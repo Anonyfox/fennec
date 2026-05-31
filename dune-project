@@ -83,6 +83,8 @@
    (>= 3.16))
   fennec
   fennec-cli
+  (mlx
+   (>= 0.11))
   (melange
    (>= 3.0.0))
   (reason-react
