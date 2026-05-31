@@ -65,6 +65,16 @@
   (run %{bin:fennec} build -o webroot --include react.js --include app.js
    --include app.css --public public)))
 
+; Make the assembled web root part of the default build, so a plain `dune build`
+; always produces webroot/ next to server.exe. In dev the server serves it from
+; disk; without this it would only build when explicitly targeted (the embed stub
+; doesn't depend on it), leaving the dev server with no assets to serve.
+(rule
+ (alias default)
+ (deps webroot)
+ (action
+  (progn)))
+
 ; --- embed module: baked-in assets for prod, an empty stub for dev ---
 ; This is the build-time half of the dev/prod split (orthogonal to the runtime
 ; FENNEC_ENV flag). In the release profile it captures the whole web root so the
