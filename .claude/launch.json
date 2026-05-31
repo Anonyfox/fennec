@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "helloworld",
+      "runtimeExecutable": "dune",
+      "runtimeArgs": ["exec", "examples/helloworld/server.exe"],
+      "port": 8200
+    }
+  ]
+}

@@ -164,16 +164,45 @@ let build_cmd =
   in
   Cmd.v (Cmd.info "build" ~doc ~man) build_term
 
+let dev_cmd =
+  let target_arg =
+    let doc = "The dune target to build and watch (default: the whole project)." in
+    Arg.(value & opt string "@@default" & info [ "target" ] ~docv:"TARGET" ~doc)
+  in
+  let exe_arg =
+    let doc = "Path to the built server executable to run and supervise (under _build)." in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"SERVER_EXE" ~doc)
+  in
+  let go target exe = Dev.run target exe in
+  let doc = "Run the dev server with livereload" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Start a development loop: run $(b,dune build --watch) (dune is the sole source watcher \
+         and builder — including assets, which are dune rules that call $(b,fennec build)) and \
+         supervise the server executable, restarting it when a backend change rebuilds it. \
+         Frontend-only edits live-reload without a restart via the framework's own asset \
+         watcher.";
+      `P
+        "This command is pure convenience. The project is a plain dune project: $(b,dune build \
+         --watch) plus $(b,dune exec) gives the same livereload without the CLI.";
+      `S Manpage.s_examples;
+      `Pre "  fennec dev _build/default/examples/helloworld/server.exe";
+      `Pre "  fennec dev --target examples/helloworld/ _build/default/examples/helloworld/server.exe" ]
+  in
+  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg)
+
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
   let man =
     [ `S Manpage.s_description;
       `P
         "Fennec bundles JavaScript (esbuild) and compiles/optimizes CSS and SCSS (Lightning CSS \
-         + grass) from a single self-contained binary — no Node, no separate toolchain.";
+         + grass) from a single self-contained binary — no Node, no separate toolchain. It also \
+         drives the development lifecycle (see the $(b,dev) command).";
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

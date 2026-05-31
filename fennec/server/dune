@@ -1,0 +1,7 @@
+; The native I/O shell: a compact HTTP/1.1 + WebSocket server over Eio (no
+; cohttp, no Lwt). Ws is the RFC 6455 framing (digestif + base64 for the
+; handshake). Livereload holds dev browsers and watches build outputs.
+(library
+ (name fennec_server)
+ (public_name fennec.server)
+ (libraries fennec.core eio eio.unix digestif base64))

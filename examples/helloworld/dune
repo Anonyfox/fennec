@@ -1,0 +1,28 @@
+; The helloworld app — a PLAIN dune project. `dune build` produces everything;
+; `dune exec ./server.exe` runs it. The `fennec dev` CLI wraps these with
+; livereload, but nothing here depends on the CLI existing.
+;
+; Asset pipeline = ordinary dune rules that call the `fennec` binary. esbuild and
+; the CSS engine run via %{bin:fennec}; the outputs (app.css, app.js) are normal
+; dune targets dropped next to server.exe, which reads them at startup. Because
+; they are real targets, `dune build --watch` rebuilds them incrementally on edit,
+; which is what drives livereload. Sources live in src/ so input and output names
+; never collide.
+
+; SCSS -> minified CSS. `fennec build` writes <base>.css, so src/app.scss -> app.css.
+(rule
+ (targets app.css)
+ (deps src/app.scss)
+ (action
+  (run %{bin:fennec} build -o . src/app.scss)))
+
+; JS -> bundled, minified app.js.
+(rule
+ (targets app.js)
+ (deps src/app.js)
+ (action
+  (run %{bin:fennec} build -o . src/app.js)))
+
+(executable
+ (name server)
+ (libraries fennec.core fennec.server eio eio_main routes unix))
