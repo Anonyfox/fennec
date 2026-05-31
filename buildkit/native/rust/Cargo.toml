@@ -1,0 +1,15 @@
+[package]
+name = "fennec_css"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fennec_css"
+crate-type = ["staticlib"]
+
+[profile.release]
+opt-level = 3
+
+[dependencies]
+lightningcss = "1.0.0-alpha.71"
+grass = { version = "0.13", default-features = false }

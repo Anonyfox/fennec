@@ -1,0 +1,21 @@
+; Build the native bundler archives for THIS platform and emit the linker flags
+; they need. esbuild -> Go c-archive (libfennec_esbuild.a + .h); css -> Rust
+; staticlib (libfennec_css.a); link_flags.sexp -> per-OS system libs. One rule,
+; cached on the native/ source tree, so it only re-runs when the shims change.
+(rule
+ (targets libfennec_esbuild.a libfennec_esbuild.h libfennec_css.a link_flags.sexp)
+ (deps
+  (source_tree native))
+ (action
+  (run bash %{dep:native/build.sh})))
+
+(library
+ (name fennec_buildkit)
+ (public_name fennec-buildkit)
+ (modes native)
+ (foreign_stubs
+  (language c)
+  (names fennec_buildkit_stubs))
+ (foreign_archives fennec_esbuild fennec_css)
+ (c_library_flags
+  (:include link_flags.sexp)))

@@ -1,0 +1,12 @@
+_build/
+_opam/
+*.install
+*.merlin
+.DS_Store
+
+# native build outputs (regenerated per platform by the dune rule)
+**/libfennec_esbuild.a
+**/libfennec_esbuild.h
+**/libfennec_css.a
+**/link_flags.sexp
+**/native/rust/target/
