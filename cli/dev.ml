@@ -57,7 +57,9 @@ let run target exe =
     exit 1
   end;
 
-  (* 2. supervise the server: restart it whenever the exe artifact changes *)
+  (* 2. supervise the server: restart it whenever the exe artifact changes, and
+     restart a crashed server — but with a crash-rate limiter so a server that
+     fails instantly on boot doesn't hot-loop forever. *)
   let dev_env = [| "FENNEC_ENV=development" |] in
   let server_pid = ref (start_server exe dev_env) in
   let last_exe = ref (mtime exe) in
@@ -72,29 +74,61 @@ let run target exe =
   Sys.set_signal Sys.sigint (Sys.Signal_handle shutdown);
   Sys.set_signal Sys.sigterm (Sys.Signal_handle shutdown);
 
-  (* also reap an unexpectedly-dead server (e.g. a crash) and restart it *)
-  let rec loop () =
+  (* crash bookkeeping: count crashes within a sliding window; back off and, past
+     a threshold, stop restarting until the NEXT rebuild (which clears the streak,
+     since a code change is the user's fix). *)
+  let crash_times = ref [] in (* recent crash timestamps, newest first *)
+  let window = 10.0 (* seconds *) and max_crashes = 5 in
+  let monotonic = ref 0.0 in (* a coarse clock from accumulated sleeps *)
+  let prune () =
+    crash_times := List.filter (fun t -> !monotonic -. t <= window) !crash_times
+  in
+  let restart reason =
+    server_pid := start_server exe dev_env;
+    pf "fennec dev: %s -> restarted server (pid %d)\n%!" reason !server_pid
+  in
+  let rec loop ~suspended =
     Unix.sleepf 0.3;
+    monotonic := !monotonic +. 0.3;
     let m = mtime exe in
     let rebuilt = m > !last_exe in
-    let crashed =
-      match Unix.waitpid [ Unix.WNOHANG ] !server_pid with
-      | 0, _ -> false
-      | _, _ -> true
-      | exception _ -> false
-    in
     if rebuilt then begin
       last_exe := m;
-      (* the exe changed: restart so the new backend is live *)
+      crash_times := []; (* a rebuild is the fix: clear the crash streak *)
       kill_quietly !server_pid;
       (try ignore (Unix.waitpid [] !server_pid) with _ -> ());
-      server_pid := start_server exe dev_env;
-      pf "fennec dev: backend rebuilt -> restarted server (pid %d)\n%!" !server_pid
+      restart "backend rebuilt";
+      loop ~suspended:false
     end
-    else if crashed then begin
-      server_pid := start_server exe dev_env;
-      pf "fennec dev: server exited -> restarted (pid %d)\n%!" !server_pid
-    end;
-    loop ()
+    else if suspended then loop ~suspended:true (* wait for the next rebuild *)
+    else begin
+      let crashed =
+        match Unix.waitpid [ Unix.WNOHANG ] !server_pid with
+        | 0, _ -> false
+        | _, _ -> true
+        | exception _ -> false
+      in
+      if not crashed then loop ~suspended:false
+      else begin
+        crash_times := !monotonic :: !crash_times;
+        prune ();
+        let n = List.length !crash_times in
+        if n >= max_crashes then begin
+          ef
+            "fennec dev: server crashed %d times in %.0fs — giving up restarts. \
+             Fix the error and save to retry.\n%!"
+            n window;
+          loop ~suspended:true
+        end
+        else begin
+          (* exponential backoff: 0.2s, 0.4s, 0.8s, … capped at ~3s *)
+          let delay = Float.min 3.0 (0.2 *. (2. ** float_of_int (n - 1))) in
+          Unix.sleepf delay;
+          monotonic := !monotonic +. delay;
+          restart (Printf.sprintf "server exited (crash %d/%d)" n max_crashes);
+          loop ~suspended:false
+        end
+      end
+    end
   in
-  loop ()
+  loop ~suspended:false

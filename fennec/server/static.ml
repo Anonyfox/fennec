@@ -28,29 +28,71 @@ let embedded_mtime = 0.0
 
 (* normalize a URL path to a safe relative lookup key:
    - strip the leading '/'
-   - reject any segment that is "" (//) , "." or ".." (path traversal)
-   - map "/" (or empty) to "index.html"
-   Returns None if unsafe. *)
+   - reject any segment that is "" (//), "." or ".." (path traversal), or that
+     contains a NUL or control byte (defends against open() truncation tricks)
+   - map "/" (or a trailing slash) to ".../index.html"
+   Returns None if unsafe. Note: this guards the KEY; [dir_lookup] additionally
+   verifies the RESOLVED path stays under root (symlink escape). *)
+let has_ctrl s = String.exists (fun c -> Char.code c < 0x20 || Char.code c = 0x7f) s
+
 let safe_key (url_path : string) : string option =
-  let p = if String.length url_path > 0 && url_path.[0] = '/' then String.sub url_path 1 (String.length url_path - 1) else url_path in
+  let p =
+    if String.length url_path > 0 && url_path.[0] = '/' then
+      String.sub url_path 1 (String.length url_path - 1)
+    else url_path
+  in
   let p = if p = "" then "index.html" else p in
   let segs = String.split_on_char '/' p in
-  let bad = List.exists (fun s -> s = "" || s = "." || s = "..") segs in
+  let bad = List.exists (fun s -> s = "" || s = "." || s = ".." || has_ctrl s) segs in
   if bad then None
   else
     (* a trailing-slash dir request -> index.html within it *)
     let p = if String.length p > 0 && p.[String.length p - 1] = '/' then p ^ "index.html" else p in
     Some p
 
+(* canonicalize and confirm [path] resolves to a real file UNDER [root] — blocks a
+   symlink inside the public tree pointing outside it. Returns the realpath, or
+   None if it escapes / doesn't exist / is a directory. *)
+let resolve_under_root ~root ~path : string option =
+  match Unix.realpath path with
+  | rp ->
+    let root_rp = try Unix.realpath root with _ -> root in
+    (* rp must equal root_rp or sit beneath it (root_rp ^ "/") *)
+    let prefix = root_rp ^ "/" in
+    let under =
+      rp = root_rp
+      || (String.length rp > String.length prefix
+         && String.sub rp 0 (String.length prefix) = prefix)
+    in
+    if under && (try not (Sys.is_directory rp) with _ -> false) then Some rp else None
+  | exception _ -> None
+
+(* Dir mode reads + hashes the file from disk; an mtime-keyed cache avoids
+   re-reading and re-hashing an unchanged file on every request (the per-request
+   whole-file read was a real CPU/IO and memory cost). Keyed by realpath; an entry
+   is reused only while size + mtime are unchanged. *)
+let cache : (string, float * int * entry) Hashtbl.t = Hashtbl.create 64
+
 let dir_lookup (root : string) (key : string) : entry option =
   let path = Filename.concat root key in
-  if not (Sys.file_exists path) || Sys.is_directory path then None
-  else
-    try
-      let bytes = In_channel.with_open_bin path In_channel.input_all in
-      let mtime = (Unix.stat path).Unix.st_mtime in
-      Some { bytes; etag = Sem.make_etag (Digest.to_hex (Digest.string bytes)); mtime }
-    with _ -> None
+  match resolve_under_root ~root ~path with
+  | None -> None
+  | Some real -> (
+    match Unix.stat real with
+    | exception _ -> None
+    | st -> (
+      let mtime = st.Unix.st_mtime and size = st.Unix.st_size in
+      match Hashtbl.find_opt cache real with
+      | Some (m, s, e) when m = mtime && s = size -> Some e
+      | _ -> (
+        try
+          let bytes = In_channel.with_open_bin real In_channel.input_all in
+          let e =
+            { bytes; etag = Sem.make_etag (Digest.to_hex (Digest.string bytes)); mtime }
+          in
+          Hashtbl.replace cache real (mtime, size, e);
+          Some e
+        with _ -> None)))
 
 let lookup (src : source) (key : string) : entry option =
   match src with
@@ -101,6 +143,10 @@ let respond ?(cache_control = "public, max-age=3600") (src : source) (req : H.re
               body = "";
             }
         | `Range { first; last } ->
+          (* clamp defensively so a bad range can never raise (which would drop
+             the connection instead of returning a clean response) *)
+          let first = max 0 (min first (len - 1)) in
+          let last = max first (min last (len - 1)) in
           let slice = String.sub e.bytes first (last - first + 1) in
           let headers =
             ("Content-Range", Printf.sprintf "bytes %d-%d/%d" first last len)

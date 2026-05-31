@@ -1,0 +1,9 @@
+(** Response finalization applied to every response (dynamic and static):
+    content-encoding negotiation (gzip/deflate, [Vary], compressible + min-size
+    only), strong ETag + conditional 304, [Date], correct [Content-Length], and
+    HEAD → empty body. *)
+
+module H = Fennec_core.Http
+
+(** Finalize [resp] for [req]. [now] is epoch seconds (for [Date] / conditional). *)
+val finalize : ?now:float -> req:H.request -> H.response -> H.response
