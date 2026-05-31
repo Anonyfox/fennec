@@ -19,7 +19,9 @@ jobs:
         include:
           - os: ubuntu-latest # linux x64
           - os: macos-latest # macos arm64
-          - os: macos-13 # macos x64
+          # macos-13 (Intel x64) runners are scarce and queue forever; re-enable
+          # once availability improves. The native chain is identical to arm64.
+          # - os: macos-13 # macos x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
