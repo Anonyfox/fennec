@@ -25,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Go: setup-go caches the module + build caches keyed on go.sum, which also
+      # covers the cgo c-archive build cache between runs.
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -34,14 +36,16 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      # Caches ~/.cargo/{registry,git} AND the build target/ dir (116 crates), so
+      # the Rust archive isn't recompiled from scratch every run. Keyed on the
+      # lockfile; prunes stale deps automatically.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('buildkit/native/rust/Cargo.lock') }}
+          workspaces: buildkit/native/rust
 
+      # setup-ocaml caches the opam root (switch + downloaded/built packages) by
+      # default, keyed on the dune-project / *.opam dependency set.
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
