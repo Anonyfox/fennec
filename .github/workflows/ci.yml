@@ -6,11 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cross-platform proof for the native build chain: the same `dune build` must
-# compile the esbuild (Go) and CSS (Rust) static archives and link them on every
-# target OS, with no manual steps. As more packages land, add them to the matrix;
-# npm artifact jobs (melange.emit -> @fennec/*) get their own workflow once those
-# packages exist.
+# Builds the `fennec` CLI (statically linking the esbuild/Go and CSS/Rust
+# archives) and runs the buildkit test suite on every target OS. Proves the
+# native chain compiles and links with no manual steps. The release workflow
+# reuses this same build to ship prebuilt binaries.
 jobs:
   build:
     strategy:
@@ -48,10 +47,8 @@ jobs:
         with:
           ocaml-compiler: "5.3"
 
-      # Buildkit's only OCaml dependency is dune itself; install it explicitly so
-      # the build never depends on a committed .opam being resolvable.
-      - name: Install dune
-        run: opam install dune --yes
+      - name: Install dependencies
+        run: opam install . --deps-only --with-test --yes
 
       - name: Build
         run: opam exec -- dune build
@@ -59,5 +56,5 @@ jobs:
       - name: Test
         run: opam exec -- dune runtest
 
-      - name: Check opam metadata is in sync
-        run: opam exec -- dune build @check
+      - name: Smoke-test the CLI
+        run: opam exec -- dune exec -- fennec --version

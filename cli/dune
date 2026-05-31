@@ -1,0 +1,9 @@
+; The `fennec` binary. Statically links the native bundlers via the internal
+; fennec_buildkit library, so the released executable is fully self-contained:
+; consumers download one binary and need no Go, Rust, or Node toolchain.
+(executable
+ (name fennec)
+ (public_name fennec)
+ (package fennec-cli)
+ (modes native)
+ (libraries fennec_buildkit cmdliner unix))

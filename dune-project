@@ -11,19 +11,22 @@
 
 (license MIT)
 
-; NOTE: no project-level (name ...) yet — dune requires that a project with a
-; single package share its name, and the core `fennec` package does not exist
-; yet. It will be added when the framework packages land.
+; The CLI is the distributable: a self-contained `fennec` binary that statically
+; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a
+; prebuilt binary per platform via GitHub Releases, so end users never compile
+; Go/Rust. fennec_buildkit is an internal, unpublished library (the CLI's engine).
 
 (package
- (name fennec-buildkit)
- (synopsis "In-process JavaScript bundler (esbuild) and CSS/SCSS engine for OCaml")
+ (name fennec-cli)
+ (synopsis "Native JavaScript and CSS build tooling in a single self-contained binary")
  (description
-  "Fennec Buildkit statically links esbuild (Go) and Lightning CSS + grass (Rust)\ninto your OCaml binary as native libraries, so bundling JavaScript and compiling\nSCSS are plain function calls -- no node, no subprocess, no second-language\nruntime at run time. The native archives are compiled for the host platform\nautomatically at build time; library consumers need no manual steps beyond a Go\nand a Rust toolchain being available when the package is built.")
+  "The `fennec` command-line tool bundles JavaScript (esbuild) and compiles and\noptimizes CSS and SCSS (Lightning CSS + grass) from one statically-linked binary.\nNo Node, no separate toolchain: download the binary and build. `fennec build`\ndrives both engines in a single pass, routing each input to the right tool by its\nfile extension.")
  (tags
-  ("build" "javascript" "css" "esbuild" "bundler" "melange"))
+  ("build" "javascript" "css" "esbuild" "bundler" "cli" "melange"))
  (depends
   (ocaml
    (>= 4.14))
   (dune
-   (>= 3.16))))
+   (>= 3.16))
+  (cmdliner
+   (>= 1.1.0))))

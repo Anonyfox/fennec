@@ -9,67 +9,79 @@ separately-publishable packages.
 
 | Package | What it is | Status |
 | --- | --- | --- |
-| [`fennec-buildkit`](./buildkit) | In-process JS bundler (esbuild) + CSS/SCSS engine (Lightning CSS + grass), statically linked | ✅ working |
+| [`fennec-cli`](./cli) | The `fennec` binary — native JS bundler + CSS/SCSS engine, statically linked | ✅ working |
 | `fennec-mongo` | BSON, query, minimongo, Mongo driver | planned |
 | `fennec-ddp` | DDP protocol over WebSocket | planned |
 | `fennec` | Core: data, web, client, UI | planned |
-| `fennec-cli` | The `fennec` binary + toolkit lib | planned |
 
 Concurrency is **Eio-only** — a deliberate, forward-looking choice.
 
-## fennec-buildkit
+## fennec-cli
 
-Drive a real frontend build pipeline from OCaml with no node, no subprocess, and
-no second-language runtime. esbuild and the CSS engine are compiled to native
-static libraries and linked straight into your binary, so bundling is a function
-call:
+A single self-contained binary that bundles JavaScript (esbuild) and
+compiles/optimizes CSS and SCSS (Lightning CSS + grass). **No Node, no Go, no
+Rust, no toolchain** at the consumer side — the native engines are statically
+linked into the binary at release time. Download it and build.
 
-```ocaml
-(* production bundle *)
-let js = Fennec_buildkit.Esbuild.build ~entry:"app.js" ~minify:true ()
-
-(* warm context for millisecond incremental rebuilds (dev servers) *)
-let ctx = Fennec_buildkit.Esbuild.create ~entry:"app.js" ()
-let js  = Fennec_buildkit.Esbuild.rebuild ctx
-let ()  = Fennec_buildkit.Esbuild.dispose ctx
-
-(* SCSS -> minified CSS *)
-let css = Fennec_buildkit.Css.scss ~minify:true ".btn { &:hover { color: red } }"
+```console
+$ fennec build src/main.ts styles/app.scss styles/extra.css
+  src/main.ts       -> dist/main.js    1.2 KB
+  styles/app.scss   -> dist/app.css    412 B
+  styles/extra.css  -> dist/extra.css  198 B
 ```
 
-### How the native libraries are linked, seamlessly
+One invocation drives **both** engines at once: each input is routed to the
+right tool by its file extension (`.js/.mjs/.cjs/.jsx/.ts/.tsx` → esbuild;
+`.css` → Lightning CSS; `.scss/.sass` → grass → Lightning CSS). Production
+optimizations (minify, tree-shake, dead-code elimination, CSS nesting/`calc`
+reduction) are **on by default**.
 
-The hard part of shipping native code is making it work on every OS with **zero
-manual steps**. Buildkit does this entirely inside the normal `dune build`:
+### `fennec build` flags
 
-1. A single dune **rule** runs [`native/build.sh`](./buildkit/native/build.sh),
-   which compiles the esbuild shim (`go build -buildmode=c-archive`) and the CSS
-   shim (`cargo build --release`, `crate-type = ["staticlib"]`) **for the host
-   platform**.
-2. The same script detects the OS and emits `link_flags.sexp` — the exact system
-   libraries this platform needs (macOS: `CoreFoundation`, `Security`, `resolv`,
-   plus Rust's `native-static-libs`; Linux: `pthread`, `dl`, `resolv`, …),
-   captured from `cargo rustc --print native-static-libs` so it is never guessed.
-3. `dune` links the archives via `(foreign_archives …)` and the generated flags
-   via `(c_library_flags (:include link_flags.sexp))`.
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `-o, --outdir DIR` | `dist` | Output directory (created if missing). |
+| `--no-minify` | off | Disable minification. |
+| `--format FMT` | `esm` | JS output format: `esm`, `iife`, or `cjs`. |
+| `--global-name NAME` | — | Global var for the bundle's exports (with `--format iife`). |
+| `--external MODULE` | — | Leave an import unbundled. Repeatable. |
+| `--sourcemap` | off | Inline source map (JS only). |
+| `--banner TEXT` | — | Text prepended to each JS bundle. |
 
-Source revisions are pinned (`go.sum`, `Cargo.lock`) for reproducible builds. The
-only build-time requirement is a Go and a Rust toolchain, declared as opam
-`depexts` (`conf-go`, `conf-rust`) so opam provisions them automatically.
+`fennec build --help` documents everything with examples.
 
-### Public API
+A long-running `fennec dev` (livereload dev server holding a warm build context)
+is the next subcommand.
 
-- `Esbuild.create / rebuild / dispose / build` — bundling with `format`
-  (`iife`/`esm`/`cjs`), `global_name`, `external_`, `minify`, `sourcemap`,
-  `banner`.
-- `Css.transform` — optimize/minify modern CSS (nesting, `calc()`, dedupe).
-- `Css.scss` — compile SCSS (vars, mixins, `@for`, functions) then optimize.
+### How the binary stays toolchain-free for users
 
-## Building
+The native complexity lives in **exactly one place — the release pipeline**:
+
+1. [`buildkit`](./buildkit) is an internal library that statically links the
+   esbuild shim (Go `c-archive`) and the CSS shim (Rust `staticlib`) into OCaml
+   via C FFI. A dune rule compiles both archives for the host and emits the
+   per-OS linker flags (`buildkit/native/emit_flags.sh`).
+2. CI builds and tests this on every target OS.
+3. On a `v*` tag, [`release.yml`](./.github/workflows/release.yml) builds the
+   `fennec` binary per platform and uploads it to GitHub Releases.
+
+So end users get a prebuilt binary; only the framework's own CI ever needs Go and
+Rust.
+
+## Building from source
+
+Requires Go and Rust toolchains (only for building the binary itself):
 
 ```sh
-dune build       # compiles the native archives + the library
-dune test        # runs the buildkit test suite
+dune build              # compiles the native archives + the CLI
+dune runtest            # runs the buildkit test suite
+dune exec -- fennec --help
+```
+
+## Releasing
+
+```sh
+git tag v0.0.1 && git push origin v0.0.1   # triggers the Release workflow
 ```
 
 ## License

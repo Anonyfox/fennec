@@ -19,9 +19,12 @@
    link_flags.sexp
    (run bash %{dep:native/emit_flags.sh}))))
 
+; Internal engine of the `fennec` CLI: esbuild + Lightning CSS/grass linked in as
+; native static archives. Not published on its own (no public_name); the CLI is
+; the distributable. The in-process OCaml API stays usable for the framework's
+; own future packages and tests.
 (library
  (name fennec_buildkit)
- (public_name fennec-buildkit)
  (modes native)
  (foreign_stubs
   (language c)
