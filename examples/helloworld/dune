@@ -2,15 +2,14 @@
 ; loop. `dune build` produces everything; `dune exec ./server.exe` runs it;
 ; `fennec dev` wraps it with livereload. Nothing here depends on the CLI existing.
 ;
-; Asset pipeline = ordinary dune rules calling the `fennec` binary. Three bundles
-; land next to server.exe, which serves them:
-;
-;   react.js  — the preact runtime (window.React/ReactDOM), built once from the
-;               framework's shipped preact_entry.mjs. Never rebuilt by app edits.
-;   app.js    — the Melange client (client output + shared_js), bundled with
-;               react/* externalized to the globals react.js sets, via the shipped
-;               require-shim banner.
-;   app.css   — SCSS compiled + minified.
+; ASSET MODEL: the web root (webroot/) is ONE tree containing every bundle output
+; AND the staged public/ files, served at their paths. Each bundle is its own
+; `fennec build` rule (dune is the manifest) writing a file target; one assembly
+; rule gathers them + public/ into the (dir webroot) target and emits the prod
+; embed module. The server serves webroot/ from disk in dev and the embedded map
+; in prod — one Static path either way.
+
+; --- bundles (each its own rule with its own flags + --out-name path) ---
 
 ; react runtime: framework's preact entry -> iife bundle exposing the globals.
 ; Copy the entry into the package dir first so esbuild resolves "preact/*" against
@@ -29,10 +28,8 @@
   (run %{bin:fennec} build --format iife --out-name react.js -o . preact_entry.mjs)))
 
 ; app bundle: melange client output -> one minified iife with react externalized
-; to the runtime globals (require-shim banner).
-; Depend on the melange.emit @melange alias of client/ so dune builds the WHOLE
-; client_output tree (entry + shared_js + melange runtime) BEFORE esbuild bundles
-; it. A glob over the output dir does not force the emit to run first.
+; to the runtime globals. Depend on the client/melange alias so the whole emit
+; tree is built before esbuild bundles it.
 (rule
  (target app.js)
  (deps
@@ -53,19 +50,32 @@
  (action
   (run %{bin:fennec} build --out-name app.css -o . src/app.scss)))
 
-; embed the public/ tree into an OCaml module for prod (single self-contained
-; binary). In dev the server reads public/ from disk instead; both go through the
-; same Fennec_server.Static path.
+; --- assemble the web root: bundles + public/, single (dir webroot) target ---
+; One fennec call copies the pre-built bundles in (--include, clash-checked),
+; stages public/ in (--public, clash-checked vs the bundles), all into webroot/.
 (rule
- (target public_assets.ml)
+ (targets
+  (dir webroot))
  (deps
+  react.js
+  app.js
+  app.css
   (source_tree public))
  (action
-  (run %{bin:fennec} embed public -o public_assets.ml)))
+  (run %{bin:fennec} build -o webroot --include react.js --include app.js
+   --include app.css --public public)))
+
+; --- prod embed module: bake the assembled web root into the binary ---
+; Generated from webroot/ so it captures bundles AND public/ in one map.
+(rule
+ (target webroot_assets.ml)
+ (deps webroot)
+ (action
+  (run %{bin:fennec} build -o webroot --embed webroot_assets.ml)))
 
 (executable
  (name server)
- (modules server public_assets)
+ (modules server webroot_assets)
  (libraries fennec.core fennec.server fennec.ui app_native
    server-reason-react.react server-reason-react.reactDom eio eio_main routes unix))
 

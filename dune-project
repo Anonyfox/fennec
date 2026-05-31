@@ -15,6 +15,10 @@
 ; render natively on the server compile to JS here.
 (using melange 0.1)
 
+; Directory targets: the assembled web root (bundles + public/) is a single
+; (dir ...) rule target served as one tree.
+(using directory-targets 0.1)
+
 ; The runtime framework shipped to opam: portable HTTP core + Eio server with
 ; livereload. The MLX dialect is declared here once so .mlx components compile in
 ; any package (the isomorphic client/SSR components land here later).

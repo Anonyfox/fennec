@@ -93,17 +93,33 @@ mode, so a prod build ships none of it.
   that when its surface is stable enough — NOT by parsing dune output (that would
   violate the principle). Marked here so it isn't forgotten. **← TODO: diagnostics.**
 
-## Static assets (`public/`) and HTTP semantics
+## The web root: bundles + `public/`, one tree
+
+Bundle outputs are static files. So there is **one web root** — the output dir of
+`fennec build` — holding every bundle AND the staged `public/` tree, served at
+their paths. The server doesn't know any bundle's name; it serves files.
+
+- **dune is the bundle manifest.** Each bundle is its own `fennec build` rule with
+  its own flags and `--out-name` subpath (`--out-name admin/admin.js` →
+  `/admin/admin.js`). Whitelabel/subapps = more rules, no central list.
+- **No `assemble`/`embed` subcommand** — two flags on `build`:
+  - `--include FILE` copies a pre-built bundle into the web root (clash-checked).
+  - `--public DIR` stages a static tree in afterward (clash-checked vs bundles).
+  - `--embed FILE` bakes the assembled web root into an OCaml `path→bytes` module.
+- **Assembly is one `(dir webroot)` rule** that `--include`s the bundle file
+  targets + `--public`s the tree. (dune wipes a dir target on each rebuild, so the
+  bundles stay separate file targets and livereload watches THOSE, not the wiped
+  webroot copies — preserving CSS-hot-swap vs JS-reload.)
+- **Clashes are hard errors**, naming the path: bundle↔bundle (dune duplicate
+  target) and bundle↔public (`fennec build` errors). No escape hatch.
+
+Dev serves `webroot/` from disk; prod serves the embedded map — one
+`Fennec_server.Static` path either way. *Verified: the prod binary serves both a
+bundle (`/app.js`) and a public file (`/robots.txt`) with the `webroot/` dir
+physically deleted.*
 
 The `public/` tree is served verbatim at its paths (`public/img/logo.svg` →
-`/img/logo.svg`), with the same dev/prod split as everything else:
-
-- **Dev**: served from disk (`Fennec_server.Static.Dir`), so edits are live.
-- **Prod**: embedded into the binary at build time — a dune rule calls
-  `%{bin:fennec} embed public -o public_assets.ml` (same CLI-as-build-tool
-  pattern), and the server serves the baked-in map (`Static.Embedded`). The
-  result is a single self-contained executable with no asset dir to ship.
-  *Verified: the prod binary serves `public/` files with the directory deleted.*
+`/img/logo.svg`).
 
 Both modes go through one `Static` path that is HTTP-airtight: correct MIME by
 extension, strong **ETag** (content hash) + **304** on `If-None-Match` /

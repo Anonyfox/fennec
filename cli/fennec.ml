@@ -71,9 +71,10 @@ let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner
   write_file out_path output;
   (out_path, String.length output)
 
-let run inputs outdir minify format global_name external_ sourcemap banner banner_file out_name =
+let run inputs outdir minify format global_name external_ sourcemap banner banner_file out_name
+    public embed includes =
   match inputs with
-  | [] ->
+  | [] when public = None && embed = None && includes = [] ->
     prerr_endline "fennec build: no input files given (try `fennec build --help`)";
     1
   | _ :: _ :: _ when out_name <> None ->
@@ -91,6 +92,7 @@ let run inputs outdir minify format global_name external_ sourcemap banner banne
          | None -> banner
        in
        mkdir_p outdir;
+       (* 1. build the bundle inputs into the output dir (the web root) *)
        List.iter
          (fun input ->
            let out_path, n =
@@ -99,6 +101,29 @@ let run inputs outdir minify format global_name external_ sourcemap banner banne
            in
            Printf.printf "  %-28s -> %-32s %s\n" input out_path (human_size n))
          inputs;
+       (* 2a. copy pre-built bundle files (from sibling dune rules) into the web
+          root, clash-checked *)
+       List.iter
+         (fun src ->
+           match Webroot.include_file ~outdir ~src with
+           | Ok () -> Printf.printf "  include %-20s -> %s/%s\n" src outdir (Filename.basename src)
+           | Error msg -> failwith msg)
+         includes;
+       (* 2b. stage public/ INTO the web root (after bundles, so clashes with a
+          bundle output are caught and are hard errors) *)
+       (match public with
+       | Some dir -> (
+         match Webroot.stage_public ~outdir ~public_dir:dir with
+         | Ok () -> Printf.printf "  staged %-21s -> %s/\n" dir outdir
+         | Error msg -> failwith msg)
+       | None -> ());
+       (* 3. optionally emit the prod embed module from the assembled web root *)
+       (match embed with
+       | Some file -> (
+         match Webroot.emit_embed ~outdir ~out_file:file with
+         | Ok n -> Printf.printf "  embedded %d file(s) -> %s\n" n file
+         | Error msg -> failwith msg)
+       | None -> ());
        flush stdout;
        0
      with Failure msg ->
@@ -116,7 +141,8 @@ let inputs_arg =
      bundled with esbuild; .css is optimized and .scss/.sass are compiled with Lightning CSS \
      + grass."
   in
-  Arg.(non_empty & pos_all string [] & info [] ~docv:"INPUT" ~doc)
+  (* may be empty when only --public/--embed are used (staging-only rule) *)
+  Arg.(value & pos_all string [] & info [] ~docv:"INPUT" ~doc)
 
 let outdir_arg =
   let doc = "Output directory (created if missing)." in
@@ -165,14 +191,39 @@ let out_name_arg =
   in
   Arg.(value & opt (some string) None & info [ "out-name" ] ~docv:"NAME" ~doc)
 
+let public_arg =
+  let doc =
+    "Stage a static directory (e.g. $(b,public)) into the output directory, paths preserved, \
+     AFTER the bundle inputs. A file that collides with a build output at the same path is a \
+     hard error. The output directory becomes the web root (bundles + static, served together)."
+  in
+  Arg.(value & opt (some string) None & info [ "public" ] ~docv:"DIR" ~doc)
+
+let embed_arg =
+  let doc =
+    "Emit an OCaml module ($(i,FILE)) mapping each file in the assembled output directory to its \
+     bytes, for compile-time embedding into the binary (prod: a single self-contained \
+     executable). Exposes $(b,lookup : string -> string option) and $(b,paths : string list)."
+  in
+  Arg.(value & opt (some string) None & info [ "embed" ] ~docv:"FILE" ~doc)
+
+let include_arg =
+  let doc =
+    "Copy a pre-built file (a bundle produced by a sibling rule) into the web root at its \
+     basename. Repeatable. A clash with another web-root file is a hard error."
+  in
+  Arg.(value & opt_all string [] & info [ "include" ] ~docv:"FILE" ~doc)
+
 let build_term =
-  let go inputs outdir no_minify format global_name external_ sourcemap banner banner_file out_name =
+  let go inputs outdir no_minify format global_name external_ sourcemap banner banner_file out_name
+      public embed includes =
     run inputs outdir (not no_minify) format global_name external_ sourcemap banner banner_file
-      out_name
+      out_name public embed includes
   in
   Term.(
     const go $ inputs_arg $ outdir_arg $ no_minify_arg $ format_arg $ global_name_arg
-    $ external_arg $ sourcemap_arg $ banner_arg $ banner_file_arg $ out_name_arg)
+    $ external_arg $ sourcemap_arg $ banner_arg $ banner_file_arg $ out_name_arg $ public_arg
+    $ embed_arg $ include_arg)
 
 let build_cmd =
   let doc = "Build JavaScript and CSS for production" in
@@ -190,7 +241,20 @@ let build_cmd =
       `P "Unminified ESM with a source map into ./build:";
       `Pre "  fennec build -o build --no-minify --sourcemap src/main.ts";
       `P "An IIFE bundle exposing a global, leaving React external:";
-      `Pre "  fennec build --format iife --global-name App --external react src/widget.jsx" ]
+      `Pre "  fennec build --format iife --global-name App --external react src/widget.jsx";
+      `S "WEB ROOT";
+      `P
+        "The output directory ($(b,-o)) is the web root: bundle outputs and the staged \
+         $(b,--public) tree live there together and are served at their paths. Each bundle is its \
+         own $(b,build) invocation (a dune rule) with its own flags and $(b,--out-name) subpath — \
+         dune is the bundle manifest. $(b,--public) stages a static tree in afterward (a clash \
+         with a bundle output is fatal); $(b,--embed) bakes the assembled root into an OCaml \
+         module for a single self-contained prod binary.";
+      `P "Stage a static tree into the web root (dev):";
+      `Pre "  fennec build src/main.ts --out-name app.js -o webroot";
+      `Pre "  fennec build --public public -o webroot";
+      `P "Same, plus embed the assembled root for prod:";
+      `Pre "  fennec build --public public --embed webroot_assets.ml -o webroot" ]
   in
   Cmd.v (Cmd.info "build" ~doc ~man) build_term
 
@@ -222,29 +286,6 @@ let dev_cmd =
   in
   Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg)
 
-let embed_cmd =
-  let dir_arg =
-    let doc = "Directory to embed (e.g. public)." in
-    Arg.(required & pos 0 (some string) None & info [] ~docv:"DIR" ~doc)
-  in
-  let out_arg =
-    let doc = "Output OCaml file (a module mapping path -> bytes)." in
-    Arg.(value & opt string "public_assets.ml" & info [ "o"; "output" ] ~docv:"FILE" ~doc)
-  in
-  let doc = "Embed a directory tree into an OCaml module for compile-time bundling" in
-  let man =
-    [ `S Manpage.s_description;
-      `P
-        "Walk $(i,DIR) and emit an OCaml module mapping each relative file path to its bytes, so \
-         the directory can be baked into the binary at compile time (prod) and served from \
-         memory. Intended to be driven by a dune rule, exactly like $(b,fennec build). The \
-         generated module exposes $(b,lookup : string -> string option) and $(b,paths : string \
-         list).";
-      `S Manpage.s_examples;
-      `Pre "  fennec embed public -o public_assets.ml" ]
-  in
-  Cmd.v (Cmd.info "embed" ~doc ~man) Term.(const Embed.run $ dir_arg $ out_arg)
-
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
   let man =
@@ -256,6 +297,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd; embed_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

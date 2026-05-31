@@ -3,10 +3,10 @@
    livereload. Nothing here knows about the CLI.
 
    It server-renders the isomorphic <App> (the SAME app.mlx the client hydrates),
-   wraps it in a full HTML document via Fennec_ui.Page (which inlines the props
-   the client reads), and serves the three built bundles (react.js, app.js,
-   app.css) that dune produced next to this exe. In dev, the framework injects the
-   livereload script and watches the built assets. *)
+   wraps it in a full HTML document via Fennec_ui.Page, and serves the WEB ROOT —
+   one tree holding every bundle (react.js, app.js, app.css) AND the public/ files
+   (robots.txt, /img/logo.svg, …) at their paths. The server doesn't know any
+   bundle's name; it just serves files. Web root = disk (dev) or embedded (prod). *)
 
 module H = Fennec_core.Http
 module App = Fennec_core.App
@@ -19,28 +19,13 @@ module Static = Fennec_server.Static
 let port = 8200
 let is_dev = try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true
 
-(* static public/ assets: read from disk in dev (live edits), serve the embedded
-   map in prod (single self-contained binary). The dev disk path is resolved from
-   the exe location up to the source tree. *)
-let public_source =
-  if is_dev then
-    let rec up n p = if n = 0 then p else up (n - 1) (Filename.dirname p) in
-    (* .../_build/default/examples/helloworld/server.exe -> repo root (strip the
-       filename + 4 dirs), then the source public/ dir *)
-    let root = up 5 Sys.executable_name in
-    Static.Dir (Filename.concat root "examples/helloworld/public")
-  else Static.Embedded Public_assets.lookup
+(* The web root. Dev: the assembled webroot/ dir next to the exe (built by dune,
+   live). Prod: the embedded map baked into the binary. One Static path either
+   way; the server is identical in both modes. *)
+let webroot_dir = Filename.concat (Filename.dirname Sys.executable_name) "webroot"
 
-(* built assets sit next to the exe under _build *)
-let asset name = Filename.concat (Filename.dirname Sys.executable_name) name
-let read path = try In_channel.with_open_bin path In_channel.input_all with _ -> ""
-
-let react_path = asset "react.js"
-let js_path = asset "app.js"
-let css_path = asset "app.css"
-let react_js = ref (read react_path)
-let app_js = ref (read js_path)
-let css = ref (read css_path)
+let web_source =
+  if is_dev then Static.Dir webroot_dir else Static.Embedded Webroot_assets.lookup
 
 (* the one prop the page renders with and the client hydrates from *)
 let name = "world"
@@ -51,8 +36,7 @@ let render_page _req =
   let body_html = ReactDOM.renderToString (App_native.App.make ~name ()) in
   let doc =
     Page.document ~title:"fennec — hello world"
-      ~description:"A server-rendered, hydrated fennec app."
-      ~css_href:"/app.css"
+      ~description:"A server-rendered, hydrated fennec app." ~css_href:"/app.css"
       ~scripts:[ "/react.js"; "/app.js" ]
       ~props_json ~dev:is_dev ~body_html ()
   in
@@ -61,17 +45,11 @@ let render_page _req =
 let () =
   Eio_main.run @@ fun env ->
   let lr = LR.create () in
-  let serve ct contents _ =
-    H.respond ~content_type:ct ~headers:[ ("cache-control", "no-cache") ] !contents
-  in
   let app =
     App.create ()
-    |> App.get "/react.js" (serve "application/javascript; charset=utf-8" react_js)
-    |> App.get "/app.js" (serve "application/javascript; charset=utf-8" app_js)
-    |> App.get "/app.css" (serve "text/css; charset=utf-8" css)
-    (* static public/ files (robots.txt, /img/logo.svg, …) served verbatim at
-       their paths, with MIME + ETag/304 + Range, before pages/404 *)
-    |> App.use_fallthrough (Static.handler public_source)
+    (* the whole web root (bundles + public) served at its paths, with MIME +
+       ETag/304 + Range, before pages/404 *)
+    |> App.use_fallthrough (Static.handler web_source)
     |> App.pages [ App.page Routes.nil render_page ]
     |> App.not_found (fun _ -> H.text ~status:404 "not found")
   in
@@ -81,11 +59,13 @@ let () =
   Eio.Switch.run @@ fun sw ->
   if is_dev then begin
     let clock = Eio.Stdenv.clock env in
-    (* watch built assets (outputs, not source); CSS hot-swaps, JS triggers reload *)
-    Eio.Fiber.fork ~sw (fun () ->
-        LR.watch lr ~clock ~kind:LR.Css ~on_change:(fun () -> css := read css_path) css_path);
-    Eio.Fiber.fork ~sw (fun () ->
-        LR.watch lr ~clock ~kind:LR.Reload ~on_change:(fun () -> app_js := read js_path) js_path)
+    (* Livereload watches the INDIVIDUAL bundle file targets (stable), NOT the
+       webroot/ copies — dune wipes a dir target on every rebuild, so a CSS-only
+       edit would otherwise bump app.js's mtime and force a full reload. Watching
+       the source-side outputs preserves CSS-hot-swap vs JS-reload. *)
+    let bundle name = Filename.concat (Filename.dirname Sys.executable_name) name in
+    Eio.Fiber.fork ~sw (fun () -> LR.watch lr ~clock ~kind:LR.Css (bundle "app.css"));
+    Eio.Fiber.fork ~sw (fun () -> LR.watch lr ~clock ~kind:LR.Reload (bundle "app.js"))
   end;
   Printf.eprintf "[fennec] helloworld on http://localhost:%d%s\n%!" port
     (if is_dev then " (dev: livereload on)" else "");
