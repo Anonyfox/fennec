@@ -1,0 +1,9 @@
+; Native SSR runtime for <Head>: the eager component + the scoped collector +
+; the render-and-collect orchestration. Pairs with fennec.csr (the Melange side),
+; which exposes the SAME Head.make signature so one shared <Head> compiles to
+; both targets.
+(library
+ (name fennec_ssr)
+ (public_name fennec.ssr)
+ (modes native)
+ (libraries fennec.head server-reason-react.react server-reason-react.reactDom))

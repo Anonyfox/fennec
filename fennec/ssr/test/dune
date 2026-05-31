@@ -1,0 +1,6 @@
+; Colocated test for the native SSR <Head> collector — verifies top-level AND
+; nested-component registration timing, inside-out precedence, body HTML.
+(test
+ (name test_head_ssr)
+ (modes native)
+ (libraries fennec.ssr fennec.head server-reason-react.react server-reason-react.reactDom))

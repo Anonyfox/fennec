@@ -1,9 +1,0 @@
-; The SSR half of the isomorphic UI layer: build a full HTML document from a
-; rendered component + hydration props. Native-only (depends on the native
-; server-reason-react render path). The matching client runtime is shipped as a
-; ready-to-bundle preact entry under runtime/ (see fennec/ui/runtime).
-(library
- (name fennec_ui)
- (public_name fennec.ui)
- (modes native)
- (libraries fennec.core))

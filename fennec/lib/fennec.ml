@@ -16,7 +16,6 @@
    generated into the app's own binary, so the app hands it to the framework. *)
 
 module Http = Fennec_core.Http
-module Page = Fennec_ui.Page
 
 (* re-export the request/response types and the verb plugs so userland needs only
    `open Fennec` (or `Fennec.get …`) — never the internal module paths *)
@@ -57,14 +56,63 @@ let text = Http.text
 let html = Http.html
 let json = Http.json
 
-(* Build a full HTML document response from SSR'd markup + page metadata. Wraps
-   Fennec_ui.Page.document, defaulting the standard client bundles (/react.js +
-   /app.js) and the stylesheet (/app.css), and auto-setting dev mode — so a page
-   handler is one call. Override any of these explicitly when an app diverges. *)
-let document ?(title = "") ?(description = "") ?(css_href = "/app.css")
-    ?(scripts = [ "/react.js"; "/app.js" ]) ?(props_json = "null") ~body_html () : response =
-  Http.html
-    (Page.document ~title ~description ~css_href ~scripts ~props_json ~dev:is_dev ~body_html ())
+module Head = Fennec_head.Head
+
+(* A document template: given the merged <head> HTML, the SSR'd body HTML, and the
+   framework bits (scripts, props, dev flag), produce the full document string.
+   The DEFAULT is provided below; an app supplies its own to own the shell (an MLX
+   component rendered to a string is a perfectly good [template]). *)
+type template =
+  head_html:string ->
+  body_html:string ->
+  css_href:string ->
+  scripts:string list ->
+  props_json:string ->
+  dev:bool ->
+  string
+
+(* the framework default template — a sensible HTML5 shell. Apps override via
+   [~template] to fully control doctype/lang/includes. *)
+let default_template : template =
+ fun ~head_html ~body_html ~css_href ~scripts ~props_json ~dev ->
+  let link =
+    if css_href = "" then "" else Printf.sprintf {|<link rel="stylesheet" href="%s"/>|} css_href
+  in
+  let script_tags =
+    String.concat "" (List.map (fun s -> Printf.sprintf {|<script src="%s" defer></script>|} s) scripts)
+  in
+  let doc =
+    Printf.sprintf
+      {|<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+%s
+%s
+</head>
+<body>
+<div id="root">%s</div>
+<script id="fennec-props" type="application/json">%s</script>
+%s
+</body>
+</html>|}
+      head_html link body_html (Head.text_escape props_json) script_tags
+  in
+  if dev then Fennec_core.Dev.inject_html doc else doc
+
+(* Render a page to a full document response. [body] is a thunk that builds the
+   page React element (mounting <Head> components anywhere in its tree); SSR
+   collects those tags and the template renders them into <head>. [title]/
+   [description]/[canonical] are handler-level DEFAULTS — a <Head> deeper in the
+   tree overrides them (inside-out wins). *)
+let render ?(template = default_template) ?title ?description ?canonical ?(css_href = "/app.css")
+    ?(scripts = [ "/react.js"; "/app.js" ]) ?(props_json = "null") ~body () : response =
+  let body_html, tree_tags = Fennec_ssr.Head.render_collect body in
+  (* handler defaults first (lowest precedence), then tree tags (win) *)
+  let base = Head.of_props ?title ?description ?canonical () in
+  let head_html = Head.to_html (Head.merge (base @ tree_tags)) in
+  Http.html (template ~head_html ~body_html ~css_href ~scripts ~props_json ~dev:is_dev)
 
 (* ---- the web root (bundles + public), dev-from-disk / prod-embedded ---- *)
 

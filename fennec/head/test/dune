@@ -1,0 +1,6 @@
+; Colocated edge-case tests for the pure head core (native side; the same module
+; also compiles to melange, but the logic is target-independent).
+(test
+ (name test_head)
+ (modes native)
+ (libraries fennec.head))

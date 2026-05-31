@@ -8,13 +8,13 @@
 
 let name = "world"
 
-(* SSR the SAME <App> the client hydrates; Fennec.document wraps it in a full HTML
-   document (client bundles + stylesheet + hydration props) for us. *)
+(* SSR the SAME <App> the client hydrates. Fennec.render builds the element via a
+   thunk, collecting the <Head> tags the tree sets (title/description/og), and
+   renders them into the document's <head> — no hardcoded title here. *)
 let render _req =
-  Fennec.document ~title:"fennec — hello world"
-    ~description:"A server-rendered, hydrated fennec app."
+  Fennec.render
     ~props_json:(Printf.sprintf {|{"name":%S}|} name)
-    ~body_html:(ReactDOM.renderToString (App_native.App.make ~name ()))
+    ~body:(fun () -> App_native.App.make ~name ())
     ()
 
 let () =

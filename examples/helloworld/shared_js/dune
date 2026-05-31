@@ -5,7 +5,7 @@
  (modes melange)
  (flags
   (:standard -w -27-32-33-37-39))
- (libraries reason-react melange.js)
+ (libraries reason-react melange.js fennec.head fennec.csr)
  (preprocess
   (pps server-reason-react.browser_ppx -js melange.ppx reason-react-ppx)))
 

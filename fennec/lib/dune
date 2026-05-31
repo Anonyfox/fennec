@@ -6,4 +6,4 @@
  (name fennec)
  (public_name fennec)
  (modes native)
- (libraries fennec.core fennec.server fennec.ui eio eio_main))
+ (libraries fennec.core fennec.server fennec.head fennec.ssr eio eio_main))
