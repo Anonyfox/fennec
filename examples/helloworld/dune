@@ -53,8 +53,19 @@
  (action
   (run %{bin:fennec} build --out-name app.css -o . src/app.scss)))
 
+; embed the public/ tree into an OCaml module for prod (single self-contained
+; binary). In dev the server reads public/ from disk instead; both go through the
+; same Fennec_server.Static path.
+(rule
+ (target public_assets.ml)
+ (deps
+  (source_tree public))
+ (action
+  (run %{bin:fennec} embed public -o public_assets.ml)))
+
 (executable
  (name server)
+ (modules server public_assets)
  (libraries fennec.core fennec.server fennec.ui app_native
    server-reason-react.react server-reason-react.reactDom eio eio_main routes unix))
 

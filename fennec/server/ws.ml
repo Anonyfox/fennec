@@ -23,7 +23,8 @@ let int_of_opcode = function
   | Pong -> 0xA
   | Other n -> n
 
-type frame = { fin : bool; opcode : opcode; payload : string }
+(* rsv1 carries the permessage-deflate "compressed" bit (RFC 7692) *)
+type frame = { fin : bool; rsv1 : bool; opcode : opcode; payload : string }
 
 (* ---- handshake ----------------------------------------------------------- *)
 
@@ -42,6 +43,7 @@ let read_frame (r : Eio.Buf_read.t) : frame option =
     let b0 = u8 r in
     let b1 = u8 r in
     let fin = b0 land 0x80 <> 0 in
+    let rsv1 = b0 land 0x40 <> 0 in
     let opcode = opcode_of_int (b0 land 0x0f) in
     let masked = b1 land 0x80 <> 0 in
     let len0 = b1 land 0x7f in
@@ -63,12 +65,13 @@ let read_frame (r : Eio.Buf_read.t) : frame option =
         String.mapi (fun i c -> Char.chr (Char.code c lxor Char.code mask.[i land 3])) payload
       else payload
     in
-    Some { fin; opcode; payload }
+    Some { fin; rsv1; opcode; payload }
 
 (* ---- frame write (server -> client, unmasked) ---------------------------- *)
 
 let write_frame (w : Eio.Buf_write.t) (f : frame) : unit =
-  Eio.Buf_write.uint8 w ((if f.fin then 0x80 else 0) lor int_of_opcode f.opcode);
+  Eio.Buf_write.uint8 w
+    ((if f.fin then 0x80 else 0) lor (if f.rsv1 then 0x40 else 0) lor int_of_opcode f.opcode);
   let len = String.length f.payload in
   if len < 126 then Eio.Buf_write.uint8 w len
   else if len < 65536 then (

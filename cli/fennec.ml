@@ -222,6 +222,29 @@ let dev_cmd =
   in
   Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg)
 
+let embed_cmd =
+  let dir_arg =
+    let doc = "Directory to embed (e.g. public)." in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"DIR" ~doc)
+  in
+  let out_arg =
+    let doc = "Output OCaml file (a module mapping path -> bytes)." in
+    Arg.(value & opt string "public_assets.ml" & info [ "o"; "output" ] ~docv:"FILE" ~doc)
+  in
+  let doc = "Embed a directory tree into an OCaml module for compile-time bundling" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Walk $(i,DIR) and emit an OCaml module mapping each relative file path to its bytes, so \
+         the directory can be baked into the binary at compile time (prod) and served from \
+         memory. Intended to be driven by a dune rule, exactly like $(b,fennec build). The \
+         generated module exposes $(b,lookup : string -> string option) and $(b,paths : string \
+         list).";
+      `S Manpage.s_examples;
+      `Pre "  fennec embed public -o public_assets.ml" ]
+  in
+  Cmd.v (Cmd.info "embed" ~doc ~man) Term.(const Embed.run $ dir_arg $ out_arg)
+
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
   let man =
@@ -233,6 +256,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; embed_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

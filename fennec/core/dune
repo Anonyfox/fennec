@@ -5,4 +5,4 @@
 (library
  (name fennec_core)
  (public_name fennec.core)
- (libraries routes))
+ (libraries routes unix))

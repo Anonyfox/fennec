@@ -60,36 +60,68 @@ let is_ws_upgrade (p : parsed) =
   | Some v -> contains (String.lowercase_ascii v) "websocket"
   | None -> false
 
+let reason_phrase = function
+  | 200 -> "OK"
+  | 204 -> "No Content"
+  | 206 -> "Partial Content"
+  | 301 -> "Moved Permanently"
+  | 302 -> "Found"
+  | 304 -> "Not Modified"
+  | 400 -> "Bad Request"
+  | 403 -> "Forbidden"
+  | 404 -> "Not Found"
+  | 405 -> "Method Not Allowed"
+  | 416 -> "Range Not Satisfiable"
+  | 500 -> "Internal Server Error"
+  | _ -> "OK"
+
+let has_header_ci headers k =
+  let kl = String.lowercase_ascii k in
+  List.exists (fun (hk, _) -> String.lowercase_ascii hk = kl) headers
+
 let write_http (w : Eio.Buf_write.t) (resp : CH.response) ~keep_alive =
-  let reason =
-    match resp.CH.status with
-    | 200 -> "OK"
-    | 404 -> "Not Found"
-    | 403 -> "Forbidden"
-    | 500 -> "Internal Server Error"
-    | _ -> "OK"
-  in
-  Eio.Buf_write.string w (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status reason);
+  Eio.Buf_write.string w (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status (reason_phrase resp.CH.status));
   List.iter
     (fun (k, v) -> Eio.Buf_write.string w (Printf.sprintf "%s: %s\r\n" k v))
     resp.CH.headers;
-  Eio.Buf_write.string w (Printf.sprintf "content-length: %d\r\n" (String.length resp.CH.body));
+  (* Responder normally sets Content-Length; add it only if absent (e.g. for the
+     bare 404 error path that bypasses the app) *)
+  if not (has_header_ci resp.CH.headers "content-length") then
+    Eio.Buf_write.string w (Printf.sprintf "content-length: %d\r\n" (String.length resp.CH.body));
   Eio.Buf_write.string w
     (Printf.sprintf "connection: %s\r\n\r\n" (if keep_alive then "keep-alive" else "close"));
   Eio.Buf_write.string w resp.CH.body
 
-let ws_handshake (w : Eio.Buf_write.t) (p : parsed) : unit =
+(* returns whether permessage-deflate was negotiated for this connection *)
+let ws_handshake (w : Eio.Buf_write.t) (p : parsed) : bool =
   let key = match header p.headers "sec-websocket-key" with Some k -> k | None -> "" in
+  let pmd =
+    match header p.headers "sec-websocket-extensions" with
+    | Some v -> contains v "permessage-deflate" && !Deflate.enabled
+    | None -> false
+  in
+  let ext =
+    if pmd then
+      "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; \
+       client_no_context_takeover\r\n"
+    else ""
+  in
   Eio.Buf_write.string w
     ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
-      Sec-WebSocket-Accept: " ^ Ws.accept_key key ^ "\r\n\r\n");
-  Eio.Buf_write.flush w
+      Sec-WebSocket-Accept: " ^ Ws.accept_key key ^ "\r\n" ^ ext ^ "\r\n");
+  Eio.Buf_write.flush w;
+  pmd
 
 (* drive the websocket: one writer fiber serializes all outgoing frames; the
-   reader loop handles ping/pong/close and dispatches text to [ws.on_text] *)
-let serve_ws ~sw (r : Eio.Buf_read.t) (w : Eio.Buf_write.t) (setup : ws -> unit) =
+   reader loop handles ping/pong/close and dispatches text to [ws.on_text]. When
+   [pmd] (permessage-deflate) is negotiated, data frames are compressed (RSV1=1)
+   and incoming RSV1 frames are inflated; control frames are never compressed. *)
+let serve_ws ~sw ~pmd (r : Eio.Buf_read.t) (w : Eio.Buf_write.t) (setup : ws -> unit) =
   let outbox : Ws.frame Eio.Stream.t = Eio.Stream.create 256 in
-  let text_frame s = { Ws.fin = true; opcode = Ws.Text; payload = s } in
+  let text_frame s =
+    if pmd then { Ws.fin = true; rsv1 = true; opcode = Ws.Text; payload = Deflate.compress s }
+    else { Ws.fin = true; rsv1 = false; opcode = Ws.Text; payload = s }
+  in
   let ws =
     {
       send = (fun s -> Eio.Stream.add outbox (text_frame s));
@@ -110,20 +142,21 @@ let serve_ws ~sw (r : Eio.Buf_read.t) (w : Eio.Buf_write.t) (setup : ws -> unit)
     match try Ws.read_frame r with _ -> None with
     | None -> ws.on_close ()
     | Some { Ws.opcode = Ws.Close; _ } ->
-      Eio.Stream.add outbox { Ws.fin = true; opcode = Ws.Close; payload = "" };
+      Eio.Stream.add outbox { Ws.fin = true; rsv1 = false; opcode = Ws.Close; payload = "" };
       ws.on_close ()
     | Some { Ws.opcode = Ws.Ping; payload; _ } ->
-      Eio.Stream.add outbox { Ws.fin = true; opcode = Ws.Pong; payload };
+      Eio.Stream.add outbox { Ws.fin = true; rsv1 = false; opcode = Ws.Pong; payload };
       loop ()
     | Some { Ws.opcode = Ws.Pong; _ } -> loop ()
-    | Some { Ws.opcode = Ws.Text; payload; _ } ->
+    | Some { Ws.opcode = Ws.Text; payload; rsv1; _ } ->
+      let payload = if rsv1 then Deflate.decompress payload else payload in
       ws.on_text payload;
       loop ()
     | Some _ -> loop ()
   in
   loop ()
 
-let handle_conn ?on_ws (app : Fennec_core.App.t) flow _addr =
+let handle_conn ?on_ws ~now (app : Fennec_core.App.t) flow _addr =
   Eio.Switch.run @@ fun sw ->
   let r = Eio.Buf_read.of_flow flow ~max_size:(16 * 1024 * 1024) in
   Eio.Buf_write.with_flow flow @@ fun w ->
@@ -134,11 +167,15 @@ let handle_conn ?on_ws (app : Fennec_core.App.t) flow _addr =
       if is_ws_upgrade p then (
         match on_ws with
         | Some f ->
-          ws_handshake w p;
-          serve_ws ~sw r w (f (to_request p))
+          let pmd = ws_handshake w p in
+          serve_ws ~sw ~pmd r w (f (to_request p))
         | None -> write_http w (CH.text ~status:404 "no websocket here") ~keep_alive:false)
       else begin
-        let resp = Fennec_core.App.dispatch app (to_request p) in
+        let req = to_request p in
+        (* run the app, then apply airtight HTTP semantics (compression,
+           ETag/conditional, Date, Content-Length, HEAD) to EVERY response *)
+        let resp = Fennec_core.App.dispatch app req in
+        let resp = Responder.finalize ~now:(now ()) ~req resp in
         let keep_alive =
           match header p.headers "connection" with
           | Some v -> String.lowercase_ascii v <> "close"
@@ -152,12 +189,14 @@ let handle_conn ?on_ws (app : Fennec_core.App.t) flow _addr =
   loop ()
 
 (* run [app] on [port]; [on_ws req ws] sets up a websocket connection. Blocks
-   until the process stops. *)
+   until the process stops. The Date/conditional headers use the env clock. *)
 let run ~env ?on_ws ~port (app : Fennec_core.App.t) =
+  let clock = Eio.Stdenv.clock env in
+  let now () = Eio.Time.now clock in
   Eio.Switch.run @@ fun sw ->
   let socket =
     Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
       (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
   in
-  Eio.Net.run_server socket (handle_conn ?on_ws app) ~on_error:(fun e ->
+  Eio.Net.run_server socket (handle_conn ?on_ws ~now app) ~on_error:(fun e ->
       Printf.eprintf "fennec: %s\n%!" (Printexc.to_string e))

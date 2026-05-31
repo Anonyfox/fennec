@@ -9,9 +9,14 @@
 
 type handler = Http.request -> Http.response
 
+(* a fallthrough answers a request only if it matches (Some), else declines
+   (None). Static file serving plugs in here. *)
+type fallthrough = Http.request -> Http.response option
+
 type t = {
   mutable middlewares : Middleware.t list;
   mutable server_routes : (Http.meth * string * handler) list;
+  mutable fallthroughs : fallthrough list;
   mutable pages : handler Routes.router option;
   mutable not_found : handler;
 }
@@ -20,9 +25,17 @@ let create () =
   {
     middlewares = [];
     server_routes = [];
+    fallthroughs = [];
     pages = None;
     not_found = (fun _ -> Http.text ~status:404 "404 Not Found");
   }
+
+(* register a fallthrough handler (e.g. static files), tried after explicit
+   server routes and before universal pages. Order of registration is order of
+   trial. *)
+let use_fallthrough f t =
+  t.fallthroughs <- t.fallthroughs @ [ f ];
+  t
 
 let use mw t =
   t.middlewares <- t.middlewares @ [ mw ];
@@ -47,18 +60,33 @@ let not_found h t =
    App.page Routes.(s "tasks" / str /? nil) (fun id req -> ...) *)
 let page = Routes.( @--> )
 
+(* try each fallthrough in order; first Some wins *)
+let rec try_fallthroughs fs req =
+  match fs with
+  | [] -> None
+  | f :: rest -> ( match f req with Some r -> Some r | None -> try_fallthroughs rest req)
+
+(* precedence: middleware (may halt) -> explicit server routes -> fallthroughs
+   (static) -> universal pages -> 404. A HEAD with no explicit route is dispatched
+   as GET so static/pages answer it; the responder strips the body. *)
 let dispatch t (req : Http.request) : Http.response =
   let conn = Middleware.{ req; resp = None } in
   List.iter (fun mw -> if not (Middleware.halted conn) then mw conn) t.middlewares;
   match conn.resp with
   | Some r -> r (* a middleware short-circuited *)
   | None -> (
-    match List.find_opt (fun (m, p, _) -> m = req.meth && p = req.path) t.server_routes with
+    let route_meth = if req.meth = Http.HEAD then Http.GET else req.meth in
+    match
+      List.find_opt (fun (m, p, _) -> m = route_meth && p = req.path) t.server_routes
+    with
     | Some (_, _, h) -> h req (* explicit server route wins *)
     | None -> (
-      match t.pages with
-      | Some router -> (
-        match Routes.match' router ~target:req.path with
-        | Routes.FullMatch f | Routes.MatchWithTrailingSlash f -> f req
-        | Routes.NoMatch -> t.not_found req)
-      | None -> t.not_found req))
+      match try_fallthroughs t.fallthroughs req with
+      | Some r -> r
+      | None -> (
+        match t.pages with
+        | Some router -> (
+          match Routes.match' router ~target:req.path with
+          | Routes.FullMatch f | Routes.MatchWithTrailingSlash f -> f req
+          | Routes.NoMatch -> t.not_found req)
+        | None -> t.not_found req)))

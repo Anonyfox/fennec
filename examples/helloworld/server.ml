@@ -14,9 +14,22 @@ module Dev = Fennec_core.Dev
 module Page = Fennec_ui.Page
 module Srv = Fennec_server.Server
 module LR = Fennec_server.Livereload
+module Static = Fennec_server.Static
 
 let port = 8200
 let is_dev = try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true
+
+(* static public/ assets: read from disk in dev (live edits), serve the embedded
+   map in prod (single self-contained binary). The dev disk path is resolved from
+   the exe location up to the source tree. *)
+let public_source =
+  if is_dev then
+    let rec up n p = if n = 0 then p else up (n - 1) (Filename.dirname p) in
+    (* .../_build/default/examples/helloworld/server.exe -> repo root (strip the
+       filename + 4 dirs), then the source public/ dir *)
+    let root = up 5 Sys.executable_name in
+    Static.Dir (Filename.concat root "examples/helloworld/public")
+  else Static.Embedded Public_assets.lookup
 
 (* built assets sit next to the exe under _build *)
 let asset name = Filename.concat (Filename.dirname Sys.executable_name) name
@@ -56,6 +69,9 @@ let () =
     |> App.get "/react.js" (serve "application/javascript; charset=utf-8" react_js)
     |> App.get "/app.js" (serve "application/javascript; charset=utf-8" app_js)
     |> App.get "/app.css" (serve "text/css; charset=utf-8" css)
+    (* static public/ files (robots.txt, /img/logo.svg, …) served verbatim at
+       their paths, with MIME + ETag/304 + Range, before pages/404 *)
+    |> App.use_fallthrough (Static.handler public_source)
     |> App.pages [ App.page Routes.nil render_page ]
     |> App.not_found (fun _ -> H.text ~status:404 "not found")
   in

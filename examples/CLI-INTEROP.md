@@ -93,15 +93,48 @@ mode, so a prod build ships none of it.
   that when its surface is stable enough — NOT by parsing dune output (that would
   violate the principle). Marked here so it isn't forgotten. **← TODO: diagnostics.**
 
+## Static assets (`public/`) and HTTP semantics
+
+The `public/` tree is served verbatim at its paths (`public/img/logo.svg` →
+`/img/logo.svg`), with the same dev/prod split as everything else:
+
+- **Dev**: served from disk (`Fennec_server.Static.Dir`), so edits are live.
+- **Prod**: embedded into the binary at build time — a dune rule calls
+  `%{bin:fennec} embed public -o public_assets.ml` (same CLI-as-build-tool
+  pattern), and the server serves the baked-in map (`Static.Embedded`). The
+  result is a single self-contained executable with no asset dir to ship.
+  *Verified: the prod binary serves `public/` files with the directory deleted.*
+
+Both modes go through one `Static` path that is HTTP-airtight: correct MIME by
+extension, strong **ETag** (content hash) + **304** on `If-None-Match` /
+`If-Modified-Since`, **Range** requests (`206` / `416`), `Cache-Control`,
+`Accept-Ranges`, HEAD.
+
+**Compression and headers apply to EVERY response** (static and dynamic SSR),
+via `Responder.finalize`:
+
+- gzip/deflate per `Accept-Encoding` (q-values honoured), only for compressible
+  types past a min size, with `Vary: Accept-Encoding`. In-process real zlib.
+- ETag + conditional 304, `Date`, correct `Content-Length`, HEAD → empty body.
+
+**Decisions on record:**
+- **Compression: zlib gzip everywhere, on demand** (static + dynamic), per
+  request. Self-sufficient — no fronting proxy assumed (consistent with no-proxy).
+- **WebSocket permessage-deflate (RFC 7692)** is implemented (RSV1 + raw-deflate,
+  no_context_takeover) — required for real Meteor/DDP client interop, and good in
+  general.
+
 ## Current status (helloworld, verified)
 
 - `fennec build` builds CSS+JS as dune targets via `%{bin:fennec}`. ✓
-- Framework serves SSR HTML + assets over the Eio server; livereload script
-  injected in dev. ✓
-- Livereload end-to-end: SCSS edit → `dune --watch` → `app.css` → `css` frame
-  (hot-swap); JS edit → `reload` frame; backend edit → exe rebuild → server
-  restart. ✓
-- `fennec dev` orchestrates `dune build --watch` + server supervision. ✓
+- Isomorphic SSR + hydration: one `.mlx` → server render + client hydrate +
+  interactivity (jsdom-tested). ✓
+- Static `public/`: dev-from-disk and prod-embedded, with MIME/ETag/304/Range. ✓
+- Compression: gzip + deflate negotiation on static and dynamic, zlib in-process;
+  WS permessage-deflate. ✓
+- Livereload end-to-end + `fennec dev` orchestration. ✓
+- 120 framework unit tests (core + ws/gzip/deflate) + the isomorphic integration
+  test. ✓
 
-Not yet (future iterations): the Melange/MLX isomorphic client (SSR + hydration),
-the DDP/reactive data layer, npm convenience, diagnostics overlay.
+Not yet (future iterations): the DDP/reactive data layer (no mongo yet),
+diagnostics overlay (`dune rpc`).
