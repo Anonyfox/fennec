@@ -8,16 +8,18 @@ on:
 
 # Cross-platform proof for the native build chain: the same `dune build` must
 # compile the esbuild (Go) and CSS (Rust) static archives and link them on every
-# target OS, with no manual steps. As more packages land, add them to the build
-# matrix here; npm artifact jobs (melange.emit -> @fennec/*) get their own
-# workflow once those packages exist.
+# target OS, with no manual steps. As more packages land, add them to the matrix;
+# npm artifact jobs (melange.emit -> @fennec/*) get their own workflow once those
+# packages exist.
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13] # linux x64, macos arm64, macos x64
-        ocaml: ["5.3.x"]
+        include:
+          - os: ubuntu-latest # linux x64
+          - os: macos-latest # macos arm64
+          - os: macos-13 # macos x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,13 +44,18 @@ jobs:
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: ${{ matrix.ocaml }}
+          ocaml-compiler: "5.3"
 
-      - name: Install dependencies
-        run: opam install . --deps-only --with-test
+      # Buildkit's only OCaml dependency is dune itself; install it explicitly so
+      # the build never depends on a committed .opam being resolvable.
+      - name: Install dune
+        run: opam install dune --yes
 
       - name: Build
         run: opam exec -- dune build
 
       - name: Test
-        run: opam exec -- dune test
+        run: opam exec -- dune runtest
+
+      - name: Check opam metadata is in sync
+        run: opam exec -- dune build @check

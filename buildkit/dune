@@ -1,13 +1,21 @@
-; Build the native bundler archives for THIS platform and emit the linker flags
-; they need. esbuild -> Go c-archive (libfennec_esbuild.a + .h); css -> Rust
-; staticlib (libfennec_css.a); link_flags.sexp -> per-OS system libs. One rule,
-; cached on the native/ source tree, so it only re-runs when the shims change.
+; Compile the native bundler archives for THIS platform:
+;   esbuild -> Go c-archive (libfennec_esbuild.a + .h)
+;   css/scss -> Rust staticlib (libfennec_css.a)
+; Cached on the native/ source tree, so it only re-runs when the shims change.
 (rule
- (targets libfennec_esbuild.a libfennec_esbuild.h libfennec_css.a link_flags.sexp)
+ (targets libfennec_esbuild.a libfennec_esbuild.h libfennec_css.a)
  (deps
   (source_tree native))
  (action
   (run bash %{dep:native/build.sh})))
+
+; The exact system libraries this platform must link. Kept as its OWN
+; single-target rule (not bundled with the archive rule) so that
+; (c_library_flags (:include ...)) resolves it on every dune version.
+(rule
+ (target link_flags.sexp)
+ (action
+  (run bash %{dep:native/emit_flags.sh})))
 
 (library
  (name fennec_buildkit)
