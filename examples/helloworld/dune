@@ -30,9 +30,13 @@
 
 ; app bundle: melange client output -> one minified iife with react externalized
 ; to the runtime globals (require-shim banner).
+; Depend on the melange.emit @melange alias of client/ so dune builds the WHOLE
+; client_output tree (entry + shared_js + melange runtime) BEFORE esbuild bundles
+; it. A glob over the output dir does not force the emit to run first.
 (rule
  (target app.js)
  (deps
+  (alias client/melange)
   (glob_files_rec client/client_output/*)
   %{workspace_root}/fennec/ui/runtime/require_shim.js)
  (action
