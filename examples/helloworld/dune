@@ -104,8 +104,7 @@
 (executable
  (name server)
  (modules server webroot_assets)
- (libraries fennec.core fennec.server fennec.ui app_native
-   server-reason-react.react server-reason-react.reactDom eio eio_main routes unix))
+ (libraries fennec app_native server-reason-react.react server-reason-react.reactDom))
 
 ; The isomorphic integration test (test/hydration.test.mjs) is a node script run
 ; OUTSIDE dune (it needs node + node_modules, which don't belong in dune's

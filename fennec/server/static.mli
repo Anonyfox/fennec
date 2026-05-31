@@ -14,5 +14,5 @@ type source = Dir of string | Embedded of (string -> string option)
     (caller falls through to pages / 404). A 403 is returned for an unsafe path. *)
 val respond : ?cache_control:string -> source -> H.request -> H.response option
 
-(** Mount as an [App.use_fallthrough] handler. *)
+(** A request → optional-response function to wrap in [App.fallthrough]. *)
 val handler : ?cache_control:string -> source -> H.request -> H.response option

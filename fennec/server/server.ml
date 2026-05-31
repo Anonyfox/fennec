@@ -1,5 +1,5 @@
 (* The native I/O shell — a compact HTTP/1.1 + WebSocket server over Eio (no
-   cohttp, no Lwt). It parses requests, runs the pure [Fennec_core.App.dispatch]
+   cohttp, no Lwt). It parses requests, runs the pure [Fennec_core.App.run]
    for HTTP, and upgrades [Upgrade: websocket] connections to a text-message
    channel ([ws]) the caller drives. Single port; the only non-portable part of
    the framework. RFC 6455 framing lives in [Ws]. *)
@@ -254,7 +254,7 @@ let handle_conn ?on_ws ~now ~timeout (app : Fennec_core.App.t) flow _addr =
            clean 500 (never a dropped connection / partial write) — we only write
            AFTER finalize succeeds. *)
         let resp =
-          try Responder.finalize ~now:(now ()) ~req (Fennec_core.App.dispatch app req)
+          try Responder.finalize ~now:(now ()) ~req (Fennec_core.App.run app req)
           with exn ->
             Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
             Responder.finalize ~now:(now ()) ~req (CH.text ~status:500 "Internal Server Error")

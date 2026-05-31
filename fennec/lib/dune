@@ -1,0 +1,9 @@
+; The userland facade — `Fennec`. The one library an app depends on: it owns the
+; Eio entry point, dev/prod mode, static web-root serving, livereload, and the
+; server lifecycle, exposing a short pipe of intent (app |> get … |> serve).
+; Re-exports Http/Page so userland needs no internal module paths.
+(library
+ (name fennec)
+ (public_name fennec)
+ (modes native)
+ (libraries fennec.core fennec.server fennec.ui eio eio_main))
