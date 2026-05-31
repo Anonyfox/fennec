@@ -118,6 +118,25 @@ Dev serves `webroot/` from disk; prod serves the embedded map — one
 bundle (`/app.js`) and a public file (`/robots.txt`) with the `webroot/` dir
 physically deleted.*
 
+### Two orthogonal dev/prod axes (don't conflate them)
+
+- **`FENNEC_ENV` (runtime)** — read by the running binary. Selects disk vs
+  embedded serving, livereload on/off, the injected dev script. One flag, the
+  sole *runtime* mode switch. `fennec dev` sets `FENNEC_ENV=development`; unset
+  defaults to dev.
+- **`--profile dev|release` (build)** — selects whether the binary actually
+  *carries* the embedded assets. The embed module is generated with the real
+  bytes only under `release`; under `dev` it is an **empty stub**
+  (`lookup _ = None`) with no dependency on the asset bytes.
+
+Why the build axis matters — measured: the embed module is compiled *into*
+`server.exe`. If it always carried the real bytes, **a CSS edit would relink the
+executable** (the module depends on `app.css`), dragging the OCaml exe recompile
+into every asset edit (~0.9s). The dev stub breaks that dependency, so an asset
+edit rebuilds only the bundle + reassembles `webroot/` — no relink (~0.25s). A
+runtime flag can't fix a build-time link dependency; hence two axes. They align
+in practice (dev profile + dev env together) but are not the same lever.
+
 The `public/` tree is served verbatim at its paths (`public/img/logo.svg` →
 `/img/logo.svg`).
 
