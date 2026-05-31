@@ -104,9 +104,9 @@ let run inputs outdir minify format global_name external_ sourcemap banner banne
        (* 2a. copy pre-built bundle files (from sibling dune rules) into the web
           root, clash-checked *)
        List.iter
-         (fun src ->
-           match Webroot.include_file ~outdir ~src with
-           | Ok () -> Printf.printf "  include %-20s -> %s/%s\n" src outdir (Filename.basename src)
+         (fun spec ->
+           match Webroot.include_file ~outdir ~spec with
+           | Ok () -> Printf.printf "  include %-24s -> %s/\n" spec outdir
            | Error msg -> failwith msg)
          includes;
        (* 2b. stage public/ INTO the web root (after bundles, so clashes with a

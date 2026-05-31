@@ -1,5 +1,5 @@
 ; Colocated unit tests for the server modules. Each gets its own executable.
 (tests
- (names test_ws test_gzip test_static)
+ (names test_ws test_gzip test_static test_endpoint)
  (modes native)
- (libraries fennec.core fennec.server eio eio_main))
+ (libraries fennec.core fennec.paw fennec.server eio eio_main))

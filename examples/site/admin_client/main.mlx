@@ -1,0 +1,5 @@
+(* Admin app client entry: hydrate the admin router (its own bundle). *)
+let () =
+  Fennec_router.Router.make ()
+  |> Site_ui_melange.Admin_router.routes
+  |> Fennec_router.Router.hydrate

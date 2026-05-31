@@ -1,0 +1,11 @@
+(* A shared nav bar. Plain <a> links; the client router intercepts same-origin
+   clicks for SPA navigation (full-page nav still works without JS). *)
+
+let[@react.component] make ~links () =
+  <nav className="nav">
+    (React.array
+       (Array.of_list
+          (List.map
+             (fun (href, label) -> <a key=href href=href className="nav-link">(React.string label)</a>)
+             links)))
+  </nav>

@@ -5,4 +5,4 @@
 (library
  (name fennec_server)
  (public_name fennec.server)
- (libraries fennec.core eio eio.unix digestif base64 zlib bigstringaf))
+ (libraries fennec.core fennec.paw eio eio.unix digestif base64 zlib bigstringaf))

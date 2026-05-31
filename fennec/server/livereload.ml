@@ -31,6 +31,34 @@ let broadcast t (msg : string) =
 
 let count t = Hashtbl.length t.clients
 
+(* The dev livereload paw. Mounted FIRST in every endpoint's pipeline (see
+   Fennec.serve), it does two jobs with one paw — both built on existing
+   primitives, no special server hook:
+     - the livereload socket itself: a ws upgrade on [Dev.endpoint] registers the
+       browser's channel (so asset watchers can push "reload"/"css" frames) and
+       unregisters on close;
+     - every other request: registers a before_send that injects the tiny client
+       script into HTML responses in memory (never on disk), so the browser opens
+       that socket. It passes the conn through (the app still answers).
+   Because it runs before the answering paws, the injection hook is registered even
+   though the app short-circuits the pipeline. *)
+let is_html_response (r : Fennec_core.Http.response) : bool =
+  match Fennec_core.Http_semantics.header r.Fennec_core.Http.headers "content-type" with
+  | Some ct -> String.length ct >= 9 && String.sub ct 0 9 = "text/html"
+  | None -> false
+
+let paw (t : t) : Fennec_paw.Paw.t =
+ fun c ->
+  if Fennec_paw.Conn.path c = Fennec_core.Dev.endpoint then
+    Fennec_paw.Conn.upgrade c (fun (ch : Fennec_core.Ws_channel.t) ->
+        let unregister = register t ch.Fennec_core.Ws_channel.send in
+        ch.Fennec_core.Ws_channel.on_close <- unregister)
+  else
+    Fennec_paw.Conn.before_send c (fun r ->
+        if is_html_response r then
+          { r with Fennec_core.Http.body = Fennec_core.Dev.inject_html r.Fennec_core.Http.body }
+        else r)
+
 type kind = Css | Reload
 
 (* poll [path]'s mtime every [interval] seconds; on change, [on_change ()] then

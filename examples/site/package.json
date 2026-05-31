@@ -1,0 +1,8 @@
+{
+  "name": "fennec-site-example",
+  "private": true,
+  "description": "Fennec multi-endpoint multi-app example — preact client runtime, jsdom test.",
+  "dependencies": { "preact": "^10.24.0" },
+  "devDependencies": { "jsdom": "^25.0.0" },
+  "scripts": { "test": "node test/site.test.mjs" }
+}

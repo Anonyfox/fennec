@@ -1,0 +1,14 @@
+; Native SSR side of the isomorphic <Head>: the per-render context sink, the
+; shared <Head> component (copied from ../head_component.ml), and render_collect.
+(library
+ (name fennec_headkit)
+ (public_name fennec.headkit)
+ (modes native)
+ (flags
+  (:standard -w -27-32-33-37-39))
+ (libraries fennec.head server-reason-react.react server-reason-react.reactDom)
+ (preprocess
+  (pps server-reason-react.browser_ppx server-reason-react.melange_ppx server-reason-react.ppx)))
+
+(copy_files#
+ (files ../head_component.ml))

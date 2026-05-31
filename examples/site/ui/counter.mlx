@@ -1,0 +1,8 @@
+(* A shared interactive component, used by both apps. Isomorphic: server-rendered
+   then hydrated; the button is live after hydration. *)
+
+let[@react.component] make ~label () =
+  let count, set = React.useState (fun () -> 0) in
+  <button className="counter" onClick=(fun _ -> set (fun c -> c + 1))>
+    (React.string (label ^ ": " ^ string_of_int count))
+  </button>

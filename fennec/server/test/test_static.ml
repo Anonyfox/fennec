@@ -124,6 +124,28 @@ let () =
   check "HEAD empty body" (head.H.body = "");
   check "HEAD has content-length" (Fennec_core.Http_semantics.header head.H.headers "content-length" <> None);
 
+  (* Embedded source (prod): same respond logic, bytes from a baked-in map.
+     This is the path a release binary takes via Static.Embedded <assets.lookup>. *)
+  print_endline "Static — embedded (prod):";
+  let table =
+    [ ("index.html", "<h1>baked</h1>"); ("robots.txt", "User-agent: *\nDisallow: /\n");
+      ("app.js", String.make 2000 'j') ]
+  in
+  let emb = Static.Embedded (fun k -> List.assoc_opt k table) in
+  let eserve r = Static.respond emb r in
+  eq "embedded index served" (status_of (eserve (req "/"))) 200;
+  eq "embedded index body" (body_of (eserve (req "/"))) "<h1>baked</h1>";
+  eq "embedded mime" (hdr (eserve (req "/")) "content-type") (Some "text/html; charset=utf-8");
+  eq "embedded js served" (status_of (eserve (req "/app.js"))) 200;
+  eq "embedded missing -> None" (status_of (eserve (req "/nope.js"))) 0;
+  eq "embedded traversal -> 403" (status_of (eserve (req "/../etc/passwd"))) 403;
+  let eetag = match hdr (eserve (req "/robots.txt")) "etag" with Some e -> e | None -> "" in
+  check "embedded has etag" (eetag <> "");
+  eq "embedded If-None-Match -> 304"
+    (status_of (eserve (req ~headers:[ ("If-None-Match", eetag) ] "/robots.txt"))) 304;
+  eq "embedded Range -> 206"
+    (status_of (eserve (req ~headers:[ ("Range", "bytes=0-9") ] "/app.js"))) 206;
+
   (* cleanup *)
   (try Sys.remove (Filename.concat root "escape") with _ -> ());
   List.iter (fun f -> try Sys.remove (Filename.concat root f) with _ -> ())

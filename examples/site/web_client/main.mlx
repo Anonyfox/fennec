@@ -1,0 +1,7 @@
+(* Web app client entry: hydrate the SAME web router the server SSR'd. The route
+   table is shared (Site_ui_melange.Web_router); the router applies each page's <Head> to
+   the live document and handles SPA navigation. *)
+let () =
+  Fennec_router.Router.make ()
+  |> Site_ui_melange.Web_router.routes
+  |> Fennec_router.Router.hydrate

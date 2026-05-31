@@ -1,0 +1,12 @@
+(* Admin app — dashboard. A SEPARATE app (own bundle, own endpoint/domain),
+   reusing the SAME shared Counter component — proving cross-app component reuse. *)
+
+module Head = Fennec_headkit.Head_component
+
+let make (_params : (string * string) list) =
+  <main className="page admin">
+    <Head title={js|Dashboard — Admin|js} description="Internal admin dashboard." />
+    <h1>(React.string "Admin Dashboard")</h1>
+    <p>(React.string "A different app on a different endpoint, sharing components.")</p>
+    <Counter label="admin actions" />
+  </main>

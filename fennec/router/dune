@@ -1,0 +1,8 @@
+; The pure path-pattern matcher — Stdlib only, both targets, so route matching is
+; identical on server (SSR) and client (CSR). The target-specific router (holding
+; React pages + layout) lives in native/ and melange/.
+(library
+ (name fennec_matcher)
+ (public_name fennec.matcher)
+ (modes native melange)
+ (modules matcher))

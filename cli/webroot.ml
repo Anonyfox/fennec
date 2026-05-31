@@ -38,16 +38,23 @@ let rec mkdir_p dir =
     (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
   end
 
-(* Copy a pre-built file [src] into [outdir] at its basename (a bundle built by a
-   sibling dune rule). A clash with a file already in [outdir] is a hard error. *)
-let include_file ~outdir ~src : (unit, string) result =
+(* Copy a pre-built file into [outdir] (a bundle built by a sibling dune rule).
+   [spec] is either "path" (kept at its basename) or "path:dest" (placed at
+   [dest], e.g. "web.js:app.js"). A clash with a file already in [outdir] is a
+   hard error. *)
+let include_file ~outdir ~spec : (unit, string) result =
+  let src, dest =
+    match String.index_opt spec ':' with
+    | Some i -> (String.sub spec 0 i, String.sub spec (i + 1) (String.length spec - i - 1))
+    | None -> (spec, Filename.basename spec)
+  in
   if not (Sys.file_exists src) then Error (Printf.sprintf "--include: %s not found" src)
   else
-    let dst = Filename.concat outdir (Filename.basename src) in
+    let dst = Filename.concat outdir dest in
     if Sys.file_exists dst then
       Error
         (Printf.sprintf "clash: included file %S collides with another web-root file at the same path"
-           (Filename.basename src))
+           dest)
     else begin
       mkdir_p (Filename.dirname dst);
       write_file dst (read_file src);

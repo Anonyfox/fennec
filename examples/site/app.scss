@@ -1,0 +1,8 @@
+$brand: #e8590c;
+body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+body.admin { --accent: #1971c2; }
+.nav { display: flex; gap: 1rem; border-bottom: 1px solid #eee; padding-bottom: .6rem; margin-bottom: 1rem;
+  .nav-link { color: $brand; text-decoration: none; &:hover { text-decoration: underline; } } }
+h1 { color: $brand; }
+.counter { font: inherit; padding: .4rem .9rem; border: 1px solid $brand; background: #fff; color: $brand; border-radius: 6px; cursor: pointer;
+  &:hover { background: $brand; color: #fff; } }

@@ -1,1 +1,0 @@
-fennec static asset, served verbatim from /hello.txt

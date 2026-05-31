@@ -1,14 +1,14 @@
 (* The native I/O shell — a compact HTTP/1.1 + WebSocket server over Eio (no
-   cohttp, no Lwt). It parses requests, runs the pure [Fennec_core.App.run]
-   for HTTP, and upgrades [Upgrade: websocket] connections to a text-message
-   channel ([ws]) the caller drives. Single port; the only non-portable part of
-   the framework. RFC 6455 framing lives in [Ws]. *)
+   cohttp, no Lwt). It parses requests, runs each Endpoint's paw pipeline
+   ([Paw.run_conn]), writes the HTTP response (or performs the RFC 6455 upgrade
+   when a paw requested one), and dispatches across endpoints by Host + port. The
+   only non-portable part of the framework. Framing lives in [Ws]. *)
 
 module CH = Fennec_core.Http
 
-(* a live websocket connection as a text-message channel. The handler sets
-   [on_text]/[on_close]; [send] is safe to call from any fiber (serialized). *)
-type ws = {
+(* the live websocket channel type lives in core (Ws_channel) so paws can
+   reference it; the server provides the concrete [send] *)
+type ws = Fennec_core.Ws_channel.t = {
   send : string -> unit;
   mutable on_text : string -> unit;
   mutable on_close : unit -> unit;
@@ -225,7 +225,22 @@ let want_keep_alive (p : parsed) : bool =
   | Some v when contains v "keep-alive" -> true
   | _ -> is_11
 
-let handle_conn ?on_ws ~now ~timeout (app : Fennec_core.App.t) flow _addr =
+module Conn = Fennec_paw.Conn
+module Paw = Fennec_paw.Paw
+
+(* select the endpoint whose host pattern matches the request's Host header;
+   first match wins, falling back to the first endpoint if none match (so a bare
+   IP / missing Host still gets served) *)
+let select_endpoint (endpoints : Endpoint.t list) (p : parsed) : Endpoint.t option =
+  let host = match header p.headers "host" with Some h -> h | None -> "" in
+  match List.find_opt (fun e -> Endpoint.host_matches e host) endpoints with
+  | Some e -> Some e
+  | None -> ( match endpoints with e :: _ -> Some e | [] -> None)
+
+(* Handle one connection. [endpoints] are those sharing this listen port; each
+   request picks its endpoint by Host. A paw pipeline may answer with an HTTP
+   response OR a websocket upgrade (the ws is itself a paw). *)
+let handle_conn ~now ~timeout (endpoints : Endpoint.t list) flow _addr =
   Eio.Switch.run @@ fun sw ->
   let r = Eio.Buf_read.of_flow flow ~max_size:(16 * 1024 * 1024) in
   Eio.Buf_write.with_flow flow @@ fun w ->
@@ -234,63 +249,85 @@ let handle_conn ?on_ws ~now ~timeout (app : Fennec_core.App.t) flow _addr =
     Eio.Buf_write.flush w
   in
   let rec loop () =
-    (* read the next request under an idle/header timeout so a slowloris or a
-       stalled keep-alive connection can't tie up this fiber forever *)
+    (* read the next request under an idle/header timeout (slowloris defense) *)
     match Eio.Time.Timeout.run timeout (fun () -> Ok (read_request r)) with
-    | Error `Timeout -> () (* drop a stalled connection silently *)
+    | Error `Timeout -> ()
     | Ok Conn_eof -> ()
     | Ok (Bad_request _) -> respond_and_close (CH.text ~status:400 "Bad Request")
     | Ok (Too_large _) -> respond_and_close (CH.text ~status:413 "Payload Too Large")
-    | Ok (Req p) ->
-      if is_ws_upgrade p then (
-        match on_ws with
-        | Some f ->
-          let pmd = ws_handshake w p in
-          serve_ws ~sw ~pmd r w (f (to_request p))
-        | None -> respond_and_close (CH.text ~status:404 "no websocket here"))
-      else begin
-        let req = to_request p in
-        (* run the app + airtight HTTP semantics. A handler exception becomes a
-           clean 500 (never a dropped connection / partial write) — we only write
-           AFTER finalize succeeds. *)
-        let resp =
-          try Responder.finalize ~now:(now ()) ~req (Fennec_core.App.run app req)
+    | Ok (Req p) -> (
+      let req = to_request p in
+      let endpoint = select_endpoint endpoints p in
+      (* run the endpoint's paw pipeline to a conn. A handler exception becomes a
+         clean 500 (never a dropped connection / partial write). *)
+      let conn =
+        match endpoint with
+        | None -> Conn.respond (Conn.make req) (CH.text ~status:404 "no endpoint")
+        | Some e -> (
+          try Paw.run_conn (Endpoint.handler e) req
           with exn ->
             Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
-            Responder.finalize ~now:(now ()) ~req (CH.text ~status:500 "Internal Server Error")
+            Conn.respond (Conn.make req) (CH.text ~status:500 "Internal Server Error"))
+      in
+      match Conn.upgrade_handler conn with
+      | Some setup when is_ws_upgrade p ->
+        (* a paw requested a websocket upgrade *)
+        let pmd = ws_handshake w p in
+        serve_ws ~sw ~pmd r w setup
+      | _ ->
+        (* HTTP response: run before_send hooks (e.g. security headers), then
+           finalize (compression, ETag/304, Date, Content-Length) *)
+        let resp =
+          match Conn.resp conn with Some r -> r | None -> CH.text ~status:404 "404 Not Found"
         in
+        let resp = Conn.apply_before_send conn resp in
+        let resp = try Responder.finalize ~now:(now ()) ~req resp with _ -> resp in
         let keep_alive = want_keep_alive p in
         write_http w resp ~keep_alive;
         Eio.Buf_write.flush w;
-        if keep_alive then loop ()
-      end
+        if keep_alive then loop ())
   in
   loop ()
 
-(* run [app] on [port]; [on_ws req ws] sets up a websocket connection. Blocks
-   until the process stops. The Date/conditional headers use the env clock.
-   @param timeout    per-request idle/header read timeout in seconds (slowloris
-                     defense). Default 30s.
-   @param max_conns  cap on concurrently-served connections (resource bound).
-                     Default 10_000. Excess connections wait for a slot. *)
-let run ?(timeout = 30.0) ?(max_conns = 10_000) ~env ?on_ws ~port (app : Fennec_core.App.t) =
+(* Run [endpoints], blocking. Endpoints sharing a listen port are grouped onto one
+   socket and selected per-request by Host pattern (prod) — so one process serves
+   many subdomains/wildcards. In dev each endpoint listens on its own [dev_port]
+   on localhost (no /etc/hosts / proxy needed).
+   @param dev       dev mode (use dev_port + lenient host). Default from FENNEC_ENV.
+   @param timeout   per-request idle/header read timeout, seconds (default 30).
+   @param max_conns concurrent-connection cap (default 10_000). *)
+let run ?(timeout = 30.0) ?(max_conns = 10_000) ?dev ~env (endpoints : Endpoint.t list) =
+  let dev =
+    match dev with
+    | Some d -> d
+    | None -> ( try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true)
+  in
   let clock = Eio.Stdenv.clock env in
   let now () = Eio.Time.now clock in
   let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) timeout in
-  (* a counting semaphore bounds in-flight connections *)
   let slots = Eio.Semaphore.make max_conns in
+  (* group endpoints by their listen port for this mode *)
+  let ports = Hashtbl.create 8 in
+  List.iter
+    (fun e ->
+      let port = Endpoint.listen_port ~dev e in
+      Hashtbl.replace ports port (e :: (try Hashtbl.find ports port with Not_found -> [])))
+    endpoints;
   Eio.Switch.run @@ fun sw ->
-  let socket =
-    Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
-  in
-  let handle flow addr =
-    Eio.Semaphore.acquire slots;
-    Fun.protect
-      ~finally:(fun () -> Eio.Semaphore.release slots)
-      (fun () -> handle_conn ?on_ws ~now ~timeout app flow addr)
-  in
-  Eio.Net.run_server socket handle ~on_error:(fun e ->
-      (* connection-level errors (client resets, parse failures past the response)
-         are logged but never crash the server *)
-      Printf.eprintf "fennec: connection error: %s\n%!" (Printexc.to_string e))
+  Hashtbl.iter
+    (fun port group ->
+      let group = List.rev group (* preserve declaration order for host matching *) in
+      let socket =
+        Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
+          (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
+      in
+      let handle flow addr =
+        Eio.Semaphore.acquire slots;
+        Fun.protect
+          ~finally:(fun () -> Eio.Semaphore.release slots)
+          (fun () -> handle_conn ~now ~timeout group flow addr)
+      in
+      Eio.Fiber.fork ~sw (fun () ->
+          Eio.Net.run_server socket handle ~on_error:(fun e ->
+              Printf.eprintf "fennec: connection error: %s\n%!" (Printexc.to_string e))))
+    ports

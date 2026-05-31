@@ -11,7 +11,7 @@ the rule wins — change the design, not the rule (or change this doc deliberate
 | **dune** | (the build tool) | The build graph. The **only** source-tree watcher. Builds everything — OCaml server, Melange client, and assets (CSS/JS) — because assets are dune rules that call the CLI. |
 | **CLI** (`fennec`) | `cli/`, package `fennec-cli` | Operational lifecycle only: `fennec build` (one-shot asset build, invoked *by* dune rules) and `fennec dev` (orchestrates `dune build --watch` + supervises the server process). Distributed as a prebuilt binary. |
 | **Framework** (`fennec`) | `fennec/`, package `fennec` | The runtime: HTTP core, Eio server, livereload. Reacts to build **outputs**, never to source. Shipped to opam. |
-| **User app** | e.g. `examples/helloworld/` | A **plain dune project**. Depends on the framework lib; uses dune rules that call the CLI for assets. Knows nothing about the CLI's existence at the code level. |
+| **User app** | e.g. `examples/site/` | A **plain dune project**. Depends on the framework lib; uses dune rules that call the CLI for assets. Knows nothing about the CLI's existence at the code level. |
 
 ## The load-bearing principle
 
@@ -36,7 +36,7 @@ keeps the parts decoupled.
 ## Asset pipeline (how CSS/JS/npm get built)
 
 Assets are **dune rules that call the CLI**, so there is ONE build graph and ONE
-watcher for everything. Example (`examples/helloworld/dune`):
+watcher for everything. Example (an app's `dune`):
 
 ```lisp
 (rule (targets app.css) (deps src/app.scss)
@@ -159,17 +159,31 @@ via `Responder.finalize`:
   no_context_takeover) — required for real Meteor/DDP client interop, and good in
   general.
 
-## Current status (helloworld, verified)
+## Current status (site, verified)
+
+The core is an Elixir/Phoenix/Plug-inspired primitive: a **Paw** (`conn -> conn`)
+that touches a connection — middleware, routes, static, the websocket, and the SSR
+app are all paws. An **Endpoint** binds a (host pattern, port) to a paw pipeline; a
+server runs many endpoints (dev: each on its own localhost port; prod: shared port,
+selected by Host pattern). See `examples/site/` for the full surface.
 
 - `fennec build` builds CSS+JS as dune targets via `%{bin:fennec}`. ✓
+- Paw core: typed assigns, pipelines, routes, halting — colocated unit tests. ✓
+- Multi-endpoint / multi-app: two apps (web + admin) on two endpoints/domains,
+  per-app asset bundles, shared components by reference. ✓
+- Universal router + `.App` paw: path → `.mlx` page map with an SSR layout
+  (overridable for whitelabeling). ✓
 - Isomorphic SSR + hydration: one `.mlx` → server render + client hydrate +
   interactivity (jsdom-tested). ✓
+- Helmet-like `<Head>`: metadata set in the tree, child-wins, identical SSR + CSR,
+  via a per-render context sink (no globals, works on any React/Preact). ✓
 - Static `public/`: dev-from-disk and prod-embedded, with MIME/ETag/304/Range. ✓
 - Compression: gzip + deflate negotiation on static and dynamic, zlib in-process;
   WS permessage-deflate. ✓
-- Livereload end-to-end + `fennec dev` orchestration. ✓
-- 120 framework unit tests (core + ws/gzip/deflate) + the isomorphic integration
-  test. ✓
+- Livereload end-to-end (the websocket is itself a paw) + `fennec dev`
+  orchestration. ✓
+- Full framework unit suite (core + paw + ws/gzip/deflate + endpoint/static/head)
+  + the multi-app isomorphic integration test. ✓
 
 Not yet (future iterations): the DDP/reactive data layer (no mongo yet),
 diagnostics overlay (`dune rpc`).
