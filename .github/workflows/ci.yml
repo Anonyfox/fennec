@@ -44,28 +44,20 @@ jobs:
         with:
           workspaces: buildkit/native/rust
 
-      # setup-ocaml caches ONLY the base switch (compiler + repo) — by design it
-      # never caches project dependencies. dune-cache: true additionally caches
-      # dune's build artifacts, including our native rule outputs (the Go/Rust
-      # .a archives), so warm builds skip recompiling them.
+      # setup-ocaml caches the opam root AND the local _opam switch, which
+      # includes the dune it installs. BUT its cache key is stable, so the first
+      # run froze a switch and later runs restore it without ever re-saving — and
+      # setup-ocaml then recompiles dune from source every run (~80s on macOS, the
+      # single slowest thing in CI). Bumping cache-prefix forces a fresh save that
+      # captures the post-install switch (dune included), so warm runs restore it.
+      # dune-cache additionally persists dune's build artifacts (incl. the native
+      # Go/Rust archives). Bump the prefix suffix whenever the switch goes stale.
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.3"
           dune-cache: true
-
-      # Persist the installed project dependencies (cmdliner + dune) across runs.
-      # setup-ocaml won't, so without this every run recompiles dune from source
-      # (~the slowest CI step). Keyed on the opam-file set + compiler, so it
-      # auto-invalidates the moment a dependency changes — never stale. The OS is
-      # in the key, so each matrix leg has its own cache.
-      - name: Cache opam dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.opam
-          key: opam-deps-${{ matrix.os }}-ocaml5.3-${{ hashFiles('**/*.opam', 'dune-project') }}
-          restore-keys: |
-            opam-deps-${{ matrix.os }}-ocaml5.3-
+          cache-prefix: fennec-v1
 
       - name: Install dependencies
         run: opam install . --deps-only --with-test --yes
