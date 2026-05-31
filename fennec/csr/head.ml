@@ -86,7 +86,8 @@ let[@react.component] component ~(tags : Head.tag list) =
 
 (* The PUBLIC <Head>. A PLAIN labelled function (identical signature to the native
    runtime's [make]) so the one shared component compiles to both targets. It
-   delegates to the internal hook component. *)
+   instantiates the internal hook component via createElement + the ppx-generated
+   props builder ([componentProps]). *)
 let make ?title ?description ?canonical ?(extra = []) () : React.element =
   let tags = Head.of_props ?title ?description ?canonical ~extra () in
-  component ~tags
+  React.createElement component (componentProps ~tags ())
