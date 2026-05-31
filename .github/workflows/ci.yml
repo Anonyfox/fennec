@@ -44,20 +44,30 @@ jobs:
         with:
           workspaces: buildkit/native/rust
 
-      # setup-ocaml caches the opam root AND the local _opam switch, which
-      # includes the dune it installs. BUT its cache key is stable, so the first
-      # run froze a switch and later runs restore it without ever re-saving — and
-      # setup-ocaml then recompiles dune from source every run (~80s on macOS, the
-      # single slowest thing in CI). Bumping cache-prefix forces a fresh save that
-      # captures the post-install switch (dune included), so warm runs restore it.
-      # dune-cache additionally persists dune's build artifacts (incl. the native
-      # Go/Rust archives). Bump the prefix suffix whenever the switch goes stale.
+      # Cache the LOCAL switch (_opam) ourselves, keyed on the opam-file set +
+      # compiler. This is what makes warm runs fast: it persists the *built*
+      # dune + cmdliner so they are never recompiled (dune-from-source was ~68s
+      # on macOS, the single slowest step). The key changes only when a
+      # dependency changes, so it is never stale; restore-keys lets an unrelated
+      # change still reuse a prior switch as a base. Restored AFTER setup-ocaml
+      # lays down the compiler, and saved in POST with deps present.
+      #
+      # NOTE: dune-cache is intentionally OFF — enabling it makes setup-ocaml run
+      # its own `opam install dune` (compiling from source) before this cache can
+      # help, which is exactly the cost we are removing.
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.3"
-          dune-cache: true
           cache-prefix: fennec-v1
+
+      - name: Cache opam switch (built deps)
+        uses: actions/cache@v4
+        with:
+          path: _opam
+          key: opam-switch-${{ matrix.os }}-ocaml5.3-${{ hashFiles('**/*.opam', 'dune-project') }}
+          restore-keys: |
+            opam-switch-${{ matrix.os }}-ocaml5.3-
 
       - name: Install dependencies
         run: opam install . --deps-only --with-test --yes
