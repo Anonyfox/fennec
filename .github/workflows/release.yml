@@ -31,27 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache-dependency-path: buildkit/native/go/go.sum
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: buildkit/native/rust
-
-      - name: Set up OCaml
-        uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.3"
-
-      - name: Install dependencies
-        run: opam install . --deps-only --yes
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
       - name: Build release binary
         run: opam exec -- dune build --profile release

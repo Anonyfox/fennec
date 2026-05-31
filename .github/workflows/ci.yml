@@ -9,7 +9,7 @@ on:
 # Builds the `fennec` CLI (statically linking the esbuild/Go and CSS/Rust
 # archives) and runs the buildkit test suite on every target OS. Proves the
 # native chain compiles and links with no manual steps. The release workflow
-# reuses this same build to ship prebuilt binaries.
+# reuses the same setup action to ship prebuilt binaries.
 jobs:
   build:
     strategy:
@@ -22,74 +22,13 @@ jobs:
           # once availability improves. The native chain is identical to arm64.
           # - os: macos-13 # macos x64
     runs-on: ${{ matrix.os }}
-    # Turn on dune's content-addressed build cache and pin its location so we can
-    # persist it. This is what lets the ~75s native archive rule (Go c-archive +
-    # Rust staticlib) be skipped on warm runs: when buildkit/native is unchanged,
-    # dune restores the prior .a/.h outputs instead of re-running native/build.sh.
-    env:
-      DUNE_CACHE: enabled
-      DUNE_CACHE_STORAGE_MODE: copy
-      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
     steps:
       - uses: actions/checkout@v4
 
-      # Go: setup-go caches the module + build caches keyed on go.sum, which also
-      # covers the cgo c-archive build cache between runs.
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Set up build environment
+        uses: ./.github/actions/setup
         with:
-          go-version: "1.24"
-          cache-dependency-path: buildkit/native/go/go.sum
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      # Caches ~/.cargo/{registry,git} AND the build target/ dir (116 crates), so
-      # the Rust archive isn't recompiled from scratch every run. Keyed on the
-      # lockfile; prunes stale deps automatically.
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: buildkit/native/rust
-
-      # Cache the LOCAL switch (_opam) ourselves, keyed on the opam-file set +
-      # compiler. This is what makes warm runs fast: it persists the *built*
-      # dune + cmdliner so they are never recompiled (dune-from-source was ~68s
-      # on macOS, the single slowest step). The key changes only when a
-      # dependency changes, so it is never stale; restore-keys lets an unrelated
-      # change still reuse a prior switch as a base. Restored AFTER setup-ocaml
-      # lays down the compiler, and saved in POST with deps present.
-      #
-      # NOTE: dune-cache is intentionally OFF — enabling it makes setup-ocaml run
-      # its own `opam install dune` (compiling from source) before this cache can
-      # help, which is exactly the cost we are removing.
-      - name: Set up OCaml
-        uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.3"
-          cache-prefix: fennec-v1
-
-      - name: Cache opam switch (built deps)
-        uses: actions/cache@v4
-        with:
-          path: _opam
-          key: opam-switch-${{ matrix.os }}-ocaml5.3-${{ hashFiles('**/*.opam', 'dune-project') }}
-          restore-keys: |
-            opam-switch-${{ matrix.os }}-ocaml5.3-
-
-      # Persist dune's build cache so the native archive rule (Go + Rust) is
-      # restored instead of rebuilt when buildkit/native is unchanged. Keyed on
-      # the native sources; restore-keys reuses an older cache as a base.
-      - name: Cache dune build
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.cache/dune
-          key: dune-cache-${{ matrix.os }}-${{ hashFiles('buildkit/native/**', 'buildkit/**/*.ml', 'buildkit/**/*.c', 'cli/**/*.ml') }}
-          restore-keys: |
-            dune-cache-${{ matrix.os }}-
-
-      - name: Install dependencies
-        run: opam install . --deps-only --with-test --yes
+          deps-args: --with-test
 
       - name: Build
         run: opam exec -- dune build

@@ -1,0 +1,82 @@
+name: Set up fennec build environment
+description: >
+  Installs the Go, Rust, and OCaml toolchains and wires up the full cache stack
+  (Rust target, opam switch, dune build) so warm runs skip every recompile. Used
+  by both CI and Release so the strategy lives in one place. Run after checkout.
+
+inputs:
+  ocaml-compiler:
+    description: OCaml compiler version
+    default: "5.3"
+  deps-args:
+    description: Extra args for `opam install . --deps-only` (e.g. --with-test)
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # dune's content-addressed cache: pin its location and enable it so the
+    # native archive rule (Go c-archive + Rust staticlib) is restored from cache
+    # on warm runs instead of recompiled (~75s). Exported to later steps too.
+    - name: Configure dune cache
+      shell: bash
+      run: |
+        {
+          echo "DUNE_CACHE=enabled"
+          echo "DUNE_CACHE_STORAGE_MODE=copy"
+          echo "XDG_CACHE_HOME=${{ github.workspace }}/.cache"
+        } >> "$GITHUB_ENV"
+
+    # Go: setup-go caches the module + build caches keyed on go.sum, covering the
+    # cgo c-archive build cache between runs.
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.24"
+        cache-dependency-path: buildkit/native/go/go.sum
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    # Caches ~/.cargo/{registry,git} AND the build target/ dir (116 crates),
+    # keyed on Cargo.lock; prunes stale deps automatically.
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: buildkit/native/rust
+
+    # setup-ocaml lays down the compiler switch. dune-cache is intentionally OFF:
+    # enabling it makes setup-ocaml run its own `opam install dune` from source
+    # (~68s) before our switch cache can help. Bump cache-prefix to invalidate
+    # setup-ocaml's own opam-root cache if it ever goes bad.
+    - name: Set up OCaml
+      uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: ${{ inputs.ocaml-compiler }}
+        cache-prefix: fennec-v1
+
+    # The local switch (_opam) with the *built* dune + cmdliner. Keyed on the
+    # opam-file set + compiler, so it persists across runs and auto-invalidates
+    # only when a dependency changes — never stale. restore-keys reuses a prior
+    # switch as a base on a partial miss.
+    - name: Cache opam switch (built deps)
+      uses: actions/cache@v4
+      with:
+        path: _opam
+        key: opam-switch-${{ runner.os }}-${{ runner.arch }}-ocaml${{ inputs.ocaml-compiler }}-${{ hashFiles('**/*.opam', 'dune-project') }}
+        restore-keys: |
+          opam-switch-${{ runner.os }}-${{ runner.arch }}-ocaml${{ inputs.ocaml-compiler }}-
+
+    # dune's build cache, keyed on the native + OCaml/C sources, so the native
+    # archive rule is restored instead of rebuilt when those are unchanged.
+    - name: Cache dune build
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.cache/dune
+        key: dune-cache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('buildkit/native/**', 'buildkit/**/*.ml', 'buildkit/**/*.c', 'cli/**/*.ml') }}
+        restore-keys: |
+          dune-cache-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install dependencies
+      shell: bash
+      run: opam install . --deps-only ${{ inputs.deps-args }} --yes
