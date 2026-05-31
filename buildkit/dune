@@ -15,7 +15,9 @@
 (rule
  (target link_flags.sexp)
  (action
-  (run bash %{dep:native/emit_flags.sh})))
+  (with-stdout-to
+   link_flags.sexp
+   (run bash %{dep:native/emit_flags.sh}))))
 
 (library
  (name fennec_buildkit)

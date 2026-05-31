@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# Emit, on stdout-redirect, the dune linker flags (an sexp) for the system
+# Emit (on stdout) the dune (c_library_flags ...) sexp listing the system
 # libraries the esbuild (Go) and CSS (Rust) static archives need on THIS OS.
-# Written as a single dune target so (c_library_flags (:include ...)) is
-# unambiguous. Libraries the OCaml runtime already links (-lc/-lm) are omitted.
+# These flags are passed straight to the C linker, so they are raw linker args
+# (NO -cclib wrapping). Libraries the OCaml runtime already links (-lc/-lm) are
+# omitted. The dune rule redirects this into link_flags.sexp.
 set -euo pipefail
 
 case "$(uname -s)" in
   Darwin)
     # Go: CoreFoundation + Security + resolv. Rust: iconv.
-    printf '(-cclib -framework -cclib CoreFoundation -cclib -framework -cclib Security -cclib -lresolv -cclib -liconv)\n'
+    printf '(-framework CoreFoundation -framework Security -lresolv -liconv)\n'
     ;;
   *)
     # Linux/glibc. Go: pthread + dl + resolv. Rust staticlib: gcc_s (unwind) +
     # rt + util + pthread + dl.
-    printf '(-cclib -lpthread -cclib -ldl -cclib -lresolv -cclib -lrt -cclib -lutil -cclib -lgcc_s)\n'
+    printf '(-lpthread -ldl -lresolv -lrt -lutil -lgcc_s)\n'
     ;;
 esac
