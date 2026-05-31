@@ -48,7 +48,9 @@
    (>= 1.0))
   eio_main
   digestif
-  base64))
+  base64
+  zlib
+  bigstringaf))
 
 ; The CLI is the distributable: a self-contained `fennec` binary that statically
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a

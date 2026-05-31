@@ -21,6 +21,8 @@ depends: [
   "eio_main"
   "digestif"
   "base64"
+  "zlib"
+  "bigstringaf"
   "odoc" {with-doc}
 ]
 build: [
