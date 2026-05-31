@@ -6,8 +6,9 @@ set -euo pipefail
 
 out="$(pwd)"
 
-# esbuild -> Go c-archive (produces .a + .h)
-( cd native/go && go build -buildmode=c-archive -o "$out/libfennec_esbuild.a" . )
+# esbuild -> Go c-archive (produces .a + .h). -s -w drops the symbol table and
+# DWARF debug info, ~halving the archive with no runtime effect.
+( cd native/go && go build -buildmode=c-archive -ldflags="-s -w" -o "$out/libfennec_esbuild.a" . )
 
 # css/scss -> Rust staticlib
 ( cd native/rust && cargo build --release --quiet )
