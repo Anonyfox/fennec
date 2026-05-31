@@ -45,6 +45,9 @@ jobs:
           # dune installs the exe under _build; cp follows the symlink to the real
           # binary, producing a standalone, self-contained executable.
           cp "_build/install/default/bin/fennec" "out/fennec-${{ matrix.target }}"
+          # dune marks its build outputs read-only; make our copy writable so it
+          # can be stripped in place.
+          chmod u+w "out/fennec-${{ matrix.target }}"
           # Strip the final binary. On Linux this drops ~16MB of DWARF debug info
           # the OCaml/Rust/Go release link leaves behind (no-op on macOS, where
           # debug info lives in a separate .dSYM that never ships). This is what
