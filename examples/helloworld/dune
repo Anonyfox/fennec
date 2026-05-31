@@ -1,28 +1,61 @@
-; The helloworld app — a PLAIN dune project. `dune build` produces everything;
-; `dune exec ./server.exe` runs it. The `fennec dev` CLI wraps these with
-; livereload, but nothing here depends on the CLI existing.
+; The helloworld app — a PLAIN dune project demonstrating the full isomorphic
+; loop. `dune build` produces everything; `dune exec ./server.exe` runs it;
+; `fennec dev` wraps it with livereload. Nothing here depends on the CLI existing.
 ;
-; Asset pipeline = ordinary dune rules that call the `fennec` binary. esbuild and
-; the CSS engine run via %{bin:fennec}; the outputs (app.css, app.js) are normal
-; dune targets dropped next to server.exe, which reads them at startup. Because
-; they are real targets, `dune build --watch` rebuilds them incrementally on edit,
-; which is what drives livereload. Sources live in src/ so input and output names
-; never collide.
+; Asset pipeline = ordinary dune rules calling the `fennec` binary. Three bundles
+; land next to server.exe, which serves them:
+;
+;   react.js  — the preact runtime (window.React/ReactDOM), built once from the
+;               framework's shipped preact_entry.mjs. Never rebuilt by app edits.
+;   app.js    — the Melange client (client output + shared_js), bundled with
+;               react/* externalized to the globals react.js sets, via the shipped
+;               require-shim banner.
+;   app.css   — SCSS compiled + minified.
 
-; SCSS -> minified CSS. `fennec build` writes <base>.css, so src/app.scss -> app.css.
+; react runtime: framework's preact entry -> iife bundle exposing the globals.
+; Copy the entry into the package dir first so esbuild resolves "preact/*" against
+; THIS example's node_modules (esbuild resolves relative to the entry file).
 (rule
- (targets app.css)
+ (target preact_entry.mjs)
+ (action
+  (copy %{workspace_root}/fennec/ui/runtime/preact_entry.mjs preact_entry.mjs)))
+
+(rule
+ (target react.js)
+ (deps
+  preact_entry.mjs
+  (glob_files_rec node_modules/preact/*))
+ (action
+  (run %{bin:fennec} build --format iife --out-name react.js -o . preact_entry.mjs)))
+
+; app bundle: melange client output -> one minified iife with react externalized
+; to the runtime globals (require-shim banner).
+(rule
+ (target app.js)
+ (deps
+  (glob_files_rec client/client_output/*)
+  %{workspace_root}/fennec/ui/runtime/require_shim.js)
+ (action
+  (run %{bin:fennec} build --format iife --global-name App --out-name app.js
+   --external react --external react-dom --external react/jsx-runtime
+   --banner-file %{workspace_root}/fennec/ui/runtime/require_shim.js
+   -o .
+   client/client_output/examples/helloworld/client/client.js)))
+
+; stylesheet: SCSS -> minified css.
+(rule
+ (target app.css)
  (deps src/app.scss)
  (action
-  (run %{bin:fennec} build -o . src/app.scss)))
-
-; JS -> bundled, minified app.js.
-(rule
- (targets app.js)
- (deps src/app.js)
- (action
-  (run %{bin:fennec} build -o . src/app.js)))
+  (run %{bin:fennec} build --out-name app.css -o . src/app.scss)))
 
 (executable
  (name server)
- (libraries fennec.core fennec.server eio eio_main routes unix))
+ (libraries fennec.core fennec.server fennec.ui app_native
+   server-reason-react.react server-reason-react.reactDom eio eio_main routes unix))
+
+; The isomorphic integration test (test/hydration.test.mjs) is a node script run
+; OUTSIDE dune (it needs node + node_modules, which don't belong in dune's
+; sandbox): `npm test` in this directory, after `dune build`. CI runs it as a
+; dedicated step. It boots the built server and drives the real react.js/app.js
+; bundles through jsdom to prove SSR + hydration + interactivity.

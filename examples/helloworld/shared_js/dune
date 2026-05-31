@@ -1,0 +1,13 @@
+; Melange (JS) compile of the SAME shared .mlx components. One component, two
+; targets, zero duplication — copy_files# pulls from shared/.
+(library
+ (name app_js)
+ (modes melange)
+ (flags
+  (:standard -w -27-32-33-37-39))
+ (libraries reason-react melange.js)
+ (preprocess
+  (pps server-reason-react.browser_ppx -js melange.ppx reason-react-ppx)))
+
+(copy_files#
+ (files ../shared/*.mlx))

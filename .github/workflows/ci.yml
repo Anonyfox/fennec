@@ -30,6 +30,16 @@ jobs:
         with:
           deps-args: --with-test
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The helloworld example's client runtime needs preact (and jsdom for its
+      # test). The framework itself needs no npm — this is example-only.
+      - name: Install example npm deps
+        run: npm install --prefix examples/helloworld
+
       - name: Build
         run: opam exec -- dune build
 
@@ -38,3 +48,9 @@ jobs:
 
       - name: Smoke-test the CLI
         run: opam exec -- dune exec -- fennec --version
+
+      # The isomorphic integration test runs outside dune (node + node_modules):
+      # boots the built server, drives the real bundles through jsdom to prove
+      # SSR + hydration + interactivity.
+      - name: Isomorphic integration test
+        run: npm test --prefix examples/helloworld

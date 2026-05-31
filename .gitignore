@@ -4,6 +4,10 @@ _opam/
 *.merlin
 .DS_Store
 
+# npm: examples install node deps locally; lockfiles are committed for
+# reproducible CI installs, node_modules is not.
+node_modules/
+
 # native build outputs (regenerated per platform by the dune rule)
 **/libfennec_esbuild.a
 **/libfennec_esbuild.h

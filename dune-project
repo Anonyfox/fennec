@@ -11,6 +11,10 @@
 
 (license MIT)
 
+; Melange (OCaml -> JS) for the isomorphic client: the same .mlx components that
+; render natively on the server compile to JS here.
+(using melange 0.1)
+
 ; The runtime framework shipped to opam: portable HTTP core + Eio server with
 ; livereload. The MLX dialect is declared here once so .mlx components compile in
 ; any package (the isomorphic client/SSR components land here later).
@@ -61,3 +65,26 @@
    (>= 3.16))
   (cmdliner
    (>= 1.1.0))))
+
+; Non-published: the userland examples (e.g. examples/helloworld). This package
+; exists only to declare the example's Melange/isomorphic deps so CI can build
+; them, WITHOUT those deps leaking into the published `fennec` framework. It is
+; never released to opam.
+(package
+ (name fennec-examples)
+ (allow_empty) ; examples are built, not installed — no stanzas attach here
+ (synopsis "Fennec example applications (not published)")
+ (description
+  "The userland examples that exercise the fennec framework end to end — the\nliving DX benchmark. Not published to opam; depends on the Melange toolchain the\nexamples need (the framework itself does not).")
+ (depends
+  (ocaml
+   (>= 4.14))
+  (dune
+   (>= 3.16))
+  fennec
+  fennec-cli
+  (melange
+   (>= 3.0.0))
+  (reason-react
+   (>= 0.14.0))
+  server-reason-react))

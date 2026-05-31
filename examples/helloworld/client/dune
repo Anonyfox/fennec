@@ -1,0 +1,8 @@
+; Melange entry: emits ES modules (client_output) that hydrate the SSR'd HTML.
+; The server's dune rule then bundles this into one app.js via `fennec build`.
+(melange.emit
+ (target client_output)
+ (libraries app_js reason-react melange.js)
+ (module_systems es6)
+ (preprocess
+  (pps server-reason-react.browser_ppx -js melange.ppx reason-react-ppx)))

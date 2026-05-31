@@ -1,0 +1,12 @@
+; Unit tests for the pure core (Http/Middleware/App/Dev/Page) and the Ws codec.
+(test
+ (name test_core)
+ (modules test_core)
+ (modes native)
+ (libraries fennec.core fennec.ui routes))
+
+(test
+ (name test_ws)
+ (modules test_ws)
+ (modes native)
+ (libraries fennec.server eio eio_main))

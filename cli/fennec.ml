@@ -48,8 +48,9 @@ let classify path =
   | _ -> Unknown
 
 (* One entry point -> one output file in [outdir]. JS bundles to ".js", CSS/SCSS
-   emit ".css", keeping the input's base name. Returns (out_path, byte length). *)
-let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner input =
+   emit ".css", keeping the input's base name unless [out_name] overrides it.
+   Returns (out_path, byte length). *)
+let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner ~out_name input =
   if not (Sys.file_exists input) then failwith (Printf.sprintf "input not found: %s" input);
   let base = Filename.remove_extension (Filename.basename input) in
   let out_ext, output =
@@ -64,23 +65,37 @@ let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner
       failwith
         (Printf.sprintf "unsupported file type %S (expected .js/.ts/.jsx or .css/.scss)" input)
   in
-  let out_path = Filename.concat outdir (base ^ out_ext) in
+  let filename = match out_name with Some n -> n | None -> base ^ out_ext in
+  let out_path = Filename.concat outdir filename in
   mkdir_p (Filename.dirname out_path);
   write_file out_path output;
   (out_path, String.length output)
 
-let run inputs outdir minify format global_name external_ sourcemap banner =
+let run inputs outdir minify format global_name external_ sourcemap banner banner_file out_name =
   match inputs with
   | [] ->
     prerr_endline "fennec build: no input files given (try `fennec build --help`)";
     1
+  | _ :: _ :: _ when out_name <> None ->
+    prerr_endline "fennec build: --out-name requires exactly one input file";
+    1
   | _ ->
     (try
+       (* banner from --banner-file takes precedence over --banner *)
+       let banner =
+         match banner_file with
+         | Some path ->
+           if not (Sys.file_exists path) then
+             failwith (Printf.sprintf "banner file not found: %s" path);
+           read_file path
+         | None -> banner
+       in
        mkdir_p outdir;
        List.iter
          (fun input ->
            let out_path, n =
-             build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner input
+             build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner ~out_name
+               input
            in
            Printf.printf "  %-28s -> %-32s %s\n" input out_path (human_size n))
          inputs;
@@ -136,13 +151,28 @@ let banner_arg =
   let doc = "Text prepended verbatim to each JavaScript bundle (e.g. a license header)." in
   Arg.(value & opt string "" & info [ "banner" ] ~docv:"TEXT" ~doc)
 
+let banner_file_arg =
+  let doc =
+    "Read the JavaScript banner from a file (e.g. a require-shim). Takes precedence over \
+     $(b,--banner)."
+  in
+  Arg.(value & opt (some string) None & info [ "banner-file" ] ~docv:"FILE" ~doc)
+
+let out_name_arg =
+  let doc =
+    "Output filename (within the output directory), instead of deriving it from the input. \
+     Requires exactly one input."
+  in
+  Arg.(value & opt (some string) None & info [ "out-name" ] ~docv:"NAME" ~doc)
+
 let build_term =
-  let go inputs outdir no_minify format global_name external_ sourcemap banner =
-    run inputs outdir (not no_minify) format global_name external_ sourcemap banner
+  let go inputs outdir no_minify format global_name external_ sourcemap banner banner_file out_name =
+    run inputs outdir (not no_minify) format global_name external_ sourcemap banner banner_file
+      out_name
   in
   Term.(
     const go $ inputs_arg $ outdir_arg $ no_minify_arg $ format_arg $ global_name_arg
-    $ external_arg $ sourcemap_arg $ banner_arg)
+    $ external_arg $ sourcemap_arg $ banner_arg $ banner_file_arg $ out_name_arg)
 
 let build_cmd =
   let doc = "Build JavaScript and CSS for production" in

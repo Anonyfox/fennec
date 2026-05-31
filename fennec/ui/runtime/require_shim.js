@@ -1,0 +1,1 @@
+var require=function(m){var t={"react":window.React,"react-dom":window.ReactDOM,"react-dom/client":window.ReactDOM,"react/jsx-runtime":window.JsxRuntime};if(t[m])return t[m];throw new Error("fennec: unexpected require("+m+")");};

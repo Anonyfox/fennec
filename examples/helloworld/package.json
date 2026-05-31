@@ -1,0 +1,14 @@
+{
+  "name": "fennec-helloworld",
+  "private": true,
+  "description": "Fennec isomorphic example — preact provides the client React runtime.",
+  "dependencies": {
+    "preact": "^10.24.0"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  },
+  "scripts": {
+    "test": "node test/hydration.test.mjs"
+  }
+}
