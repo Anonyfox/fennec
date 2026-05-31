@@ -22,6 +22,14 @@ jobs:
           # once availability improves. The native chain is identical to arm64.
           # - os: macos-13 # macos x64
     runs-on: ${{ matrix.os }}
+    # Turn on dune's content-addressed build cache and pin its location so we can
+    # persist it. This is what lets the ~75s native archive rule (Go c-archive +
+    # Rust staticlib) be skipped on warm runs: when buildkit/native is unchanged,
+    # dune restores the prior .a/.h outputs instead of re-running native/build.sh.
+    env:
+      DUNE_CACHE: enabled
+      DUNE_CACHE_STORAGE_MODE: copy
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
     steps:
       - uses: actions/checkout@v4
 
@@ -68,6 +76,17 @@ jobs:
           key: opam-switch-${{ matrix.os }}-ocaml5.3-${{ hashFiles('**/*.opam', 'dune-project') }}
           restore-keys: |
             opam-switch-${{ matrix.os }}-ocaml5.3-
+
+      # Persist dune's build cache so the native archive rule (Go + Rust) is
+      # restored instead of rebuilt when buildkit/native is unchanged. Keyed on
+      # the native sources; restore-keys reuses an older cache as a base.
+      - name: Cache dune build
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.cache/dune
+          key: dune-cache-${{ matrix.os }}-${{ hashFiles('buildkit/native/**', 'buildkit/**/*.ml', 'buildkit/**/*.c', 'cli/**/*.ml') }}
+          restore-keys: |
+            dune-cache-${{ matrix.os }}-
 
       - name: Install dependencies
         run: opam install . --deps-only --with-test --yes
