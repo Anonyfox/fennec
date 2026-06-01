@@ -1,0 +1,1 @@
+(library (name app) (wrapped false) (libraries iso html) (preprocess (pps iso_ppx)) (flags (:standard -w -a)))

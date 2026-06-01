@@ -1,0 +1,16 @@
+(* Reads AND mutates GLOBAL state. Keyed <li> list reconciles by id. *)
+open Iso
+
+let make () =
+  fun () ->
+    <div className="todos">
+      <button id="add" onClick=(fun () -> Store.add (Printf.sprintf "item %d" (peek Store.next_id)))>"add todo"</button>
+      <ul>
+        (List.map (fun (t : Store.todo) ->
+           <li key=(string_of_int t.id) className="todo">
+             t.text
+             <button className="rm" onClick=(fun () -> Store.remove t.id)>"×"</button>
+           </li>)
+           (get Store.todos))
+      </ul>
+    </div>

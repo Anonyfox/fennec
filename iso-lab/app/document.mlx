@@ -1,0 +1,19 @@
+(* SERVER-ONLY document shell. Just an mlx function returning the <html> vnode —
+   no setup/render split, never hydrated. It carries only STATIC infrastructure
+   (charset, viewport, the #app mount, styles, the client script). All dynamic,
+   overridable metadata comes through Iso.Head and is injected via (raw head). *)
+open Iso
+
+let make ~(head : string) ~(app : string) ~(styles : string) ~(client_js : string) =
+  <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      (Iso.raw head)
+      <style>(Iso.raw styles)</style>
+    </head>
+    <body>
+      <div id="app">(Iso.raw app)</div>
+      <script>(Iso.raw client_js)</script>
+    </body>
+  </html>

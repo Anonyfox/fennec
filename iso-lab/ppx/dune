@@ -1,0 +1,2 @@
+(library (name iso_ppx) (kind ppx_rewriter) (libraries ppxlib)
+ (preprocess (pps ppxlib.metaquot)) (flags (:standard -w -a)))

@@ -1,0 +1,23 @@
+(* Composes the tree + registers DEFAULT head metadata in its setup. Because this
+   runs on server AND client, the defaults are rehydration-safe. Deeper components
+   (e.g. Stats) override these. The title reads Store.todos so App re-renders on
+   every todo change — proving the two <Counter/> instances keep their local counts. *)
+open Iso
+
+let make () =
+  Head.use (fun () -> [
+    Head.title "iso PoC";
+    Head.meta ~name:"description" "An isomorphic OCaml UI runtime";
+    Head.og "og:title" "iso PoC";
+    Head.json_ld {|{"@context":"https://schema.org","@type":"WebSite","name":"iso PoC"}|};
+  ]);
+  fun () ->
+    <div id="app-root">
+      <h1>"iso — "(List.length (get Store.todos))" todos"</h1>
+      <section className="counters">
+        <Counter />
+        <Counter />
+      </section>
+      <Stats />
+      <Todo_list />
+    </div>

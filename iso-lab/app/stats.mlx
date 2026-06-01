@@ -1,0 +1,12 @@
+(* Reads GLOBAL state for display AND contributes DYNAMIC head metadata that
+   OVERRIDES App's defaults (deeper => wins). The title tracks Store.todos, so it
+   updates reactively during SSR (at render time) and in the browser (on change). *)
+open Iso
+
+let make () =
+  Head.use (fun () -> [
+    Head.title (Printf.sprintf "%d todos · iso" (List.length (get Store.todos)));
+    Head.meta ~name:"description" "Live todo dashboard";
+  ]);
+  fun () ->
+    <div className="stats">"todos in store: "(List.length (get Store.todos))</div>
