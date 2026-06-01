@@ -3,6 +3,8 @@
 @use "../../components/theme";
 @use "../../components/nav";
 @use "../../components/counter";
+@use "../../components/hero";
 body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
 h1 { color: theme.$brand; }
 .page { display: block; }
+

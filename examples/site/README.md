@@ -71,37 +71,41 @@ the template hardcodes no paths.
 ## How the build fits together (and why so few dune files)
 
 You edit two dune files: `frontend/dune` (the native SSR lib + shared config) and
-the top-level `dune` (the server + one assemble rule). The melange CSR mirror lives
+the top-level `dune` (the server + per-bundle rules). The Melange CSR mirror lives
 under `frontend_build/` (generated machinery) — the same sources via `copy_files`,
-one `(subdir …)` line per app folder (the *only* place adding a brand-new app
-touches dune). `fennec assemble`
-then **discovers** the apps and, per app, esbuild-bundles its emitted JS and
-compiles its `main.scss`, builds the shared `/react.js` once, and merges `public/`
-— all into one web root, with no per-app dune wiring.
+one `(subdir …)` line per app folder. Per CLI-INTEROP.md, each bundle is its own
+`fennec build` rule producing a STABLE file target (`web.js`, `web.css`, …), and
+one `(dir webroot)` rule `--include`s them at their served `/_apps/<name>/main.*`
+paths + `--public`s `public/`. Stable targets are what let dev livereload tell a
+CSS hot-swap from a JS reload (a wiped dir target would reload on every edit).
 
 ## Run it
 
 ```sh
 npm install --prefix examples/site            # first time (preact + jsdom)
-dune build examples/site/server.exe @examples/site/all
-_build/default/examples/site/server.exe
+
+# DEV: bytecode server (fast iteration) + assets, then run it
+dune build @examples/site/dev
+dune exec examples/site/server.bc             # or: fennec dev --target @examples/site/dev …
 # web   -> http://localhost:8200
 # admin -> http://localhost:8201
 
 npm test --prefix examples/site               # isomorphic test (SSR + hydrate)
 
-# prod: embed the web root into the binary; endpoints select by Host on port 80
+# PROD: native binary with the web root embedded; endpoints select by Host on :80
 dune build --profile release examples/site/server.exe @examples/site/all
 FENNEC_ENV=production _build/default/examples/site/server.exe
 ```
 
 ## Non-ASCII strings
 
-OCaml string literals are byte strings; Melange doesn't round-trip raw non-ASCII
-bytes as JS Unicode. For any string with non-ASCII characters (em dash, emoji),
-use the `{js|…|js}` delimiter — Melange emits a proper JS string and native OCaml
-treats it as the same UTF-8 bytes, so SSR and CSR agree:
+OCaml string literals are byte strings; Melange would emit raw non-ASCII bytes as
+mojibake on the client. Use the `{js|…|js}` delimiter — Melange emits a proper JS
+string and native OCaml treats it as the same UTF-8 bytes, so SSR and CSR agree:
 
 ```ocaml
 <Head title={js|Home — Fennec Site|js} />
 ```
+
+You can't forget: `fennec.unicode_ppx` turns a plain non-ASCII string literal into
+a **compile error** that points you at `{js|…|js}`. The footgun can't ship.

@@ -5,4 +5,4 @@
 (library
  (name fennec_head)
  (public_name fennec.head)
- (modes native melange))
+ (modes byte native melange))

@@ -4,5 +4,5 @@
 (library
  (name fennec_matcher)
  (public_name fennec.matcher)
- (modes native melange)
+ (modes byte native melange)
  (modules matcher))

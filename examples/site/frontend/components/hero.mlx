@@ -1,0 +1,10 @@
+(* A marketing hero section — shared component with colocated styles (hero.scss).
+   Reused by marketing pages; isomorphic like everything else. *)
+
+let[@react.component] make ~title ~subtitle () =
+  <section className="hero">
+    <h1 className="hero-title">(React.string title)</h1>
+    <p className="hero-subtitle">(React.string subtitle)</p>
+    <a className="hero-cta" href="/about">(React.string "Learn more")</a>
+  </section>
+

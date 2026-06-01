@@ -1,0 +1,8 @@
+; Colocated-ish unit tests for the mlx components. They can't live inside
+; frontend/ (its `include_subdirs qualified` forbids sub-dunes), so they sit in a
+; sibling test exe that depends on the native frontend lib and renders components
+; to HTML via server-reason-react.
+(test
+ (name test_components)
+ (modules test_components)
+ (libraries fennec-examples.frontend server-reason-react.react server-reason-react.reactDom))

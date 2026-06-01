@@ -133,9 +133,42 @@ Why the build axis matters — measured: the embed module is compiled *into*
 `server.exe`. If it always carried the real bytes, **a CSS edit would relink the
 executable** (the module depends on `app.css`), dragging the OCaml exe recompile
 into every asset edit (~0.9s). The dev stub breaks that dependency, so an asset
-edit rebuilds only the bundle + reassembles `webroot/` — no relink (~0.25s). A
-runtime flag can't fix a build-time link dependency; hence two axes. They align
-in practice (dev profile + dev env together) but are not the same lever.
+edit rebuilds only the bundle + reassembles `webroot/` — no relink. A runtime flag
+can't fix a build-time link dependency; hence two axes. They align in practice
+(dev profile + dev env together) but are not the same lever.
+
+### The dev server is bytecode; release is native
+
+A third use of the build axis, for raw iteration speed. The server executable is
+`(modes byte exe)`:
+
+- **dev** builds and runs `server.bc` (**bytecode**) — no native code generation
+  and no native link. Both the per-module recompile and (especially) the link are
+  far cheaper, and a plain `.bc` runs standalone in the dev environment (no custom
+  runtime, unlike `byte_complete`, which does a slow C link).
+- **release** builds the native `server.exe`.
+
+`fennec dev` watches/runs the `.bc`; nothing else changes (the supervisor spawns a
+file, native or bytecode alike). It's the same decoupling as the embed stub: a
+build-time choice the runtime never sees.
+
+### Dev-cycle speed (measured, `DUNE_CACHE` off, real edits)
+
+The target is **"instant" ≈ 100 ms** of *felt* latency. `dune build` pays a fixed
+~0.1 s startup per invocation; `fennec dev` runs `dune build --watch` as a daemon
+and pays it once, so felt latency ≈ (numbers below − the ~0.1 s floor).
+
+| edit → rebuild | `dune build` | ≈ `fennec dev` (daemon) |
+| --- | --- | --- |
+| `.scss` → web root | ~0.08 s | **< 0.1 s** |
+| page `.mlx` → web root (CSR bundle) | ~0.19 s | ~0.09 s |
+| page `.mlx` → `server.bc` (SSR, bytecode) | ~0.21 s | ~0.12 s |
+| (same, native `server.exe`, for contrast) | ~0.48 s | — |
+
+A page edit rebuilds SSR + CSR in parallel, so the felt loop is ~0.1 s — near
+instant, ~5–8× faster than a native-link dev loop. The remaining floor is the
+per-module compile (server-reason-react ppx on the SSR side, Melange on the CSR
+side), which is inherent to the toolchains, not our wiring.
 
 The `public/` tree is served verbatim at its paths (`public/img/logo.svg` →
 `/img/logo.svg`).
@@ -180,10 +213,24 @@ selected by Host pattern). See `examples/site/` for the full surface.
 - Static `public/`: dev-from-disk and prod-embedded, with MIME/ETag/304/Range. ✓
 - Compression: gzip + deflate negotiation on static and dynamic, zlib in-process;
   WS permessage-deflate. ✓
+- Web root from STABLE per-bundle file targets + one `--include` assembly rule, so
+  livereload distinguishes CSS hot-swap from JS reload (proven via a WS client). ✓
+- Bytecode dev server (`server.bc`) / native release; near-instant dev loop
+  (~0.1 s felt) — see "Dev-cycle speed" above. ✓
+- Cross-target Unicode is safe by construction: `fennec.unicode_ppx` makes a plain
+  non-ASCII string literal (which Melange would mojibake) a **compile error**,
+  directing the author to `{js|…|js}`. The footgun can't ship. ✓
 - Livereload end-to-end (the websocket is itself a paw) + `fennec dev`
   orchestration. ✓
 - Full framework unit suite (core + paw + ws/gzip/deflate + endpoint/static/head)
-  + the multi-app isomorphic integration test. ✓
+  + the multi-app isomorphic integration test + colocated mlx component tests. ✓
+
+The native SSR lib and the Melange CSR mirror are genuinely two compilations (each
+needs a different React lib + ppx; a single `(modes native melange)` lib can't —
+server-reason-react pulls a non-Melange dep, and the `[@react.component]` ppx
+differs per target). So the `copy_files` mirror under `frontend_build/` is
+structural, not incidental. Reset build state with `dune clean` (a full clean);
+manually deleting a `_build/` subtree desyncs dune's incremental DB.
 
 Not yet (future iterations): the DDP/reactive data layer (no mongo yet),
 diagnostics overlay (`dune rpc`).

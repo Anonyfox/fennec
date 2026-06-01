@@ -27,23 +27,33 @@ let web_source ~name ~assets : Static.source =
 (* the static-serving paw for an app's web root *)
 let static ~name ~assets : Paw.t = Plug.static (web_source ~name ~assets)
 
-(* watch built bundles next to the exe (dev): *.css hot-swap, *.js reload *)
+(* Watch built bundle file targets next to the exe (dev): *.css hot-swaps, *.js
+   reloads. Non-recursive on purpose — the watched dir holds the STABLE bundle file
+   targets (not a wiped dir target), so an unchanged bundle keeps its mtime and only
+   the edited one fires, keeping CSS-hot-swap vs JS-reload meaningful (CLI-INTEROP.md).
+   Staying shallow also skips the served web-root subdir (which IS wiped each
+   rebuild) so it never triggers spurious reloads. *)
 let dev_watch ~sw ~clock lr ~dir =
   let entries = try Sys.readdir dir with _ -> [||] in
   Array.iter
     (fun f ->
       let path = Filename.concat dir f in
-      match Filename.extension f with
-      | ".css" -> Eio.Fiber.fork ~sw (fun () -> Livereload.watch lr ~clock ~kind:Livereload.Css path)
-      | ".js" | ".mjs" ->
-        Eio.Fiber.fork ~sw (fun () -> Livereload.watch lr ~clock ~kind:Livereload.Reload path)
-      | _ -> ())
+      if (try Sys.is_directory path with _ -> false) then ()
+      else
+        match Filename.extension f with
+        | ".css" ->
+          Eio.Fiber.fork ~sw (fun () -> Livereload.watch lr ~clock ~kind:Livereload.Css path)
+        | ".js" | ".mjs" ->
+          Eio.Fiber.fork ~sw (fun () -> Livereload.watch lr ~clock ~kind:Livereload.Reload path)
+        | _ -> ())
     entries
 
 (* Serve a list of endpoints, blocking. In dev, a livereload paw is prepended to
-   every endpoint and the bundle dirs are watched. Owns Eio + the lifecycle. *)
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?(webroots = []) (endpoints : Endpoint.t list) :
-    unit =
+   every endpoint and the given [watch] dirs (the STABLE bundle file targets, e.g.
+   "assets") are watched for livereload — NOT the served web root, which is a wiped
+   dir target. Owns Eio + the lifecycle. *)
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?(watch = []) (endpoints : Endpoint.t list) : unit
+    =
   Eio_main.run @@ fun env ->
   let lr = Livereload.create () in
   let endpoints =
@@ -56,7 +66,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?(webroots = []) (endpoints : 
       (fun name ->
         let dir = Filename.concat (Filename.dirname Sys.executable_name) name in
         dev_watch ~sw ~clock:(Eio.Stdenv.clock env) lr ~dir)
-      webroots;
+      watch;
   Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints)
     (if is_dev then " (dev: livereload on)" else "");
   Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~env endpoints

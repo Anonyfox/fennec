@@ -8,6 +8,8 @@
 
 module R = Fennec_router.Router
 
-let router = R.make () |> R.page "/" Home.make |> R.page "/about" About.make
+let router =
+  R.make () |> R.page "/" Home.make |> R.page "/about" About.make
+  |> R.page "/pricing" Pricing.make
 
 let () = R.hydrate router

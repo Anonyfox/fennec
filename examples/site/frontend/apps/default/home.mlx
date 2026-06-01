@@ -1,7 +1,8 @@
 (* Web app — home page. Sets its own metadata via <Head> (inside-out wins, SSR +
    CSR identically), and reuses shared components from ../../components. A page is
-   [params -> element]. Non-ASCII string literals use {js|...|js} so Melange emits
-   proper JS Unicode (OCaml byte-strings don't round-trip raw UTF-8 through it). *)
+   [params -> element]. Non-ASCII string literals use the {js|…|js} delimiter so
+   Melange emits proper JS Unicode (fennec.unicode_ppx makes a plain non-ASCII
+   literal a compile error, so this can't be forgotten). *)
 
 module Head = Fennec_headkit.Head_component
 
@@ -16,3 +17,4 @@ let make (_params : (string * string) list) =
     <p>(React.string "One component tree, server-rendered then hydrated.")</p>
     <Components.Counter label="clicks" />
   </main>
+

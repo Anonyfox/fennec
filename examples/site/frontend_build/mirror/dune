@@ -12,7 +12,7 @@
  (flags (:standard -w -27-32-33-37-39))
  (libraries fennec.matcher fennec.head fennec.headkit_melange fennec.router_melange
    reason-react melange.js)
- (preprocess (pps melange.ppx reason-react-ppx)))
+ (preprocess (pps fennec.unicode_ppx melange.ppx reason-react-ppx)))
 (subdir apps/default (copy_files (files %{project_root}/examples/site/frontend/apps/default/*.mlx)))
 (subdir apps/admin (copy_files (files %{project_root}/examples/site/frontend/apps/admin/*.mlx)))
 (subdir components (copy_files (files %{project_root}/examples/site/frontend/components/*.mlx)))

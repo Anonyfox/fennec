@@ -1,51 +1,105 @@
 ; The site example — ONE shared public/ + a single isomorphic frontend/ tree
-; (apps, components, templates), assembled into ONE web root.
+; (apps, components, templates).
 ;
-;   frontend/  -> native SSR lib (frontend/dune); the melange CSR mirror + emit
-;               live under frontend_build/ (generated build machinery — see its README)
-;   fennec assemble: per app, esbuild the emitted apps/<name>/main.js -> _apps/<name>/main.js
-;                    and sass apps/<name>/main.scss -> _apps/<name>/main.css; build the
-;                    shared /react.js (preact) runtime; merge public/ -> webroot/.
-;   prod: one embed module bakes the assembled web root into the binary.
+; Per CLI-INTEROP.md the web root is assembled from STABLE per-bundle file targets
+; (each its own `fennec build` rule), then one (dir webroot) rule --includes them
+; at their served paths + --publics public/. Why stable file targets and not a
+; single dir-target assembler: dune wipes a dir target on every rebuild, so dev
+; livereload (which mtime-polls) would see EVERY asset change on any edit and always
+; full-reload. Watching the stable bundle targets instead lets a CSS edit hot-swap
+; and a JS edit reload. Each app is a few rules here ("more rules per subapp, no
+; central list") — pages/components inside an app need no dune change.
 
-; ---- shared preact runtime entry (resolve preact against this dir's node_modules)
 (rule
  (target preact_entry.mjs)
  (action
   (copy %{workspace_root}/fennec/ui/runtime/preact_entry.mjs preact_entry.mjs)))
 
-; ---- assemble the single web root: per-app JS+CSS bundles, shared runtime, public/
+; ---- stable bundle file targets — dev livereload watches THESE (shallow) ----
+
+; shared preact runtime -> served as /react.js
+(rule
+ (target react.js)
+ (deps
+  preact_entry.mjs
+  (glob_files_rec node_modules/preact/*))
+ (action
+  (run %{bin:fennec} build --format iife --out-name react.js -o . preact_entry.mjs)))
+
+; per-app JS — esbuild the melange-emitted entry, externalizing react onto the
+; shared runtime globals (require-shim banner).
+(rule
+ (target web.js)
+ (deps
+  (alias frontend_build/emit/melange)
+  (glob_files_rec frontend_build/emit/out/*)
+  %{workspace_root}/fennec/ui/runtime/require_shim.js)
+ (action
+  (run %{bin:fennec} build --format iife --global-name App --external react
+   --external react-dom --external react/jsx-runtime --banner-file
+   %{workspace_root}/fennec/ui/runtime/require_shim.js --out-name web.js -o .
+   frontend_build/emit/out/node_modules/fennec-examples.frontend_client/apps/default/main.js)))
+
+(rule
+ (target admin.js)
+ (deps
+  (alias frontend_build/emit/melange)
+  (glob_files_rec frontend_build/emit/out/*)
+  %{workspace_root}/fennec/ui/runtime/require_shim.js)
+ (action
+  (run %{bin:fennec} build --format iife --global-name App --external react
+   --external react-dom --external react/jsx-runtime --banner-file
+   %{workspace_root}/fennec/ui/runtime/require_shim.js --out-name admin.js -o .
+   frontend_build/emit/out/node_modules/fennec-examples.frontend_client/apps/admin/main.js)))
+
+; per-app CSS — compile the app's entry stylesheet (@use resolves relative to the
+; file, pulling in colocated component styles).
+(rule
+ (target web.css)
+ (deps
+  (glob_files_rec frontend/*.scss))
+ (action
+  (run %{bin:fennec} build --out-name web.css -o . frontend/apps/default/main.scss)))
+
+(rule
+ (target admin.css)
+ (deps
+  (glob_files_rec frontend/*.scss))
+ (action
+  (run %{bin:fennec} build --out-name admin.css -o . frontend/apps/admin/main.scss)))
+
+; ---- assemble the SERVED web root: --include each bundle at its served path ----
+; (src:dest) maps the flat build target to the predictable /_apps/<name>/main.* URL
+; the SSR template derives from the app name.
 (rule
  (targets
   (dir webroot))
  (deps
-  (alias frontend_build/emit/melange)
-  (glob_files_rec frontend_build/emit/out/*)
-  (source_tree frontend)
-  (source_tree public)
-  preact_entry.mjs
-  (glob_files_rec node_modules/preact/*)
-  %{workspace_root}/fennec/ui/runtime/require_shim.js)
+  react.js
+  web.js
+  admin.js
+  web.css
+  admin.css
+  (source_tree public))
  (action
-  (run %{bin:fennec} assemble
-   --emit frontend_build/emit/out
-   --frontend frontend
-   --public public
-   --runtime preact_entry.mjs
-   --shim %{workspace_root}/fennec/ui/runtime/require_shim.js
-   -o webroot)))
+  (run %{bin:fennec} build -o webroot --include react.js --include
+   web.js:_apps/default/main.js --include web.css:_apps/default/main.css --include
+   admin.js:_apps/admin/main.js --include admin.css:_apps/admin/main.css --public
+   public)))
 
-; ---- prod embed module (release: bake the web root in; dev: empty stub) ----
+; ---- prod embed module (release bakes the web root in; dev = empty stub) ----
 (rule
  (target assets.ml)
- (enabled_if (= %{profile} release))
+ (enabled_if
+  (= %{profile} release))
  (deps webroot)
  (action
-  (run %{bin:fennec} assemble --embed assets.ml -o webroot)))
+  (run %{bin:fennec} build -o webroot --embed assets.ml)))
 
 (rule
  (target assets.ml)
- (enabled_if (<> %{profile} release))
+ (enabled_if
+  (<> %{profile} release))
  (action
   (with-stdout-to assets.ml
    (echo "let lookup (_ : string) : string option = None\n"))))
@@ -59,7 +113,17 @@
  (name default)
  (deps webroot))
 
+; the dev loop target: bytecode server + assembled web root, rebuilt on edit.
+;   fennec dev --target @examples/site/dev _build/default/examples/site/server.bc
+(alias
+ (name dev)
+ (deps server.bc webroot))
+
 (executable
  (name server)
+ ; dev builds the bytecode server (server.bc) — no native codegen, no native link,
+ ; so the SSR rebuild loop is ~half the native time and runs standalone in the dev
+ ; env. Release builds the native server.exe. (See CLI-INTEROP.md: build axis.)
+ (modes byte exe)
  (modules server assets)
  (libraries fennec fennec.router fennec-examples.frontend))

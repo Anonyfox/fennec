@@ -7,7 +7,7 @@
 (library
  (name frontend)
  (public_name fennec-examples.frontend)
- (modes native)
+ (modes byte native)
  (flags (:standard -w -27-32-33-37-39))
  (libraries fennec.matcher fennec.head fennec.headkit fennec.router
    server-reason-react.react server-reason-react.reactDom)

@@ -1,0 +1,8 @@
+; A ppx_rewriter that retags non-ASCII string literals with the {js|…|js}
+; delimiter so they survive Melange codegen as proper JS Unicode (native is
+; unaffected). Added to a frontend's preprocess; see fennec_unicode_ppx.ml.
+(library
+ (name fennec_unicode_ppx)
+ (public_name fennec.unicode_ppx)
+ (kind ppx_rewriter)
+ (libraries ppxlib))

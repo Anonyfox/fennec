@@ -1,0 +1,5 @@
+; Regression test for the Unicode lint (drives the linter object directly).
+(test
+ (name test_unicode_ppx)
+ (modes native)
+ (libraries fennec_unicode_ppx ppxlib))

@@ -23,6 +23,7 @@ depends: [
   "base64"
   "zlib"
   "bigstringaf"
+  "ppxlib" {>= "0.28"}
   "odoc" {with-doc}
 ]
 build: [

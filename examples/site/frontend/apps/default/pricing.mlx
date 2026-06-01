@@ -1,0 +1,13 @@
+(* Web app — pricing (marketing) page. Composes the shared Hero + Counter, sets
+   its own <Head>. A new page is just a file + one route line in main.mlx. *)
+
+module Head = Fennec_headkit.Head_component
+
+let make (_params : (string * string) list) =
+  <main className="page">
+    <Head title={js|Pricing — Fennec Site|js}
+      description="Simple pricing for the Fennec site." />
+    <Components.Nav links=[ ("/", "Home"); ("/about", "About"); ("/pricing", "Pricing") ] />
+    <Components.Hero title="Pricing" subtitle={js|Free while we're in beta 🦊|js} />
+    <Components.Counter label="seats" />
+  </main>

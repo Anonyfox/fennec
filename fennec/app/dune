@@ -4,5 +4,5 @@
 (library
  (name fennec)
  (public_name fennec)
- (modes native)
+ (modes byte native)
  (libraries fennec.core fennec.paw fennec.server eio eio_main))

@@ -4,5 +4,5 @@
 (library
  (name fennec_paw)
  (public_name fennec.paw)
- (modes native)
+ (modes byte native)
  (libraries fennec.core))

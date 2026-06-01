@@ -38,4 +38,7 @@ let admin =
        (Router.render ~name:"admin" ~template:Frontend.Templates.Admin.make
           Frontend.Apps.Admin.Main.router)
 
-let () = Fennec.serve ~webroots:[ "webroot" ] [ web; admin ]
+(* serve the assembled web root (via the static paw above); in dev, watch the exe
+   dir — where the STABLE bundle targets (react.js, web.js, web.css, …) land — for
+   livereload (CSS hot-swap vs JS reload). The wiped webroot/ subdir is skipped. *)
+let () = Fennec.serve ~watch:[ "." ] [ web; admin ]

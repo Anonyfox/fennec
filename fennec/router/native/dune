@@ -3,7 +3,7 @@
 (library
  (name fennec_router)
  (public_name fennec.router)
- (modes native)
+ (modes byte native)
  (flags
   (:standard -w -27-32-33-37-39))
  (libraries fennec.matcher fennec.head fennec.headkit server-reason-react.react
