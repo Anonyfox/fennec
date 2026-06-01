@@ -8,12 +8,13 @@ set -euo pipefail
 
 case "$(uname -s)" in
   Darwin)
-    # Go: CoreFoundation + Security + resolv. Rust: iconv.
-    printf '(-framework CoreFoundation -framework Security -lresolv -liconv)\n'
+    # Go: CoreFoundation + Security + resolv. Rust: iconv. notify (fs events):
+    # CoreServices (FSEvents).
+    printf '(-framework CoreFoundation -framework CoreServices -framework Security -lresolv -liconv)\n'
     ;;
   *)
     # Linux/glibc. Go: pthread + dl + resolv. Rust staticlib: gcc_s (unwind) +
-    # rt + util + pthread + dl.
+    # rt + util + pthread + dl. notify uses inotify (no extra lib).
     printf '(-lpthread -ldl -lresolv -lrt -lutil -lgcc_s)\n'
     ;;
 esac

@@ -20,3 +20,7 @@ strip = true
 [dependencies]
 lightningcss = "1.0.0-alpha.71"
 grass = { version = "0.13", default-features = false }
+# Cross-platform filesystem events (FSEvents / inotify / kqueue / Windows) — the
+# same crate cargo-watch/watchexec use. Powers the CLI dev supervisor's EVENTED
+# watch of the built server exe (no polling). Vendored into the static archive.
+notify = "6"

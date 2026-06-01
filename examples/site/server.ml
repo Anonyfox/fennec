@@ -38,7 +38,7 @@ let admin =
        (Router.render ~name:"admin" ~template:Frontend.Templates.Admin.make
           Frontend.Apps.Admin.Main.router)
 
-(* serve the assembled web root (via the static paw above); in dev, watch the exe
-   dir — where the STABLE bundle targets (react.js, web.js, web.css, …) land — for
-   livereload (CSS hot-swap vs JS reload). The wiped webroot/ subdir is skipped. *)
-let () = Fennec.serve ~watch:[ "." ] [ web; admin ]
+(* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
+   watches the served bundles and pings the server's dev control socket, which
+   relays a CSS hot-swap or full reload to the browser. The server watches nothing. *)
+let () = Fennec.serve [ web; admin ]

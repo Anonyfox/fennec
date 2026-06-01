@@ -1,16 +1,19 @@
-(* Livereload server glue (dev only). Holds the set of connected livereload
-   browsers and a background fiber that watches build *outputs* (not source) and
-   pushes a frame when they change:
+(* Livereload server glue (dev only). A pure RELAY: it holds the set of connected
+   livereload browsers and broadcasts a frame to them on demand. It watches
+   nothing — all filesystem watching lives in the CLI (the one process that links
+   the native fs-event watcher). On a served-asset change the CLI pings the dev
+   control socket and the framework relays the frame here via [broadcast]:
 
-     - a watched asset file (CSS/JS bundle) changes -> push "css" (hot-swap) or
-       "reload" depending on the asset kind.
+     - "css"    -> stylesheet hot-swap (no reload)
+     - anything -> full reload
 
-   Backend reloads need NO push from here: when the CLI restarts the server the
-   socket simply drops, and the client script reloads on reconnect. So this
-   module only exists to make frontend-only edits reload without a restart.
+   Backend reloads need no frame at all: when the CLI restarts the server the
+   socket simply drops, and the client script reloads on reconnect. So this module
+   exists only to (a) hold the browser sockets ([register]) and (b) deliver the
+   CLI's frontend-edit signal to them ([broadcast]).
 
-   Wire it by pointing the [Fennec_core.Dev.endpoint] websocket at [register],
-   and forking [watch] for each output you want to live-reload on. *)
+   Wire it by pointing the [Fennec_core.Dev.endpoint] websocket at [register]; the
+   dev control listener (see Fennec.serve) calls [broadcast]. *)
 
 type t = {
   clients : (int, string -> unit) Hashtbl.t;
@@ -35,8 +38,8 @@ let count t = Hashtbl.length t.clients
    Fennec.serve), it does two jobs with one paw — both built on existing
    primitives, no special server hook:
      - the livereload socket itself: a ws upgrade on [Dev.endpoint] registers the
-       browser's channel (so asset watchers can push "reload"/"css" frames) and
-       unregisters on close;
+       browser's channel (so the dev control listener can push "reload"/"css"
+       frames) and unregisters on close;
      - every other request: registers a before_send that injects the tiny client
        script into HTML responses in memory (never on disk), so the browser opens
        that socket. It passes the conn through (the app still answers).
@@ -58,22 +61,3 @@ let paw (t : t) : Fennec_paw.Paw.t =
         if is_html_response r then
           { r with Fennec_core.Http.body = Fennec_core.Dev.inject_html r.Fennec_core.Http.body }
         else r)
-
-type kind = Css | Reload
-
-(* poll [path]'s mtime every [interval] seconds; on change, [on_change ()] then
-   broadcast the frame for [kind]. Run inside an Eio switch via Fiber.fork. *)
-let watch t ~clock ?(interval = 0.3) ~kind ?(on_change = fun () -> ()) (path : string) : unit =
-  let mtime () = try (Unix.stat path).Unix.st_mtime with _ -> 0.0 in
-  let frame = match kind with Css -> "css" | Reload -> "reload" in
-  let rec loop last =
-    Eio.Time.sleep clock interval;
-    let m = mtime () in
-    if m > last && m > 0.0 then begin
-      (try on_change () with _ -> ());
-      broadcast t frame;
-      loop m
-    end
-    else loop last
-  in
-  loop (mtime ())

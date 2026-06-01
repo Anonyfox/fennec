@@ -54,6 +54,14 @@ module Esbuild = struct
     if h < 0 then failwith "fennec-buildkit: failed to create esbuild context";
     h
 
+  (** Create a context directly from a pre-encoded options JSON (as produced by
+      {!json_opts}). Used by the dev build worker so a warm rebuild uses the exact
+      same options — and therefore yields byte-identical output — as the cold path. *)
+  let create_json (opts_json : string) : ctx =
+    let h = _create opts_json in
+    if h < 0 then failwith "fennec-buildkit: failed to create esbuild context";
+    h
+
   (** Rebuild the bundle, returning the bytes.
       @raise Failure with esbuild's formatted message on a build error. *)
   let rebuild (c : ctx) : string = _rebuild c
@@ -85,4 +93,35 @@ module Css = struct
       an app's entry sheet), then optimize/minify. *)
   let scss_path ?(minify = true) (path : string) : string =
     _scss_path path (if minify then 1 else 0)
+end
+
+(** Cross-platform filesystem events (the Rust [notify] crate: FSEvents / inotify
+    / kqueue / Windows). Lets a tool react to a finished build the instant the OS
+    reports it — no polling. A handle is an opaque pointer carried as a nativeint;
+    [0n] means watching is unavailable on this platform, so the caller should fall
+    back to a poll. *)
+module Watch = struct
+  type t = nativeint
+
+  external _start : string -> int -> nativeint = "fennec_bk_watch_start"
+  external _add : nativeint -> string -> int -> int = "fennec_bk_watch_add"
+  external _wait : nativeint -> int -> int = "fennec_bk_watch_wait"
+  external _free : nativeint -> unit = "fennec_bk_watch_free"
+
+  (** Watch [dir] for filesystem events. [recursive] defaults to false. *)
+  let start ?(recursive = false) (dir : string) : t = _start dir (if recursive then 1 else 0)
+
+  (** Add another [dir] to an existing watcher; all paths feed one event stream.
+      Returns whether it was added. *)
+  let add (h : t) ?(recursive = false) (dir : string) : bool =
+    _add h dir (if recursive then 1 else 0) = 1
+
+  (** Whether a watcher was created; if not, poll instead. *)
+  let available (h : t) : bool = h <> 0n
+
+  (** Block until an event fires or [timeout_ms] elapses; [true] iff an event
+      fired. The blocking wait releases the OCaml runtime lock. *)
+  let wait (h : t) ~timeout_ms : bool = _wait h timeout_ms = 1
+
+  let free (h : t) : unit = _free h
 end

@@ -47,6 +47,27 @@ let classify path =
   | "scss" | "sass" -> Scss
   | _ -> Unknown
 
+(* Build one JS bundle's bytes. In dev, `fennec dev` exports FENNEC_ESBUILD_WORKER —
+   a warm esbuild worker holding the context across rebuilds — so delegate to it for
+   a fast incremental rebuild, falling back to the cold one-shot on ANY failure (no
+   worker, dead socket, timeout, build/internal error). The two paths are
+   byte-identical: the worker builds from the same options JSON. *)
+let build_js ~entry ~format ~global_name ~external_ ~minify ~sourcemap ~banner =
+  let cold () =
+    Fennec_buildkit.Esbuild.build ~entry ~format ~global_name ~external_ ~minify ~sourcemap ~banner
+      ()
+  in
+  match Sys.getenv_opt "FENNEC_ESBUILD_WORKER" with
+  | None | Some "" -> cold ()
+  | Some socket ->
+    let opts_json =
+      Fennec_buildkit.Esbuild.json_opts ~entry ~format ~global_name ~external_ ~minify ~sourcemap
+        ~banner
+    in
+    ( match Esbuild_worker.client_build ~socket ~opts_json with
+    | Some bytes -> bytes
+    | None -> cold () )
+
 (* One entry point -> one output file in [outdir]. JS bundles to ".js", CSS/SCSS
    emit ".css", keeping the input's base name unless [out_name] overrides it.
    Returns (out_path, byte length). *)
@@ -56,9 +77,7 @@ let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner
   let out_ext, output =
     match classify input with
     | Js ->
-      ( ".js",
-        Fennec_buildkit.Esbuild.build ~entry:input ~format ~global_name ~external_ ~minify
-          ~sourcemap ~banner () )
+      (".js", build_js ~entry:input ~format ~global_name ~external_ ~minify ~sourcemap ~banner)
     | Css -> (".css", Fennec_buildkit.Css.transform ~minify (read_file input))
     (* path-aware: @use/@import resolve relative to the file, so a component's
        stylesheet can sit next to it and be pulled into an app's entry sheet *)
@@ -269,24 +288,40 @@ let dev_cmd =
     let doc = "Path to the built server executable to run and supervise (under _build)." in
     Arg.(required & pos 0 (some string) None & info [] ~docv:"SERVER_EXE" ~doc)
   in
-  let go target exe = Dev.run target exe in
+  let assets_arg =
+    let doc =
+      "Name of the served web-root directory (a subdir of the server exe's build dir) whose \
+       bundles drive frontend livereload. Default: $(b,webroot)."
+    in
+    Arg.(value & opt string "webroot" & info [ "assets" ] ~docv:"DIR" ~doc)
+  in
+  let go target exe assets = Dev.run target exe assets in
   let doc = "Run the dev server with livereload" in
   let man =
     [ `S Manpage.s_description;
       `P
         "Start a development loop: run $(b,dune build --watch) (dune is the sole source watcher \
          and builder — including assets, which are dune rules that call $(b,fennec build)) and \
-         supervise the server executable, restarting it when a backend change rebuilds it. \
-         Frontend-only edits live-reload without a restart via the framework's own asset \
-         watcher.";
+         supervise the server executable. The CLI watches the build OUTPUT with a native \
+         filesystem-event watcher: a backend change rebuilds the exe and the server is \
+         restarted; a frontend-only edit live-reloads without a restart, the CLI signalling the \
+         server's dev control socket to hot-swap CSS or reload.";
       `P
         "This command is pure convenience. The project is a plain dune project: $(b,dune build \
-         --watch) plus $(b,dune exec) gives the same livereload without the CLI.";
+         --watch) plus $(b,dune exec) still builds and runs it — you lose only the automated \
+         restart and CSS hot-swap.";
       `S Manpage.s_examples;
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc";
       `Pre "  fennec dev --target examples/site/ _build/default/examples/site/server.exe" ]
   in
-  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg)
+  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg)
+
+(* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
+let worker_cmd =
+  let socket_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"SOCKET") in
+  let go socket = Esbuild_worker.serve ~socket (* loops until signalled; never returns *) in
+  let doc = "(internal) persistent esbuild build worker used by fennec dev" in
+  Cmd.v (Cmd.info "__esbuild-worker" ~doc) Term.(const go $ socket_arg)
 
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
@@ -299,6 +334,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

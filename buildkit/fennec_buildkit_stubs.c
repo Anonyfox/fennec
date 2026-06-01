@@ -4,6 +4,7 @@
 #include <caml/alloc.h>
 #include <caml/memory.h>
 #include <caml/fail.h>
+#include <caml/threads.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -17,6 +18,12 @@ extern char *fennec_css_transform(const char *src, int minify);
 extern char *fennec_css_scss(const char *src, int minify);
 extern char *fennec_css_scss_path(const char *path, int minify);
 extern void fennec_css_free(char *p);
+
+/* Rust staticlib (fennec_css): cross-platform fs watching */
+extern void *fennec_watch_start(const char *path, int recursive);
+extern int fennec_watch_add(void *handle, const char *path, int recursive);
+extern int fennec_watch_wait(void *handle, int timeout_ms);
+extern void fennec_watch_free(void *handle);
 
 /* ---- esbuild ---- */
 
@@ -84,4 +91,37 @@ CAMLprim value fennec_bk_scss_path(value path, value minify) {
   CAMLparam2(path, minify);
   CAMLreturn(copy_and_free(fennec_css_scss_path((char *)String_val(path), Int_val(minify)),
                            "scss: compile error"));
+}
+
+/* ---- fs watching ---- */
+/* handle is an opaque pointer carried as an OCaml nativeint (0 = failed/none). */
+
+CAMLprim value fennec_bk_watch_start(value path, value recursive) {
+  CAMLparam2(path, recursive);
+  void *h = fennec_watch_start((char *)String_val(path), Int_val(recursive));
+  CAMLreturn(caml_copy_nativeint((intnat)h));
+}
+
+CAMLprim value fennec_bk_watch_add(value handle, value path, value recursive) {
+  CAMLparam3(handle, path, recursive);
+  void *h = (void *)Nativeint_val(handle);
+  int r = fennec_watch_add(h, (char *)String_val(path), Int_val(recursive));
+  CAMLreturn(Val_int(r));
+}
+
+CAMLprim value fennec_bk_watch_wait(value handle, value timeout_ms) {
+  CAMLparam2(handle, timeout_ms);
+  void *h = (void *)Nativeint_val(handle);
+  int t = Int_val(timeout_ms);
+  /* blocking recv — release the runtime lock so GC/signals/other fibers proceed */
+  caml_release_runtime_system();
+  int r = fennec_watch_wait(h, t);
+  caml_acquire_runtime_system();
+  CAMLreturn(Val_int(r));
+}
+
+CAMLprim value fennec_bk_watch_free(value handle) {
+  CAMLparam1(handle);
+  fennec_watch_free((void *)Nativeint_val(handle));
+  CAMLreturn(Val_unit);
 }

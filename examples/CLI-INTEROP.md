@@ -10,7 +10,7 @@ the rule wins — change the design, not the rule (or change this doc deliberate
 | --- | --- | --- |
 | **dune** | (the build tool) | The build graph. The **only** source-tree watcher. Builds everything — OCaml server, Melange client, and assets (CSS/JS) — because assets are dune rules that call the CLI. |
 | **CLI** (`fennec`) | `cli/`, package `fennec-cli` | Operational lifecycle only: `fennec build` (one-shot asset build, invoked *by* dune rules) and `fennec dev` (orchestrates `dune build --watch` + supervises the server process). Distributed as a prebuilt binary. |
-| **Framework** (`fennec`) | `fennec/`, package `fennec` | The runtime: HTTP core, Eio server, livereload. Reacts to build **outputs**, never to source. Shipped to opam. |
+| **Framework** (`fennec`) | `fennec/`, package `fennec` | The runtime: HTTP core, Eio server, and the livereload **relay** (holds the browser sockets; the CLI drives it). Watches nothing itself. Shipped to opam. |
 | **User app** | e.g. `examples/site/` | A **plain dune project**. Depends on the framework lib; uses dune rules that call the CLI for assets. Knows nothing about the CLI's existence at the code level. |
 
 ## The load-bearing principle
@@ -18,18 +18,21 @@ the rule wins — change the design, not the rule (or change this doc deliberate
 > **dune is the only thing that watches source and builds. Everything else reacts
 > to build *outputs* — never to source files, never to another tool's internals.**
 
-Every reactor watches an *output artifact* it cares about:
-- The **CLI supervisor** watches the built **server exe** (one file) → restart on change.
-- The **framework** (dev mode) watches built **assets** (`app.css`, `app.js`) → push livereload frame on change.
+A single reactor — the CLI — watches the build *outputs* it cares about, with one
+cross-platform native fs-watcher (the `notify` crate):
+- the built **server exe** → restart the server on change;
+- the served **bundles** (the web root) → ping the framework's dev control socket
+  to hot-swap CSS / full-reload on change.
 
-Nobody parses dune's stdout. Nobody runs a second source watcher. This is what
-keeps the parts decoupled.
+The framework watches nothing; it only relays the CLI's frontend signal to the
+browser over the livereload socket. Nobody parses dune's stdout. Nobody runs a
+second source watcher. This is what keeps the parts decoupled.
 
 ## Touchpoints (the entire interface surface)
 
 1. **CLI → dune**: a standard `dune build --watch <target>` invocation. No custom protocol.
 2. **dune → CLI**: asset rules call `%{bin:fennec} build …`. Outputs are ordinary dune targets.
-3. **CLI → app**: process lifecycle only (spawn / signal / wait) + dev config via env (`FENNEC_ENV`). No custom protocol.
+3. **CLI → app**: process lifecycle (spawn / signal / wait) + dev config via env (`FENNEC_ENV`, and `FENNEC_LIVERELOAD` = a unix-socket path). On a frontend edit the CLI sends one line (`css`/`reload`) to that dev-only loopback socket; the app relays it to browsers. That one line is the whole protocol.
 4. **app ↔ browser**: the framework's livereload websocket (`/_fennec/livereload`) + an injected client script. Framework's concern entirely.
 5. **Shared state across all of them**: the `_build` output dir + the port. That's it.
 
@@ -56,17 +59,38 @@ watcher for everything. Example (an app's `dune`):
 
 Two cases, one client mechanism (a persistent websocket; see `fennec/core/dev.ml`):
 
-- **Backend change** (server/shared OCaml): dune rebuilds the exe → CLI restarts
-  the server → the livereload socket drops → the client reconnects when the new
-  server is up → reload. **No server-side signal needed**; the disconnect *is*
-  the trigger. Robust by construction (tolerates the server being briefly down).
-- **Frontend-only change** (CSS/JS): the server does **not** restart, socket stays
-  open. The framework polls its own built asset's mtime (~3 Hz, Stdlib only — no
-  native filewatcher, no platform divergence) and pushes a frame: `css` →
-  stylesheet hot-swap (no reload), anything else → full reload.
+- **Backend change** (server/shared OCaml): dune rebuilds the exe → the CLI
+  restarts the server → the livereload socket drops → the client reconnects when
+  the new server is up → reload. **No server-side signal needed**; the disconnect
+  *is* the trigger. Robust by construction (tolerates the server being briefly down).
+- **Frontend-only change** (CSS/JS): the exe is untouched, so the server does
+  **not** restart and the socket stays open. The CLI sees the served bundle change
+  and sends the server a frame over the dev control socket: `css` → stylesheet
+  hot-swap (no reload), anything else → full reload.
 
-The heavy source-tree watching is dune's optimized native watcher; our part is a
-trivial portable output-mtime poll. We never write a real filewatcher.
+**All watching lives in the CLI, evented, in one place.** A single native
+fs-watcher (the `notify` crate, vendored in the CLI's static archive — FSEvents /
+inotify / kqueue / Windows) covers, recursively, both the rebuilt exe and the
+served web root beneath it; it reacts the instant dune finishes writing, with no
+polling in the steady state. Two refinements keep it honest:
+
+- it watches the *served* web-root file (assembled *last*), so it never signals
+  before the bytes the browser will fetch are in place;
+- dune rewrites the whole web root (fresh mtimes for unchanged files) on every
+  build, so the CLI gates on a **content hash**, not mtime — a rewrite with
+  identical bytes is ignored, and a CSS-only edit never full-reloads the JS.
+
+The framework watches nothing — it's a pure relay: it holds the browser sockets
+and forwards the CLI's frame. This is deliberate. The framework runs inside the
+user's lean server, which must **not** link the CLI's native archive (see
+decoupling); putting all watching in the CLI keeps the server dependency-free
+*and* makes every hop evented. The only timed loops left are the two with no event
+to wait on: the browser's reconnect retry (nothing fires when a server returns)
+and the CLI's ~1 Hz crash check (a crashed process emits no fs event).
+
+The heavy *source-tree* watching is always dune's optimized native watcher; the
+CLI never touches source. We never hand-roll a watcher — the CLI uses a proven
+library.
 
 The livereload script is injected into HTML responses **in memory** (before the
 last `</body>`); it never rewrites a user file on disk. All of it is gated on dev
@@ -74,15 +98,24 @@ mode, so a prod build ships none of it.
 
 ## Decoupling guarantees (the point of all this)
 
-- **Delete the CLI** → `dune build --watch` + `dune exec ./server.exe` still gives
-  working livereload (via the reconnect loop). You lose only auto-restart and CSS
-  hot-swap. The project was always a plain dune project. ← decoupling proof.
+- **Delete the CLI** → `dune build --watch` + `dune exec ./server.exe` is still a
+  working dune project: it builds and serves, and a manual restart reloads the
+  browser via the reconnect loop. You lose the *automation* — auto-restart and CSS
+  hot-swap — because all output-watching lived in the CLI, by design. ← decoupling proof.
 - **Delete dev mode** → it's all behind `FENNEC_ENV`; the prod server contains no
   livereload code, no watcher, no injected script.
 - **No file acrobatics** → the user's source is never rewritten on disk.
 
 ## Decisions on record
 
+- **All build-output watching lives in the CLI; the framework is a relay.** Exactly
+  one process watches (one native fs-watcher, evented — no polling in the steady
+  state), and the server stays free of any native watch dependency. That is what
+  lets "delete the CLI" leave a clean dune project, and it makes every hop of the
+  dev loop evented. The framework exposes a dev-only loopback control socket
+  (`FENNEC_LIVERELOAD`) the CLI pings on a frontend edit; the server forwards the
+  frame to browsers. Chosen over an in-server watch (which would either add a
+  native dep to every prod binary, or force a poll inside the server).
 - **No dev proxy.** The app binds the real port in dev exactly as in prod
   (dev≈prod fidelity). OCaml's sub-second rebuild + the browser's reconnect poll
   make restart downtime invisible. We accept it over a proxy that would diverge

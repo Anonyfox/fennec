@@ -1,21 +1,30 @@
 (* `fennec dev` — the development orchestrator.
 
-   Per examples/CLI-INTEROP.md, this is STRICTLY operational sugar over things
-   dune and the framework already do. It owns no build logic and no file
-   watching of source: it runs two long-lived things and supervises them.
+   Per examples/CLI-INTEROP.md, this is STRICTLY operational sugar over what dune
+   and the framework already do. It owns no build logic — dune is the sole source
+   watcher and builder. The CLI runs three things and supervises them:
 
-     1. `dune build --watch <target>` — dune is the sole source watcher and the
-        sole builder (OCaml server + assets, since assets are dune rules that call
-        `fennec build`). This rebuilds everything incrementally on edit.
+     1. `dune build --watch <target>` — dune watches SOURCE and rebuilds everything
+        incrementally (OCaml server + assets, since assets are dune rules that call
+        `fennec build`).
 
-     2. the server exe — spawned as a child. When dune rebuilds it (backend
-        change), the exe artifact's mtime changes; we restart the child. The
-        browser's livereload socket drops and reconnects -> reload. Frontend-only
-        edits don't restart the server; the framework pushes a hot-swap itself.
+     2. the server exe — spawned as a child. The CLI watches the build OUTPUT for
+        filesystem events (the native `notify` watcher, recursive over the exe's
+        build dir); when a backend change rebuilds the exe we restart the child.
+        Its livereload socket drops and the browser reconnects -> reload.
 
-   Delete this command and the project still works: `dune build --watch` in one
-   terminal + `dune exec <exe>` in another gives livereload via the same
-   mechanisms. This is only convenience. *)
+     3. the served web root — the SAME output watcher also covers the assembled
+        bundles. A frontend-only edit (CSS/JS) leaves the exe untouched, so instead
+        of restarting we ping the server's dev control socket, which relays a CSS
+        hot-swap or full reload. We gate on a content HASH, since dune rewrites the
+        whole web root (fresh mtimes) on every build — only a real change reloads,
+        and a CSS-only edit never reloads the JS.
+
+   So ALL filesystem watching of build outputs lives here, evented, in one place;
+   the framework watches nothing. Delete this command and the project is still a
+   plain dune project that builds and runs (`dune build --watch` + `dune exec`);
+   you lose only the automated restart and CSS hot-swap, exactly as CLI-INTEROP
+   records. *)
 
 let pf = Printf.printf
 let ef = Printf.eprintf
@@ -35,12 +44,42 @@ let start_server exe extra_env =
 
 let kill_quietly pid = try Unix.kill pid Sys.sigterm with _ -> ()
 
-let run target exe =
+(* A unix-socket path in the temp dir, unique to this CLI run. Kept short — unix
+   socket paths cap around 100 bytes — falling back to /tmp if $TMPDIR is long. *)
+let tmp_socket prefix =
+  let name = Printf.sprintf "%s-%d.sock" prefix (Unix.getpid ()) in
+  let p = Filename.concat (Filename.get_temp_dir_name ()) name in
+  if String.length p <= 100 then p else Filename.concat "/tmp" name
+
+(* the dev control socket the framework listens on (FENNEC_LIVERELOAD) *)
+let control_socket_path () = tmp_socket "fennec-lr"
+
+(* spawn the persistent esbuild worker (`fennec __esbuild-worker <socket>`), reusing
+   this same fennec binary; returns its pid *)
+let start_esbuild_worker socket =
+  let exe = Sys.executable_name in
+  Unix.create_process exe [| exe; "__esbuild-worker"; socket |] Unix.stdin Unix.stderr Unix.stderr
+
+let run target exe assets =
   if not (Sys.file_exists "dune-project") then begin
     ef "fennec dev: run from a dune project root (no dune-project here)\n";
     exit 1
   end;
   pf "fennec dev: watching %s, serving %s\n%!" target exe;
+
+  (* 0. the warm esbuild worker — started BEFORE dune so even the first build
+     delegates to it. We export its socket; dune passes the env through to the
+     `fennec build` rule actions, which connect to it for a fast incremental
+     rebuild. If it doesn't come up, builds simply fall back to the cold path. *)
+  let worker_socket = tmp_socket "fennec-esb" in
+  let worker_pid = start_esbuild_worker worker_socket in
+  let ww = ref 0.0 in
+  while (not (Sys.file_exists worker_socket)) && !ww < 3.0 do
+    Unix.sleepf 0.05;
+    ww := !ww +. 0.05
+  done;
+  if Sys.file_exists worker_socket then Unix.putenv "FENNEC_ESBUILD_WORKER" worker_socket
+  else pf "fennec dev: esbuild worker did not start; falling back to cold builds\n%!";
 
   (* 1. dune --watch: the one source watcher + builder *)
   let watch_pid = start_watch target in
@@ -60,36 +99,125 @@ let run target exe =
   (* 2. supervise the server: restart it whenever the exe artifact changes, and
      restart a crashed server — but with a crash-rate limiter so a server that
      fails instantly on boot doesn't hot-loop forever. *)
-  let dev_env = [| "FENNEC_ENV=development" |] in
+  let control_path = control_socket_path () in
+  let dev_env = [| "FENNEC_ENV=development"; "FENNEC_LIVERELOAD=" ^ control_path |] in
   let server_pid = ref (start_server exe dev_env) in
   let last_exe = ref (mtime exe) in
-  pf "fennec dev: server up (pid %d)\n%!" !server_pid;
+
+  (* Frontend livereload. The output watcher (below) covers the served web root; on
+     a real CONTENT change we ping the dev control socket. We hash files, not
+     mtimes: dune rewrites the whole web root on every build, so unchanged files get
+     fresh mtimes — only a true change should reload, and a CSS-only edit must not
+     reload the JS. *)
+  let assets_dir = Filename.concat (Filename.dirname exe) assets in
+  let asset_hashes : (string, Digest.t) Hashtbl.t = Hashtbl.create 32 in
+  let rec scan dir acc =
+    match Sys.readdir dir with
+    | exception _ -> acc
+    | entries ->
+      Array.fold_left
+        (fun acc f ->
+          let p = Filename.concat dir f in
+          if (try Sys.is_directory p with _ -> false) then scan p acc
+          else match Filename.extension f with ".css" | ".js" | ".mjs" -> p :: acc | _ -> acc)
+        acc entries
+  in
+  (* refresh the hash table; return (any CSS changed, any non-CSS changed) *)
+  let scan_assets () =
+    let css = ref false and other = ref false in
+    List.iter
+      (fun p ->
+        match (try Some (Digest.file p) with _ -> None) with
+        | None -> ()
+        | Some h -> (
+          match Hashtbl.find_opt asset_hashes p with
+          | Some old when old = h -> ()
+          | _ ->
+            Hashtbl.replace asset_hashes p h;
+            if Filename.extension p = ".css" then css := true else other := true))
+      (scan assets_dir []);
+    (!css, !other)
+  in
+  (* push one frame to the server's dev control socket (best-effort; if the server
+     isn't listening yet the connect just fails and the next build pings again) *)
+  let ping (frame : string) =
+    try
+      let fd = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Fun.protect
+        ~finally:(fun () -> try Unix.close fd with _ -> ())
+        (fun () ->
+          Unix.connect fd (Unix.ADDR_UNIX control_path);
+          let msg = frame ^ "\n" in
+          ignore (Unix.write_substring fd msg 0 (String.length msg)))
+    with _ -> ()
+  in
+  (* on a served-asset content change: a JS change wins (full reload), else CSS
+     hot-swaps; nothing changed -> no frame *)
+  let signal_assets () =
+    let css, other = scan_assets () in
+    if other then ping "reload" else if css then ping "css"
+  in
+  (* the web root is built alongside the exe (@dev) but may land a moment later;
+     wait briefly so the seed + the recursive watch below see the real tree *)
+  let w2 = ref 0.0 in
+  while (not (Sys.file_exists assets_dir)) && !w2 < 5.0 do
+    Unix.sleepf 0.1;
+    w2 := !w2 +. 0.1
+  done;
+  ignore (scan_assets ()); (* seed the table with the current build (not a change) *)
+
+  (* EVENTED detection via the CLI's cross-platform native watcher (FSEvents /
+     inotify / kqueue — the `notify` crate). TWO narrow watches feed one event
+     stream, deliberately NOT a recursive watch of the whole build dir — that would
+     put an inotify watch on every node_modules / build subdir on Linux and flood
+     events. Instead: the exe's dir NON-recursively (catches the relinked exe, a
+     direct child), and the served web root RECURSIVELY (a small subtree whose dirs
+     keep their inodes across rebuilds, so the watch survives). [await] returns the
+     instant dune finishes writing; no polling. If the platform can't deliver
+     events the watcher is unavailable and we fall back to a short sleep. *)
+  let watcher = Fennec_buildkit.Watch.start (Filename.dirname exe) in
+  let evented = Fennec_buildkit.Watch.available watcher in
+  if evented then ignore (Fennec_buildkit.Watch.add watcher ~recursive:true assets_dir);
+  pf "fennec dev: server up (pid %d) — rebuilds via %s\n%!" !server_pid
+    (if evented then "fs events" else "poll");
 
   let shutdown _ =
     pf "\nfennec dev: shutting down\n%!";
     kill_quietly !server_pid;
     kill_quietly watch_pid;
+    kill_quietly worker_pid;
+    if evented then Fennec_buildkit.Watch.free watcher;
+    (try Sys.remove control_path with _ -> ());
+    (try Sys.remove worker_socket with _ -> ());
     exit 0
   in
   Sys.set_signal Sys.sigint (Sys.Signal_handle shutdown);
   Sys.set_signal Sys.sigterm (Sys.Signal_handle shutdown);
 
-  (* crash bookkeeping: count crashes within a sliding window; back off and, past
-     a threshold, stop restarting until the NEXT rebuild (which clears the streak,
-     since a code change is the user's fix). *)
+  (* Block until a filesystem event (instant on a finished rebuild) or a bounded
+     timeout — the timeout only bounds how soon a CRASHED server is noticed; a real
+     rebuild wakes us immediately via the event. No busy polling either way.
+     Returns true if something happened (an event, or the poll-fallback tick), so
+     the caller only rescans the served assets when there was a reason to. *)
+  let await () =
+    if evented then Fennec_buildkit.Watch.wait watcher ~timeout_ms:1000
+    else (Unix.sleepf 0.2; true)
+  in
+
+  (* crash bookkeeping: count crashes within a sliding window (real time); back off
+     and, past a threshold, stop restarting until the NEXT rebuild (which clears the
+     streak, since a code change is the user's fix). *)
+  let now () = Unix.gettimeofday () in
   let crash_times = ref [] in (* recent crash timestamps, newest first *)
   let window = 10.0 (* seconds *) and max_crashes = 5 in
-  let monotonic = ref 0.0 in (* a coarse clock from accumulated sleeps *)
-  let prune () =
-    crash_times := List.filter (fun t -> !monotonic -. t <= window) !crash_times
-  in
+  let prune () = crash_times := List.filter (fun t -> now () -. t <= window) !crash_times in
   let restart reason =
     server_pid := start_server exe dev_env;
     pf "fennec dev: %s -> restarted server (pid %d)\n%!" reason !server_pid
   in
   let rec loop ~suspended =
-    Unix.sleepf 0.3;
-    monotonic := !monotonic +. 0.3;
+    let event = await () in
+    if event then signal_assets (); (* frontend hot-swap: ping on a real asset change *)
     let m = mtime exe in
     let rebuilt = m > !last_exe in
     if rebuilt then begin
@@ -110,7 +238,7 @@ let run target exe =
       in
       if not crashed then loop ~suspended:false
       else begin
-        crash_times := !monotonic :: !crash_times;
+        crash_times := now () :: !crash_times;
         prune ();
         let n = List.length !crash_times in
         if n >= max_crashes then begin
@@ -124,7 +252,6 @@ let run target exe =
           (* exponential backoff: 0.2s, 0.4s, 0.8s, … capped at ~3s *)
           let delay = Float.min 3.0 (0.2 *. (2. ** float_of_int (n - 1))) in
           Unix.sleepf delay;
-          monotonic := !monotonic +. delay;
           restart (Printf.sprintf "server exited (crash %d/%d)" n max_crashes);
           loop ~suspended:false
         end

@@ -1,15 +1,15 @@
 (* Dev-mode livereload — the PURE parts: the client script and the HTML injection.
 
-   Design (see examples/CLI-INTEROP.md): the framework reacts to build *outputs*,
-   never to source files. Livereload has two cases, and the client script handles
-   both with one mechanism — a dedicated websocket that the browser keeps open:
+   Design (see examples/CLI-INTEROP.md): all build-output watching lives in the
+   CLI; the framework only relays. Livereload has two cases, and the client script
+   handles both with one mechanism — a dedicated websocket that the browser keeps open:
 
    - Backend change: dune rebuilds the exe, the CLI restarts the server, the
      livereload socket drops. The script polls and, on reconnect, reloads. No
      server-side signal needed — the disconnect IS the reload trigger.
    - Frontend-only change (CSS/JS): the server stays up, so the socket stays
-     open; the framework's asset poller pushes a frame ("reload" or "css") and
-     the script acts on it.
+     open; the CLI (which watches the built bundles) pings the server's dev control
+     socket, the server pushes a frame ("reload" or "css"), and the script acts on it.
 
    The script is injected into HTML responses in memory (before </body>); it
    NEVER rewrites a file on disk. Disabled entirely outside dev mode, so a prod
@@ -17,16 +17,28 @@
 
 let endpoint = "/_fennec/livereload"
 
-(* A tiny, dependency-free client. Keeps a websocket open; on any close it polls
-   to reconnect, and once the server is back it reloads (covers server restart).
-   A "css" text frame hot-swaps stylesheets with no reload; anything else (e.g.
-   "reload") does a full reload. *)
+(* A tiny, dependency-free client. Keeps a websocket open; when it drops (server
+   restart) it reconnects, and once the server is back it reloads. A "css" text
+   frame hot-swaps stylesheets with no reload; anything else does a full reload.
+
+   Reconnect strategy (mirrors what mature dev servers like Vite settled on, tuned
+   for a LOCAL server that's down only ~0.3–0.5s): a flat, fast retry interval — no
+   exponential backoff, because backoff exists to spare a remote/overloaded server
+   and only ADDS latency for localhost. While the tab is hidden we stop retrying
+   (pointless), and we reconnect IMMEDIATELY on focus / visibility-change — the
+   single biggest perceived-latency win, since the dev's tab-switch back from the
+   editor is exactly when they want the page fresh. The poll itself can't be
+   removed (no browser API signals "endpoint reachable again"), only made cheap,
+   fast, and event-gated. *)
 let client_script =
   Printf.sprintf
     {js|(function(){
   var EP = "%s";
   var url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + EP;
+  var RETRY_MS = 250;
   var hadConnection = false;
+  var live = false;       // is a socket currently open?
+  var pending = null;     // a scheduled reconnect timer, if any
   function swapCss(){
     var links = document.querySelectorAll('link[rel="stylesheet"]');
     links.forEach(function(l){
@@ -34,10 +46,21 @@ let client_script =
       l.href = u + (u.indexOf("?") >= 0 ? "&" : "?") + "_fennec=" + Date.now();
     });
   }
+  function schedule(){
+    if (pending !== null || live || document.hidden) return; // hidden: resume on visibility
+    pending = setTimeout(connect, RETRY_MS);
+  }
+  function reconnectNow(){
+    if (live) return;
+    if (pending !== null) { clearTimeout(pending); pending = null; }
+    connect();
+  }
   function connect(){
+    pending = null;
     var ws;
-    try { ws = new WebSocket(url); } catch(e) { return retry(); }
+    try { ws = new WebSocket(url); } catch(e) { return schedule(); }
     ws.onopen = function(){
+      live = true;
       if (hadConnection) { location.reload(); return; }
       hadConnection = true;
     };
@@ -45,10 +68,11 @@ let client_script =
       if (e.data === "css") swapCss();
       else location.reload();
     };
-    ws.onclose = function(){ retry(); };
+    ws.onclose = function(){ live = false; schedule(); };
     ws.onerror = function(){ try { ws.close(); } catch(_){} };
   }
-  function retry(){ setTimeout(connect, 500); }
+  addEventListener("visibilitychange", function(){ if (!document.hidden) reconnectNow(); });
+  addEventListener("focus", reconnectNow);
   connect();
 })();|js}
     endpoint
