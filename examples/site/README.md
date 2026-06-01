@@ -12,7 +12,7 @@ examples/site/
       admin/         a separate app:  main.mlx + main.scss + dashboard
     components/      shared, nested .mlx + colocated .scss (counter, nav, _theme)
     templates/       SSR document shells as real .mlx (default, admin)
-  client/  emit/     build wiring for the CSR mirror (you rarely open these)
+  frontend_build/    generated CSR build machinery (two tiny dunes; ignore — see its README)
   dune               executable + the one `fennec assemble` rule
   test/site.test.mjs isomorphic test (SSR + hydrate, both apps)
 ```
@@ -71,9 +71,10 @@ the template hardcodes no paths.
 ## How the build fits together (and why so few dune files)
 
 You edit two dune files: `frontend/dune` (the native SSR lib + shared config) and
-the top-level `dune` (the server + one assemble rule). The melange CSR mirror is
-`client/dune` — the same sources via `copy_files`, one `(subdir …)` line per app
-folder (the *only* place adding a brand-new app touches dune). `fennec assemble`
+the top-level `dune` (the server + one assemble rule). The melange CSR mirror lives
+under `frontend_build/` (generated machinery) — the same sources via `copy_files`,
+one `(subdir …)` line per app folder (the *only* place adding a brand-new app
+touches dune). `fennec assemble`
 then **discovers** the apps and, per app, esbuild-bundles its emitted JS and
 compiles its `main.scss`, builds the shared `/react.js` once, and merges `public/`
 — all into one web root, with no per-app dune wiring.

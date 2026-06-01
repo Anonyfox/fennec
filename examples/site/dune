@@ -1,8 +1,9 @@
 ; The site example — ONE shared public/ + a single isomorphic frontend/ tree
 ; (apps, components, templates), assembled into ONE web root.
 ;
-;   frontend/  -> native SSR lib (frontend/dune) + melange CSR mirror (client/) + emit/
-;   fennec assemble: per app, esbuild emit/out/.../apps/<name>/main.js -> _apps/<name>/main.js
+;   frontend/  -> native SSR lib (frontend/dune); the melange CSR mirror + emit
+;               live under frontend_build/ (generated build machinery — see its README)
+;   fennec assemble: per app, esbuild the emitted apps/<name>/main.js -> _apps/<name>/main.js
 ;                    and sass apps/<name>/main.scss -> _apps/<name>/main.css; build the
 ;                    shared /react.js (preact) runtime; merge public/ -> webroot/.
 ;   prod: one embed module bakes the assembled web root into the binary.
@@ -18,8 +19,8 @@
  (targets
   (dir webroot))
  (deps
-  (alias emit/melange)
-  (glob_files_rec emit/out/*)
+  (alias frontend_build/emit/melange)
+  (glob_files_rec frontend_build/emit/out/*)
   (source_tree frontend)
   (source_tree public)
   preact_entry.mjs
@@ -27,7 +28,7 @@
   %{workspace_root}/fennec/ui/runtime/require_shim.js)
  (action
   (run %{bin:fennec} assemble
-   --emit emit/out
+   --emit frontend_build/emit/out
    --frontend frontend
    --public public
    --runtime preact_entry.mjs
