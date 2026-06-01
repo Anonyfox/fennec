@@ -6,7 +6,7 @@ let make (_params : (string * string) list) =
   <main className="page">
     <Head title={js|About — Fennec Site|js}
       description="What this little fullstack OCaml framework is about." />
-    <Nav links=[ ("/", "Home"); ("/about", "About") ] />
+    <Components.Nav links=[ ("/", "Home"); ("/about", "About") ] />
     <h1>(React.string "About")</h1>
     <p>(React.string "Fennec: an Elixir/Phoenix-inspired core with a React/Melange front.")</p>
   </main>

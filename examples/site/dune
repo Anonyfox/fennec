@@ -1,9 +1,11 @@
-; The site example — two apps (web, admin), each assembled into its own web root
-; (true per-app bundles for whitelabeling), served by two endpoints in server.ml.
+; The site example — ONE shared public/ + a single isomorphic frontend/ tree
+; (apps, components, templates), assembled into ONE web root.
 ;
-; Per app: react.js (preact runtime, shared source) + app.js (that app's Melange
-; client bundle) + app.css (shared SCSS) + the staged public dir -> webroot_<app>.
-; A prod embed module per app bakes its web root into the binary.
+;   frontend/  -> native SSR lib (frontend/dune) + melange CSR mirror (client/) + emit/
+;   fennec assemble: per app, esbuild emit/out/.../apps/<name>/main.js -> _apps/<name>/main.js
+;                    and sass apps/<name>/main.scss -> _apps/<name>/main.css; build the
+;                    shared /react.js (preact) runtime; merge public/ -> webroot/.
+;   prod: one embed module bakes the assembled web root into the binary.
 
 ; ---- shared preact runtime entry (resolve preact against this dir's node_modules)
 (rule
@@ -11,104 +13,52 @@
  (action
   (copy %{workspace_root}/fennec/ui/runtime/preact_entry.mjs preact_entry.mjs)))
 
+; ---- assemble the single web root: per-app JS+CSS bundles, shared runtime, public/
 (rule
- (target react.js)
+ (targets
+  (dir webroot))
  (deps
+  (alias emit/melange)
+  (glob_files_rec emit/out/*)
+  (source_tree frontend)
+  (source_tree public)
   preact_entry.mjs
-  (glob_files_rec node_modules/preact/*))
- (action
-  (run %{bin:fennec} build --format iife --out-name react.js -o . preact_entry.mjs)))
-
-; ---- shared stylesheet ----
-(rule
- (target app.css)
- (deps app.scss)
- (action
-  (run %{bin:fennec} build --out-name app.css -o . app.scss)))
-
-; ---- web app bundle ----
-(rule
- (target web.js)
- (deps
-  (alias web_client/melange)
-  (glob_files_rec web_client/client_output/*)
+  (glob_files_rec node_modules/preact/*)
   %{workspace_root}/fennec/ui/runtime/require_shim.js)
  (action
-  (run %{bin:fennec} build --format iife --global-name App --out-name web.js
-   --external react --external react-dom --external react/jsx-runtime
-   --banner-file %{workspace_root}/fennec/ui/runtime/require_shim.js -o .
-   web_client/client_output/examples/site/web_client/main.js)))
+  (run %{bin:fennec} assemble
+   --emit emit/out
+   --frontend frontend
+   --public public
+   --runtime preact_entry.mjs
+   --shim %{workspace_root}/fennec/ui/runtime/require_shim.js
+   -o webroot)))
 
+; ---- prod embed module (release: bake the web root in; dev: empty stub) ----
 (rule
- (target admin.js)
- (deps
-  (alias admin_client/melange)
-  (glob_files_rec admin_client/client_output/*)
-  %{workspace_root}/fennec/ui/runtime/require_shim.js)
- (action
-  (run %{bin:fennec} build --format iife --global-name App --out-name admin.js
-   --external react --external react-dom --external react/jsx-runtime
-   --banner-file %{workspace_root}/fennec/ui/runtime/require_shim.js -o .
-   admin_client/client_output/examples/site/admin_client/main.js)))
-
-; ---- assemble per-app web roots (bundle is served as app.js in each) ----
-(rule
- (targets
-  (dir webroot_web))
- (deps react.js web.js app.css
-  (source_tree public_web))
- (action
-  (run %{bin:fennec} build -o webroot_web --include react.js --include web.js:app.js
-   --include app.css --public public_web)))
-
-(rule
- (targets
-  (dir webroot_admin))
- (deps react.js admin.js app.css
-  (source_tree public_admin))
- (action
-  (run %{bin:fennec} build -o webroot_admin --include react.js --include admin.js:app.js
-   --include app.css --public public_admin)))
-
-; ---- prod embed modules per app (dev: empty stub, no relink on asset edits) ----
-(rule
- (target web_assets.ml)
+ (target assets.ml)
  (enabled_if (= %{profile} release))
- (deps webroot_web)
+ (deps webroot)
  (action
-  (run %{bin:fennec} build -o webroot_web --embed web_assets.ml)))
+  (run %{bin:fennec} assemble --embed assets.ml -o webroot)))
 
 (rule
- (target web_assets.ml)
+ (target assets.ml)
  (enabled_if (<> %{profile} release))
  (action
-  (with-stdout-to web_assets.ml
+  (with-stdout-to assets.ml
    (echo "let lookup (_ : string) : string option = None\n"))))
 
-(rule
- (target admin_assets.ml)
- (enabled_if (= %{profile} release))
- (deps webroot_admin)
- (action
-  (run %{bin:fennec} build -o webroot_admin --embed admin_assets.ml)))
-
-(rule
- (target admin_assets.ml)
- (enabled_if (<> %{profile} release))
- (action
-  (with-stdout-to admin_assets.ml
-   (echo "let lookup (_ : string) : string option = None\n"))))
-
-; ensure both web roots are built by a plain `dune build`
+; ensure the web root is built by a plain `dune build`
 (alias
  (name all)
- (deps webroot_web webroot_admin))
+ (deps webroot))
 
 (alias
  (name default)
- (deps webroot_web webroot_admin))
+ (deps webroot))
 
 (executable
  (name server)
- (modules server web_assets admin_assets)
- (libraries fennec fennec.router site_ui_native))
+ (modules server assets)
+ (libraries fennec fennec.router fennec-examples.frontend))

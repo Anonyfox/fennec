@@ -1,0 +1,17 @@
+(* The admin app's SSR shell — whitelabel variant: a distinct <body> class so the
+   admin app is themed independently, while sharing the same render contract. *)
+
+let[@react.component] make ~head ~body ~runtime ~js ~css () =
+  <html lang="en">
+    <head>
+      <meta charSet="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      (head)
+      <link rel="stylesheet" href=css />
+    </head>
+    <body className="admin">
+      <div id="root" dangerouslySetInnerHTML=(object method __html = body end) />
+      <script src=runtime defer=true></script>
+      <script src=js defer=true></script>
+    </body>
+  </html>

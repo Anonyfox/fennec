@@ -1,0 +1,8 @@
+// Web app stylesheet entry. Pulls in the colocated component styles it uses,
+// plus the app's own base. Same @use mechanism for shared + local.
+@use "../../components/theme";
+@use "../../components/nav";
+@use "../../components/counter";
+body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+h1 { color: theme.$brand; }
+.page { display: block; }

@@ -1,0 +1,6 @@
+@use "theme";
+.nav {
+  display: flex; gap: 1rem; border-bottom: 1px solid #eee;
+  padding-bottom: .6rem; margin-bottom: 1rem;
+  .nav-link { color: theme.$brand; text-decoration: none; &:hover { text-decoration: underline; } }
+}

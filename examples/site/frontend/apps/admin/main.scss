@@ -1,0 +1,7 @@
+// Admin app stylesheet entry — its own bundle (whitelabel), reusing the shared
+// Counter style by the same @use mechanism, with an admin accent.
+@use "../../components/theme";
+@use "../../components/counter";
+body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+body.admin { border-top: 4px solid theme.$accent; }
+h1 { color: theme.$accent; }

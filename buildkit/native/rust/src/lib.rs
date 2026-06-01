@@ -49,6 +49,25 @@ pub extern "C" fn fennec_css_scss(src: *const c_char, minify: c_int) -> *mut c_c
     }
 }
 
+/// Compile a SCSS *file* (grass `from_path`, which resolves `@use`/`@import`
+/// relative to the file and its directory — so a component's stylesheet can sit
+/// next to it and be pulled in by an app's entry sheet). Then optimize.
+#[no_mangle]
+pub extern "C" fn fennec_css_scss_path(path: *const c_char, minify: c_int) -> *mut c_char {
+    let p = match read(path) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let css = match grass::from_path(&p, &grass::Options::default()) {
+        Ok(c) => c,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match optimize(&css, minify != 0) {
+        Some(out) => to_c(out),
+        None => to_c(css),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fennec_css_free(p: *mut c_char) {
     if !p.is_null() {

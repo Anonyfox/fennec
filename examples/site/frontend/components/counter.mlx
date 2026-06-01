@@ -1,0 +1,9 @@
+(* A shared interactive component, used by multiple apps. Isomorphic: server-
+   rendered then hydrated; the button is live after hydration. Its styles live
+   next to it in counter.scss, pulled in by each app's main.scss via @use. *)
+
+let[@react.component] make ~label () =
+  let count, set = React.useState (fun () -> 0) in
+  <button className="counter" onClick=(fun _ -> set (fun c -> c + 1))>
+    (React.string (label ^ ": " ^ string_of_int count))
+  </button>

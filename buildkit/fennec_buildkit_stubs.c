@@ -15,6 +15,7 @@ extern void fennec_esbuild_ctx_dispose(int handle);
 /* Rust staticlib (fennec_css) */
 extern char *fennec_css_transform(const char *src, int minify);
 extern char *fennec_css_scss(const char *src, int minify);
+extern char *fennec_css_scss_path(const char *path, int minify);
 extern void fennec_css_free(char *p);
 
 /* ---- esbuild ---- */
@@ -76,5 +77,11 @@ CAMLprim value fennec_bk_css(value src, value minify) {
 CAMLprim value fennec_bk_scss(value src, value minify) {
   CAMLparam2(src, minify);
   CAMLreturn(copy_and_free(fennec_css_scss((char *)String_val(src), Int_val(minify)),
+                           "scss: compile error"));
+}
+
+CAMLprim value fennec_bk_scss_path(value path, value minify) {
+  CAMLparam2(path, minify);
+  CAMLreturn(copy_and_free(fennec_css_scss_path((char *)String_val(path), Int_val(minify)),
                            "scss: compile error"));
 }

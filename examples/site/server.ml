@@ -1,23 +1,15 @@
 (* The site server — TWO endpoints, each its own app on its own domain (dev: its
    own localhost port). The whole operational surface: a shared paw pipeline
-   (logger, security headers, a custom plug), an API route, static serving, and
-   the universal router via [Endpoint.app]. In prod endpoints are selected by Host
-   pattern; in dev each gets its own port (no /etc/hosts). [Fennec.serve] owns
-   Eio + dev livereload. *)
+   (logger, security headers, a custom plug, ONE shared static web root), an API
+   route, and the universal router via [Endpoint.app]. Each app mounts by name —
+   the name fixes its predictable asset URLs (/_apps/<name>/main.{js,css}) — with
+   its own SSR template (an .mlx component) for whitelabeling. In prod endpoints
+   are selected by Host pattern; in dev each gets its own port. *)
 
 module Endpoint = Fennec.Endpoint
 module Plug = Fennec.Plug
 module Conn = Fennec.Conn
 module Router = Fennec_router.Router
-
-(* per-app SSR document shells (whitelabel via a body class + a bundle name) *)
-let layout ~theme ~head_html ~body_html =
-  Printf.sprintf
-    {|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>%s<link rel="stylesheet" href="/app.css"/></head><body class="%s"><div id="root">%s</div><script src="/react.js" defer></script><script src="/app.js" defer></script></body></html>|}
-    head_html theme body_html
-
-let web_router = Site_ui_native.Web_router.routes (Router.make ~layout:(layout ~theme:"web") ())
-let admin_router = Site_ui_native.Admin_router.routes (Router.make ~layout:(layout ~theme:"admin") ())
 
 (* a custom plug — trivial to write and unit-test: stamp every response *)
 let powered_by : Fennec.Paw.t =
@@ -25,19 +17,25 @@ let powered_by : Fennec.Paw.t =
   Conn.before_send c (fun r ->
       { r with Fennec.Http.headers = ("X-Powered-By", "fennec") :: r.Fennec.Http.headers })
 
-let common = [ Plug.logger (); Plug.security_headers; powered_by ]
+(* shared pipeline: logging, security headers, the custom plug, and ONE static web
+   root (public/ + every app's bundle, assembled together) served to all apps. *)
+let common =
+  [ Plug.logger (); Plug.security_headers; powered_by;
+    Fennec.static ~name:"webroot" ~assets:Assets.lookup ]
 
 let web =
   Endpoint.make ~host:"localhost" ~port:80 ~dev_port:8200 ()
   |> Endpoint.pipe common
   |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true,"app":"web"}|})
-  |> Endpoint.plug (Fennec.static ~name:"webroot_web" ~assets:Web_assets.lookup)
-  |> Endpoint.app (Router.render web_router)
+  |> Endpoint.app
+       (Router.render ~name:"default" ~template:Frontend.Templates.Default.make
+          Frontend.Apps.Default.Main.router)
 
 let admin =
   Endpoint.make ~host:"admin.localhost" ~port:80 ~dev_port:8201 ()
   |> Endpoint.pipe common
-  |> Endpoint.plug (Fennec.static ~name:"webroot_admin" ~assets:Admin_assets.lookup)
-  |> Endpoint.app (Router.render admin_router)
+  |> Endpoint.app
+       (Router.render ~name:"admin" ~template:Frontend.Templates.Admin.make
+          Frontend.Apps.Admin.Main.router)
 
-let () = Fennec.serve ~webroots:[ "webroot_web"; "webroot_admin" ] [ web; admin ]
+let () = Fennec.serve ~webroots:[ "webroot" ] [ web; admin ]

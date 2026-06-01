@@ -1,5 +1,7 @@
 (* Web app — home page. Sets its own metadata via <Head> (inside-out wins, SSR +
-   CSR identically), uses shared components. A page is [params -> element]. *)
+   CSR identically), and reuses shared components from ../../components. A page is
+   [params -> element]. Non-ASCII string literals use {js|...|js} so Melange emits
+   proper JS Unicode (OCaml byte-strings don't round-trip raw UTF-8 through it). *)
 
 module Head = Fennec_headkit.Head_component
 
@@ -9,8 +11,8 @@ let make (_params : (string * string) list) =
       title={js|Home — Fennec Site|js}
       description="The marketing home page, server-rendered and hydrated."
       extra=[ Fennec_head.Head.Meta_property ("og:title", "Fennec Site") ] />
-    <Nav links=[ ("/", "Home"); ("/about", "About") ] />
+    <Components.Nav links=[ ("/", "Home"); ("/about", "About") ] />
     <h1>(React.string {js|Welcome to the Fennec site 🦊|js})</h1>
     <p>(React.string "One component tree, server-rendered then hydrated.")</p>
-    <Counter label="clicks" />
+    <Components.Counter label="clicks" />
   </main>

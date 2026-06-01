@@ -70,12 +70,19 @@ end
 module Css = struct
   external _transform : string -> int -> string = "fennec_bk_css"
   external _scss : string -> int -> string = "fennec_bk_scss"
+  external _scss_path : string -> int -> string = "fennec_bk_scss_path"
 
   (** Optimize modern CSS — flatten nesting, reduce [calc()], dedupe, and
       (optionally) minify. *)
   let transform ?(minify = true) (src : string) : string = _transform src (if minify then 1 else 0)
 
-  (** Compile SCSS (variables, mixins, [@for], functions, interpolation) to CSS via
-      grass, then optimize/minify via Lightning CSS. *)
+  (** Compile SCSS source text (variables, mixins, [@for], functions,
+      interpolation) to CSS via grass, then optimize/minify via Lightning CSS. *)
   let scss ?(minify = true) (src : string) : string = _scss src (if minify then 1 else 0)
+
+  (** Compile a SCSS *file* by path: [@use]/[@import] resolve relative to the
+      file (so a component's stylesheet can live next to it and be pulled in by
+      an app's entry sheet), then optimize/minify. *)
+  let scss_path ?(minify = true) (path : string) : string =
+    _scss_path path (if minify then 1 else 0)
 end

@@ -1,0 +1,6 @@
+; Emit the CSR mirror to JS. Each app's main.mlx becomes an entry under out/ that
+; `fennec assemble` esbuild-bundles into /_apps/<name>/main.js.
+(melange.emit
+ (target out)
+ (libraries frontend_client)
+ (module_systems es6))

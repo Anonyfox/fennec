@@ -258,6 +258,77 @@ let build_cmd =
   in
   Cmd.v (Cmd.info "build" ~doc ~man) build_term
 
+(* ---- the assemble command: build ONE web root from a frontend/ tree ---- *)
+
+let assemble_run emit_dir frontend_dir public_dir runtime shim outdir embed minify =
+  match embed with
+  | Some out_file -> (
+    (* prod path: emit the embed module from the already-assembled web root *)
+    match Webroot.emit_embed ~outdir ~out_file with
+    | Ok n ->
+      Printf.printf "  embedded %d file(s) -> %s\n" n out_file;
+      flush stdout;
+      0
+    | Error msg ->
+      Printf.eprintf "fennec assemble: %s\n" msg;
+      1)
+  | None -> (
+    let missing name = function Some v -> Ok v | None -> Error name in
+    match
+      Result.bind (missing "--emit" emit_dir) (fun emit_dir ->
+          Result.bind (missing "--frontend" frontend_dir) (fun frontend_dir ->
+              Result.bind (missing "--public" public_dir) (fun public_dir ->
+                  Result.bind (missing "--runtime" runtime) (fun runtime ->
+                      Result.bind (missing "--shim" shim) (fun shim ->
+                          Ok (emit_dir, frontend_dir, public_dir, runtime, shim))))))
+    with
+    | Error flag ->
+      Printf.eprintf "fennec assemble: %s is required (or use --embed)\n" flag;
+      1
+    | Ok (emit_dir, frontend_dir, public_dir, runtime, shim) -> (
+      match Webroot.assemble ~emit_dir ~frontend_dir ~public_dir ~runtime ~shim ~outdir ~minify with
+      | Ok () ->
+        flush stdout;
+        0
+      | Error msg ->
+        Printf.eprintf "fennec assemble: %s\n" msg;
+        1))
+
+let assemble_cmd =
+  let opt names docv doc = Arg.(value & opt (some string) None & info names ~docv ~doc) in
+  let emit_arg = opt [ "emit" ] "DIR" "Melange emit output dir (holds each app's emitted main.js)." in
+  let frontend_arg =
+    opt [ "frontend" ] "DIR" "The frontend source tree (apps/ for discovery + each app's main.scss)."
+  in
+  let public_arg' = opt [ "public" ] "DIR" "Shared static tree merged into the web root." in
+  let runtime_arg = opt [ "runtime" ] "FILE" "Shared JS runtime entry (preact) -> /react.js." in
+  let shim_arg = opt [ "shim" ] "FILE" "Require-shim banner mapping react externals to globals." in
+  let go emit frontend public runtime shim outdir embed no_minify =
+    assemble_run emit frontend public runtime shim outdir embed (not no_minify)
+  in
+  let term =
+    Term.(
+      const go $ emit_arg $ frontend_arg $ public_arg' $ runtime_arg $ shim_arg $ outdir_arg
+      $ embed_arg $ no_minify_arg)
+  in
+  let doc = "Assemble a frontend/ tree into one served web root" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Discover the apps under $(b,--frontend)/apps (folders with a main.mlx) and, for each, \
+         esbuild-bundle its emitted JS ($(b,--emit)) and compile its main.scss into the \
+         predictable $(b,/_apps/<name>/main.{js,css}). Build the shared $(b,--runtime) once as \
+         $(b,/react.js), then merge the $(b,--public) tree in. Adding an app needs NO change \
+         here. With $(b,--embed FILE), instead bake the already-assembled $(b,-o) web root into \
+         an OCaml module for a self-contained prod binary.";
+      `S Manpage.s_examples;
+      `Pre
+        "  fennec assemble --emit emit/out --frontend frontend --public public \\\n\
+        \                  --runtime preact_entry.mjs --shim require_shim.js -o webroot";
+      `Pre "  fennec assemble --embed assets.ml -o webroot" ]
+  in
+  Cmd.v (Cmd.info "assemble" ~doc ~man) term
+
 let dev_cmd =
   let target_arg =
     let doc = "The dune target to build and watch (default: the whole project)." in
@@ -281,8 +352,8 @@ let dev_cmd =
         "This command is pure convenience. The project is a plain dune project: $(b,dune build \
          --watch) plus $(b,dune exec) gives the same livereload without the CLI.";
       `S Manpage.s_examples;
-      `Pre "  fennec dev _build/default/examples/helloworld/server.exe";
-      `Pre "  fennec dev --target examples/helloworld/ _build/default/examples/helloworld/server.exe" ]
+      `Pre "  fennec dev _build/default/examples/site/server.exe";
+      `Pre "  fennec dev --target examples/site/ _build/default/examples/site/server.exe" ]
   in
   Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg)
 
@@ -297,6 +368,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd ]
+  Cmd.group info [ build_cmd; assemble_cmd; dev_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

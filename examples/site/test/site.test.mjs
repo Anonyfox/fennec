@@ -1,8 +1,9 @@
-// Isomorphic integration test for the multi-endpoint site. Boots the server,
-// then for the WEB app: checks SSR markup + metadata, drives the real
-// react.js + app.js bundles through jsdom to prove hydration (button), and that
-// the client Head runtime set document.title. Also checks the ADMIN app is a
-// distinct bundle/endpoint with its own metadata.
+// Isomorphic integration test for the multi-endpoint site on the unified layout.
+// Boots the server, then for the WEB app: checks SSR markup + metadata, drives the
+// real /react.js + /_apps/default/main.js bundles through jsdom to prove hydration
+// (button) and that the client Head runtime set document.title. Also checks the
+// ADMIN app is a distinct bundle/endpoint with its own metadata, the colocated CSS
+// made it into the bundle, and the shared public/ tree serves on both.
 import { JSDOM } from "jsdom";
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -28,11 +29,14 @@ await ensure();
 // --- WEB app: SSR + metadata ---
 const html = await (await fetch(WEB + "/")).text();
 const reactJs = await (await fetch(WEB + "/react.js")).text();
-const appJs = await (await fetch(WEB + "/app.js")).text();
+const appJs = await (await fetch(WEB + "/_apps/default/main.js")).text();
+const appCss = await (await fetch(WEB + "/_apps/default/main.css")).text();
 check("web SSR renders h1", /Welcome to the Fennec site/.test(html));
 check("web SSR title (Head)", /<title>Home — Fennec Site<\/title>/.test(html));
 check("web SSR og:title (Head)", /property="og:title"/.test(html));
 check("web counter present", /clicks: 0/.test(html));
+check("web bundle ref is /_apps/default", /\/_apps\/default\/main\.js/.test(html));
+check("colocated css bundled (.counter)", /\.counter/.test(appCss));
 
 // --- WEB app: hydration + client Head ---
 const dom = new JSDOM(html, { pretendToBeVisual: true, runScripts: "dangerously", url: WEB + "/" });
@@ -49,16 +53,18 @@ await sleep(50);
 check("web hydrated + interactive", /clicks: 2/.test(w.document.querySelector(".counter")?.textContent || ""));
 check("web CSR set document.title", /Home — Fennec Site/.test(w.document.title));
 
-// --- ADMIN app: distinct bundle + metadata ---
+// --- ADMIN app: distinct bundle + metadata + whitelabel template ---
 const adminHtml = await (await fetch(ADMIN + "/")).text();
-const adminJs = await (await fetch(ADMIN + "/app.js")).text();
+const adminJs = await (await fetch(ADMIN + "/_apps/admin/main.js")).text();
 check("admin SSR title", /<title>Dashboard — Admin<\/title>/.test(adminHtml));
 check("admin distinct bundle", adminJs !== appJs);
 check("admin whitelabel body class", /class="admin"/.test(adminHtml));
+check("admin bundle ref is /_apps/admin", /\/_apps\/admin\/main\.js/.test(adminHtml));
 
-// --- API + static ---
+// --- API + shared public ---
 check("web API", /"app":"web"/.test(await (await fetch(WEB + "/api/health")).text()));
-check("admin robots disallow", /Disallow: \//.test(await (await fetch(ADMIN + "/robots.txt")).text()));
+check("shared public served on web", /User-agent/.test(await (await fetch(WEB + "/robots.txt")).text()));
+check("shared public served on admin", /User-agent/.test(await (await fetch(ADMIN + "/robots.txt")).text()));
 
 if (proc) proc.kill();
 console.log(fails === 0 ? "site loop OK" : `${fails} check(s) failed`);

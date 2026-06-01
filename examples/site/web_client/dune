@@ -1,9 +1,0 @@
-; Web app client bundle entry (melange.emit). Imports only the web router, so the
-; emitted JS — once esbuild-bundled — contains just what the web app needs (true
-; per-app bundles for whitelabeling).
-(melange.emit
- (target client_output)
- (libraries site_ui_melange fennec.router_melange fennec.headkit_melange reason-react melange.js)
- (module_systems es6)
- (preprocess
-  (pps melange.ppx reason-react-ppx)))
