@@ -25,6 +25,19 @@ let dispose e =  (* unmount: unsubscribe from everything so it never re-runs *)
   List.iter (fun (P s) -> s.subs <- List.filter (fun e' -> e' != e) s.subs) e.deps;
   e.deps <- []
 
+(* platform flag: the client entrypoint flips this true; native SSR leaves it false *)
+let is_browser = ref false
+
+(* on_mount: a browser-only side effect (à la Vue's onMounted / React useEffect[]).
+   Registered during setup, run once AFTER the initial client render adopts the SSR
+   DOM. A no-op on the server, so SSR never executes browser-only handlers. *)
+let mount_queue : (unit -> unit) list ref = ref []
+let on_mount f = if !is_browser then mount_queue := f :: !mount_queue
+let flush_mounts () =
+  let q = List.rev !mount_queue in
+  mount_queue := [];
+  List.iter (fun f -> f ()) q
+
 type attr = Attr of string * string | Handler of string * (unit -> unit)
 type vnode =
   | Text of string
@@ -174,4 +187,72 @@ module Head = struct
         | Script (a, b) -> Printf.sprintf "<script data-ih=\"%s\"%s>%s</script>" k (attrs_str a) b
         | Json_ld j -> Printf.sprintf "<script data-ih=\"%s\" type=\"application/ld+json\">%s</script>" k j)
     |> String.concat ""
+end
+
+(* ---- Data: isomorphic, reactive resources (à la SolidJS createResource) ----
+
+   A resource is a SIGNAL of state — never awaited mid-render. The component reads
+   it reactively (with a fallback while loading), and the async result's only job is
+   to [set] the signal. That single idea dissolves the Eio<->Promise mismatch: each
+   platform resolves into a [set], nothing blocks the render.
+
+   The same keyed table serves SSR-embed and client-seed (Meteor fast-render):
+   - SERVER: the driver fills [seed] (= the request's data context) by actually
+     running fetches in Eio fibers, then serializes it into the page.
+   - CLIENT: [seed] is loaded from window.__ISO_DATA__. A resource whose key is
+     present resolves SYNCHRONOUSLY (no fetch, no loading flash, hydration matches),
+     and the entry is consumed so later/dynamic fetches hit the network for real.
+
+   The [source] hook is the only platform split (the SOURCE functor, as a ref): on
+   the server it forks an Eio fiber; on the client it does a real fetch. *)
+module Data = struct
+  type 'a state = Loading | Ready of 'a | Failed of string
+  type 'a t = { st : 'a state signal; key : string; decode : string -> 'a; fallback : 'a }
+
+  (* key -> raw payload string. Client: seeded from __ISO_DATA__, consumed once.
+     Server: the per-request data context the driver fills + serializes. *)
+  let seed : (string, string) Hashtbl.t = Hashtbl.create 16
+  let put_seed k v = Hashtbl.replace seed k v
+  let take_seed k =
+    match Hashtbl.find_opt seed k with
+    | None -> None
+    | Some v -> if !is_browser then Hashtbl.remove seed k; Some v  (* client consumes; server keeps for pass 2 + embed *)
+  let clear_seed () = Hashtbl.clear seed
+
+  (* platform SOURCE: deliver a key's raw payload to a continuation. Default no-op
+     (overridden by the server driver / the client fetch binding). *)
+  let source : (string -> (string -> unit) -> unit) ref = ref (fun _ _ -> ())
+
+  let resource ~key ?(client_only = false) ~fallback ~decode () =
+    let initial, fetch_now =
+      match take_seed key with
+      | Some json -> (Ready (decode json), false)              (* seed/ctx hit: synchronous *)
+      | None -> (Loading, not (client_only && not !is_browser)) (* server skips browser-only data *)
+    in
+    let st = signal initial in
+    if fetch_now then !source key (fun json -> set st (Ready (decode json)));
+    { st; key; decode; fallback }
+
+  (* reactive readers (each subscribes via get) *)
+  let status r = get r.st
+  let value r = match get r.st with Ready v -> v | _ -> r.fallback  (* fallback until ready *)
+  let loading r = match get r.st with Loading -> true | _ -> false
+  let error r = match get r.st with Failed e -> Some e | _ -> None
+  (* an explicit, dynamic refetch always hits the network (bypasses the seed) *)
+  let refetch r = set r.st Loading; !source r.key (fun json -> set r.st (Ready (r.decode json)))
+
+  (* serialize the data context to a <script>-safe JS assignment *)
+  let js_string s =
+    let b = Buffer.create (String.length s + 2) in
+    Buffer.add_char b '"';
+    String.iter (fun c -> match c with
+      | '"' -> Buffer.add_string b "\\\"" | '\\' -> Buffer.add_string b "\\\\"
+      | '\n' -> Buffer.add_string b "\\n" | '\r' -> Buffer.add_string b "\\r"
+      | '<' -> Buffer.add_string b "\\u003c"  (* never let a value close the <script> *)
+      | c -> Buffer.add_char b c) s;
+    Buffer.add_char b '"';
+    Buffer.contents b
+  let to_script () =
+    let pairs = Hashtbl.fold (fun k v acc -> (js_string k ^ ":" ^ js_string v) :: acc) seed [] in
+    "window.__ISO_DATA__={" ^ String.concat "," pairs ^ "}"
 end

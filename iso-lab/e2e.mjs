@@ -26,8 +26,15 @@ const descCount  = () => document.querySelectorAll('head meta[name="description"
 const desc       = () => document.querySelector('head meta[name="description"]').getAttribute('content');
 const jsonld     = () => document.querySelectorAll('head script[type="application/ld+json"]').length;
 const og         = () => document.querySelector('head meta[property="og:title"]');
+// data helpers
+const msg        = () => document.querySelector('.greeting .msg').textContent;
+const gstatus    = () => document.querySelector('.greeting .gstatus').textContent;
+const bdata      = () => document.querySelector('.browser-box .bdata').textContent;
+const mountedTxt = () => document.querySelector('.browser-box .mounted').textContent;
+const wait       = ms => new Promise(r => setTimeout(r, ms));
 
-setTimeout(() => {
+(async () => {
+  await wait(200);  // hydration + browser-only fetch (30ms) + mounts have all run
   console.log('— after hydration —');
   eq('counter[0]', counts()[0], 0);
   eq('counter[1]', counts()[1], 0);
@@ -40,6 +47,14 @@ setTimeout(() => {
   eq('description = Stats override', desc(), 'Live todo dashboard');
   eq('App og:title survives (not overridden)', og() ? og().getAttribute('content') : null, 'iso PoC');
   eq('App json-ld survives', jsonld(), 1);
+
+  console.log('— DATA: regular resource seeded (no flash, no refetch on hydrate) —');
+  eq('greeting = SSR value (seeded, not fallback, not client value)', msg(), 'Hello from the server 👋');
+  eq('greeting status ready (never flashed loading)', gstatus().trim(), '(ready)');
+
+  console.log('— DATA: client-only resource ran AFTER hydration —');
+  eq('browser-only data loaded in browser', bdata(), 'Loaded in the browser ✨');
+  eq('on_mount ran (browser-only side effect)', mountedTxt(), 'mounted ✓');
 
   console.log('— LOCAL state: +counter[0] twice, +counter[1] once —');
   click(counterBtns(0)[1]); click(counterBtns(0)[1]);
@@ -72,6 +87,13 @@ setTimeout(() => {
   eq('counters still local-intact', counts().join(','), '2,1');
   eq('title tracks removal', headTitle(), '2 todos · iso');
 
+  console.log('— DATA: dynamic refetch hits the network (real fetch) —');
+  click(document.querySelector('#refetch'));
+  eq('refetch shows loading immediately', gstatus().trim(), '(loading)');
+  await wait(80);
+  eq('refetch resolved to live client value', msg(), 'Hello again, from the client 🔁');
+  eq('refetch status ready again', gstatus().trim(), '(ready)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
-}, 300);
+})();

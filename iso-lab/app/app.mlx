@@ -1,7 +1,6 @@
-(* Composes the tree + registers DEFAULT head metadata in its setup. Because this
-   runs on server AND client, the defaults are rehydration-safe. Deeper components
-   (e.g. Stats) override these. The title reads Store.todos so App re-renders on
-   every todo change — proving the two <Counter/> instances keep their local counts. *)
+(* Composes the tree + registers DEFAULT head metadata in its setup. Now also hosts
+   the data-loading demo: <Greeting/> (regular resource) and <Browser_box/>
+   (client-only resource + on_mount). *)
 open Iso
 
 let make () =
@@ -20,4 +19,8 @@ let make () =
       </section>
       <Stats />
       <Todo_list />
+      <section className="data">
+        <Greeting />
+        <Browser_box />
+      </section>
     </div>

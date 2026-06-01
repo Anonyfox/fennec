@@ -1,10 +1,9 @@
-(* SERVER-ONLY document shell. Just an mlx function returning the <html> vnode —
-   no setup/render split, never hydrated. It carries only STATIC infrastructure
-   (charset, viewport, the #app mount, styles, the client script). All dynamic,
-   overridable metadata comes through Iso.Head and is injected via (raw head). *)
+(* SERVER-ONLY document shell. Carries only static infrastructure; dynamic metadata
+   comes via (raw head), and the data context via (raw data) — emitted before the
+   client script so window.__ISO_DATA__ exists when the client boots. *)
 open Iso
 
-let make ~(head : string) ~(app : string) ~(styles : string) ~(client_js : string) =
+let make ~(head : string) ~(data : string) ~(app : string) ~(styles : string) ~(client_js : string) =
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -14,6 +13,7 @@ let make ~(head : string) ~(app : string) ~(styles : string) ~(client_js : strin
     </head>
     <body>
       <div id="app">(Iso.raw app)</div>
+      <script>(Iso.raw data)</script>
       <script>(Iso.raw client_js)</script>
     </body>
   </html>

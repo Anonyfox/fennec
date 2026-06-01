@@ -1,0 +1,13 @@
+(* Regular isomorphic resource. On the server it actually runs (Eio) and the value
+   is embedded; on the client's first render it's seeded (no fetch, no flash). The
+   refetch button does a real, dynamic client fetch. *)
+open Iso
+
+let make () =
+  let g = Data.resource ~key:"/api/greeting" ~fallback:"…" ~decode:Fun.id () in
+  fun () ->
+    <div className="greeting">
+      <p className="msg">(Data.value g)</p>
+      <span className="gstatus">(if Data.loading g then " (loading)" else " (ready)")</span>
+      <button id="refetch" onClick=(fun () -> Data.refetch g)>"refetch"</button>
+    </div>

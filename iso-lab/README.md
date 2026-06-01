@@ -36,6 +36,32 @@ components override shallower ones (key-deduped, last wins). Isomorphic by desig
 SSR marks tags `data-ih="<key>"`; the client reconciles `document.head` by the same
 key, so the first pass is a no-op (rehydration-safe) and updates are reactive.
 
+## Data model (isomorphic fetch / fast-render)
+
+Data is a **reactive resource** — a signal of `Loading | Ready | Failed` — never
+awaited mid-render, so the Eio↔Promise gap never reaches component code (each side
+just resolves into a `set`). One keyed table (`window.__ISO_DATA__` ⇄ the server's
+data context) serves SSR-embed and client-seed:
+
+```ocaml
+let g = Data.resource ~key:"/api/greeting" ~fallback:"…" ~decode:Fun.id ()
+(* render: *) (Data.value g)   (* fallback until ready, then the value, reactively *)
+```
+
+- **Server** actually runs the fetch (Eio, in-process — the path doubles as the
+  route key, so no HTTP-to-self / relative-path problem), awaits all fetches between
+  render passes, then serializes the context into the page.
+- **Client** seeds from `__ISO_DATA__`: a resource whose key is present resolves
+  synchronously (no fetch, no loading flash, rehydration-safe), then the seed is
+  consumed so `Data.refetch` and later keys hit the network for real.
+- `~client_only:true` — browser-only data: SSR renders the fallback and embeds
+  nothing; the client fetches after hydration.
+- `on_mount f` — Vue `onMounted` equivalent: a browser-only side effect, no-op on
+  the server.
+
+The one platform split is `Iso.Data.source` (a hook): the server forks an Eio
+fiber; the client does a real `fetch`. Components never see which is linked.
+
 ## Run
 
 ```sh

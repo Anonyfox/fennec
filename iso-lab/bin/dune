@@ -1,5 +1,5 @@
-(executable (name ssr) (modules ssr) (libraries iso app) (flags (:standard -w -a)))
-(executable (name client) (modules client iso_dom iso_head) (modes js)
+(executable (name ssr) (modules ssr) (libraries iso app eio eio_main) (flags (:standard -w -a)))
+(executable (name client) (modules client iso_dom iso_head iso_client_data) (modes js)
  (libraries iso app js_of_ocaml) (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
 (executable (name style_extract) (modules style_extract) (libraries unix) (flags (:standard -w -a)))
 (rule (target (dir styles)) (deps style_extract.exe (glob_files %{project_root}/iso-lab/app/*.mlx))
