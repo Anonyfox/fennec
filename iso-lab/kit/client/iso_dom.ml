@@ -12,25 +12,16 @@ let doc = Dom_html.document
 let rec mnode = function
   | MText t -> (t :> Dom.node Js.t) | MElem e -> (e.node :> Dom.node Js.t) | MComp mc -> mnode mc.msub
 
-(* ambient current event: set around each dispatch so Iso.target_value / key / etc.
-   can read the live event without threading it through the (unit -> unit) handler.
-   Installed once here (client only) over the real js_of_ocaml event. *)
-let cur_event : Js.Unsafe.any option ref = ref None
-let () =
-  let get name = match !cur_event with None -> None | Some e -> (try Some (Js.Unsafe.get e (Js.string name)) with _ -> None) in
-  Iso.ev_value := (fun () -> match get "target" with Some t -> (try Js.to_string (Js.Unsafe.get t (Js.string "value")) with _ -> "") | None -> "");
-  Iso.ev_checked := (fun () -> match get "target" with Some t -> (try Js.to_bool (Js.Unsafe.get t (Js.string "checked")) with _ -> false) | None -> false);
-  Iso.ev_key := (fun () -> match !cur_event with Some e -> (try Js.to_string (Js.Unsafe.get e (Js.string "key")) with _ -> "") | None -> "");
-  Iso.ev_prevent := (fun () -> match !cur_event with Some e -> (try ignore (Js.Unsafe.meth_call e "preventDefault" [||]) with _ -> ()) | None -> ())
-
+(* dispatch sets the ambient event in the browser Platform so Iso.target_value / key
+   / etc. can read it; the Platform owns the reading (and the js_of_ocaml types). *)
 let ensure_handler handlers (node : Dom_html.element Js.t) ev f =
   match Hashtbl.find_opt handlers ev with
   | Some r -> r := f
   | None -> let r = ref f in Hashtbl.replace handlers ev r;
     ignore (Dom.addEventListener node (Dom.Event.make ev)
       (Dom.handler (fun e ->
-        cur_event := Some (Js.Unsafe.inject e);
-        Fun.protect ~finally:(fun () -> cur_event := None) (fun () -> !r ());
+        Dispatch.set (Js.Unsafe.inject e);
+        Fun.protect ~finally:Dispatch.clear (fun () -> !r ());
         Js._true)) Js._false)
 
 (* value/checked are live DOM PROPERTIES, not attributes — set them as properties so

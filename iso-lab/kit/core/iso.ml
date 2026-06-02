@@ -72,35 +72,20 @@ let watch f =
   fun () -> dispose e
 
 (* ---- ambient current event ----
-   Handlers stay [unit -> unit]; these accessors read the event being dispatched.
-   The client runtime installs the real readers (over the live js_of_ocaml event)
-   and sets/clears the ambient event around each dispatch. During SSR no handler
-   runs, so these return safe defaults — event code can't touch the server render. *)
-let ev_value : (unit -> string) ref = ref (fun () -> "")
-let ev_checked : (unit -> bool) ref = ref (fun () -> false)
-let ev_key : (unit -> string) ref = ref (fun () -> "")
-let ev_prevent : (unit -> unit) ref = ref (fun () -> ())
-let target_value () = !ev_value ()      (* an input/textarea/select's current value *)
-let target_checked () = !ev_checked ()  (* a checkbox/radio's checked state *)
-let key () = !ev_key ()                  (* a keyboard event's key, e.g. "Enter" *)
-let prevent_default () = !ev_prevent ()
+   Handlers stay [unit -> unit]; these accessors read the event being dispatched via
+   the linked Platform (browser reads the live js_of_ocaml event; native returns safe
+   defaults). During SSR no handler runs, so event code can't touch the server render. *)
+let target_value = Platform.event_value      (* an input/textarea/select's current value *)
+let target_checked = Platform.event_checked  (* a checkbox/radio's checked state *)
+let key = Platform.event_key                  (* a keyboard event's key, e.g. "Enter" *)
+let prevent_default = Platform.event_prevent_default
 
-(* ---- Browser: SSR-safe facade over js_of_ocaml. Native = no-op/None; the client
-   runtime installs the real implementations. Safe anywhere — call it freely; during
-   SSR (and before the client installs it) it's inert. Only meaningful in client
-   contexts (on_mount / event handlers), which never run during SSR. *)
+(* ---- Browser: SSR-safe facade resolved by the linked Platform. Native = no-op/None;
+   browser = js_of_ocaml. Safe anywhere; meaningful only in client contexts. *)
 module Browser = struct
-  type t = {
-    local_get : string -> string option;
-    local_set : string -> string -> unit;
-    local_remove : string -> unit;
-  }
-  let stub = { local_get = (fun _ -> None); local_set = (fun _ _ -> ()); local_remove = (fun _ -> ()) }
-  let impl = ref stub
-  let install i = impl := i
-  let local_get k = (!impl).local_get k
-  let local_set k v = (!impl).local_set k v
-  let local_remove k = (!impl).local_remove k
+  let local_get = Platform.local_get
+  let local_set = Platform.local_set
+  let local_remove = Platform.local_remove
 end
 
 type attr = Attr of string * string | Handler of string * (unit -> unit)
@@ -479,9 +464,10 @@ module Router = struct
       fmt
   let ext fmt = Printf.sprintf fmt
 
-  (* navigation hook: client overrides with pushState + set_path; server no-op *)
-  let nav_hook : (string -> unit) ref = ref (fun _ -> ())
-  let navigate abs = !nav_hook abs
+  (* navigation: push history via the linked platform, sync the path, run mounts.
+     [sync_path] is the popstate path (already navigated; no push). No runtime hook. *)
+  let sync_path abs = set_path (current ()) abs; flush_mounts ()
+  let navigate abs = Platform.push_state abs; sync_path abs
 
   (* the routed outlet: a component that reactively renders the matched page,
      keyed by the relative path so a path change swaps the page instance *)
@@ -512,6 +498,7 @@ let param = Router.param
 let param_or = Router.param_or
 (* navigate the active app (client intercepts; pushState + re-render) *)
 let navigate = Router.navigate
+let sync_path = Router.sync_path
 (* the routed outlet of the active app — place (outlet ()) in a layout *)
 let outlet () = Router.outlet (Router.current ())
 

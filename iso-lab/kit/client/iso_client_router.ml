@@ -12,18 +12,10 @@ let starts_with ~prefix s =
 let install (t : Iso.Router.t) =
   (* initial relative path BEFORE hydration, so the first client render == SSR *)
   Iso.Router.set_path t (pathname ());
-  (* navigate: pushState the absolute URL + update the relative current path *)
-  (* a navigation may mount new pages/components; flush their on_mount handlers once
-     they're attached (the initial flush in the client entry only covers the first
-     render — components mounted later via navigation need their own flush) *)
-  let nav abs = Iso.Router.set_path t abs; Iso.flush_mounts () in
-  Iso.Router.nav_hook := (fun abs ->
-    ignore (Js.Unsafe.meth_call (Js.Unsafe.get Dom_html.window (Js.string "history"))
-              "pushState" [| u Js.null; u (Js.string ""); u (Js.string abs) |]);
-    nav abs);
-  (* back/forward *)
+  (* navigation now lives in core: Iso.navigate = Platform.push_state + sync_path +
+     flush_mounts; Iso.sync_path = path + flush (for popstate, already navigated). *)
   ignore (Dom_html.addEventListener Dom_html.window Dom_html.Event.popstate
-            (Dom_html.handler (fun _ -> nav (pathname ()); Js._true)) Js._false);
+            (Dom_html.handler (fun _ -> Iso.sync_path (pathname ()); Js._true)) Js._false);
   (* hijack plain left-clicks on in-scope, same-origin anchors *)
   ignore (Dom_html.addEventListener Dom_html.document Dom_html.Event.click
             (Dom_html.handler (fun ev ->

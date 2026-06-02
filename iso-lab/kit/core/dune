@@ -1,1 +1,1 @@
-(library (name iso) (flags (:standard -w -a)))
+(library (name iso) (libraries iso_platform) (flags (:standard -w -a)))

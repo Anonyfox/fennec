@@ -1,0 +1,2 @@
+(library (name iso_platform_browser) (implements iso_platform) (modes byte)
+ (libraries js_of_ocaml) (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))

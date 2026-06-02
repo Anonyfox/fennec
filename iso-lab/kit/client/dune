@@ -1,3 +1,5 @@
-; client runtime (jsoo): DOM reconciler, head + data + router bindings, boot
-(library (name iso_client) (wrapped false) (libraries iso js_of_ocaml)
+; client runtime (jsoo): DOM reconciler, head + data + router bindings, boot.
+; depends on the browser platform impl (for Dispatch + to select it at link).
+(library (name iso_client) (wrapped false) (modes byte)
+ (libraries iso iso_platform_browser js_of_ocaml)
  (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
