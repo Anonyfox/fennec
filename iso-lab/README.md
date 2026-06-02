@@ -62,6 +62,53 @@ let g = Data.resource ~key:"/api/greeting" ~fallback:"…" ~decode:Fun.id ()
 The one platform split is `Iso.Data.source` (a hook): the server forks an Eio
 fiber; the client does a real `fetch`. Components never see which is linked.
 
+## Authoring & layout (the DX)
+
+```
+app/
+  app.mlx          # layout shell: nav + (outlet ())
+  document.mlx     # server-only HTML shell (slots: Doc.head/outlet/scripts)
+  *.mlx            # reusable components (counter, greeting, …)
+  store.ml         # global state
+routes/            # the file tree IS the route table (Next.js convention)
+  index.mlx        #  /
+  products/
+    index.mlx      #  /products
+    [id].mlx       #  /products/:id   (param in the filename)
+  [...rest].mlx    #  catch-all → not-found
+```
+
+A component/page is `<script setup>` style — top-level bindings are the per-instance
+setup, `view` is the reactive render; the ppx generates `make`. No `open`, no `make`,
+no `fun () ->`:
+
+```ocaml
+let count = signal 0                       (* setup *)
+let view =                                  (* render *)
+  <div class="counter">
+    <button onClick=(fun () -> count -= 1)>"−"</button>
+    <span>(get count)</span>
+    <button onClick=(fun () -> count += 1)>"+"</button>
+  </div>
+```
+
+(Define `make` explicitly to opt out — the full-power escape hatch for typed props /
+custom args / the server-only `document.mlx`.)
+
+A `route_gen` step scans `routes/` and emits one `Routes_gen` module: the router, the
+page modules, and a **typed `Paths`** — one builder per route, so links are
+compile-checked:
+
+```ocaml
+Paths.products_id ~id:"7"   (* ✓ /shop/products/7 *)
+Paths.nope ()               (* ✗ compile error: Unbound value Paths.nope *)
+Paths.products_id ~slug:"7" (* ✗ compile error: no such label ~slug *)
+```
+
+`Iso.p "/products/%d" 7` (ambient, runtime-checked) is the lighter alternative;
+`Iso.ext "/admin"` links outside the app. The client entry is one line
+(`Iso_csr.start`); the server entry is the mount table + data source + document.
+
 ## Router (universal, location-transparent)
 
 Reuses fennec's pure `Matcher` (`:named` params, `*` tail) verbatim; the rest is a

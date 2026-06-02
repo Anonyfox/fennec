@@ -1,5 +1,4 @@
 let () = Head.title "Home · shop"
-
 let view =
   <main className="page" data_page="home">
     <h1>"Home"</h1>

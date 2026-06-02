@@ -75,8 +75,15 @@ let pat_name p = match p.ppat_desc with
 let item_defines name item = match item.pstr_desc with
   | Pstr_value (_, vbs) -> List.exists (fun vb -> pat_name vb.pvb_pat = Some name) vbs
   | _ -> false
-let componentize str =
+let rec componentize str =
   let open Ast_builder.Default in
+  (* recurse into nested module structures first (so generated route files, which
+     hold one page per nested module, get each page's `view` turned into `make`) *)
+  let str = List.map (fun item -> match item.pstr_desc with
+    | Pstr_module ({ pmb_expr = { pmod_desc = Pmod_structure s; _ } as me; _ } as mb) ->
+      { item with pstr_desc =
+          Pstr_module { mb with pmb_expr = { me with pmod_desc = Pmod_structure (componentize s) } } }
+    | _ -> item) str in
   if (not (List.exists (item_defines "view") str)) || List.exists (item_defines "make") str
   then str
   else begin

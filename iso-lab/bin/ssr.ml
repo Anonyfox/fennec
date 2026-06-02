@@ -4,7 +4,7 @@ let read f = In_channel.with_open_bin f In_channel.input_all
 let source = function "/api/greeting" -> Some "Hello from the server \xf0\x9f\x91\x8b" | _ -> None
 
 (* the mount table: which apps live at which base. The server knows them all. *)
-let mounts = [ { Iso_ssr.base = "/shop"; root = App.make; router = Routes.router } ]
+let mounts = [ { Iso_ssr.base = "/shop"; root = App.make; router = Routes_gen.router } ]
 
 let () =
   Eio_main.run @@ fun env ->

@@ -1,1 +1,1 @@
-let () = Iso_csr.start ~root:App.make ~router:Routes.router ()
+let () = Iso_csr.start ~root:App.make ~router:Routes_gen.router ()
