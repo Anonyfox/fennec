@@ -429,6 +429,7 @@ module Router = struct
   let absolutize base rel =
     if base = "" || base = "/" then rel else if rel = "/" then base else base ^ rel
 
+  let base t = t.base                          (* the app's mount prefix *)
   let current_path t = get t.current          (* reactive: relative path *)
   let set_path t abs = set t.current (relativize t.base abs)
 
@@ -673,6 +674,5 @@ module Reconcile (B : BACKEND) = struct
             | None -> let m = create vnode in B.append container (mnode m); mounted := Some m)
         | Some m -> mounted := Some (reconcile ~parent:container m vnode));
        deps = [] } in
-    run_effect eff;
-    mounted
+    run_effect eff
 end

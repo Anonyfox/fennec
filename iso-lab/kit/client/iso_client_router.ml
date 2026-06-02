@@ -33,7 +33,7 @@ let install (t : Iso.Router.t) =
                        Js.Unsafe.meth_call a "getAttribute" [| u (Js.string "href") |] in
                      Js.Opt.case hopt (fun () -> Js._true) (fun h ->
                        let href = Js.to_string h in
-                       let base = t.Iso.Router.base in
+                       let base = Iso.Router.base t in
                        let in_scope =
                          starts_with ~prefix:"/" href && not (starts_with ~prefix:"//" href)
                          && (base = "" || href = base || starts_with ~prefix:(base ^ "/") href)

@@ -39,18 +39,14 @@ let start () =
     | Head.Script (a, b) -> set_attrs el a; el##.textContent := Js.some (Js.string b)
     | Head.Json_ld j -> el##.textContent := Js.some (Js.string j)
   in
-  let eff =
-    { run = (fun () ->
-        let desired = Head.resolve (get Head.sources) in  (* subscribes to the registry *)
-        let keyed = List.map (fun t -> (Head.tag_key t, t)) desired in
-        let wanted = List.map fst keyed in
-        List.iter (fun (k, t) ->
-            match Hashtbl.find_opt current k with
-            | Some el -> patch el t
-            | None -> let el = mk k t in Dom.appendChild head el; Hashtbl.replace current k el)
-          keyed;
-        let stale = Hashtbl.fold (fun k el acc -> if List.mem k wanted then acc else (k, el) :: acc) current [] in
-        List.iter (fun (k, el) -> (try Dom.removeChild head el with _ -> ()); Hashtbl.remove current k) stale);
-      deps = [] }
-  in
-  run_effect eff
+  ignore (Iso.watch (fun () ->
+      let desired = Head.resolve (get Head.sources) in  (* subscribes to the registry *)
+      let keyed = List.map (fun t -> (Head.tag_key t, t)) desired in
+      let wanted = List.map fst keyed in
+      List.iter (fun (k, t) ->
+          match Hashtbl.find_opt current k with
+          | Some el -> patch el t
+          | None -> let el = mk k t in Dom.appendChild head el; Hashtbl.replace current k el)
+        keyed;
+      let stale = Hashtbl.fold (fun k el acc -> if List.mem k wanted then acc else (k, el) :: acc) current [] in
+      List.iter (fun (k, el) -> (try Dom.removeChild head el with _ -> ()); Hashtbl.remove current k) stale))
