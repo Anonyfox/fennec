@@ -1,0 +1,13 @@
+(* Home page. Reuses Counter (local state), Greeting (data resource), Browser_box
+   (client-only + on_mount) — proving those all work when reached via client nav. *)
+open Iso
+
+let make _params =
+  Head.use (fun () -> [ Head.title "Home · shop" ]);
+  fun () ->
+    <main className="page" data_page="home">
+      <h1>"Home"</h1>
+      <Counter />
+      <Greeting />
+      <Browser_box />
+    </main>

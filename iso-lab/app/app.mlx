@@ -1,26 +1,21 @@
-(* Composes the tree + registers DEFAULT head metadata in its setup. Now also hosts
-   the data-loading demo: <Greeting/> (regular resource) and <Browser_box/>
-   (client-only resource + on_mount). *)
+(* The app SHELL: persistent nav + the routed outlet. Links use the typed path
+   sigil: App_router.p for in-app (base auto-prefixed + checked), App_router.ext for
+   outer reach (e.g. a different app mounted elsewhere). *)
 open Iso
 
 let make () =
   Head.use (fun () -> [
-    Head.title "iso PoC";
-    Head.meta ~name:"description" "An isomorphic OCaml UI runtime";
-    Head.og "og:title" "iso PoC";
-    Head.json_ld {|{"@context":"https://schema.org","@type":"WebSite","name":"iso PoC"}|};
+    Head.meta ~name:"description" "iso router demo";
+    Head.og "og:title" "iso shop";
   ]);
   fun () ->
     <div id="app-root">
-      <h1>"iso — "(List.length (get Store.todos))" todos"</h1>
-      <section className="counters">
-        <Counter />
-        <Counter />
-      </section>
-      <Stats />
-      <Todo_list />
-      <section className="data">
-        <Greeting />
-        <Browser_box />
-      </section>
+      <nav className="nav">
+        <a className="nav-home" href=(App_router.p "/")>"Home"</a>
+        " · "
+        <a className="nav-products" href=(App_router.p "/products")>"Products"</a>
+        " · "
+        <a className="nav-admin" href=(App_router.ext "/admin")>"Admin ↗"</a>
+      </nav>
+      (Router.outlet Routes.router)
     </div>

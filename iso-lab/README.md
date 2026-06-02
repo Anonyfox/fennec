@@ -62,6 +62,34 @@ let g = Data.resource ~key:"/api/greeting" ~fallback:"…" ~decode:Fun.id ()
 The one platform split is `Iso.Data.source` (a hook): the server forks an Eio
 fiber; the client does a real `fetch`. Components never see which is linked.
 
+## Router (universal, location-transparent)
+
+Reuses fennec's pure `Matcher` (`:named` params, `*` tail) verbatim; the rest is a
+tiny reactive layer on the signals runtime — no React `Shell`/context needed.
+
+- **Location-transparent mounting.** An app is mounted at a BASE (`/shop`) and
+  declares routes RELATIVE to it (`/products/:id`). The server strips the base; the
+  client gets it injected. The same app works at any base. The mount table
+  (`base -> app`) lives server-side; longest prefix wins.
+- **Reactive.** `current` is a path signal; `Router.outlet` re-renders the matched
+  page on navigation (keyed by relative path → param change remounts with fresh
+  params). Pages mount/unmount cleanly via the effect scope (`on_cleanup`), so
+  per-page `Head.use` titles never accumulate.
+- **SPA navigation.** Client-side: pushState + popstate + global click interception
+  scoped to the base (out-of-scope/external links fall through to the browser).
+- **Typed path building (Phoenix `~p` flavour, no ppx).** OCaml format strings are
+  already typed, so:
+  ```ocaml
+  App_router.p   "/products/%d" 42   (* in-app: typed hole, base auto-prefixed, dev-checked vs routes *)
+  App_router.ext "/admin"            (* outer reach: raw url, no base, no check *)
+  ```
+  `%d` rejects a string at compile time; a path matching no route fails fast; `ext`
+  is the explicit escape hatch for linking to other apps / external sites.
+
+Deep-link SSR + hydration, reverse routing, reactive params, head cleanup, store
+persistence across nav, popstate, and `on_mount` for nav-mounted components are all
+covered by `e2e.mjs` (the page is SSR'd for `/shop/products/7`).
+
 ## Run
 
 ```sh
@@ -69,7 +97,8 @@ dune build iso-lab/bin/client.bc.js iso-lab/bin/ssr.exe
 dune exec iso-lab/bin/ssr.exe -- \
   _build/default/iso-lab/bin/client.bc.js \
   _build/default/iso-lab/bin/styles \
-  iso-lab/index.html
+  iso-lab/index.html \
+  /shop/products/7          # request path (which app + route to SSR)
 # E2E (needs jsdom; e.g. from a dir where it resolves):
 node iso-lab/e2e.mjs
 ```

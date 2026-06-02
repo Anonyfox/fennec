@@ -4,7 +4,8 @@ open Iso
 type melem = { tag : string; key : string option; node : Dom_html.element Js.t;
                mutable attrs : attr list; mutable children : mounted list;
                handlers : (string, (unit -> unit) ref) Hashtbl.t }
-and mcomp = { mcid : string; mckey : string option; mutable msub : mounted; meff : Iso.reaction }
+and mcomp = { mcid : string; mckey : string option; mutable msub : mounted; meff : Iso.reaction;
+              cleanups : (unit -> unit) list ref }
 and mounted = MText of Dom.text Js.t | MElem of melem | MComp of mcomp
 
 let doc = Dom_html.document
@@ -43,12 +44,18 @@ and mk_effect ~first sub =
          sub := `Render (render, Some (reconcile ~parent:p old v)))) ; deps = [] }
 
 and instantiate ~first (c : Iso.comp) =
+  (* scope cleanups to this instance: setup + first render register into [cleanups]
+     (save/restore so nested children scope to themselves) *)
+  let cleanups = ref [] in
+  let saved = !Iso.current_cleanups in
+  Iso.current_cleanups := cleanups;
   let render = c.setup () in
   let sub = ref (`Render (render, None)) in
   let eff = mk_effect ~first sub in
   Iso.run_effect eff;
+  Iso.current_cleanups := saved;
   let m = (match !sub with `Render (_, Some m) -> m | _ -> failwith "comp produced nothing") in
-  MComp { mcid = c.cid; mckey = c.ckey; msub = m; meff = eff }
+  MComp { mcid = c.cid; mckey = c.ckey; msub = m; meff = eff; cleanups }
 and mount_comp c = instantiate ~first:create c
 and hydrate_comp dom c = instantiate ~first:(fun v -> hydrate dom v) c
 
@@ -65,7 +72,9 @@ and hydrate (dom : Dom.node Js.t) = function
     MElem { tag; key; node; attrs; children; handlers }
 
 and unmount = function
-  | MComp mc -> Iso.dispose mc.meff; unmount mc.msub
+  | MComp mc ->
+    List.iter (fun f -> f ()) !(mc.cleanups);  (* run instance cleanups (Head.use removal, etc.) *)
+    Iso.dispose mc.meff; unmount mc.msub
   | MElem e -> List.iter unmount e.children
   | MText _ -> ()
 

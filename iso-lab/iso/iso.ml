@@ -28,6 +28,18 @@ let dispose e =  (* unmount: unsubscribe from everything so it never re-runs *)
 (* platform flag: the client entrypoint flips this true; native SSR leaves it false *)
 let is_browser = ref false
 
+(* IMPORTANT — per-request isolation (the concurrency seam).
+   Several pieces below keep PER-RENDER state in MODULE GLOBALS: Head.sources, the
+   Data.seed table + Data.source hook, and each Router's `current` signal. On the
+   client that's correct (one document, one app, single-threaded). In the one-shot
+   SSR binary it's also fine (one render per process). But fennec's REAL server is
+   concurrent (Eio fibers), and these globals would race/bleed across simultaneous
+   requests. Before this meets the real server, give each request its own context —
+   the clean fix is Eio fiber-local storage (Eio.Fiber.with_binding / a per-request
+   record threaded by the handler), NOT locks. This changes no public API: resource/
+   Head.use/Router stay identical; only WHERE their backing store lives changes.
+   Every such global below is tagged `IMPORTANT: per-request state`. *)
+
 (* on_mount: a browser-only side effect (à la Vue's onMounted / React useEffect[]).
    Registered during setup, run once AFTER the initial client render adopts the SSR
    DOM. A no-op on the server, so SSR never executes browser-only handlers. *)
@@ -37,6 +49,15 @@ let flush_mounts () =
   let q = List.rev !mount_queue in
   mount_queue := [];
   List.iter (fun f -> f ()) q
+
+(* Effect scope: cleanups registered during a component's setup/first render are
+   tied to THAT instance and run on its unmount. The DOM runtime points
+   [current_cleanups] at the mounting instance's accumulator (save/restore per
+   instance, so nested children scope correctly). Used by Head.use to remove its
+   head contribution on unmount, by subscriptions, etc. A no-op container on the
+   server (SSR never unmounts). *)
+let current_cleanups : (unit -> unit) list ref ref = ref (ref [])
+let on_cleanup f = let r = !current_cleanups in r := f :: !r
 
 type attr = Attr of string * string | Handler of string * (unit -> unit)
 type vnode =
@@ -131,6 +152,7 @@ module Head = struct
   let json_ld j = Json_ld j
 
   (* the registry: ordered (source-id, tags); a later source overrides an earlier *)
+  (* IMPORTANT: per-request state — must become fiber-local on the concurrent server *)
   let sources : (int * tag list) list signal = signal []
   let counter = ref 0
 
@@ -149,7 +171,11 @@ module Head = struct
              else cur @ [ (id, tags) ]));
         deps = [] }
     in
-    run_effect eff
+    run_effect eff;
+    (* on unmount: stop reacting AND drop this slot so its tags disappear *)
+    on_cleanup (fun () ->
+      dispose eff;
+      set sources (List.filter (fun (i, _) -> i <> id) (peek sources)))
 
   (* the content-key that identifies a tag for dedupe + DOM reconciliation *)
   let tag_key = function
@@ -211,6 +237,9 @@ module Data = struct
 
   (* key -> raw payload string. Client: seeded from __ISO_DATA__, consumed once.
      Server: the per-request data context the driver fills + serializes. *)
+  (* IMPORTANT: per-request state — [seed] AND [source] below are the request's data
+     context + fetch strategy; both must be fiber-local on the concurrent server (two
+     requests fetching different data would otherwise share one table). *)
   let seed : (string, string) Hashtbl.t = Hashtbl.create 16
   let put_seed k v = Hashtbl.replace seed k v
   let take_seed k =
@@ -255,4 +284,122 @@ module Data = struct
   let to_script () =
     let pairs = Hashtbl.fold (fun k v acc -> (js_string k ^ ":" ^ js_string v) :: acc) seed [] in
     "window.__ISO_DATA__={" ^ String.concat "," pairs ^ "}"
+end
+
+(* ---- Matcher: pure path-pattern matching (reused verbatim from fennec) ----
+   Stdlib only, identical on server + client. Patterns: "/", "/about",
+   "/users/:id" (named param), "/files/*" (greedy tail). *)
+module Matcher = struct
+  type params = (string * string) list
+  let segments (p : string) : string list =
+    String.split_on_char '/' p |> List.filter (fun s -> s <> "")
+  let match_one ~(pattern : string) (path : string) : params option =
+    let ps = segments pattern and xs = segments path in
+    let rec go ps xs acc =
+      match (ps, xs) with
+      | [], [] -> Some (List.rev acc)
+      | [ "*" ], rest -> Some (List.rev (("*", String.concat "/" rest) :: acc))
+      | pseg :: ptl, xseg :: xtl ->
+        if String.length pseg > 0 && pseg.[0] = ':' then
+          go ptl xtl ((String.sub pseg 1 (String.length pseg - 1), xseg) :: acc)
+        else if pseg = xseg then go ptl xtl acc
+        else None
+      | _ -> None
+    in
+    go ps xs []
+  let find (routes : (string * 'a) list) (path : string) : ('a * params) option =
+    let rec go = function
+      | [] -> None
+      | (pattern, v) :: rest -> (
+        match match_one ~pattern path with Some p -> Some (v, p) | None -> go rest)
+    in
+    go routes
+  let param (params : params) name = List.assoc_opt name params
+end
+
+(* ---- Router: base-aware, reactive, isomorphic ----
+
+   An app is mounted at a BASE prefix (""/"/admin"/"/shop"). It declares routes
+   RELATIVE to that base ("/products/:id"), so it's location-transparent: the same
+   app works at any base. The base is injected once, never baked into patterns.
+
+   - Server: the dispatcher strips the base, sets [current] to the relative path,
+     renders the outlet. (One mount table; longest base prefix wins.)
+   - Client: [set_path] relativizes window.location; the outlet re-renders on the
+     [current] signal; [navigate]/click-interception pushState within scope.
+   - [href]/[build] do REVERSE routing (named route + params -> URL), so links are
+     derived from the route table, not fragile hardcoded strings. *)
+module Router = struct
+  open Matcher
+  type page = params -> (unit -> vnode)
+  type route = { pattern : string; name : string; page : page }
+  type t = { base : string; mutable routes : route list; not_found : page option; current : string signal }
+
+  (* IMPORTANT: per-request state — `current` (the active path) is per-render. A
+     module-global router instance is fine on the client (one document) but on the
+     concurrent server two requests would fight over `current`; make it fiber-local
+     (e.g. resolve the router/current from the request context) before going live. *)
+  let make ?(base = "") ?not_found () = { base; routes = []; not_found; current = signal "/" }
+  let page ?name pattern p t =
+    t.routes <- t.routes @ [ { pattern; name = (match name with Some n -> n | None -> pattern); page = p } ];
+    t
+
+  let relativize base abs =
+    if base = "" || base = "/" then abs
+    else if abs = base then "/"
+    else if String.length abs > String.length base && String.sub abs 0 (String.length base) = base
+    then (let r = String.sub abs (String.length base) (String.length abs - String.length base) in if r = "" then "/" else r)
+    else abs
+  let absolutize base rel =
+    if base = "" || base = "/" then rel else if rel = "/" then base else base ^ rel
+
+  let current_path t = get t.current          (* reactive: relative path *)
+  let set_path t abs = set t.current (relativize t.base abs)
+
+  (* reverse routing: build the RELATIVE path for a named route + params *)
+  let build t name (args : (string * string) list) =
+    match List.find_opt (fun r -> r.name = name) t.routes with
+    | None -> failwith ("router: unknown route " ^ name)
+    | Some r ->
+      "/" ^ (Matcher.segments r.pattern
+             |> List.map (fun seg ->
+                 if String.length seg > 0 && seg.[0] = ':' then
+                   let k = String.sub seg 1 (String.length seg - 1) in
+                   (match List.assoc_opt k args with Some v -> v | None -> failwith ("router: missing param " ^ k))
+                 else if seg = "*" then Option.value ~default:"" (List.assoc_opt "*" args)
+                 else seg)
+             |> String.concat "/")
+  (* absolute (base-prefixed) href for a named route *)
+  let href t name args = absolutize t.base (build t name args)
+
+  (* Typed, base-aware path building — the Phoenix [~p"/users/#{id}"] flavour, but
+     leaning on OCaml's already-typed format strings (the %d/%s IS the type).
+     [path] is for IN-APP links: typesafe holes, the base is auto-prefixed, and the
+     built path is dev-checked against the route table (a typo fails fast — "knows
+     its allowed paths"). [ext] is the OUTER-REACH escape hatch: a raw url with no
+     base and no check, for linking to other apps / external sites. *)
+  let path t fmt =
+    Printf.ksprintf
+      (fun rel ->
+        (match Matcher.find (List.map (fun r -> (r.pattern, ())) t.routes) rel with
+         | Some _ -> ()
+         | None -> failwith (Printf.sprintf "router: path %S matches no route (use Router.ext for outer reach)" rel));
+        absolutize t.base rel)
+      fmt
+  let ext fmt = Printf.sprintf fmt
+
+  (* navigation hook: client overrides with pushState + set_path; server no-op *)
+  let nav_hook : (string -> unit) ref = ref (fun _ -> ())
+  let navigate abs = !nav_hook abs
+
+  (* the routed outlet: a component that reactively renders the matched page,
+     keyed by the relative path so a path change swaps the page instance *)
+  let outlet t : vnode =
+    comp ~cid:"__router_outlet" (fun () -> fun () ->
+      let rel = get t.current in
+      match Matcher.find (List.map (fun r -> (r.pattern, r)) t.routes) rel with
+      | Some (r, params) -> comp ~cid:rel (fun () -> r.page params)
+      | None -> (match t.not_found with
+          | Some p -> comp ~cid:("__nf:" ^ rel) (fun () -> p [ ("*", rel) ])
+          | None -> text ""))
 end

@@ -2,8 +2,11 @@ import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+// deep-link: the page was SSR'd for /shop/products/7 (app mounted at base /shop)
 const dom = new JSDOM(html, {
+  url: 'http://localhost/shop/products/7',
   runScripts: 'dangerously',
+  pretendToBeVisual: true,
   beforeParse(w) { w.TextDecoder = globalThis.TextDecoder; w.TextEncoder = globalThis.TextEncoder; },
 });
 const { document } = dom.window;
@@ -13,86 +16,89 @@ const eq = (label, got, want) => {
   if (String(got) === String(want)) { pass++; console.log(`  ✓ ${label} = ${got}`); }
   else { fail++; console.log(`  ✗ ${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); }
 };
-const counts = () => [...document.querySelectorAll('.counter .count')].map(e => e.textContent);
-const stats  = () => document.querySelector('.stats').textContent;
-const title  = () => document.querySelector('h1').textContent;
-const lis     = () => document.querySelectorAll('.todos li').length;
-const click  = el => el.dispatchEvent(new dom.window.Event('click'));
-const counterBtns = i => document.querySelectorAll('.counter')[i].querySelectorAll('button'); // [−, +]
-// head helpers
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+const pageName   = () => document.querySelector('.page')?.getAttribute('data-page');
+const h1         = () => document.querySelector('.page h1')?.textContent;
+const headTitle  = () => document.querySelector('head title')?.textContent;
 const titleCount = () => document.querySelectorAll('head title').length;
-const headTitle  = () => document.querySelector('head title').textContent;
-const descCount  = () => document.querySelectorAll('head meta[name="description"]').length;
-const desc       = () => document.querySelector('head meta[name="description"]').getAttribute('content');
-const jsonld     = () => document.querySelectorAll('head script[type="application/ld+json"]').length;
-const og         = () => document.querySelector('head meta[property="og:title"]');
-// data helpers
-const msg        = () => document.querySelector('.greeting .msg').textContent;
-const gstatus    = () => document.querySelector('.greeting .gstatus').textContent;
-const bdata      = () => document.querySelector('.browser-box .bdata').textContent;
-const mountedTxt = () => document.querySelector('.browser-box .mounted').textContent;
-const wait       = ms => new Promise(r => setTimeout(r, ms));
+const attr       = (sel, n) => document.querySelector(sel)?.getAttribute(n);
+const path       = () => dom.window.location.pathname;
+const fire       = el => el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+const click      = sel => fire(document.querySelector(sel));
+const counterInc = () => fire(document.querySelector('.counter').querySelectorAll('button')[1]);
+const todos      = () => document.querySelectorAll('.todos li').length;
+const stats      = () => document.querySelector('.stats')?.textContent;
 
 (async () => {
-  await wait(200);  // hydration + browser-only fetch (30ms) + mounts have all run
-  console.log('— after hydration —');
-  eq('counter[0]', counts()[0], 0);
-  eq('counter[1]', counts()[1], 0);
-  eq('stats', stats(), 'todos in store: 0');
+  await wait(120);
 
-  console.log('— HEAD: rehydration-safe (no duplication) + override resolved —');
-  eq('exactly one <title> (no dup on hydrate)', titleCount(), 1);
-  eq('title = Stats override (deepest wins)', headTitle(), '0 todos · iso');
-  eq('exactly one description', descCount(), 1);
-  eq('description = Stats override', desc(), 'Live todo dashboard');
-  eq('App og:title survives (not overridden)', og() ? og().getAttribute('content') : null, 'iso PoC');
-  eq('App json-ld survives', jsonld(), 1);
+  console.log('— deep-link hydration (mounted at base /shop, route is RELATIVE) —');
+  eq('page = product', pageName(), 'product');
+  eq('param rendered', h1(), 'Product #7');
+  eq('per-page title', headTitle(), 'Product 7 · shop');
+  eq('location', path(), '/shop/products/7');
 
-  console.log('— DATA: regular resource seeded (no flash, no refetch on hydrate) —');
-  eq('greeting = SSR value (seeded, not fallback, not client value)', msg(), 'Hello from the server 👋');
-  eq('greeting status ready (never flashed loading)', gstatus().trim(), '(ready)');
+  console.log('— typed path sigil (p): base auto-prefixed; ext: outer reach —');
+  eq('nav-home href (p "/")', attr('.nav-home', 'href'), '/shop');
+  eq('nav-products href (p "/products")', attr('.nav-products', 'href'), '/shop/products');
+  eq('back link href', attr('.back', 'href'), '/shop/products');
+  eq('ext link is NOT base-prefixed', attr('.nav-admin', 'href'), '/admin');
 
-  console.log('— DATA: client-only resource ran AFTER hydration —');
-  eq('browser-only data loaded in browser', bdata(), 'Loaded in the browser ✨');
-  eq('on_mount ran (browser-only side effect)', mountedTxt(), 'mounted ✓');
+  console.log('— SPA nav: click "← all products" (no reload) —');
+  click('.back');
+  await wait(20);
+  eq('page = products', pageName(), 'products');
+  eq('title swapped', headTitle(), 'Products · shop');
+  eq('pushState updated location', path(), '/shop/products');
+  eq('still exactly one <title> (Head.use cleaned up on unmount)', titleCount(), 1);
 
-  console.log('— LOCAL state: +counter[0] twice, +counter[1] once —');
-  click(counterBtns(0)[1]); click(counterBtns(0)[1]);
-  click(counterBtns(1)[1]);
-  eq('counter[0] independent', counts()[0], 2);
-  eq('counter[1] independent', counts()[1], 1);
-  eq('stats untouched (fine-grained)', stats(), 'todos in store: 0');
+  console.log('— outer-reach (ext) link is NOT hijacked by the in-scope interceptor —');
+  click('.nav-admin');
+  await wait(20);
+  eq('ext click left our route untouched', pageName(), 'products');
+  eq('ext click did not pushState within app', path(), '/shop/products');
 
-  console.log('— GLOBAL state: add todo (App re-renders) —');
-  click(document.querySelector('#add'));
-  eq('store count via stats', stats(), 'todos in store: 1');
-  eq('title reflects store', title(), 'iso — 1 todos');
-  eq('li rendered', lis(), 1);
-  eq('counter[0] PERSISTED across parent re-render', counts()[0], 2);
-  eq('counter[1] PERSISTED across parent re-render', counts()[1], 1);
-  console.log('  · head reacts in the browser (dynamic title):');
-  eq('title updated reactively', headTitle(), '1 todos · iso');
-  eq('still exactly one <title>', titleCount(), 1);
-  eq('description still single + unchanged', descCount() + ':' + desc(), '1:Live todo dashboard');
+  console.log('— global store survives nav; add a todo here —');
+  click('#add');
+  eq('todo added', todos(), 1);
+  eq('stats', stats(), 'todos in store: 1');
 
-  console.log('— add 2 more, then remove first (keyed) —');
-  click(document.querySelector('#add'));
-  click(document.querySelector('#add'));
-  eq('three todos', lis(), 3);
-  eq('first item text', document.querySelector('.todos li').firstChild.textContent.trim(), 'item 1');
-  click(document.querySelector('.todos li .rm')); // remove item 1
-  eq('two todos after remove', lis(), 2);
-  eq('now first is item 2', document.querySelector('.todos li').firstChild.textContent.trim(), 'item 2');
-  eq('stats after remove', stats(), 'todos in store: 2');
-  eq('counters still local-intact', counts().join(','), '2,1');
-  eq('title tracks removal', headTitle(), '2 todos · iso');
+  console.log('— reactive params: click Product 9 (same pattern, new param) —');
+  click('.p9');
+  await wait(20);
+  eq('page = product', pageName(), 'product');
+  eq('param updated (remount)', h1(), 'Product #9');
+  eq('title tracks param', headTitle(), 'Product 9 · shop');
+  eq('location', path(), '/shop/products/9');
+  eq('one <title> (no accumulation across 3 page visits)', titleCount(), 1);
 
-  console.log('— DATA: dynamic refetch hits the network (real fetch) —');
-  click(document.querySelector('#refetch'));
-  eq('refetch shows loading immediately', gstatus().trim(), '(loading)');
-  await wait(80);
-  eq('refetch resolved to live client value', msg(), 'Hello again, from the client 🔁');
-  eq('refetch status ready again', gstatus().trim(), '(ready)');
+  console.log('— nav Home: local state + client-side data + client-only + on_mount —');
+  click('.nav-home');
+  await wait(120);  // greeting + browser-only fetch (30ms) + mounts
+  eq('page = home', pageName(), 'home');
+  eq('title', headTitle(), 'Home · shop');
+  counterInc(); counterInc();
+  eq('local counter state', document.querySelector('.counter .count').textContent, 2);
+  eq('greeting fetched on client nav (not seeded)', document.querySelector('.greeting .msg').textContent, 'Hello again, from the client 🔁');
+  eq('client-only data loaded', document.querySelector('.browser-box .bdata').textContent, 'Loaded in the browser ✨');
+  eq('on_mount ran', document.querySelector('.browser-box .mounted').textContent, 'mounted ✓');
+
+  console.log('— nav back to Products: global store PERSISTED (proves no full reload) —');
+  click('.nav-products');
+  await wait(20);
+  eq('page = products', pageName(), 'products');
+  eq('todo still there (global store survived SPA nav)', todos(), 1);
+
+  console.log('— browser back button (popstate) —');
+  // history: …/products/9 -> /shop (home) -> /shop/products ; back() from /shop/products lands on Home
+  dom.window.history.back();
+  await wait(30);
+  eq('popstate navigates (no reload)', pageName(), 'home');
+  eq('popstate updated location', path(), '/shop');
+
+  console.log('— SSR payload was empty (product page has no resources) —');
+  eq('empty data context embedded', /window\.__ISO_DATA__=\{\}/.test(html), true);
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

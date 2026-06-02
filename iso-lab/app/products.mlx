@@ -1,0 +1,14 @@
+open Iso
+
+let make _params =
+  Head.use (fun () -> [ Head.title "Products · shop" ]);
+  fun () ->
+    <main className="page" data_page="products">
+      <h1>"Products"</h1>
+      <ul className="plinks">
+        <li><a className="p7" href=(App_router.p "/products/%d" 7)>"Product 7"</a></li>
+        <li><a className="p9" href=(App_router.p "/products/%d" 9)>"Product 9"</a></li>
+      </ul>
+      <Stats />
+      <Todo_list />
+    </main>
