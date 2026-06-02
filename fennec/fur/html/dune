@@ -1,0 +1,3 @@
+; Generated typed HTML elements (per-element labeled attrs + value types).
+(library (name fennec_fur_html) (public_name fennec.fur.html) (wrapped false)
+ (libraries fennec.fur) (modes byte native) (flags (:standard -w -a)))

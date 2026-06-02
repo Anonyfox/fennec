@@ -1,0 +1,4 @@
+; Virtual platform: native (stub) vs browser (jsoo), resolved at link time.
+(library (name fennec_fur_platform) (public_name fennec.fur.platform) (wrapped false)
+ (virtual_modules platform) (default_implementation fennec_fur_platform_native)
+ (modes byte native) (flags (:standard -w -a)))

@@ -1,0 +1,8 @@
+(* exercises the full ppx path: <script setup>, JSX -> Fur_html, event sugar,
+   child coercion (get count -> text), adjacent-text coalescing. *)
+let count = signal 0
+let view =
+  <div className="w">
+    <span>"n="(get count)</span>
+    <button onClick=(count += 1)>"+"</button>
+  </div>

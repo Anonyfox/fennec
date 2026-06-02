@@ -1,0 +1,3 @@
+; The mlx -> Fur ppx: JSX -> Fur_html/Fur.comp, <script setup>, event/each/key sugar.
+(library (name fennec_fur_ppx) (public_name fennec.fur.ppx) (kind ppx_rewriter)
+ (libraries ppxlib) (preprocess (pps ppxlib.metaquot)) (flags (:standard -w -a)))

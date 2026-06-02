@@ -52,7 +52,9 @@
   zlib
   bigstringaf
   (ppxlib
-   (>= 0.28))))
+   (>= 0.28))
+  js_of_ocaml
+  js_of_ocaml-ppx))
 
 ; The CLI is the distributable: a self-contained `fennec` binary that statically
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a

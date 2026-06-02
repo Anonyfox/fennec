@@ -1,0 +1,4 @@
+; Browser runtime (jsoo): the reconciler backend + head/data/router bindings + boot.
+(library (name fennec_fur_client) (public_name fennec.fur.client) (wrapped false) (modes byte)
+ (libraries fennec.fur fennec.fur.platform_browser js_of_ocaml)
+ (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
