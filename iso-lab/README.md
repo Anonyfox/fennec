@@ -4,21 +4,37 @@ A self-contained experiment: a Vue-SFC-flavoured, signals-based UI runtime that
 renders the SAME `.mlx` components on the server (SSR → string) and in the browser
 (js_of_ocaml → DOM, with true hydration). No React/melange dependency.
 
-## Layout
+## Layout — userland (`frontend/`) vs framework (`kit/`)
 
-- `iso/` — platform-agnostic core: signals (`signal`/`get`/`set`/`update`), the
-  `vnode` type, SSR (`to_html`/`document`), and `Iso.Head` (data-driven, reactive
-  head management).
-- `html/` — generated typed HTML element functions (per-element labeled attrs +
-  value types; unknown tags/attrs are compile errors).
-- `ppx/` — the mlx→runtime ppx: lowers JSX elements to `Html.*`, capitalized tags
-  to component instances (`Iso.comp`), coerces non-vnode children to text.
-- `app/` — the demo: `Store` (global state), `Counter` (local state), `Stats` +
-  `Todo_list` (global), `App` (composition + head defaults), `Document` (server
-  -only HTML shell template).
-- `bin/` — `ssr.exe` (native SSR + page assembly), `client.bc.js` (jsoo CSR:
-  `iso_dom` reconciler + `iso_head` head reconciler), `style_extract.exe`.
-- `e2e.mjs` — jsdom end-to-end test (SSR → hydrate → interact → assert).
+Everything a developer authors lives under `frontend/`; everything that would move
+into the real framework lives under `kit/`.
+
+```
+frontend/                    # ← 100% userland (mirrors fennec's frontend/)
+  apps/<name>/               #   each folder is an APP, mounted at /<name>
+    main.mlx                 #     lean config: base + template
+    layout.mlx               #     the app's shell (nav + outlet)
+    index.mlx [id].mlx …     #     file-tree routes (index/[id]/[...rest], nests)
+  components/                #   shared across apps (<Counter/> …), inline scoped scss
+  templates/                 #   SSR document shells
+  stores/  server/           #   shared global state + in-process data sources
+kit/                         # ← framework (→ fennec.* later)
+  core/   iso.ml             #   signals, vnode, ssr, head, data, router, matcher, doc, mount
+  html/   ppx/               #   typed elements + the mlx ppx (JSX, <script setup>)
+  client/ server/            #   jsoo runtime + Eio SSR driver
+  tools/                     #   route_gen (file-tree codegen) + style_extract
+  entry/                     #   generic client/ssr mains (CLI-generated in a product)
+e2e.mjs                      #   jsdom end-to-end test
+```
+
+**Scale = more apps, not routing ceremony.** Need an isolated section? Add a folder
+under `apps/`; it mounts independently and shares `/components`, `/stores`, `/server`
+for free (the demo's `admin/` reuses the shop's `<Counter/>`). No route groups, no
+qualified-component names. The generator scans `apps/*/` → one `Routes_gen` with each
+app's `{config, Layout, typed Paths, page modules, router}` + a single
+`apps : Iso.mount list`; the client picks the app by location, the server by request
+path. The only non-content userland files are per-folder `dune`s (build glue OCaml
+requires) — in a real product the CLI generates those.
 
 ## State model
 
@@ -62,21 +78,7 @@ let g = Data.resource ~key:"/api/greeting" ~fallback:"…" ~decode:Fun.id ()
 The one platform split is `Iso.Data.source` (a hook): the server forks an Eio
 fiber; the client does a real `fetch`. Components never see which is linked.
 
-## Authoring & layout (the DX)
-
-```
-app/
-  app.mlx          # layout shell: nav + (outlet ())
-  document.mlx     # server-only HTML shell (slots: Doc.head/outlet/scripts)
-  *.mlx            # reusable components (counter, greeting, …)
-  store.ml         # global state
-routes/            # the file tree IS the route table (Next.js convention)
-  index.mlx        #  /
-  products/
-    index.mlx      #  /products
-    [id].mlx       #  /products/:id   (param in the filename)
-  [...rest].mlx    #  catch-all → not-found
-```
+## Authoring (the DX)
 
 A component/page is `<script setup>` style — top-level bindings are the per-instance
 setup, `view` is the reactive render; the ppx generates `make`. No `open`, no `make`,
@@ -95,9 +97,9 @@ let view =                                  (* render *)
 (Define `make` explicitly to opt out — the full-power escape hatch for typed props /
 custom args / the server-only `document.mlx`.)
 
-A `route_gen` step scans `routes/` and emits one `Routes_gen` module: the router, the
-page modules, and a **typed `Paths`** — one builder per route, so links are
-compile-checked:
+A `route_gen` step scans `apps/*/` and emits one `Routes_gen` module: per app a
+`{config, Layout, page modules, router}` plus a **typed `Paths`** — one builder per
+route, so links are compile-checked:
 
 ```ocaml
 Paths.products_id ~id:"7"   (* ✓ /shop/products/7 *)
@@ -140,12 +142,10 @@ covered by `e2e.mjs` (the page is SSR'd for `/shop/products/7`).
 ## Run
 
 ```sh
-dune build iso-lab/bin/client.bc.js iso-lab/bin/ssr.exe
-dune exec iso-lab/bin/ssr.exe -- \
-  _build/default/iso-lab/bin/client.bc.js \
-  _build/default/iso-lab/bin/styles \
-  iso-lab/index.html \
-  /shop/products/7          # request path (which app + route to SSR)
-# E2E (needs jsdom; e.g. from a dir where it resolves):
+dune build iso-lab/kit/entry/client.bc.js iso-lab/kit/entry/ssr.exe
+B=_build/default/iso-lab/kit/entry
+dune exec iso-lab/kit/entry/ssr.exe -- \
+  $B/client.bc.js $B/styles iso-lab/index.html /shop/products/7   # request path → which app+route
+# E2E (needs jsdom; run from a dir where it resolves):
 node iso-lab/e2e.mjs
 ```

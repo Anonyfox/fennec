@@ -1,0 +1,8 @@
+; the generic mains (CLI-generated in a real product): they just consume the
+; userland app (Routes_gen.apps + Api.source) through the runtime libs.
+(executable (name ssr) (modules ssr) (libraries iso iso_app iso_server server eio eio_main) (flags (:standard -w -a)))
+(executable (name client) (modules client) (modes js) (libraries iso iso_app iso_client js_of_ocaml)
+ (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
+(rule (target (dir styles)) (deps %{project_root}/iso-lab/kit/tools/style_extract.exe
+   (glob_files %{project_root}/iso-lab/frontend/components/*.mlx))
+ (action (run %{project_root}/iso-lab/kit/tools/style_extract.exe styles %{project_root}/iso-lab/frontend/components)))

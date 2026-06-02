@@ -1,0 +1,3 @@
+; client runtime (jsoo): DOM reconciler, head + data + router bindings, boot
+(library (name iso_client) (wrapped false) (libraries iso js_of_ocaml)
+ (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))

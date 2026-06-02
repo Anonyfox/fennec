@@ -1,0 +1,2 @@
+; server runtime (Eio): the two-pass SSR render driver + mount dispatch
+(library (name iso_server) (wrapped false) (libraries iso eio) (flags (:standard -w -a)))

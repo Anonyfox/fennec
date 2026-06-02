@@ -1,1 +1,0 @@
-(executable (name route_gen) (libraries unix) (flags (:standard -w -a)))
