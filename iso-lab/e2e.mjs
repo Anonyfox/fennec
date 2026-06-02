@@ -123,6 +123,23 @@ const goto = p => { dom.window.history.pushState({}, '', p); dom.window.dispatch
   console.log('— SSR payload empty for the product deep-link —');
   eq('empty data context', /window\.__ISO_DATA__=\{\}/.test(html), true);
 
+  console.log('— SECOND APP (/admin) reuses the shared <Counter/> —');
+  const adminHtml = readFileSync(new URL('./admin.html', import.meta.url), 'utf8');
+  const adm = new JSDOM(adminHtml, {
+    url: 'http://localhost/admin', runScripts: 'dangerously', pretendToBeVisual: true,
+    beforeParse(w) { w.TextDecoder = globalThis.TextDecoder; w.TextEncoder = globalThis.TextEncoder; },
+  });
+  await wait(120);
+  const ad = adm.window.document;
+  eq('admin page rendered', ad.querySelector('.page')?.getAttribute('data-page'), 'admin-home');
+  eq('admin title', ad.querySelector('head title')?.textContent, 'Admin · dashboard');
+  eq('admin reuses shared Counter', !!ad.querySelector('.counter'), true);
+  // the SAME component is live in the admin app — increment it
+  ad.querySelector('.counter').querySelectorAll('button')[1]
+    .dispatchEvent(new adm.window.MouseEvent('click', { bubbles: true }));
+  eq('shared Counter works in admin', ad.querySelector('.counter .count').textContent, 1);
+  eq('admin location is its own base', adm.window.location.pathname, '/admin');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

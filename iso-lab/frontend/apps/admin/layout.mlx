@@ -1,0 +1,8 @@
+let () = Head.description "iso admin"
+let view =
+  <div id="app-root" className="admin">
+    <nav className="nav">
+      <a className="nav-shop" href=(ext "/shop")>"↩ Shop"</a>
+    </nav>
+    (outlet ())
+  </div>

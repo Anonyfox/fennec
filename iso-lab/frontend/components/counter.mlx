@@ -1,6 +1,4 @@
-(* LOCAL state: a signal in setup. <script setup> style — no make, no fun () ->. *)
 let count = signal 0
-
 let view =
   <div className="counter">
     <button onClick=(fun () -> count -= 1)>"−"</button>

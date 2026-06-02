@@ -1,8 +1,6 @@
-(* The app SHELL (layout): persistent nav + the routed outlet. *)
-let () =
-  Head.description "iso router demo";
-  Head.og "og:title" "iso shop"
-
+(* the app's persistent shell: nav + the routed outlet *)
+let () = Head.description "iso shop"
+let () = Head.og "og:title" "iso shop"
 let view =
   <div id="app-root">
     <nav className="nav">

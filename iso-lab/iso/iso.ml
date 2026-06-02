@@ -464,3 +464,13 @@ module Doc = struct
   let outlet c = raw c.body                                 (* the SSR'd app body *)
   let scripts c = raw (Printf.sprintf "<script>%s</script><script>%s</script>" c.data c.client_js)
 end
+
+(* ---- a mounted app: base + its shell (root) + its router + its document shell.
+   The generator emits one [mount list]; the client picks by location, the server by
+   request path. The single declarative description of "what runs where". *)
+type mount = {
+  base : string;
+  root : unit -> (unit -> vnode);   (* the app's layout/shell make *)
+  router : Router.t;
+  document : Doc.ctx -> vnode;       (* the app's chosen template *)
+}

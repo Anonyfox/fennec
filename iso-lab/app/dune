@@ -1,8 +1,0 @@
-(library (name app) (wrapped false) (libraries iso html) (preprocess (pps iso_ppx))
- (flags (:standard -w -a -open Iso)))
-; file-tree routing: scan routes/ -> ONE generated module (Routes_gen) holding the
-; typed Paths, the page modules, and the router. The tree IS the route table.
-(rule
- (deps (source_tree %{project_root}/iso-lab/routes) %{project_root}/iso-lab/route_gen/route_gen.exe)
- (target routes_gen.mlx)
- (action (run %{project_root}/iso-lab/route_gen/route_gen.exe %{project_root}/iso-lab/routes routes_gen.mlx /shop)))

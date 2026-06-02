@@ -1,0 +1,3 @@
+(* lean per-app config: where it mounts + which document shell *)
+let base = "/shop"
+let template = Default.make

@@ -1,2 +1,5 @@
 # generated SSR page (inlines the compiled client bundle, ~4MB)
 index.html
+
+# generated SSR pages
+admin.html

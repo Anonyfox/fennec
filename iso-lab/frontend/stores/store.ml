@@ -1,4 +1,3 @@
-(* GLOBAL state = signals in a shared module. (Iso is auto-opened via -open Iso.) *)
 type todo = { id : int; text : string }
 let todos : todo list signal = signal []
 let next_id = signal 1

@@ -1,15 +1,24 @@
-(* Client runtime boot — the whole hydration dance behind one call.
-   [start ~root ~router ()] installs the data SOURCE + seed, activates and wires the
-   router, hydrates the SSR'd #app, consumes the seed, starts the head reconciler,
-   and runs on_mount handlers. The app's client entry is then a single line. *)
+(* Client runtime boot. Picks the app whose base matches the URL, activates it,
+   hydrates the SSR'd #app, then consumes the seed + runs head/mounts. Generic over
+   the generated [mount list] — no per-app code. *)
 open Js_of_ocaml
 
-let start ~(root : unit -> unit -> Iso.vnode) ~(router : Iso.Router.t) () =
-  Iso_client_data.install ();        (* is_browser; load __ISO_DATA__; SOURCE *)
-  Iso.Router.activate router;        (* ambient: p/param/outlet resolve to this app *)
-  Iso_client_router.install router;  (* relative path from URL + nav listeners *)
-  let app = Js.Opt.get (Dom_html.document##getElementById (Js.string "app")) (fun () -> failwith "no #app") in
-  Iso_dom.hydrate_root app (root ());
-  Iso.Data.clear_seed ();            (* consume: later/dynamic fetches hit the network *)
-  Iso_head.start ();
-  Iso.flush_mounts ()
+let starts_with p s = String.length s >= String.length p && String.sub s 0 (String.length p) = p
+let dispatch (mounts : Iso.mount list) path =
+  List.filter (fun (m : Iso.mount) -> m.base = "" || path = m.base || starts_with (m.base ^ "/") path) mounts
+  |> List.sort (fun (a : Iso.mount) b -> compare (String.length b.base) (String.length a.base))
+  |> function m :: _ -> Some m | [] -> None
+
+let start (mounts : Iso.mount list) =
+  Iso_client_data.install ();
+  let path = Js.to_string Dom_html.window##.location##.pathname in
+  match dispatch mounts path with
+  | None -> ()
+  | Some m ->
+    Iso.Router.activate m.router;
+    Iso_client_router.install m.router;
+    let app = Js.Opt.get (Dom_html.document##getElementById (Js.string "app")) (fun () -> failwith "no #app") in
+    Iso_dom.hydrate_root app (m.root ());
+    Iso.Data.clear_seed ();
+    Iso_head.start ();
+    Iso.flush_mounts ()

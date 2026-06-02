@@ -1,8 +1,6 @@
-(* Browser-only data (~client_only) + on_mount side effect. *)
 let b = Data.string "/api/browser-only" ~fallback:"(loading in browser…)" ~client_only:true ()
 let mounted = signal false
 let () = on_mount (fun () -> set mounted true)
-
 let view =
   <div className="browser-box">
     <p className="bdata">(Data.value b)</p>

@@ -1,6 +1,4 @@
-(* Regular isomorphic resource (string payload). *)
 let g = Data.string "/api/greeting" ~fallback:"…" ()
-
 let view =
   <div className="greeting">
     <p className="msg">(Data.value g)</p>
