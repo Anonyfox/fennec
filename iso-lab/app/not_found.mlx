@@ -3,5 +3,5 @@ let path = param_or "*" ""
 let view =
   <main className="page" data_page="notfound">
     <h1>"Not found"</h1>
-    <p className="missing">"no route: /"path</p>
+    <p className="missing">"no route: "path</p>
   </main>
