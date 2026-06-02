@@ -1,12 +1,9 @@
-(* LOCAL state = a signal created in setup. [make ()] runs ONCE per instance; the
-   returned closure is the render. Two <Counter/> tags => two independent counts. *)
-open Iso
-
+(* LOCAL state: a signal in setup. += / -= are int-signal sugar. *)
 let make () =
   let count = signal 0 in
   fun () ->
     <div className="counter">
-      <button onClick=(fun () -> update count (fun n -> n - 1))>"−"</button>
+      <button onClick=(fun () -> count -= 1)>"−"</button>
       <span className="count">(get count)</span>
-      <button onClick=(fun () -> update count (fun n -> n + 1))>"+"</button>
+      <button onClick=(fun () -> count += 1)>"+"</button>
     </div>

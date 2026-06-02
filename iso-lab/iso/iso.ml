@@ -143,13 +143,15 @@ module Head = struct
     | Script of (string * string) list * string  (* attrs * inline body ("" if external) *)
     | Json_ld of string                (* raw JSON for <script type="application/ld+json"> *)
 
-  (* ergonomic constructors so call sites read like markup but stay typed data *)
-  let title s = Title s
-  let meta ~name content = Meta [ ("name", name); ("content", content) ]
-  let og property content = Meta [ ("property", property); ("content", content) ]
-  let link ~rel ?(attrs = []) href = Link (("rel", rel) :: ("href", href) :: attrs)
-  let script ?(attrs = []) ?(body = "") () = Script (attrs, body)
-  let json_ld j = Json_ld j
+  (* typed tag builders — for dynamic batches via [use] (read like markup, stay data) *)
+  module Tag = struct
+    let title s = Title s
+    let meta ~name content = Meta [ ("name", name); ("content", content) ]
+    let og property content = Meta [ ("property", property); ("content", content) ]
+    let link ~rel ?(attrs = []) href = Link (("rel", rel) :: ("href", href) :: attrs)
+    let script ?(attrs = []) ?(body = "") () = Script (attrs, body)
+    let json_ld j = Json_ld j
+  end
 
   (* the registry: ordered (source-id, tags); a later source overrides an earlier *)
   (* IMPORTANT: per-request state — must become fiber-local on the concurrent server *)
@@ -176,6 +178,16 @@ module Head = struct
     on_cleanup (fun () ->
       dispose eff;
       set sources (List.filter (fun (i, _) -> i <> id) (peek sources)))
+
+  (* one-liner registrants for the common (static) case — Head.title "x" instead of
+     Head.use (fun () -> [Head.Tag.title "x"]). Use [use] for dynamic/multi-tag. *)
+  let one t = use (fun () -> [ t ])
+  let title s = one (Tag.title s)
+  let description s = one (Tag.meta ~name:"description" s)
+  let meta ~name v = one (Tag.meta ~name v)
+  let og property v = one (Tag.og property v)
+  let link ~rel ?attrs href = one (Tag.link ~rel ?attrs href)
+  let json_ld j = one (Tag.json_ld j)
 
   (* the content-key that identifies a tag for dedupe + DOM reconciliation *)
   let tag_key = function
@@ -262,6 +274,10 @@ module Data = struct
     if fetch_now then !source key (fun json -> set st (Ready (decode json)));
     { st; key; decode; fallback }
 
+  (* common case: string payload (no decoder). [Data.string "/api/x" ~fallback:"…" ()] *)
+  let string key ?(fallback = "") ?(client_only = false) () =
+    resource ~key ~client_only ~fallback ~decode:Fun.id ()
+
   (* reactive readers (each subscribes via get) *)
   let status r = get r.st
   let value r = match get r.st with Ready v -> v | _ -> r.fallback  (* fallback until ready *)
@@ -331,15 +347,26 @@ end
      derived from the route table, not fragile hardcoded strings. *)
 module Router = struct
   open Matcher
-  type page = params -> (unit -> vnode)
+  (* a page is just a component (unit -> render). Its route params come from the
+     ambient `param` accessor, so pages and components have the SAME shape. *)
+  type page = unit -> (unit -> vnode)
   type route = { pattern : string; name : string; page : page }
-  type t = { base : string; mutable routes : route list; not_found : page option; current : string signal }
+  type t = { base : string; mutable routes : route list; not_found : page option;
+             current : string signal; mutable cur_params : params }
 
-  (* IMPORTANT: per-request state — `current` (the active path) is per-render. A
-     module-global router instance is fine on the client (one document) but on the
-     concurrent server two requests would fight over `current`; make it fiber-local
-     (e.g. resolve the router/current from the request context) before going live. *)
-  let make ?(base = "") ?not_found () = { base; routes = []; not_found; current = signal "/" }
+  (* IMPORTANT: per-request state — `current`/`cur_params` (the active path + its
+     params) and `active` below are per-render. A module-global router instance is
+     fine on the client (one document) but on the concurrent server two requests
+     would fight over them; make them fiber-local (resolve the router from the
+     request context) before going live. *)
+  let make ?(base = "") ?not_found () =
+    { base; routes = []; not_found; current = signal "/"; cur_params = [] }
+
+  (* the ACTIVE app for this render — lets pages/components reach the router (for p,
+     param, href) without importing it, so there's no instance/registration cycle *)
+  let active : t option ref = ref None
+  let activate t = active := Some t
+  let current () = match !active with Some t -> t | None -> failwith "Router: no active app (call activate)"
   let page ?name pattern p t =
     t.routes <- t.routes @ [ { pattern; name = (match name with Some n -> n | None -> pattern); page = p } ];
     t
@@ -398,8 +425,42 @@ module Router = struct
     comp ~cid:"__router_outlet" (fun () -> fun () ->
       let rel = get t.current in
       match Matcher.find (List.map (fun r -> (r.pattern, r)) t.routes) rel with
-      | Some (r, params) -> comp ~cid:rel (fun () -> r.page params)
-      | None -> (match t.not_found with
-          | Some p -> comp ~cid:("__nf:" ^ rel) (fun () -> p [ ("*", rel) ])
-          | None -> text ""))
+      | Some (r, params) -> t.cur_params <- params; comp ~cid:rel r.page
+      | None -> t.cur_params <- [ ("*", rel) ];
+        (match t.not_found with
+         | Some pg -> comp ~cid:("__nf:" ^ rel) pg
+         | None -> text ""))
+
+  (* ambient param access for the active app's current route (page reads `param "id"`
+     instead of receiving + destructuring a params assoc) *)
+  let param name = Matcher.param (current ()).cur_params name
+  let param_or name d = match param name with Some v -> v | None -> d
+end
+
+(* ---- bare, ambient userland helpers (with -open Iso these need no prefix) ---- *)
+
+(* typed in-app path (base auto-prefixed, route-checked); ext = outer reach *)
+let p fmt = Router.path (Router.current ()) fmt
+let ext fmt = Router.ext fmt
+let href name args = Router.href (Router.current ()) name args
+(* current route params of the active app *)
+let param = Router.param
+let param_or = Router.param_or
+(* navigate the active app (client intercepts; pushState + re-render) *)
+let navigate = Router.navigate
+(* the routed outlet of the active app — place (outlet ()) in a layout *)
+let outlet () = Router.outlet (Router.current ())
+
+(* int-signal arithmetic sugar: count += 1 / count -= 1 *)
+let ( += ) s n = update s (fun x -> x + n)
+let ( -= ) s n = update s (fun x -> x - n)
+
+(* ---- Doc: document-shell slots, so a template places (Doc.head ctx) etc. instead
+   of threading raw head/data/body/script strings by hand. The SSR driver fills ctx. *)
+module Doc = struct
+  type ctx = { head : string; data : string; body : string; styles : string; client_js : string }
+  let head c = raw c.head                                   (* resolved <head> metadata *)
+  let styles c = raw c.styles                               (* collected CSS *)
+  let outlet c = raw c.body                                 (* the SSR'd app body *)
+  let scripts c = raw (Printf.sprintf "<script>%s</script><script>%s</script>" c.data c.client_js)
 end

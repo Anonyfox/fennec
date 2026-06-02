@@ -1,6 +1,3 @@
-(* Reads AND mutates GLOBAL state. Keyed <li> list reconciles by id. *)
-open Iso
-
 let make () =
   fun () ->
     <div className="todos">

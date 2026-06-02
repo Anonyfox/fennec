@@ -1,10 +1,8 @@
-open Iso
-
-let make params =
-  let id = match Matcher.param params "id" with Some v -> v | None -> "?" in
-  Head.use (fun () -> [ Head.title (Printf.sprintf "Product %s · shop" id) ]);
+let make () =
+  let id = param_or "id" "?" in
+  Head.title (Printf.sprintf "Product %s · shop" id);
   fun () ->
     <main className="page" data_page="product">
       <h1>"Product #"id</h1>
-      <a className="back" href=(App_router.p "/products")>"← all products"</a>
+      <a className="back" href=(p "/products")>"← all products"</a>
     </main>

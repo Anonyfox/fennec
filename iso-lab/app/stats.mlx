@@ -1,6 +1,3 @@
-(* Reads GLOBAL state for display. (Head metadata is now owned by pages.) *)
-open Iso
-
 let make () =
   fun () ->
     <div className="stats">"todos in store: "(List.length (get Store.todos))</div>

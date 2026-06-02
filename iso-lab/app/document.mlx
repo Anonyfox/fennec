@@ -1,19 +1,14 @@
-(* SERVER-ONLY document shell. Carries only static infrastructure; dynamic metadata
-   comes via (raw head), and the data context via (raw data) — emitted before the
-   client script so window.__ISO_DATA__ exists when the client boots. *)
-open Iso
-
-let make ~(head : string) ~(data : string) ~(app : string) ~(styles : string) ~(client_js : string) =
+(* SERVER-ONLY document shell. Places framework slots; the SSR driver fills them. *)
+let make ctx =
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      (Iso.raw head)
-      <style>(Iso.raw styles)</style>
+      (Doc.head ctx)
+      <style>(Doc.styles ctx)</style>
     </head>
     <body>
-      <div id="app">(Iso.raw app)</div>
-      <script>(Iso.raw data)</script>
-      <script>(Iso.raw client_js)</script>
+      <div id="app">(Doc.outlet ctx)</div>
+      (Doc.scripts ctx)
     </body>
   </html>

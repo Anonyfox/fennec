@@ -1,10 +1,6 @@
-(* Regular isomorphic resource. On the server it actually runs (Eio) and the value
-   is embedded; on the client's first render it's seeded (no fetch, no flash). The
-   refetch button does a real, dynamic client fetch. *)
-open Iso
-
+(* Regular isomorphic resource (Data.string: string payload, no decoder). *)
 let make () =
-  let g = Data.resource ~key:"/api/greeting" ~fallback:"…" ~decode:Fun.id () in
+  let g = Data.string "/api/greeting" ~fallback:"…" () in
   fun () ->
     <div className="greeting">
       <p className="msg">(Data.value g)</p>

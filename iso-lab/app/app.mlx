@@ -1,21 +1,15 @@
-(* The app SHELL: persistent nav + the routed outlet. Links use the typed path
-   sigil: App_router.p for in-app (base auto-prefixed + checked), App_router.ext for
-   outer reach (e.g. a different app mounted elsewhere). *)
-open Iso
-
+(* The app SHELL (layout): persistent nav + the routed outlet. *)
 let make () =
-  Head.use (fun () -> [
-    Head.meta ~name:"description" "iso router demo";
-    Head.og "og:title" "iso shop";
-  ]);
+  Head.description "iso router demo";
+  Head.og "og:title" "iso shop";
   fun () ->
     <div id="app-root">
       <nav className="nav">
-        <a className="nav-home" href=(App_router.p "/")>"Home"</a>
+        <a className="nav-home" href=(p "/")>"Home"</a>
         " · "
-        <a className="nav-products" href=(App_router.p "/products")>"Products"</a>
+        <a className="nav-products" href=(p "/products")>"Products"</a>
         " · "
-        <a className="nav-admin" href=(App_router.ext "/admin")>"Admin ↗"</a>
+        <a className="nav-admin" href=(ext "/admin")>"Admin ↗"</a>
       </nav>
-      (Router.outlet Routes.router)
+      (outlet ())
     </div>
