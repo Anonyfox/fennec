@@ -82,6 +82,12 @@ let node (x : 'a) : vnode =
   else if Obj.tag r = Obj.string_tag then Text (Obj.magic x)
   else if Obj.tag r = Obj.double_tag then Text (string_of_float (Obj.magic x))
   else (Obj.magic x : vnode)
+(* JS-like list rendering order: each items (fun x -> …)  ==  items.map(x => …) *)
+let each l f = List.map f l
+(* key coercion so key=t.id (int) works as well as key="x" (string) *)
+let skey (x : 'a) : string =
+  let r = Obj.repr x in
+  if Obj.is_int r then string_of_int (Obj.magic x) else (Obj.magic x : string)
 let with_key k = function
   | Elem { tag; attrs; children; _ } -> Elem { tag; key = Some k; attrs; children }
   | Comp c -> Comp { c with ckey = Some k }

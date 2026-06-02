@@ -6,7 +6,14 @@ let dash s = String.map (fun c -> if c = '_' then '-' else c) s
 let lid_str f = match f.pexp_desc with
   | Pexp_ident { txt; _ } -> Some (String.concat "." (Longident.flatten_exn txt)) | _ -> None
 let head c = match c.pexp_desc with Pexp_apply (f, _) -> lid_str f | _ -> None
-let list_heads = ["List.map";"List.mapi";"List.filter_map";"List.concat_map";"Array.map"]
+let list_heads = ["List.map";"List.mapi";"List.filter_map";"List.concat_map";"Array.map";"each";"Iso.each"]
+(* an event attribute (onClick, onInput, …): on + UpperCase *)
+let is_event name = String.length name > 2 && name.[0]='o' && name.[1]='n' && name.[2] >= 'A' && name.[2] <= 'Z'
+(* handler sugar: wrap a unit statement in `fun () ->`, but leave real functions /
+   function references untouched (onClick=(count += 1) vs onClick=(fun () -> …) / onClick=h) *)
+let wrap_handler ~loc arg = match arg.pexp_desc with
+  | Pexp_function _ | Pexp_ident _ -> arg   (* already a function / function reference *)
+  | _ -> [%expr fun () -> [%e arg]]
 let is_vnode_head h =
   starts_with "Html." h || starts_with "Iso." h
   || (let n = String.length h in n >= 5 && String.sub h (n-5) 5 = ".make")
@@ -29,9 +36,13 @@ let expand ~loc e =
     let children = ref None and labeled = ref [] and extra = ref [] and key = ref None in
     List.iter (fun (label, arg) -> match label with
       | (Labelled "children" | Optional "children") -> children := Some arg
-      | (Labelled "key" | Optional "key") when is_comp -> key := Some arg
+      | (Labelled "key" | Optional "key") ->
+        let k = [%expr Iso.skey [%e arg]] in           (* auto-coerce int/string keys *)
+        if is_comp then key := Some k else labeled := (Labelled "key", k) :: !labeled
       | Labelled name when (not is_comp) && (starts_with "data_" name || starts_with "aria_" name) ->
         extra := [%expr Iso.attr [%e estring ~loc (dash name)] [%e arg]] :: !extra
+      | Labelled name when (not is_comp) && is_event name ->
+        labeled := (Labelled name, wrap_handler ~loc arg) :: !labeled  (* fun () -> sugar *)
       | (Labelled _ | Optional _) -> labeled := (label, arg) :: !labeled
       | Nolabel -> ()) args;
     let children0 = (match !children with Some c -> c | None -> [%expr []]) in
@@ -103,6 +114,29 @@ let rec componentize str =
       List.rev !others @ [ [%stri let make () = [%e body]] ]
   end
 
+(* <template>…</template> block: a top-level JSX <template> expression. Rewrite it to
+   `let view = <its children>` (single child as-is, multiple wrapped in a fragment),
+   BEFORE the JSX mapper runs — then componentize folds it into `make` as usual. *)
+let is_jsx e = List.exists (fun a -> a.attr_name.txt = "JSX") e.pexp_attributes
+let desugar_blocks str =
+  let open Ast_builder.Default in
+  List.map (fun item -> match item.pstr_desc with
+    | Pstr_eval (e, _) when is_jsx e ->
+      (match e.pexp_desc with
+       | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "template"; _ }; _ }, args) ->
+         let loc = e.pexp_loc in
+         let children = List.fold_left (fun acc (l, a) -> match l with
+           | Labelled "children" | Optional "children" -> Some a | _ -> acc) None args in
+         let view = (match children with
+           | None -> [%expr Iso.frag []]
+           | Some c -> (match list_elements c with
+               | Some [ single ] -> single        (* one root *)
+               | _ -> [%expr Iso.frag [%e c]]))    (* many roots -> fragment *)
+         in
+         [%stri let view = [%e view]]
+       | _ -> item)
+    | _ -> item) str
+
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
       PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (css,_,_)); _ }, _); _ } ]), _) ->
@@ -112,5 +146,5 @@ let impl str =
   module_scope := None; scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
-  componentize (mapper#structure str)
+  componentize (mapper#structure (desugar_blocks str))
 let () = Driver.register_transformation "iso_jsx" ~impl

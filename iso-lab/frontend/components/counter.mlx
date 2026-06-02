@@ -1,4 +1,4 @@
-(* LOCAL state + INLINE scoped scss (extracted to counter.scss, scoped by data-iso) *)
+(* LOCAL state + inline scoped scss. Event sugar: onClick=(stmt), no fun () ->. *)
 [%%style {scss|
 .counter { display: inline-flex; gap: 6px; align-items: center }
 .counter button { cursor: pointer }
@@ -8,7 +8,7 @@
 let count = signal 0
 let view =
   <div className="counter">
-    <button onClick=(fun () -> count -= 1)>"−"</button>
+    <button onClick=(count -= 1)>"−"</button>
     <span className="count">(get count)</span>
-    <button onClick=(fun () -> count += 1)>"+"</button>
+    <button onClick=(count += 1)>"+"</button>
   </div>

@@ -87,15 +87,26 @@ no `fun () ->`:
 ```ocaml
 let count = signal 0                       (* setup *)
 let view =                                  (* render *)
-  <div class="counter">
-    <button onClick=(fun () -> count -= 1)>"−"</button>
-    <span>(get count)</span>
-    <button onClick=(fun () -> count += 1)>"+"</button>
+  <div className="counter">
+    <button onClick=(count -= 1)>"−"</button>   (* event sugar: auto fun () -> *)
+    <span className="count">(get count)</span>
+    <button onClick=(count += 1)>"+"</button>
   </div>
 ```
 
+ppx-level sugar (all tooling-safe, no editor plugin):
+- **event handlers** — `onClick=(stmt)` auto-wraps in `fun () ->` (real functions/refs left alone).
+- **lists** — `each items (fun x -> …)` (JS-like `items.map` order), auto-fragmented.
+- **keys** — `key=t.id` (int or string; auto-coerced, no `string_of_int`).
+- **signals** — `count += 1` / `count -= 1`.
+
 (Define `make` explicitly to opt out — the full-power escape hatch for typed props /
 custom args / the server-only `document.mlx`.)
+
+Deferred to the one mlx reader enhancement (Phase 2, not ppx-able): **bare text**
+(`Home` without quotes), `class=`, `{expr}`, a `<template>`/`<style>` block syntax,
+and in-template signal-read sugar. These are parse-level, so they live in the dialect
+reader (keeping full intelligence, no plugin) rather than the ppx.
 
 A `route_gen` step scans `apps/*/` and emits one `Routes_gen` module: per app a
 `{config, Layout, page modules, router}` plus a **typed `Paths`** — one builder per
