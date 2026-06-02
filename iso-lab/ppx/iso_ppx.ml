@@ -61,6 +61,41 @@ let mapper = object
     if List.exists (fun a -> a.attr_name.txt = "JSX") e.pexp_attributes
     then expand ~loc:e.pexp_loc e else e
 end
+(* ---- <script setup> transform ----
+   A component file may be written as top-level setup bindings + `let view = <jsx>`,
+   with no `make`. This folds them into the real contract:
+       let make () = <setup let-ins, in source order> in fun () -> view
+   Setup runs once per instance; `view` is the reactive render. A file that defines
+   `make` explicitly is left ALONE — the full-power escape hatch (typed props, custom
+   args, server-only shells like document.mlx). A file with no `view` is untouched. *)
+let pat_name p = match p.ppat_desc with
+  | Ppat_var { txt; _ } -> Some txt
+  | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) -> Some txt
+  | _ -> None
+let item_defines name item = match item.pstr_desc with
+  | Pstr_value (_, vbs) -> List.exists (fun vb -> pat_name vb.pvb_pat = Some name) vbs
+  | _ -> false
+let componentize str =
+  let open Ast_builder.Default in
+  if (not (List.exists (item_defines "view") str)) || List.exists (item_defines "make") str
+  then str
+  else begin
+    let setup = ref [] and view_expr = ref None and others = ref [] in
+    List.iter (fun item -> match item.pstr_desc with
+      | Pstr_value (_, vbs) when List.exists (fun vb -> pat_name vb.pvb_pat = Some "view") vbs ->
+        (match List.find_opt (fun vb -> pat_name vb.pvb_pat = Some "view") vbs with
+         | Some vb -> view_expr := Some vb.pvb_expr | None -> ())
+      | Pstr_value (rf, vbs) -> setup := (rf, vbs) :: !setup
+      | _ -> others := item :: !others) str;
+    match !view_expr with
+    | None -> str
+    | Some ve ->
+      let loc = ve.pexp_loc in
+      let render = [%expr fun () -> [%e ve]] in
+      let body = List.fold_left (fun body (rf, vbs) -> pexp_let ~loc rf vbs body) render !setup in
+      List.rev !others @ [ [%stri let make () = [%e body]] ]
+  end
+
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
       PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (css,_,_)); _ }, _); _ } ]), _) ->
@@ -70,5 +105,5 @@ let impl str =
   module_scope := None; scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
-  mapper#structure str
+  componentize (mapper#structure str)
 let () = Driver.register_transformation "iso_jsx" ~impl

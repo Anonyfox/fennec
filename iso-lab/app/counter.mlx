@@ -1,9 +1,9 @@
-(* LOCAL state: a signal in setup. += / -= are int-signal sugar. *)
-let make () =
-  let count = signal 0 in
-  fun () ->
-    <div className="counter">
-      <button onClick=(fun () -> count -= 1)>"−"</button>
-      <span className="count">(get count)</span>
-      <button onClick=(fun () -> count += 1)>"+"</button>
-    </div>
+(* LOCAL state: a signal in setup. <script setup> style — no make, no fun () ->. *)
+let count = signal 0
+
+let view =
+  <div className="counter">
+    <button onClick=(fun () -> count -= 1)>"−"</button>
+    <span className="count">(get count)</span>
+    <button onClick=(fun () -> count += 1)>"+"</button>
+  </div>
