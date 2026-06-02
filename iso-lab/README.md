@@ -103,6 +103,30 @@ ppx-level sugar (all tooling-safe, no editor plugin):
 (Define `make` explicitly to opt out — the full-power escape hatch for typed props /
 custom args / the server-only `document.mlx`.)
 
+### Interactivity (forms + browser APIs, SSR-safe)
+
+Handlers stay `unit -> unit`; the event being dispatched is read via ambient
+accessors — no event threading, no signature churn:
+
+```ocaml
+let draft = signal ""
+<input value=(get draft) onInput=(set draft (target_value ()))
+       onKeydown=(if key () = "Enter" then add ()) />
+```
+`target_value` / `target_checked` / `key` / `prevent_default` read the live event on
+the client; during SSR (no handler runs) they return safe defaults. `value`/`checked`
+are set as DOM **properties**, so controlled inputs update *and* clear correctly.
+
+Browser APIs go through `Iso.Browser`, a thin SSR-safe facade over js_of_ocaml (the
+real bindings — no reinvention): `Browser.local_get/local_set/local_remove`. Native =
+no-op/`None`; the client runtime installs the real impl. Use them in client contexts
+(`on_mount`, handlers), which never run during SSR:
+
+```ocaml
+let () = on_mount (fun () ->
+  Browser.local_set "visits" (string_of_int (visits + 1)))   (* localStorage, never on the server *)
+```
+
 Deferred to the one mlx reader enhancement (Phase 2, not ppx-able): **bare text**
 (`Home` without quotes), `class=`, `{expr}`, a `<template>`/`<style>` block syntax,
 and in-template signal-read sugar. These are parse-level, so they live in the dialect

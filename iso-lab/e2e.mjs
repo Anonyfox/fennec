@@ -62,15 +62,22 @@ const goto = p => { dom.window.history.pushState({}, '', p); dom.window.dispatch
   eq('product links built by p', attr('.p7', 'href'), '/shop/products/7');
   eq('product links built by p', attr('.p9', 'href'), '/shop/products/9');
 
-  console.log('— global store: add 2, remove 1 —');
+  console.log('— FORM: type into the input (reads target_value), add, controlled clear —');
   eq('stats initial', stats(), 'todos in store: 0');
-  click('#add'); click('#add');
-  eq('two todos', todos(), 2);
+  const typeAdd = txt => {
+    const input = document.querySelector('#todo-input');
+    input.value = txt;
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));  // -> onInput reads target_value
+    click('#add');
+  };
+  typeAdd('milk'); typeAdd('eggs');
+  eq('two typed todos', todos(), 2);
+  eq('typed value used (not a fixed string)', document.querySelector('.todos li').firstChild.textContent.trim(), 'milk');
+  eq('controlled input cleared after add', document.querySelector('#todo-input').value, '');
   eq('stats', stats(), 'todos in store: 2');
-  eq('first item', document.querySelector('.todos li').firstChild.textContent.trim(), 'item 1');
   click('.todos li .rm');                 // remove first (keyed reconcile)
   eq('one todo after remove', todos(), 1);
-  eq('now first is item 2', document.querySelector('.todos li').firstChild.textContent.trim(), 'item 2');
+  eq('now first is eggs', document.querySelector('.todos li').firstChild.textContent.trim(), 'eggs');
   eq('stats after remove', stats(), 'todos in store: 1');
 
   console.log('— reactive param: click Product 9 —');
@@ -91,6 +98,8 @@ const goto = p => { dom.window.history.pushState({}, '', p); dom.window.dispatch
   eq('greeting ready', text('.greeting .gstatus').trim(), '(ready)');
   eq('client-only data', text('.browser-box .bdata'), 'Loaded in the browser ✨');
   eq('on_mount ran', text('.browser-box .mounted'), 'mounted ✓');
+  eq('localStorage visit counter (Browser facade)', text('.visits'), 'visits (localStorage): 1');
+  eq('localStorage actually written', dom.window.localStorage.getItem('visits'), '1');
 
   console.log('— greeting refetch: real dynamic fetch (loading → ready) —');
   click('#refetch');

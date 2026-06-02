@@ -13,6 +13,14 @@ let client_remote = function
 
 let install () =
   Iso.is_browser := true;
+  (* real Browser facade over js_of_ocaml localStorage (no-op if unavailable) *)
+  Iso.Browser.install {
+    Iso.Browser.local_get = (fun k ->
+      Js.Optdef.case (Dom_html.window##.localStorage) (fun () -> None)
+        (fun s -> Js.Opt.case (s##getItem (Js.string k)) (fun () -> None) (fun v -> Some (Js.to_string v))));
+    local_set = (fun k v -> Js.Optdef.iter (Dom_html.window##.localStorage) (fun s -> s##setItem (Js.string k) (Js.string v)));
+    local_remove = (fun k -> Js.Optdef.iter (Dom_html.window##.localStorage) (fun s -> s##removeItem (Js.string k)));
+  };
   let d : 'a Js.Optdef.t = Js.Unsafe.get Dom_html.window (Js.string "__ISO_DATA__") in
   Js.Optdef.iter d (fun obj ->
     let keys = Js.to_array (Js.object_keys obj) in

@@ -1,6 +1,12 @@
+let draft = signal ""
+let add () = if get draft <> "" then (Store.add (get draft); set draft "")
 let view =
   <div className="todos">
-    <button id="add" onClick=(Store.add (Printf.sprintf "item %d" (peek Store.next_id)))>"add todo"</button>
+    <input id="todo-input" placeholder="new todo"
+           value=(get draft)
+           onInput=(set draft (target_value ()))
+           onKeydown=(if key () = "Enter" then add ()) />
+    <button id="add" onClick=(add ())>"add"</button>
     <ul>
       (each (get Store.todos) (fun (t : Store.todo) ->
          <li key=t.id className="todo">

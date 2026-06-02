@@ -59,6 +59,38 @@ let flush_mounts () =
 let current_cleanups : (unit -> unit) list ref ref = ref (ref [])
 let on_cleanup f = let r = !current_cleanups in r := f :: !r
 
+(* ---- ambient current event ----
+   Handlers stay [unit -> unit]; these accessors read the event being dispatched.
+   The client runtime installs the real readers (over the live js_of_ocaml event)
+   and sets/clears the ambient event around each dispatch. During SSR no handler
+   runs, so these return safe defaults — event code can't touch the server render. *)
+let ev_value : (unit -> string) ref = ref (fun () -> "")
+let ev_checked : (unit -> bool) ref = ref (fun () -> false)
+let ev_key : (unit -> string) ref = ref (fun () -> "")
+let ev_prevent : (unit -> unit) ref = ref (fun () -> ())
+let target_value () = !ev_value ()      (* an input/textarea/select's current value *)
+let target_checked () = !ev_checked ()  (* a checkbox/radio's checked state *)
+let key () = !ev_key ()                  (* a keyboard event's key, e.g. "Enter" *)
+let prevent_default () = !ev_prevent ()
+
+(* ---- Browser: SSR-safe facade over js_of_ocaml. Native = no-op/None; the client
+   runtime installs the real implementations. Safe anywhere — call it freely; during
+   SSR (and before the client installs it) it's inert. Only meaningful in client
+   contexts (on_mount / event handlers), which never run during SSR. *)
+module Browser = struct
+  type t = {
+    local_get : string -> string option;
+    local_set : string -> string -> unit;
+    local_remove : string -> unit;
+  }
+  let stub = { local_get = (fun _ -> None); local_set = (fun _ _ -> ()); local_remove = (fun _ -> ()) }
+  let impl = ref stub
+  let install i = impl := i
+  let local_get k = (!impl).local_get k
+  let local_set k v = (!impl).local_set k v
+  let local_remove k = (!impl).local_remove k
+end
+
 type attr = Attr of string * string | Handler of string * (unit -> unit)
 type vnode =
   | Text of string

@@ -5,4 +5,5 @@ let view =
     <Counter />
     <Greeting />
     <Browser_box />
+    <Visits />
   </main>

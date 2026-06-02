@@ -1,0 +1,8 @@
+(* localStorage demo: SSR renders 0; on the client, on_mount reads/increments/saves *)
+let n = signal 0
+let () = on_mount (fun () ->
+  let prev = match Browser.local_get "visits" with Some s -> (try int_of_string s with _ -> 0) | None -> 0 in
+  let next = prev + 1 in
+  Browser.local_set "visits" (string_of_int next);
+  set n next)
+let view = <p className="visits">"visits (localStorage): "(get n)</p>
