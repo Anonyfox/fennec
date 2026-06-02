@@ -525,3 +525,154 @@ type mount = {
   router : Router.t;
   document : Doc.ctx -> vnode;       (* the app's chosen template *)
 }
+
+(* ---- Reconcile: the create / hydrate / keyed-diff algorithm, parameterized over a
+   DOM BACKEND. The browser instantiates it with js_of_ocaml; tests instantiate it
+   with an in-memory fake — so the subtlest code (keyed reconciliation, hydration
+   adoption + recovery) is unit-testable in milliseconds, and the algorithm itself is
+   platform-agnostic. *)
+module type BACKEND = sig
+  type node
+  val create_text : string -> node
+  val create_element : string -> node
+  val get_text : node -> string
+  val set_text : node -> string -> unit
+  val get_attr : node -> string -> string option
+  val set_attr : node -> string -> string -> unit
+  val remove_attr : node -> string -> unit
+  val set_prop : node -> string -> string -> unit   (* value/checked as live property *)
+  val get_prop : node -> string -> string
+  val append : node -> node -> unit                 (* parent child *)
+  val remove : node -> node -> unit                 (* parent child *)
+  val replace : node -> node -> node -> unit        (* parent new old *)
+  val parent : node -> node option
+  val listen : node -> string -> (unit -> unit) ref -> unit  (* attach a handler over the ref *)
+  val child : node -> int -> node option            (* nth child (hydration) *)
+  val first_child : node -> node option
+end
+
+module Reconcile (B : BACKEND) = struct
+  type melem = { tag : string; key : string option; node : B.node;
+                 mutable attrs : attr list; mutable children : mounted list;
+                 handlers : (string, (unit -> unit) ref) Hashtbl.t }
+  and mcomp = { mcid : string; mckey : string option; mutable msub : mounted;
+                meff : reaction; cleanups : (unit -> unit) list ref }
+  and mounted = MText of B.node | MElem of melem | MComp of mcomp
+
+  let rec mnode = function MText n -> n | MElem e -> e.node | MComp mc -> mnode mc.msub
+  let ensure_handler handlers node ev f =
+    match Hashtbl.find_opt handlers ev with
+    | Some r -> r := f
+    | None -> let r = ref f in Hashtbl.replace handlers ev r; B.listen node ev r
+  let put_attr node handlers = function
+    | Attr ("value", v) -> B.set_prop node "value" v
+    | Attr ("checked", v) -> B.set_prop node "checked" v
+    | Attr (k, v) -> B.set_attr node k v
+    | Handler (ev, f) -> ensure_handler handlers node ev f
+  let key_of_m = function MElem e -> e.key | MComp mc -> mc.mckey | _ -> None
+  let key_of_v = function Elem { key; _ } -> key | Comp { ckey; _ } -> ckey | _ -> None
+  let has_key v = key_of_v v <> None
+
+  let rec create = function
+    | Text s -> MText (B.create_text s)
+    | Comp c -> mount_comp c
+    | Fragment _ -> MText (B.create_text "")
+    | Elem { tag; key; attrs; children } ->
+      let node = B.create_element tag in
+      let handlers = Hashtbl.create 4 in
+      List.iter (put_attr node handlers) attrs;
+      let children = List.map (fun ch -> let m = create ch in B.append node (mnode m); m) (flatten children) in
+      MElem { tag; key; node; attrs; children; handlers }
+
+  and mk_effect ~first sub =
+    { run = (fun () -> match !sub with `R (render, m) ->
+        let v = render () in
+        (match m with
+         | None -> sub := `R (render, Some (first v))
+         | Some old -> (match B.parent (mnode old) with
+             | Some p -> sub := `R (render, Some (reconcile ~parent:p old v))
+             | None -> sub := `R (render, Some old))));
+      deps = [] }
+
+  and instantiate ~first (c : comp) =
+    let cleanups = ref [] in
+    let saved = !current_cleanups in
+    current_cleanups := cleanups;
+    let render = c.setup () in
+    let sub = ref (`R (render, None)) in
+    let eff = mk_effect ~first sub in
+    run_effect eff;
+    current_cleanups := saved;
+    let m = (match !sub with `R (_, Some m) -> m | _ -> failwith "comp produced nothing") in
+    MComp { mcid = c.cid; mckey = c.ckey; msub = m; meff = eff; cleanups }
+  and mount_comp c = instantiate ~first:create c
+
+  and hydrate dom = function
+    | Text _ -> MText dom
+    | Comp c -> instantiate ~first:(fun v -> hydrate dom v) c
+    | Fragment _ -> MText dom
+    | Elem { tag; key; attrs; children } ->
+      let handlers = Hashtbl.create 4 in
+      List.iter (function Handler (ev, f) -> ensure_handler handlers dom ev f | Attr _ -> ()) attrs;
+      let children = List.mapi (fun i ch ->
+        match B.child dom i with
+        | Some d -> hydrate d ch
+        | None -> let m = create ch in B.append dom (mnode m); m) (flatten children) in
+      MElem { tag; key; node = dom; attrs; children; handlers }
+
+  and unmount = function
+    | MComp mc -> List.iter (fun f -> f ()) !(mc.cleanups); dispose mc.meff; unmount mc.msub
+    | MElem e -> List.iter unmount e.children
+    | MText _ -> ()
+
+  and patch_attrs e new_attrs =
+    List.iter (function
+      | Attr ("value", v) -> if B.get_prop e.node "value" <> v then B.set_prop e.node "value" v
+      | Attr ("checked", v) -> B.set_prop e.node "checked" v
+      | Attr (k, v) -> if B.get_attr e.node k <> Some v then B.set_attr e.node k v
+      | Handler (ev, f) -> ensure_handler e.handlers e.node ev f) new_attrs;
+    List.iter (function
+      | Attr (k, _) when not (List.exists (function Attr (k2, _) -> k2 = k | _ -> false) new_attrs) -> B.remove_attr e.node k
+      | _ -> ()) e.attrs
+
+  and reconcile ~parent m vnode : mounted =
+    match m, vnode with
+    | MText t, Text s -> (if B.get_text t <> s then B.set_text t s); m
+    | MElem e, Elem { tag; attrs; children; _ } when e.tag = tag ->
+      patch_attrs e attrs; e.attrs <- attrs;
+      e.children <- reconcile_children ~parent:e.node e.children (flatten children); m
+    | MComp mc, Comp c when mc.mcid = c.cid && mc.mckey = c.ckey -> m
+    | _ -> unmount m; let m' = create vnode in B.replace parent (mnode m') (mnode m); m'
+
+  and reconcile_children ~parent olds news =
+    if List.exists has_key news then keyed ~parent olds news else positional ~parent olds news
+  and positional ~parent olds news = match olds, news with
+    | o :: os, n :: ns -> let m = reconcile ~parent o n in m :: positional ~parent os ns
+    | [], n :: ns -> let m = create n in B.append parent (mnode m); m :: positional ~parent [] ns
+    | o :: os, [] -> unmount o; B.remove parent (mnode o); positional ~parent os []
+    | [], [] -> []
+  and keyed ~parent olds news =
+    let map = Hashtbl.create 16 in
+    List.iter (fun m -> match key_of_m m with Some k -> Hashtbl.replace map k m | None -> ()) olds;
+    let used = Hashtbl.create 16 in
+    let result = List.map (fun vn -> match key_of_v vn with
+        | Some k when Hashtbl.mem map k -> Hashtbl.replace used k (); reconcile ~parent (Hashtbl.find map k) vn
+        | _ -> create vn) news in
+    List.iter (fun m -> B.append parent (mnode m)) result;
+    List.iter (fun m -> match key_of_m m with Some k when not (Hashtbl.mem used k) -> unmount m; B.remove parent (mnode m) | _ -> ()) olds;
+    result
+
+  (* hydrate or render under [container]: first run adopts the SSR root, later runs diff *)
+  let mount_root container (render : unit -> vnode) =
+    let mounted = ref None in
+    let eff = { run = (fun () ->
+        let vnode = render () in
+        match !mounted with
+        | None -> (match B.first_child container with
+            | Some first -> mounted := Some (hydrate first vnode)
+            | None -> let m = create vnode in B.append container (mnode m); mounted := Some m)
+        | Some m -> mounted := Some (reconcile ~parent:container m vnode));
+       deps = [] } in
+    run_effect eff;
+    mounted
+end

@@ -99,6 +99,59 @@ let () = print_endline "— router —";
   eq "typed path" (path t "/products/%d" 7) "/shop/products/7";
   eq "ext raw" (ext "/admin/%d" 3) "/admin/3"
 
+(* In-memory BACKEND: the same reconciler core (Iso.Reconcile) the browser runs,
+   driven against a pure tree so the keyed diff is unit-testable without jsdom. *)
+module Fake = struct
+  type node = { mutable text : string; mutable attrs : (string * string) list;
+                mutable kids : node list; mutable par : node option }
+  let mk () = { text = ""; attrs = []; kids = []; par = None }
+  let create_text s = let n = mk () in n.text <- s; n
+  let create_element _ = mk ()
+  let get_text n = n.text
+  let set_text n s = n.text <- s
+  let get_attr n k = List.assoc_opt k n.attrs
+  let set_attr n k v = n.attrs <- (k, v) :: List.remove_assoc k n.attrs
+  let remove_attr n k = n.attrs <- List.remove_assoc k n.attrs
+  let set_prop n k v = set_attr n k v
+  let get_prop n k = Option.value ~default:"" (get_attr n k)
+  let detach c = match c.par with Some p -> p.kids <- List.filter (fun x -> x != c) p.kids; c.par <- None | None -> ()
+  let append p c = detach c; p.kids <- p.kids @ [ c ]; c.par <- Some p
+  let remove _ c = detach c
+  let replace p nw od = detach nw;
+    p.kids <- List.concat_map (fun x -> if x == od then [ nw ] else [ x ]) p.kids;
+    nw.par <- Some p; od.par <- None
+  let parent n = n.par
+  let listen _ _ _ = ()
+  let child n i = List.nth_opt n.kids i
+  let first_child n = match n.kids with x :: _ -> Some x | [] -> None
+end
+
+let () = print_endline "— reconcile (fake backend) —";
+  let module D = Iso.Reconcile (Fake) in
+  let texts ul = String.concat "," (List.map (fun li -> match li.Fake.kids with t :: _ -> t.Fake.text | [] -> "") ul.Fake.kids) in
+  let model = Iso.signal [ 1; 2; 3 ] in
+  let render () = Iso.h "ul" [] (Iso.each (Iso.get model) (fun i -> Iso.h ~key:(string_of_int i) "li" [] [ Iso.text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  let ul () = List.hd root.Fake.kids in
+  eq "keyed initial" (texts (ul ())) "1,2,3";
+  Iso.set model [ 3; 1; 2 ]; eq "keyed reorder" (texts (ul ())) "3,1,2";
+  Iso.set model [ 3; 2 ];    eq "keyed remove" (texts (ul ())) "3,2";
+  Iso.set model [ 3; 2; 4 ]; eq "keyed add" (texts (ul ())) "3,2,4";
+  check "no orphans after diff" (List.length (ul ()).Fake.kids = 3);
+  (* text patch + attr patch on a kept element *)
+  let t = Iso.signal "a" in
+  let render2 () = Iso.h "p" [ Iso.attr "data-x" (Iso.get t) ] [ Iso.text (Iso.get t) ] in
+  let r2 = Fake.create_element "" in
+  let _ = D.mount_root r2 render2 in
+  let p () = List.hd r2.Fake.kids in
+  let ptext () = match (p ()).Fake.kids with x :: _ -> x.Fake.text | [] -> "" in
+  eq "text initial" (ptext ()) "a";
+  eq "attr initial" (Option.value ~default:"" (List.assoc_opt "data-x" (p ()).Fake.attrs)) "a";
+  Iso.set t "b";
+  eq "text patched in place" (ptext ()) "b";
+  eq "attr patched in place" (Option.value ~default:"" (List.assoc_opt "data-x" (p ()).Fake.attrs)) "b"
+
 let () =
   Printf.printf "\n%s — %d passed, %d failed\n" (if !failed = 0 then "PASS" else "FAIL") !passed !failed;
   exit (if !failed = 0 then 0 else 1)
