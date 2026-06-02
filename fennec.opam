@@ -24,6 +24,8 @@ depends: [
   "zlib"
   "bigstringaf"
   "ppxlib" {>= "0.28"}
+  "js_of_ocaml"
+  "js_of_ocaml-ppx"
   "odoc" {with-doc}
 ]
 build: [
