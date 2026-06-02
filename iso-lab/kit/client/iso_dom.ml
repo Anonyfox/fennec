@@ -88,7 +88,12 @@ and hydrate (dom : Dom.node Js.t) = function
     let handlers = Hashtbl.create 4 in
     List.iter (function Handler (ev,f) -> ensure_handler handlers node ev f | Attr _ -> ()) attrs;
     let dn = node##.childNodes in
-    let children = List.mapi (fun i ch -> hydrate (Js.Opt.get (dn##item i) (fun () -> failwith "hydrate")) ch) (Iso.flatten children) in
+    (* adopt the SSR'd child if present; on a SSR/CSR mismatch, recover by creating
+       it and appending (never crash the page over a desync) *)
+    let children = List.mapi (fun i ch ->
+      match Js.Opt.to_option (dn##item i) with
+      | Some d -> hydrate d ch
+      | None -> let m = create ch in Dom.appendChild node (mnode m); m) (Iso.flatten children) in
     MElem { tag; key; node; attrs; children; handlers }
 
 and unmount = function

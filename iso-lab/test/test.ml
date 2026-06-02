@@ -13,22 +13,25 @@ let () = print_endline "— signals —";
   let s = Iso.signal 0 in
   check "peek initial" (Iso.peek s = 0);
   let runs = ref 0 in
-  Iso.run_effect { Iso.run = (fun () -> incr runs; ignore (Iso.get s)); deps = [] };
+  let _ = Iso.watch (fun () -> incr runs; ignore (Iso.get s)) in
   check "effect runs once on create" (!runs = 1);
   Iso.set s 1;            check "effect re-runs on change" (!runs = 2);
   Iso.set s 1;            check "no re-run on equal set" (!runs = 2);
   Iso.update s (fun n -> n + 1); check "update notifies" (!runs = 3 && Iso.peek s = 2);
   let r2 = ref 0 in
-  let e = { Iso.run = (fun () -> incr r2; ignore (Iso.get s)); deps = [] } in
-  Iso.run_effect e; let before = !r2 in
-  Iso.dispose e; Iso.set s 99;
+  let stop = Iso.watch (fun () -> incr r2; ignore (Iso.get s)) in
+  let before = !r2 in
+  stop (); Iso.set s 99;
   check "disposed effect never re-runs" (!r2 = before);
   let a = Iso.signal 1 and b = Iso.signal 10 and pick = Iso.signal true in
   let last = ref 0 in
-  Iso.run_effect { Iso.run = (fun () -> last := if Iso.get pick then Iso.get a else Iso.get b); deps = [] };
+  let _ = Iso.watch (fun () -> last := if Iso.get pick then Iso.get a else Iso.get b) in
   check "dynamic deps: tracks a" (!last = 1);
   Iso.set pick false; check "switches to b" (!last = 10);
-  Iso.set a 5;         check "no longer tracks a after switch" (!last = 10)
+  Iso.set a 5;         check "no longer tracks a after switch" (!last = 10);
+  let no = Iso.signal 0 ~eq:(fun _ _ -> false) in
+  let c = ref 0 in let _ = Iso.watch (fun () -> incr c; ignore (Iso.get no)) in
+  Iso.set no 0; check "custom eq (always-notify) re-runs on equal set" (!c = 2)
 
 let () = print_endline "— matcher —";
   let open Iso.Matcher in

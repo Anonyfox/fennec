@@ -3,11 +3,14 @@
    module is GLOBAL. get subscribes, set/update notify. One primitive, scoped by
    where you define it. *)
 type reaction = { run : unit -> unit; mutable deps : psig list }
-and 'a signal = { mutable v : 'a; mutable subs : reaction list }
+and 'a signal = { mutable v : 'a; mutable subs : reaction list; eq : 'a -> 'a -> bool }
 and psig = P : 'a signal -> psig
 
 let current : reaction option ref = ref None
-let signal v = { v; subs = [] }
+(* [eq] decides whether a [set] is a real change (and thus notifies). Defaults to
+   structural equality; pass ~eq:(fun _ _ -> false) to always notify, or a custom
+   one for values structural-compare can't handle (e.g. closures). *)
+let signal ?(eq = ( = )) v = { v; subs = []; eq }
 let peek s = s.v
 let get s =
   (match !current with
@@ -19,7 +22,7 @@ let run_effect e =
   e.deps <- [];
   let prev = !current in current := Some e;
   Fun.protect ~finally:(fun () -> current := prev) e.run
-let set s v = if compare v s.v <> 0 then (s.v <- v; List.iter run_effect (List.rev s.subs))
+let set s v = if not (s.eq v s.v) then (s.v <- v; List.iter run_effect (List.rev s.subs))
 let update s f = set s (f (peek s))
 let dispose e =  (* unmount: unsubscribe from everything so it never re-runs *)
   List.iter (fun (P s) -> s.subs <- List.filter (fun e' -> e' != e) s.subs) e.deps;
@@ -58,6 +61,15 @@ let flush_mounts () =
    server (SSR never unmounts). *)
 let current_cleanups : (unit -> unit) list ref ref = ref (ref [])
 let on_cleanup f = let r = !current_cleanups in r := f :: !r
+
+(* reactive side-effect (à la Solid createEffect / MobX autorun): runs now, re-runs
+   when a signal it read changes, auto-disposed on the owning component's unmount.
+   Returns a stop handle. (Named [watch] because [effect] is an OCaml 5 keyword.) *)
+let watch f =
+  let e = { run = f; deps = [] } in
+  run_effect e;
+  on_cleanup (fun () -> dispose e);
+  fun () -> dispose e
 
 (* ---- ambient current event ----
    Handlers stay [unit -> unit]; these accessors read the event being dispatched.
@@ -108,18 +120,32 @@ let comp ~cid ?key setup = Comp { cid; ckey = key; setup }
 let on ev f = Handler (ev, f)
 let attr k v = Attr (k, v)
 let class_ v = Attr ("class", v)
+
+(* ---- THE sanctioned unsafe primitive ----
+   JSX child/key slots accept int | float | string | vnode in the same position —
+   ad-hoc polymorphism OCaml can't express in the type system. This is the ONE place
+   we use Obj, and it is TOTAL over that contract:
+     - is_int  -> a literal int     -> Text (string_of_int …)
+     - string  -> a string          -> Text …
+     - double  -> a float           -> Text (string_of_float …)
+     - else    -> ALREADY a vnode   -> returned as-is
+   The ppx only emits [node]/[skey] in child/key position and never wraps a value it
+   knows is already a vnode (an Html element, a component .make, or an Iso builder),
+   so the else branch is reached only for genuine vnodes. Any other type in a child
+   slot is a usage error. *)
 let node (x : 'a) : vnode =
   let r = Obj.repr x in
   if Obj.is_int r then Text (string_of_int (Obj.magic x))
   else if Obj.tag r = Obj.string_tag then Text (Obj.magic x)
   else if Obj.tag r = Obj.double_tag then Text (string_of_float (Obj.magic x))
   else (Obj.magic x : vnode)
-(* JS-like list rendering order: each items (fun x -> …)  ==  items.map(x => …) *)
-let each l f = List.map f l
-(* key coercion so key=t.id (int) works as well as key="x" (string) *)
+(* key coercion (same contract, int|string) so key=t.id works as well as key="x" *)
 let skey (x : 'a) : string =
   let r = Obj.repr x in
   if Obj.is_int r then string_of_int (Obj.magic x) else (Obj.magic x : string)
+
+(* JS-like list rendering order: each items (fun x -> …)  ==  items.map(x => …) *)
+let each l f = List.map f l
 let with_key k = function
   | Elem { tag; attrs; children; _ } -> Elem { tag; key = Some k; attrs; children }
   | Comp c -> Comp { c with ckey = Some k }
