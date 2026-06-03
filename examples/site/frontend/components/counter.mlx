@@ -1,9 +1,25 @@
-(* A shared interactive component, used by multiple apps. Isomorphic: server-
-   rendered then hydrated; the button is live after hydration. Its styles live
-   next to it in counter.scss, pulled in by each app's main.scss via @use. *)
+(* Shared interactive component (used by both apps). LOCAL state — `signal` created in
+   setup, so each mounted <Counter/> is independent; live after hydration.
 
-let[@react.component] make ~label () =
-  let count, set = React.useState (fun () -> 0) in
-  <button className="counter" onClick=(fun _ -> set (fun c -> c + 1))>
-    (React.string (label ^ ": " ^ string_of_int count))
-  </button>
+   Single-file component: styles are colocated right here in a [%%style] block. The Fur
+   ppx stamps every element in this file with a data-fur scope hash; style_extract pulls
+   this block out, scopes its selectors to that same hash, and the server inlines it —
+   no external .scss, no className collisions. Flat selectors only. Tokens come from the
+   global stylesheet as CSS custom properties (var(--brand)). *)
+[%%style {scss|
+.counter { display: inline-flex; gap: .5rem; align-items: center; font: inherit }
+.clabel { color: #555 }
+.cbtn { cursor: pointer; border: 1px solid var(--brand); background: #fff; color: var(--brand); border-radius: 6px; padding: .1rem .55rem; font: inherit; line-height: 1.4 }
+.cbtn:hover { background: var(--brand); color: #fff }
+.count { font-weight: 700; min-width: 2ch; text-align: center }
+|scss}]
+
+let make ?(label = "count") () =
+  let count = signal 0 in
+  fun () ->
+    <span className="counter">
+      <span className="clabel">(node (label ^ ":"))</span>
+      <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
+      <span className="count">(get count)</span>
+      <button className="cbtn inc" onClick=(count += 1)>"+"</button>
+    </span>

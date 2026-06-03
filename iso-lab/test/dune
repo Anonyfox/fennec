@@ -1,3 +1,0 @@
-; fast, deterministic unit tests that LOCK the runtime contract (no jsdom, no node).
-; These must stay green through the iso -> Fur refactor (virtual libs etc.).
-(test (name test) (libraries iso iso_platform_native) (flags (:standard -w -a)))

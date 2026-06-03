@@ -1,0 +1,7 @@
+; Global state store — shared signals (Store.todos, …). Plain .ml, no ppx. Wrapped
+; false so the module is just `Store`. Components depend on this lib.
+(library
+ (name site_store)
+ (wrapped false)
+ (libraries fennec.fur)
+ (flags (:standard -w -a -open Fur)))

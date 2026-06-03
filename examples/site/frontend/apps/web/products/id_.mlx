@@ -1,0 +1,9 @@
+(* dynamic segment: file `id_.mlx` -> route /products/:id, module Products.Id_.
+   `id` is AUTO-BOUND from the filename by the Fur ppx (typed string) — no boilerplate,
+   no `param_or "id"`. Just use `id`. *)
+let () = Head.title (Printf.sprintf "Product %s — Fennec Site" id)
+let view =
+  <main className="page" data_page="product">
+    <h1>"Product #"id</h1>
+    <a className="back" href="/products">"← all products"</a>
+  </main>

@@ -1,8 +1,0 @@
-; The pure <head> metadata core: tag model, merge/dedup (inside-out wins),
-; escaping, and HTML rendering. Pure Stdlib (no unix/eio), so it builds for BOTH
-; native (server SSR) and melange (client CSR) — the SAME merge runs on both
-; sides, guaranteeing the SSR head equals the CSR head.
-(library
- (name fennec_head)
- (public_name fennec.head)
- (modes byte native melange))

@@ -1,7 +1,0 @@
-(data_only_dirs apps)
-(library (name iso_app) (wrapped false) (libraries iso html components templates stores)
- (preprocess (pps iso_ppx)) (flags (:standard -w -a -open Iso)))
-(rule
- (deps (source_tree apps) %{project_root}/iso-lab/kit/tools/route_gen.exe)
- (target routes_gen.mlx)
- (action (run %{project_root}/iso-lab/kit/tools/route_gen.exe apps routes_gen.mlx)))

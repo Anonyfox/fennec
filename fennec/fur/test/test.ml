@@ -1,6 +1,7 @@
 (* Contract lock for the Fur runtime core. Pure algorithms only — signals, matcher,
-   head merge, SSR rendering, data resources, router. Reconcile/hydrate are covered by
-   the jsdom E2E until the backend-abstract refactor makes them unit-testable. *)
+   head merge, SSR rendering, data resources, router. Reconcile is unit-tested here
+   against a fake backend; full hydrate/interactivity is covered by the real-browser
+   e2e (examples/site/e2e — headless Chrome over CDP from Eio). *)
 let passed = ref 0 and failed = ref 0
 let check name cond =
   if cond then incr passed else (incr failed; Printf.printf "  \xe2\x9c\x97 %s\n" name)
@@ -100,7 +101,7 @@ let () = print_endline "— router —";
   eq "ext raw" (ext "/admin/%d" 3) "/admin/3"
 
 (* In-memory BACKEND: the same reconciler core (Fur.Reconcile) the browser runs,
-   driven against a pure tree so the keyed diff is unit-testable without jsdom. *)
+   driven against a pure tree so the keyed diff is unit-testable without a browser. *)
 module Fake = struct
   type node = { mutable text : string; mutable attrs : (string * string) list;
                 mutable kids : node list; mutable par : node option }

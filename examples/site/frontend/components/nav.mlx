@@ -1,11 +1,16 @@
-(* A shared nav bar. Plain <a> links; the client router intercepts same-origin
-   clicks for SPA navigation (full-page nav still works without JS). *)
+(* Shared nav bar. Plain <a> links; the client router intercepts in-scope same-origin
+   clicks for SPA navigation, and full-page nav still works without JS. Styles colocated
+   in the [%%style] block (single-file component). The caller passes typed paths (see the
+   web layout's use of `p`/`ext`). *)
+[%%style {scss|
+.nav { display: flex; gap: 1rem; border-bottom: 1px solid #eee; padding-bottom: .6rem; margin-bottom: 1rem }
+.nav-link { color: var(--brand); text-decoration: none }
+.nav-link:hover { text-decoration: underline }
+|scss}]
 
-let[@react.component] make ~links () =
-  <nav className="nav">
-    (React.array
-       (Array.of_list
-          (List.map
-             (fun (href, label) -> <a key=href href=href className="nav-link">(React.string label)</a>)
-             links)))
-  </nav>
+let make ~links () =
+  fun () ->
+    <nav className="nav">
+      (frag (each links (fun (href, label) ->
+        <a className="nav-link" key=href href=href>(node label)</a>)))
+    </nav>

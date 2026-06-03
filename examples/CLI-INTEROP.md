@@ -8,7 +8,7 @@ the rule wins — change the design, not the rule (or change this doc deliberate
 
 | Actor | Package / location | Owns |
 | --- | --- | --- |
-| **dune** | (the build tool) | The build graph. The **only** source-tree watcher. Builds everything — OCaml server, Melange client, and assets (CSS/JS) — because assets are dune rules that call the CLI. |
+| **dune** | (the build tool) | The build graph. The **only** source-tree watcher. Builds everything — the native OCaml server, the js_of_ocaml client bundle (Fennec.Fur), and assets (CSS/JS) — because assets are dune rules that call the CLI. |
 | **CLI** (`fennec`) | `cli/`, package `fennec-cli` | Operational lifecycle only: `fennec build` (one-shot asset build, invoked *by* dune rules) and `fennec dev` (orchestrates `dune build --watch` + supervises the server process). Distributed as a prebuilt binary. |
 | **Framework** (`fennec`) | `fennec/`, package `fennec` | The runtime: HTTP core, Eio server, and the livereload **relay** (holds the browser sockets; the CLI drives it). Watches nothing itself. Shipped to opam. |
 | **User app** | e.g. `examples/site/` | A **plain dune project**. Depends on the framework lib; uses dune rules that call the CLI for assets. Knows nothing about the CLI's existence at the code level. |
@@ -199,9 +199,8 @@ and pays it once, so felt latency ≈ (numbers below − the ~0.1 s floor).
 | (same, native `server.exe`, for contrast) | ~0.48 s | — |
 
 A page edit rebuilds SSR + CSR in parallel, so the felt loop is ~0.1 s — near
-instant, ~5–8× faster than a native-link dev loop. The remaining floor is the
-per-module compile (server-reason-react ppx on the SSR side, Melange on the CSR
-side), which is inherent to the toolchains, not our wiring.
+instant. The remaining floor is the per-file preprocessing (the mlx reader + the Fur
+ppx) plus the js_of_ocaml step, inherent to the toolchain, not our wiring.
 
 The `public/` tree is served verbatim at its paths (`public/img/logo.svg` →
 `/img/logo.svg`).
@@ -240,7 +239,7 @@ selected by Host pattern). See `examples/site/` for the full surface.
 - Universal router + `.App` paw: path → `.mlx` page map with an SSR layout
   (overridable for whitelabeling). ✓
 - Isomorphic SSR + hydration: one `.mlx` → server render + client hydrate +
-  interactivity (jsdom-tested). ✓
+  interactivity (proven end-to-end in a real headless Chrome via the Eio CDP e2e). ✓
 - Helmet-like `<Head>`: metadata set in the tree, child-wins, identical SSR + CSR,
   via a per-render context sink (no globals, works on any React/Preact). ✓
 - Static `public/`: dev-from-disk and prod-embedded, with MIME/ETag/304/Range. ✓
@@ -250,20 +249,20 @@ selected by Host pattern). See `examples/site/` for the full surface.
   livereload distinguishes CSS hot-swap from JS reload (proven via a WS client). ✓
 - Bytecode dev server (`server.bc`) / native release; near-instant dev loop
   (~0.1 s felt) — see "Dev-cycle speed" above. ✓
-- Cross-target Unicode is safe by construction: `fennec.unicode_ppx` makes a plain
-  non-ASCII string literal (which Melange would mojibake) a **compile error**,
-  directing the author to `{js|…|js}`. The footgun can't ship. ✓
+- Cross-target Unicode is safe by construction: native SSR and js_of_ocaml both emit
+  UTF-8 directly, so non-ASCII string literals just work — no delimiter dance, no ppx. ✓
 - Livereload end-to-end (the websocket is itself a paw) + `fennec dev`
   orchestration. ✓
-- Full framework unit suite (core + paw + ws/gzip/deflate + endpoint/static/head)
-  + the multi-app isomorphic integration test + colocated mlx component tests. ✓
+- Full framework unit suite (core + paw + ws/gzip/deflate + endpoint/static/head +
+  Fennec.Fur) + the curl SSR integration test + colocated mlx component tests. ✓
 
-The native SSR lib and the Melange CSR mirror are genuinely two compilations (each
-needs a different React lib + ppx; a single `(modes native melange)` lib can't —
-server-reason-react pulls a non-Melange dep, and the `[@react.component]` ppx
-differs per target). So the `copy_files` mirror under `frontend_build/` is
-structural, not incidental. Reset build state with `dune clean` (a full clean);
-manually deleting a `_build/` subtree desyncs dune's incremental DB.
+SSR and CSR are the SAME source now: each app is one real Dune library (`web_app`,
+`admin_app`) linked natively into the server (SSR via `Fur_ssr.handler`) and compiled
+to JS via `js_of_ocaml` for the client (the `client/` executables, `(modes js)`) — no
+React lib, no `[@react.component]` ppx, no Melange, so no `copy_files` mirror and no
+shared `/react.js` runtime. A per-app client bundle is just the jsoo output, served
+verbatim. Reset build state with `dune clean` (a full clean); manually deleting a
+`_build/` subtree desyncs dune's incremental DB.
 
 Not yet (future iterations): the DDP/reactive data layer (no mongo yet),
 diagnostics overlay (`dune rpc`).

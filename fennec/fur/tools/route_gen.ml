@@ -21,10 +21,18 @@ let starts p s = String.length s >= String.length p && String.sub s 0 (String.le
 let is_alnum c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 
 type seg = Catch of string | Param of string | Lit of string
+(* A route segment (file or folder name, minus extension) classifies to:
+     literal   "about"           -> /about
+     param     "id_"   (trailing _)  -> /:id        (valid OCaml module Id_, so LSP works)
+     catch-all "rest__" (trailing __) -> /*rest      (valid module Rest__)
+   The bracket forms ([id], [...rest]) are still accepted for back-compat (used by the
+   inlining mode), but the underscore forms are the real-module convention. *)
 let classify s =
   let n = String.length s in
   if n >= 5 && starts "[..." s && s.[n-1] = ']' then Catch (String.sub s 4 (n - 5))
   else if n >= 2 && s.[0] = '[' && s.[n-1] = ']' then Param (String.sub s 1 (n - 2))
+  else if n >= 3 && s.[n-1] = '_' && s.[n-2] = '_' then Catch (String.sub s 0 (n - 2))
+  else if n >= 2 && s.[n-1] = '_' then Param (String.sub s 0 (n - 1))
   else Lit s
 let clean s = match classify s with Catch n | Param n | Lit n -> n
 let mangle s = String.map (fun c -> if is_alnum c then c else '_') s
@@ -63,26 +71,95 @@ let gen_app dir name =
     pages;
   let not_found = match !catch with Some m -> Printf.sprintf " ~not_found:%s.make" m | None -> "" in
   let b = Buffer.create 4096 in
-  Buffer.add_string b (Printf.sprintf "module %s = struct\n" appmod);
+  (* The app is emitted as its OWN top-level module (file <app>_routes.mlx), NOT a
+     submodule of a shared file. That separation is what lets a per-app client bundle
+     link ONLY this app (jsoo/DCE never pulls a sibling app's code) — strictly isolated
+     bundles, dev and prod, with no per-app libraries. *)
+  ignore appmod;
   Buffer.add_string b (Printf.sprintf "%s\n" (read (Filename.concat dir "main.mlx")));   (* base, template *)
-  Buffer.add_string b (Printf.sprintf "  module Layout = struct\n%s\n  end\n" (read (Filename.concat dir "layout.mlx")));
-  Buffer.add_string b (Printf.sprintf "  module Paths = struct\n%s\n  end\n" (String.concat "\n" (List.rev !path_lines)));
+  Buffer.add_string b (Printf.sprintf "module Layout = struct\n%s\n  end\n" (read (Filename.concat dir "layout.mlx")));
+  Buffer.add_string b (Printf.sprintf "module Paths = struct\n%s\n  end\n" (String.concat "\n" (List.rev !path_lines)));
   Buffer.add_string b (String.concat "\n\n" (List.rev !page_mods));
-  Buffer.add_string b (Printf.sprintf "\n  let router =\n    Router.make ~base%s ()\n%s\nend\n"
+  Buffer.add_string b (Printf.sprintf "\nlet router =\n    Router.make ~base%s ()\n%s\n"
                          not_found (String.concat "\n" (List.rev !route_lines)));
-  (appmod, Buffer.contents b)
+  Buffer.add_string b "let mount : Fur.mount = { Fur.base; root = Layout.make; router; document = template }\n";
+  Buffer.contents b
+
+let app_dirs apps_dir =
+  Sys.readdir apps_dir |> Array.to_list |> List.sort compare
+  |> List.filter (fun n -> Sys.is_directory (Filename.concat apps_dir n))
+
+(* the top-level module name for an app's routes file: <app>_routes.mlx -> <App>_routes *)
+let route_mod n = String.capitalize_ascii (mangle n ^ "_routes")
+
+(* the wrapped per-app library's module name: app "web" -> lib web_app -> module Web_app *)
+let lib_mod n = String.capitalize_ascii (mangle n) ^ "_app"
+
+(* GLUE mode (real-module apps): the app's page/layout/main .mlx are REAL dune modules
+   in a per-app library with (include_subdirs qualified), so Merlin/LSP works and editing
+   a page recompiles only that module. route_gen emits only the wiring that REFERENCES
+   those modules — routes.ml (router + mount) and paths.ml (typed paths) — never inlining
+   source. Handles params (id_), catch-all (rest__) and nested folders (products/id_.mlx
+   -> module Products.Id_, route /products/:id). *)
+let emit_glue app_dir out_dir =
+  let pages = List.rev (walk app_dir [] []) in
+  let route_lines = ref [] and path_lines = ref [] and catch = ref None in
+  List.iter (fun (prefix, basename, _full) ->
+    (* qualified module reference: prefix folders + the file, each capitalized as dune
+       names them under (include_subdirs qualified): products/id_.mlx -> Products.Id_ *)
+    let modref = String.concat "." (List.map String.capitalize_ascii (prefix @ [ basename ])) in
+    let url_segs = prefix @ (if basename = "index" then [] else [ basename ]) in
+    let segs = List.map classify url_segs in
+    let pattern = "/" ^ String.concat "/" (List.map (function Lit s -> s | Param p -> ":" ^ p | Catch _ -> "*") segs) in
+    if List.exists (function Catch _ -> true | _ -> false) segs then catch := Some modref
+    else begin
+      route_lines := Printf.sprintf "  |> Router.page %S %s.make" pattern modref :: !route_lines;
+      let pname = (match List.filter_map (function Lit s -> Some (mangle s) | Param p -> Some (mangle p) | Catch _ -> None) segs with [] -> "root" | l -> String.concat "_" l) in
+      let params = List.filter_map (function Param p -> Some p | _ -> None) segs in
+      let fmt = "/" ^ String.concat "/" (List.map (function Lit s -> s | Param _ -> "%s" | Catch _ -> "%s") segs) in
+      let args_sig = if params = [] then "()" else String.concat " " (List.map (fun p -> "~" ^ p) params) in
+      let args_app = String.concat " " params in
+      path_lines := Printf.sprintf "let %s %s = Router.absolutize Main.base (Printf.sprintf %S %s)" pname args_sig fmt args_app :: !path_lines
+    end)
+    pages;
+  let not_found = match !catch with Some m -> Printf.sprintf " ~not_found:%s.make" m | None -> "" in
+  write (Filename.concat out_dir "routes.ml")
+    (Printf.sprintf
+       "(* GENERATED glue — do not edit. Wires the app's REAL page modules (Index, ...)\n   into a router + mount; the pages themselves are authored .mlx in this library. *)\nlet base = Main.base\nlet template = Main.template\nlet router =\n  Router.make ~base%s ()\n%s\nlet mount : Fur.mount = { Fur.base; root = Layout.make; router; document = template }\n"
+       not_found (String.concat "\n" (List.rev !route_lines)));
+  write (Filename.concat out_dir "paths.ml")
+    (Printf.sprintf "(* GENERATED typed paths — do not edit. *)\n%s\n" (String.concat "\n" (List.rev !path_lines)))
+
+(* routes mode: emit ONE FILE PER APP — <app>_routes.mlx — each its OWN top-level
+   module. The per-file separation (not shared submodules of one Routes_gen) is what
+   isolates per-app client bundles: a boot referencing only <App>_routes never links a
+   sibling app's code, in dev and prod alike. *)
+let emit_routes apps_dir out_dir =
+  let names = app_dirs apps_dir in
+  names |> List.iter (fun n ->
+    let body = gen_app (Filename.concat apps_dir n) n in
+    write (Filename.concat out_dir (mangle n ^ "_routes.mlx"))
+      (Printf.sprintf "(* GENERATED from frontend/apps/%s/ — do not edit. *)\n%s" n body));
+  (* routes_index: the combined mount list, for the server / a single all-apps bundle.
+     Per-app client bundles do NOT reference this (they boot <App>_routes directly), so
+     it never pulls a sibling app's code into an isolated bundle. *)
+  write (Filename.concat out_dir "routes_index.ml")
+    (Printf.sprintf "(* GENERATED — combined mount list. *)\nlet apps : Fur.mount list = [ %s ]\n"
+       (String.concat "; " (List.map (fun n -> route_mod n ^ ".mount") names)))
+
+(* boots mode: emit one client entry per app (<app>.ml) into out_dir, booting ONLY its
+   own app — by referencing its per-app library's Routes.mount. Generated, so there are
+   no hand-written entry files; each bundle links only its own app's lib. *)
+let emit_boots apps_dir out_dir =
+  app_dirs apps_dir |> List.iter (fun n ->
+    write (Filename.concat out_dir (mangle n ^ ".ml"))
+      (Printf.sprintf
+         "(* GENERATED client entry for app %S — do not edit. Boots only this app. *)\nlet () = Fur_csr.start [ %s.Routes.mount ]\n"
+         n (lib_mod n)))
 
 let () =
-  let apps_dir = Sys.argv.(1) and out = Sys.argv.(2) in
-  let app_names =
-    Sys.readdir apps_dir |> Array.to_list |> List.sort compare
-    |> List.filter (fun n -> Sys.is_directory (Filename.concat apps_dir n)) in
-  let mods = List.map (fun n -> gen_app (Filename.concat apps_dir n) n) app_names in
-  let buf = Buffer.create 8192 in
-  Buffer.add_string buf "(* GENERATED from frontend/apps/ — do not edit. *)\n\n";
-  List.iter (fun (_, src) -> Buffer.add_string buf src; Buffer.add_string buf "\n") mods;
-  let mounts = List.map (fun (m, _) ->
-    Printf.sprintf "  { Fur.base = %s.base; root = %s.Layout.make; router = %s.router; document = %s.template }"
-      m m m m) mods in
-  Buffer.add_string buf (Printf.sprintf "\nlet apps : Fur.mount list = [\n%s\n]\n" (String.concat ";\n" mounts));
-  write out (Buffer.contents buf)
+  match Array.to_list Sys.argv with
+  | _ :: "--glue" :: app_dir :: out_dir :: _ -> emit_glue app_dir out_dir
+  | _ :: "--boots" :: apps_dir :: out_dir :: _ -> emit_boots apps_dir out_dir
+  | _ :: apps_dir :: out_dir :: _ -> emit_routes apps_dir out_dir
+  | _ -> prerr_endline "usage: route_gen --glue <app_dir> <out_dir> | --boots <apps_dir> <out_dir> | <apps_dir> <out_dir>"; exit 2

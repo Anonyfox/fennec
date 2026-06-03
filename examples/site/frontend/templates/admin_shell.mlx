@@ -1,0 +1,18 @@
+(* Server-only document shell for the admin app — whitelabel: its own body class and
+   its own bundle, distinct from the web app's. (Named Admin_shell, not Admin, so it
+   doesn't collide with the generated [Admin] app module.) *)
+let make ctx =
+  <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      (Doc.head ctx)
+      <link rel="stylesheet" href="/_apps/admin/main.css" />
+      <style>(Doc.styles ctx)</style>
+    </head>
+    <body className="admin">
+      <div id="app">(Doc.outlet ctx)</div>
+      (Doc.data ctx)
+      <script src="/_apps/admin/main.js" defer=true></script>
+    </body>
+  </html>

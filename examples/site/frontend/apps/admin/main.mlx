@@ -1,7 +1,4 @@
-(* Admin app ENTRY — its own isomorphic main.mlx and its own bundle. *)
-
-module R = Fennec_router.Router
-
-let router = R.make () |> R.page "/" Dashboard.make
-
-let () = R.hydrate router
+(* the admin app — its own bundle, its own endpoint/domain, its own whitelabel shell,
+   reusing the shared Counter from ../../components *)
+let base = ""
+let template = Admin_shell.make

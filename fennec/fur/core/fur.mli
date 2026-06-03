@@ -140,8 +140,9 @@ module Doc : sig
   type ctx = { head : string; data : string; body : string; styles : string; client_js : string }
   val head : ctx -> vnode
   val styles : ctx -> vnode
+  val data : ctx -> vnode                                 (* fast-render seed <script> only *)
   val outlet : ctx -> vnode
-  val scripts : ctx -> vnode
+  val scripts : ctx -> vnode                              (* seed + client bundle, both inline *)
 end
 
 (* ---- a mounted app (the generator emits a mount list) ---- *)

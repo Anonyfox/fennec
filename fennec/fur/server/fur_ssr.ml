@@ -40,3 +40,58 @@ let render ~env ~(mounts : Fur.mount list) ~source ~request ~client_js ~styles (
     let body = passes 0 in
     let ctx = { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script (); body; styles; client_js } in
     Some (Fur.document (m.document ctx))
+
+(* Synchronous render — no Eio. This is the shape the framework's [Endpoint.app]
+   consumes directly (path -> html option). A pure render never yields, so the module
+   globals it touches (Router/Head/Data) cannot interleave between concurrent request
+   fibers — no per-request isolation needed.
+
+   [?source] turns on server-side data: an in-process (path -> string option) fetcher
+   run between render passes (synchronously — fine because the source is in-process; an
+   app needing real async I/O uses [render ~env] above). Each pass renders, collects the
+   data keys the tree asked for, fetches + seeds them, and re-renders until the tree
+   stops asking (or 16 passes). The seed is embedded for fast-render on the client.
+
+   [?styles] is inlined into the document <style> (the extracted, scoped [%%style] of the
+   app's components). Asset URLs (js/css <link>/<script>) stay the document template's
+   concern; ctx.client_js is left empty (external bundle, served by the framework). *)
+let handler ?(styles = "") ?source ~(mounts : Fur.mount list) (request : string) : string option =
+  match dispatch mounts request with
+  | None -> None
+  | Some m ->
+    Fur.Router.activate m.router;
+    Fur.Router.set_path m.router request;
+    Fur.Data.clear_seed ();
+    let render_root = m.root () in
+    (match source with
+     | None -> ()
+     | Some src ->
+       let pending : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+       let attempted : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+       Fur.Data.source :=
+         (fun key _ ->
+           if (not (Hashtbl.mem pending key)) && (not (Hashtbl.mem attempted key))
+              && not (Hashtbl.mem Fur.Data.seed key)
+           then Hashtbl.replace pending key ());
+       let rec passes n =
+         ignore (Fur.to_html (render_root ()));
+         if Hashtbl.length pending = 0 || n > 16 then ()
+         else begin
+           let batch = Hashtbl.fold (fun k () acc -> k :: acc) pending [] in
+           Hashtbl.clear pending;
+           List.iter
+             (fun key ->
+               Hashtbl.replace attempted key ();
+               match src key with Some v -> Fur.Data.put_seed key v | None -> ())
+             batch;
+           passes (n + 1)
+         end
+       in
+       passes 0;
+       Fur.Data.source := (fun _ _ -> ()));
+    let body = Fur.to_html (render_root ()) in
+    let ctx =
+      { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script ();
+        body; styles; client_js = "" }
+    in
+    Some (Fur.document (m.document ctx))

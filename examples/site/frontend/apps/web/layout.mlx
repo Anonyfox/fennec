@@ -1,0 +1,15 @@
+(* the web app's persistent shell: the shared nav + the routed outlet.
+   Links use TYPED paths: `p "/about"` is the in-app path (router-managed, base-aware,
+   intercepted for SPA nav), `ext "https://…"` is an outward raw URL (left to the
+   browser). Both are compile-checked format strings. *)
+let view =
+  <div id="app-root">
+    <Nav links=[
+      (p "/", "Home");
+      (p "/about", "About");
+      (p "/pricing", "Pricing");
+      (p "/products", "Products");
+      (ext "https://github.com/Anonyfox/fennec", "GitHub ↗");
+    ] />
+    (outlet ())
+  </div>

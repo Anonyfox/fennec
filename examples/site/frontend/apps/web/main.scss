@@ -1,0 +1,11 @@
+// The ONE external stylesheet for the web app: global/base rules + the design tokens,
+// exposed as CSS custom properties so single-file components can reference them
+// (var(--brand)) without importing scss. Component-specific styles live inline in each
+// .mlx ([%%style]) and are inlined by the server — they are NOT here.
+:root {
+  --brand: #e8590c;
+  --accent: #1971c2;
+}
+body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+h1 { color: var(--brand); }
+.page { display: block; }

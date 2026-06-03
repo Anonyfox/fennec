@@ -1,7 +1,0 @@
-let g = Data.string "/api/greeting" ~fallback:"…" ()
-let view =
-  <div className="greeting">
-    <p className="msg">(Data.value g)</p>
-    <span className="gstatus">(if Data.loading g then " (loading)" else " (ready)")</span>
-    <button id="refetch" onClick=(Data.refetch g)>"refetch"</button>
-  </div>

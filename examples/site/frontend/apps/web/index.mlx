@@ -1,0 +1,17 @@
+(* Web home (/). Sets its own metadata via Head (deepest wins, SSR + CSR alike) and
+   reuses shared components — the isomorphic feature tour: <Counter/> local state,
+   <Greeting/> isomorphic data + fast-render, <Browser_box/> client-only data + on_mount,
+   <Visits/> localStorage. Non-ASCII literals are plain — js_of_ocaml and the native SSR
+   both emit UTF-8 directly (no Melange {js|…|js} delimiter needed). *)
+let () = Head.title "Home — Fennec Site"
+let () = Head.description "The marketing home page, server-rendered then hydrated."
+let () = Head.og "og:title" "Fennec Site"
+let view =
+  <main className="page">
+    <h1>"Welcome to the Fennec site 🦊"</h1>
+    <p>"One component tree, server-rendered then hydrated."</p>
+    <Counter label="clicks" />
+    <Greeting />
+    <Browser_box />
+    <Visits />
+  </main>

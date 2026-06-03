@@ -1,0 +1,7 @@
+let () = Head.title "About — Fennec Site"
+let () = Head.description "What the Fennec site is."
+let view =
+  <main className="page">
+    <h1>"About"</h1>
+    <p>"Server-rendered, then hydrated — the same components run in both places."</p>
+  </main>

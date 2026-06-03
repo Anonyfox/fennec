@@ -137,6 +137,43 @@ let desugar_blocks str =
        | _ -> item)
     | _ -> item) str
 
+(* Auto-bind route params from the FILENAME. A file whose path has segments marked
+   `name_` (param) or `name__` (catch-all) — e.g. products/id_.mlx — gets a typed
+   `let <name> = Fur.param_or "<key>" ""` injected, folded by componentize into the
+   per-instance setup (so it reads the live route param each render). The binding is a
+   plain `string`; carry a warning-suppression attr so an unused param never errors.
+   Only injected when the file will be componentized (has `view`, no explicit `make`)
+   so the binding always lands in setup, never at module-init. *)
+let route_params fname =
+  String.split_on_char '/' (try Filename.chop_extension fname with _ -> fname)
+  |> List.filter_map (fun c ->
+       let n = String.length c in
+       if n >= 3 && c.[n-1] = '_' && c.[n-2] = '_' then Some (String.sub c 0 (n-2), "*")
+       else if n >= 2 && c.[n-1] = '_' && c.[n-2] <> '_' then Some (String.sub c 0 (n-1), String.sub c 0 (n-1))
+       else None)
+let input_fname str =
+  List.fold_left (fun acc item ->
+    match acc with Some _ -> acc | None ->
+      let p = item.pstr_loc.loc_start.Lexing.pos_fname in
+      if p = "" || p = "_none_" then None else Some p) None str
+  |> Option.value ~default:""
+let inject_params str =
+  let open Ast_builder.Default in
+  if (not (List.exists (item_defines "view") str)) || List.exists (item_defines "make") str then str
+  else
+    match route_params (input_fname str) with
+    | [] -> str
+    | params ->
+      let loc = Location.none in
+      let no_unused = attribute ~loc ~name:{ txt = "warning"; loc }
+                        ~payload:(PStr [ pstr_eval ~loc (estring ~loc "-26-27") [] ]) in
+      let bindings = List.map (fun (name, key) ->
+        let vb = { (value_binding ~loc ~pat:(ppat_var ~loc { txt = name; loc })
+                      ~expr:[%expr Fur.param_or [%e estring ~loc key] ""])
+                   with pvb_attributes = [ no_unused ] } in
+        pstr_value ~loc Nonrecursive [ vb ]) params in
+      bindings @ str
+
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
       PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (css,_,_)); _ }, _); _ } ]), _) ->
@@ -146,5 +183,5 @@ let impl str =
   module_scope := None; scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
-  componentize (mapper#structure (desugar_blocks str))
+  componentize (inject_params (mapper#structure (desugar_blocks str)))
 let () = Driver.register_transformation "iso_jsx" ~impl

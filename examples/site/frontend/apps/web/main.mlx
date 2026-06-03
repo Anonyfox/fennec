@@ -1,0 +1,3 @@
+(* lean per-app config: where it mounts (the domain root) + which document shell *)
+let base = ""
+let template = Default.make

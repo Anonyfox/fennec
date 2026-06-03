@@ -1,0 +1,15 @@
+; Inlined component styles. style_extract scans the components' [%%style] blocks and
+; emits ONE module (Site_styles.css : string) — every block scoped to the same data-fur
+; hash the ppx stamps on that component's elements. The server inlines this into the
+; document <style>. Regenerates whenever a component's styles change.
+(library
+ (name site_styles)
+ (modules site_styles))
+(rule
+ (target site_styles.ml)
+ (deps
+  (glob_files_rec %{project_root}/examples/site/frontend/components/*.mlx)
+  %{project_root}/fennec/fur/tools/style_extract.exe)
+ (action
+  (run %{project_root}/fennec/fur/tools/style_extract.exe site_styles.ml
+   %{project_root}/examples/site/frontend/components)))

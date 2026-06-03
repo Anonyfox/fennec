@@ -3,8 +3,7 @@ opam-version: "2.0"
 synopsis: "Fennec example applications (not published)"
 description: """
 The userland examples that exercise the fennec framework end to end — the
-living DX benchmark. Not published to opam; depends on the Melange toolchain the
-examples need (the framework itself does not)."""
+living DX benchmark. Not published to opam."""
 maintainer: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 authors: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 license: "MIT"
@@ -16,9 +15,8 @@ depends: [
   "fennec"
   "fennec-cli"
   "mlx" {>= "0.11"}
-  "melange" {>= "3.0.0"}
-  "reason-react" {>= "0.14.0"}
-  "server-reason-react"
+  "yojson"
+  "base64"
   "odoc" {with-doc}
 ]
 build: [

@@ -1,7 +1,10 @@
-// Admin app stylesheet entry — its own bundle (whitelabel), reusing the shared
-// Counter style by the same @use mechanism, with an admin accent.
-@use "../../components/theme";
-@use "../../components/counter";
+// The ONE external stylesheet for the admin app — whitelabel. By pointing --brand at
+// the admin accent, the SHARED single-file components (which use var(--brand)) recolor
+// themselves for this app automatically — no per-app component variants needed.
+:root {
+  --brand: #1971c2;
+  --accent: #1971c2;
+}
 body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-body.admin { border-top: 4px solid theme.$accent; }
-h1 { color: theme.$accent; }
+body.admin { border-top: 4px solid var(--accent); }
+h1 { color: var(--accent); }

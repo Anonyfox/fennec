@@ -1,0 +1,8 @@
+let () = Head.title "Dashboard — Admin"
+let () = Head.description "Internal admin dashboard."
+let view =
+  <main className="page admin">
+    <h1>"Admin Dashboard"</h1>
+    <p>"A different app on a different endpoint, sharing components."</p>
+    <Counter label="admin actions" />
+  </main>

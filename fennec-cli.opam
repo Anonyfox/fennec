@@ -11,7 +11,7 @@ file extension."""
 maintainer: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 authors: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 license: "MIT"
-tags: ["build" "javascript" "css" "esbuild" "bundler" "cli" "melange"]
+tags: ["build" "javascript" "css" "esbuild" "bundler" "cli"]
 homepage: "https://github.com/Anonyfox/fennec"
 bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [

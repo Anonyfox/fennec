@@ -1,1 +1,0 @@
-let view = <div className="stats">"todos in store: "(List.length (get Store.todos))</div>

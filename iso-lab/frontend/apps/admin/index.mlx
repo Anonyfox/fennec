@@ -1,7 +1,0 @@
-let () = Head.title "Admin · dashboard"
-let view =
-  <main className="page" data_page="admin-home">
-    <h1>"Admin dashboard"</h1>
-    <p className="note">"shares the Counter component with the shop app:"</p>
-    <Counter />
-  </main>

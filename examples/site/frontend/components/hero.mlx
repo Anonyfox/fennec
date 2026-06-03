@@ -1,10 +1,16 @@
-(* A marketing hero section — shared component with colocated styles (hero.scss).
-   Reused by marketing pages; isomorphic like everything else. *)
+(* Marketing hero section — shared single-file component (styles colocated below). *)
+[%%style {scss|
+.hero { text-align: center; padding: 3rem 0 }
+.hero-title { color: var(--brand); font-size: 2.4rem; margin: 0 }
+.hero-subtitle { color: #555; margin: .5rem 0 0 }
+.hero-cta { display: inline-block; margin-top: 1rem; padding: .6rem 1.2rem; background: var(--brand); color: #fff; border-radius: 6px; text-decoration: none }
+.hero-cta:hover { opacity: .9 }
+|scss}]
 
-let[@react.component] make ~title ~subtitle () =
-  <section className="hero">
-    <h1 className="hero-title">(React.string title)</h1>
-    <p className="hero-subtitle">(React.string subtitle)</p>
-    <a className="hero-cta" href="/about">(React.string "Learn more")</a>
-  </section>
-
+let make ~title ~subtitle () =
+  fun () ->
+    <section className="hero">
+      <h1 className="hero-title">(node title)</h1>
+      <p className="hero-subtitle">(node subtitle)</p>
+      <a className="hero-cta" href="/about">"Learn more"</a>
+    </section>

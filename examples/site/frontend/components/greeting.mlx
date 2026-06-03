@@ -1,0 +1,20 @@
+(* ISOMORPHIC DATA — the same fetch on server and client. `Data.string key` declares a
+   dependency on a data key. On the server the SSR driver runs the in-process source for
+   that key BETWEEN render passes and embeds the result as a fast-render seed; the client
+   reads the seed on boot (no loading flash, no refetch on first paint). `refetch` then
+   hits the real HTTP endpoint of the same name. Server source + HTTP route both live in
+   server.ml so SSR and client agree on the value. *)
+[%%style {scss|
+.greeting { margin: 1rem 0; padding: .6rem .9rem; border: 1px solid #eee; border-radius: 6px }
+.msg { margin: 0; display: inline }
+.gstatus { color: #888; font-size: .85em }
+.grefetch { margin-left: .6rem; cursor: pointer }
+|scss}]
+
+let g = Data.string "/api/greeting" ~fallback:"…" ()
+let view =
+  <div className="greeting">
+    <p className="msg">(Data.value g)</p>
+    <span className="gstatus">(if Data.loading g then " (loading)" else " (ready)")</span>
+    <button className="grefetch" id="refetch" onClick=(Data.refetch g)>"refetch"</button>
+  </div>

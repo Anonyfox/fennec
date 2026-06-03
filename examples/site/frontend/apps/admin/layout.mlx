@@ -1,0 +1,5 @@
+(* the admin shell: just the routed outlet (no shared nav — a distinct app) *)
+let view =
+  <div id="app-root">
+    (outlet ())
+  </div>

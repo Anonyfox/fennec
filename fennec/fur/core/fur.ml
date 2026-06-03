@@ -513,6 +513,7 @@ module Doc = struct
   type ctx = { head : string; data : string; body : string; styles : string; client_js : string }
   let head c = raw c.head                                   (* resolved <head> metadata *)
   let styles c = raw c.styles                               (* collected CSS *)
+  let data c = raw (Printf.sprintf "<script>%s</script>" c.data)  (* fast-render seed only *)
   let outlet c = raw c.body                                 (* the SSR'd app body *)
   let scripts c = raw (Printf.sprintf "<script>%s</script><script>%s</script>" c.data c.client_js)
 end

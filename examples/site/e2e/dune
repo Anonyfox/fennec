@@ -1,0 +1,8 @@
+; Real-browser e2e for the site example — pure OCaml/Eio, no npm. Drives a headless
+; Chrome over the DevTools Protocol (cdp.ml = a hand-written WebSocket+CDP client on
+; Eio). NOT part of `dune test` (it needs a system Chrome); run via ./run.sh.
+(executable
+ (name e2e)
+ (modules e2e cdp)
+ (libraries eio eio_main eio.unix yojson base64)
+ (flags (:standard -w +a-26-27-32-33-37-69-70)))

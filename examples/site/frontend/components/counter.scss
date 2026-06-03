@@ -1,6 +1,0 @@
-@use "theme";
-.counter {
-  font: inherit; padding: .4rem .9rem; border: 1px solid theme.$brand;
-  background: #fff; color: theme.$brand; border-radius: 6px; cursor: pointer;
-  &:hover { background: theme.$brand; color: #fff; }
-}

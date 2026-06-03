@@ -1,22 +1,21 @@
-(* The web app's SSR document shell — a REAL .mlx component (not a string). Used
-   only during SSR (never melange'd), but written in the same familiar shape.
-   The router renders it with:
-     ~head    the page's collected <Head> tags, as elements to splice into <head>
-     ~body    the server-rendered app HTML, injected raw into #root for hydration
-     ~runtime ~js ~css   the app's predictable asset URLs
-   server-reason-react emits the <!DOCTYPE> itself when rendering <html>. *)
-
-let[@react.component] make ~head ~body ~runtime ~js ~css () =
+(* Server-only document shell for the web app. References the app's external GLOBAL
+   stylesheet + bundle (served at /_apps/web/main.{css,js}), while the SSR driver fills
+   the framework slots: (Doc.head) resolved head metadata, (Doc.styles) the inlined,
+   scoped component [%%style], (Doc.outlet) the body to hydrate, (Doc.data) the
+   fast-render seed. So: one external sheet for global/base + tokens, component styles
+   inlined alongside the markup they belong to. *)
+let make ctx =
   <html lang="en">
     <head>
-      <meta charSet="utf-8" />
+      <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      (head)
-      <link rel="stylesheet" href=css />
+      (Doc.head ctx)
+      <link rel="stylesheet" href="/_apps/web/main.css" />
+      <style>(Doc.styles ctx)</style>
     </head>
     <body className="web">
-      <div id="root" dangerouslySetInnerHTML=(object method __html = body end) />
-      <script src=runtime defer=true></script>
-      <script src=js defer=true></script>
+      <div id="app">(Doc.outlet ctx)</div>
+      (Doc.data ctx)
+      <script src="/_apps/web/main.js" defer=true></script>
     </body>
   </html>

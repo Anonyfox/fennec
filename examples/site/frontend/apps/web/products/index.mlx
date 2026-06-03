@@ -1,0 +1,14 @@
+(* /products. Links use the GENERATED typed path builder Paths.products_id ~id — a
+   compile error if the route or its param changes. Also hosts the global-store demo:
+   <Todo_list/> mutates Store.todos, <Stats/> reads it — kept in sync reactively. *)
+let () = Head.title "Products — Fennec Site"
+let view =
+  <main className="page">
+    <h1>"Products"</h1>
+    <ul className="plinks">
+      <li><a className="p7" href=(Paths.products_id ~id:"7")>"Product 7"</a></li>
+      <li><a className="p9" href=(Paths.products_id ~id:"9")>"Product 9"</a></li>
+    </ul>
+    <Stats />
+    <Todo_list />
+  </main>

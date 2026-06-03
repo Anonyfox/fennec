@@ -1,2 +1,0 @@
-(library (name iso_platform) (wrapped false) (virtual_modules platform)
- (default_implementation iso_platform_native) (modes byte native) (flags (:standard -w -a)))

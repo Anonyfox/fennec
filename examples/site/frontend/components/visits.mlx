@@ -1,0 +1,19 @@
+(* localStorage via the SSR-safe Browser facade. The server renders 0 (no DOM, the
+   facade is a no-op there); on the client, on_mount reads the stored count, increments,
+   persists, and updates the signal — so the number climbs on every reload. *)
+[%%style {scss|
+.visits { margin: 1rem 0; color: #555 }
+|scss}]
+
+let n = signal 0
+let () =
+  on_mount (fun () ->
+      let prev =
+        match Browser.local_get "visits" with
+        | Some s -> ( try int_of_string s with _ -> 0 )
+        | None -> 0
+      in
+      let next = prev + 1 in
+      Browser.local_set "visits" (string_of_int next);
+      set n next)
+let view = <p className="visits">"visits (localStorage): "(get n)</p>

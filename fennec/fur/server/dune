@@ -1,3 +1,3 @@
 ; Server runtime (Eio): the two-pass SSR render driver + mount dispatch.
-(library (name fennec_fur_server) (public_name fennec.fur.server)
+(library (name fennec_fur_server) (public_name fennec.fur.server) (wrapped false)
  (libraries fennec.fur eio) (modes byte native) (flags (:standard -w -a)))

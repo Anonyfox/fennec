@@ -1,0 +1,7 @@
+let () = Head.title "Pricing — Fennec Site"
+let () = Head.description "Pricing for the Fennec site."
+let view =
+  <main className="page">
+    <Hero title="Pricing" subtitle="Free while in beta." />
+    <Counter label="seats" />
+  </main>

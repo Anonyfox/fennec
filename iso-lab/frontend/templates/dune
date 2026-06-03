@@ -1,2 +1,0 @@
-(library (name templates) (wrapped false) (libraries iso html) (preprocess (pps iso_ppx))
- (flags (:standard -w -a -open Iso)))

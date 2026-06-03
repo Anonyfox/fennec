@@ -5,10 +5,11 @@ An isomorphic OCaml UI runtime: the **same** `.mlx` components render on the ser
 Signals for reactivity, file-tree routing with typed paths, fast-render data, scoped
 styles — no React, no Melange, no hand-written JavaScript.
 
-> Status: this submodule is complete, tested, and documented, but **not yet wired
-> into any downstream fennec app**. It is exercised end-to-end by the `iso-lab/`
-> experiment (the playground it grew from); these libraries are the cleaned, named,
-> public-quality home for that runtime.
+> Status: this submodule is complete, tested, documented, and **the framework's only
+> frontend story** — the React/Melange isomorphic stack it replaced has been removed.
+> It is wired end-to-end into `examples/site` (the multi-app SSR + hydration example),
+> whose `e2e/` drives a real headless Chrome over the DevTools Protocol — a hand-written
+> WebSocket+CDP client on Eio, no npm, no Lwt, no chromedriver.
 
 ## Libraries
 
@@ -81,5 +82,9 @@ let view =
 ```sh
 dune exec fennec/fur/test/test.exe   # 63 checks: signals, matcher, head merge, SSR,
                                      # data, router, keyed reconcile (fake backend),
-                                     # and a ppx-compiled component — no jsdom/node.
+                                     # and a ppx-compiled component — pure, no browser.
 ```
+
+Real-browser behaviour (hydration, events, data fetch/refetch, localStorage, SPA nav,
+bundle isolation) is covered end-to-end by `examples/site/e2e` — a headless Chrome driven
+over the DevTools Protocol from Eio (`sh examples/site/e2e/run.sh`).

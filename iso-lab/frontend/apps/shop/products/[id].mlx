@@ -1,7 +1,0 @@
-let id = param_or "id" "?"
-let () = Head.title (Printf.sprintf "Product %s · shop" id)
-let view =
-  <main className="page" data_page="product">
-    <h1>"Product #"id</h1>
-    <a className="back" href=(Paths.products ())>"← all products"</a>
-  </main>

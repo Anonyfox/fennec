@@ -1,2 +1,0 @@
-let base = "/admin"
-let template = Default.make

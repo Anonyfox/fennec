@@ -1,0 +1,7 @@
+(* Reads the SAME global Store as Todo_list — adding/removing a todo there updates this
+   count reactively, demonstrating shared state across independent components. *)
+[%%style {scss|
+.stats { margin: .6rem 0; color: #555; font-size: .9em }
+|scss}]
+
+let view = <div className="stats">"todos in store: "(List.length (get Store.todos))</div>

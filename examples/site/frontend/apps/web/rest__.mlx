@@ -1,0 +1,10 @@
+(* Catch-all. File `rest__.mlx` (trailing __) becomes the router's not_found page; the
+   unmatched path is auto-bound from the filename as `rest` (the "*" param), typed string,
+   no boilerplate. Renders for any URL no other route claims. *)
+let () = Head.title "Not found — Fennec Site"
+let view =
+  <main className="page" data_page="notfound">
+    <h1>"Not found"</h1>
+    <p className="missing">"no route: "rest</p>
+    <a className="back" href="/">"← home"</a>
+  </main>

@@ -1,1 +1,0 @@
-(library (name iso_platform_native) (implements iso_platform) (modes byte native) (flags (:standard -w -a)))

@@ -1,0 +1,11 @@
+; The ADMIN app as its own real Dune library (mirrors apps/web). Separate lib => its
+; client bundle never links the web app's code.
+(library
+ (name admin_app)
+ (libraries fennec.fur fennec.fur.html site_components site_templates)
+ (preprocess (pps fennec.fur.ppx))
+ (flags (:standard -w -a -open Fur)))
+(rule
+ (deps (glob_files *.mlx) %{project_root}/fennec/fur/tools/route_gen.exe)
+ (targets routes.ml paths.ml)
+ (action (run %{project_root}/fennec/fur/tools/route_gen.exe --glue . .)))
