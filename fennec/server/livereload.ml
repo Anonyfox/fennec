@@ -67,5 +67,14 @@ let paw (t : t) : Fennec_paw.Paw.t =
   else
     Fennec_paw.Conn.before_send c (fun r ->
         if is_html_response r then
-          { r with Fennec_core.Http.body = Fennec_core.Dev.inject_html r.Fennec_core.Http.body }
+          (* inject the client script AND force the dev page to revalidate (no-cache): a reload
+             after a restart must fetch the fresh SSR, not a heuristically-cached old page. The
+             strong ETag downstream keeps this cheap (304 when unchanged). *)
+          let headers =
+            ("cache-control", "no-cache")
+            :: List.filter
+                 (fun (k, _) -> String.lowercase_ascii k <> "cache-control")
+                 r.Fennec_core.Http.headers
+          in
+          { r with Fennec_core.Http.body = Fennec_core.Dev.inject_html r.Fennec_core.Http.body; headers }
         else r)

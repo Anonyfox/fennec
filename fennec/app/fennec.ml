@@ -59,8 +59,14 @@ let web_source ~name ~assets : Fennec_server.Static.source =
   if is_dev then Fennec_server.Static.Dir (Filename.concat (Filename.dirname Sys.executable_name) name)
   else Fennec_server.Static.Embedded (name, assets)
 
-(* the static-serving paw for an app's web root *)
-let static ~name ~assets : Paw.t = Fennec_server.Static.make (web_source ~name ~assets)
+(* the static-serving paw for an app's web root. In DEV every asset is served [no-cache]
+   (the browser still caches, but always revalidates via the strong ETag, so a 304 when
+   unchanged is ~free) — otherwise a reloaded page would hydrate with a STALE cached bundle and
+   an edit would never show. In PROD the source is embedded and immutable, so Static's
+   content-aware default applies (HTML revalidates, other assets get a max-age). *)
+let static ~name ~assets : Paw.t =
+  let cache_control = if is_dev then Some "no-cache" else None in
+  Fennec_server.Static.make ?cache_control (web_source ~name ~assets)
 
 (* The dev control socket. The CLI owns ALL filesystem watching (it's the one
    process that links the native fs-event watcher); the framework watches nothing.
