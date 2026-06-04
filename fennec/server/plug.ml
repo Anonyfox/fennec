@@ -6,7 +6,6 @@
 
 module Conn = Fennec_paw.Conn
 module Paw = Fennec_paw.Paw
-module Route = Fennec_paw.Route
 module Assigns = Fennec_paw.Assigns
 module H = Fennec_core.Http
 
@@ -20,7 +19,7 @@ let constant_eq (a : string) (b : string) : bool =
 
 (* Serve static files from a web root (disk in dev, embedded map in prod). Answers
    when the path matches an asset, else declines. *)
-let static (src : Static.source) : Paw.t = Route.fallthrough (Static.handler src)
+let static (src : Static.source) : Paw.t = Paw.fallthrough (Static.handler src)
 
 (* Add common security headers to every response via a before_send hook. Declines
    (passes through) — it only registers the hook. *)

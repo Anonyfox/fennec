@@ -9,7 +9,6 @@
 
 module Paw = Fennec_paw.Paw
 module Conn = Fennec_paw.Conn
-module Route = Fennec_paw.Route
 module H = Fennec_core.Http
 
 type t = {
@@ -36,11 +35,11 @@ let plug (p : Paw.t) (t : t) : t = add p t
 let prepend (p : Paw.t) (t : t) : t = { t with paws = p :: t.paws }
 
 (* route verbs — each is a paw *)
-let get path h t = add (Route.get path h) t
-let post path h t = add (Route.post path h) t
-let put path h t = add (Route.put path h) t
-let delete path h t = add (Route.delete path h) t
-let patch path h t = add (Route.patch path h) t
+let get path h t = add (Paw.get path h) t
+let post path h t = add (Paw.post path h) t
+let put path h t = add (Paw.put path h) t
+let delete path h t = add (Paw.delete path h) t
+let patch path h t = add (Paw.patch path h) t
 
 (* Mount an SSR app: a [render : path -> string option] (the universal router's
    render) becomes a paw answering with an HTML document when it matches, else

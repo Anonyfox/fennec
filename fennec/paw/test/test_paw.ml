@@ -4,7 +4,6 @@
 module H = Fennec_core.Http
 module Conn = Fennec_paw.Conn
 module Paw = Fennec_paw.Paw
-module Route = Fennec_paw.Route
 module Assigns = Fennec_paw.Assigns
 
 let fails = ref 0
@@ -189,12 +188,12 @@ let () =
   eq "all-decline 404" (Paw.run (Paw.seq [ tap "x"; tap "y" ]) (req "/")).H.status 404
 
 let () =
-  print_endline "Route matching:";
+  print_endline "Paw routes (matching):";
   let app =
     Paw.seq
-      [ Route.get "/api/ping" (fun c -> Conn.json c {|{"pong":true}|});
-        Route.post "/api/ping" (fun c -> Conn.text c "posted");
-        Route.get "/" (fun c -> Conn.html c "<h1>home</h1>") ]
+      [ Paw.get "/api/ping" (fun c -> Conn.json c {|{"pong":true}|});
+        Paw.post "/api/ping" (fun c -> Conn.text c "posted");
+        Paw.get "/" (fun c -> Conn.html c "<h1>home</h1>") ]
   in
   eq "GET route" (Paw.run app (req "/api/ping")).H.body {|{"pong":true}|};
   eq "POST route (same path, diff method)" (Paw.run app (req ~meth:H.POST "/api/ping")).H.body "posted";
@@ -202,17 +201,17 @@ let () =
   eq "no match -> 404" (Paw.run app (req "/nope")).H.status 404;
   eq "wrong method -> 404" (Paw.run app (req ~meth:H.DELETE "/api/ping")).H.status 404;
   (* fallthrough answers only on Some *)
-  let ft = Route.fallthrough (fun r -> if r.H.path = "/f" then Some (H.text "F") else None) in
+  let ft = Paw.fallthrough (fun r -> if r.H.path = "/f" then Some (H.text "F") else None) in
   eq "fallthrough hit" (Paw.run (Paw.seq [ ft ]) (req "/f")).H.body "F";
   eq "fallthrough miss -> 404" (Paw.run (Paw.seq [ ft ]) (req "/g")).H.status 404
 
 let () =
-  print_endline "Route path params:";
+  print_endline "Paw routes (path params):";
   let app =
     Paw.seq
-      [ Route.get "/users/:id" (fun c -> Conn.text c (Option.value (Conn.path_param c "id") ~default:"?"));
-        Route.get "/files/*rest" (fun c -> Conn.text c (Option.value (Conn.path_param c "rest") ~default:"?"));
-        Route.get "/a/:x/b/:y" (fun c ->
+      [ Paw.get "/users/:id" (fun c -> Conn.text c (Option.value (Conn.path_param c "id") ~default:"?"));
+        Paw.get "/files/*rest" (fun c -> Conn.text c (Option.value (Conn.path_param c "rest") ~default:"?"));
+        Paw.get "/a/:x/b/:y" (fun c ->
             Conn.text c (Option.value (Conn.param c "x") ~default:"?" ^ "-"
                         ^ Option.value (Conn.param c "y") ~default:"?")) ]
   in
@@ -222,7 +221,7 @@ let () =
   eq "param count mismatch -> 404" (Paw.run app (req "/users/42/extra")).H.status 404;
   eq "no match -> 404" (Paw.run app (req "/nope")).H.status 404;
   (* path param takes precedence over a query param of the same name in [param] *)
-  let one = Paw.seq [ Route.get "/p/:id" (fun c -> Conn.text c (Option.value (Conn.param c "id") ~default:"?")) ] in
+  let one = Paw.seq [ Paw.get "/p/:id" (fun c -> Conn.text c (Option.value (Conn.param c "id") ~default:"?")) ] in
   eq "path param beats query in param"
     (Paw.run one (H.make_request ~meth:H.GET ~path:"/p/path" ~query_string:"id=query" ())).H.body "path"
 
