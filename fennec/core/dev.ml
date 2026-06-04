@@ -36,6 +36,7 @@ let client_script =
   var EP = "%s";
   var url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + EP;
   var RETRY_MS = 250;
+  var sock = null;        // the current socket (may be STALE on a throttled background tab)
   var live = false;       // is a socket currently open?
   var pending = null;     // a scheduled reconnect timer, if any
   var bootId = null;      // the server's process id, adopted on first sight
@@ -51,16 +52,21 @@ let client_script =
     pending = setTimeout(connect, RETRY_MS);
   }
   function reconnectNow(){
-    if (live) return;
+    // Regaining focus/visibility is exactly when the dev wants the page fresh — and exactly
+    // when `live` can lie: a backgrounded tab gets its socket throttled, so the server can
+    // restart WITHOUT the close event arriving, leaving `live` stuck true. So never trust it
+    // here — always tear the socket down and reconnect, re-reading the boot id (an unchanged
+    // server just replies with the same id and nothing reloads; a new one triggers the reload).
     if (pending !== null) { clearTimeout(pending); pending = null; }
+    if (sock) { try { sock.onclose = null; sock.close(); } catch(_){} sock = null; }
+    live = false;
     connect();
   }
   function connect(){
     pending = null;
-    var ws;
-    try { ws = new WebSocket(url); } catch(e) { return schedule(); }
-    ws.onopen = function(){ live = true; };
-    ws.onmessage = function(e){
+    try { sock = new WebSocket(url); } catch(e) { sock = null; return schedule(); }
+    sock.onopen = function(){ live = true; };
+    sock.onmessage = function(e){
       var d = e.data;
       if (d.slice(0,5) === "boot:") {
         var id = d.slice(5);
@@ -71,8 +77,8 @@ let client_script =
       if (d === "css") swapCss();
       else location.reload();
     };
-    ws.onclose = function(){ live = false; schedule(); };
-    ws.onerror = function(){ try { ws.close(); } catch(_){} };
+    sock.onclose = function(){ live = false; sock = null; schedule(); };
+    sock.onerror = function(){ try { sock.close(); } catch(_){} };
   }
   addEventListener("visibilitychange", function(){ if (!document.hidden) reconnectNow(); });
   addEventListener("focus", reconnectNow);
