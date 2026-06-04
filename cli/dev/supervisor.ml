@@ -101,7 +101,13 @@ let run ~targets ~exe ~assets =
   let assets = Assets.create ~dir:(Filename.concat (Filename.dirname exe) assets) in
   let limiter = Crash_limiter.create () in
   let pidfile = Pidfile.path_for ~root:(Sys.getcwd ()) in
-  let record_pids () = Pidfile.record pidfile (Dune_watch.pid !dw :: worker_pid :: (match !server_pid with Some p -> [ p ] | None -> [])) in
+  (* record OUR pid too, not just the children: a previous `fennec dev` that wasn't shut down
+     cleanly would otherwise keep supervising (respawning a server that fights for the port).
+     The next run kills it via this pid, and its server then self-exits (getppid), freeing the
+     port — so two `fennec dev`s can't coexist and serve a stale build. *)
+  let record_pids () =
+    Pidfile.record pidfile (Unix.getpid () :: Dune_watch.pid !dw :: worker_pid :: (match !server_pid with Some p -> [ p ] | None -> []))
+  in
 
   let start_or_restart label =
     (* don't disturb the running server while the artifact is mid-write; the next settle restarts *)
