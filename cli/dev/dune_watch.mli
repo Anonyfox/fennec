@@ -33,6 +33,13 @@ type line =
 
 val classify_line : string -> line
 
+(** Strip ANSI CSI escapes (colour) from a line. Exposed for reuse by the diagnostics parser. *)
+val strip_ansi : string -> string
+
+(** [find_sub hay needle]: byte index of the first occurrence of [needle] in [hay]. Exposed for
+    reuse by the diagnostics parser. *)
+val find_sub : string -> string -> int option
+
 (** A build cycle that has fully settled, or the watcher process exiting. *)
 type event =
   | Settled_build of {

@@ -139,6 +139,14 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
         in
         watch ())
   | None -> ());
-  Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints)
-    (if livereload_on then " (dev: livereload on)" else "");
+  (match (if is_dev then Sys.getenv_opt "FENNEC_DEV_UI" else None) with
+  | Some ("1" | "on" | "true") ->
+    (* the dev supervisor owns the terminal: report our dev URLs for its banner (it renders the
+       status itself) and otherwise stay quiet *)
+    let urls =
+      endpoints |> List.map (Fennec_server.Endpoint.listen_port ~dev:true) |> List.sort_uniq compare |> List.map (Printf.sprintf "http://localhost:%d")
+    in
+    Printf.eprintf "[fennec:urls] %s\n%!" (String.concat " " urls)
+  | _ ->
+    Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints) (if livereload_on then " (dev: livereload on)" else ""));
   Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~env endpoints

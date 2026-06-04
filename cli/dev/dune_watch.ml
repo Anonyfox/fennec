@@ -83,9 +83,12 @@ let is_building t = t.building
 let start (targets : string list) : t =
   let rd, wr = Unix.pipe ~cloexec:false () in
   let args = Array.of_list ("dune" :: "build" :: "--watch" :: targets) in
-  (* dune's status goes to stderr; capture it, leave stdout inherited *)
-  let pid = Unix.create_process "dune" args Unix.stdin Unix.stdout wr in
+  (* dune's status + diagnostics go to STDERR — capture those; its stdout is only progress/asset-
+     copy chatter, which the supervisor's own UI replaces, so send it to /dev/null. *)
+  let devnull = try Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0 with _ -> Unix.stdout in
+  let pid = Unix.create_process "dune" args Unix.stdin devnull wr in
   Unix.close wr;
+  if devnull <> Unix.stdout then (try Unix.close devnull with _ -> ());
   { pid; fd = rd; carry = Buffer.create 1024; triggers = []; msg = Buffer.create 1024; started = None; building = false; queue = Queue.create (); eof = false }
 
 let now () = Unix.gettimeofday ()
