@@ -79,9 +79,11 @@ links, `paths.ml` gives compile-checked builders: `Paths.products_id ~id:"7"`.
 
 ## Build / run / test
 ```sh
-# dev: bytecode server + assembled web root (served from disk), fast incremental rebuilds
-dune build @examples/site/dev
-fennec dev --target @examples/site/dev _build/default/examples/site/server.bc
+# dev: from this directory, just run. `fennec dev` discovers the server (the one
+# executable that calls Fennec.serve), builds + watches it, supervises restarts, livereloads.
+cd examples/site && fennec dev
+#   fennec dev --dry-run                 # show the discovered server/target, don't run
+#   fennec dev --target … SERVER_EXE     # explicit override (e.g. multi-server repos)
 
 # component unit tests (OCaml, no deps)
 dune test examples/site/frontend_test

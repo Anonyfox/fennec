@@ -91,7 +91,15 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
 (* Serve a list of endpoints, blocking. In dev, a livereload paw is prepended to
    every endpoint and a dev control socket is opened for the CLI to ping on a
    frontend edit (the framework itself watches nothing). Owns Eio + the lifecycle. *)
+(* exactly one place starts the server. Many modules may LINK fennec, but a second [serve]
+   call (a stray entrypoint in a library, a copy-pasted main) is a bug — fail loudly rather
+   than half-start a second server. This is the runtime counterpart to the CLI's discovery,
+   which finds the single [serve] site. *)
+let started = Atomic.make false
+
 let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) : unit =
+  if not (Atomic.compare_and_set started false true) then
+    failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
   let lr = Livereload.create () in
   (* Livereload is a dev convenience; it reloads the page on a frontend edit. For an e2e or

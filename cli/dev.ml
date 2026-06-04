@@ -32,10 +32,35 @@ let ef = Printf.eprintf
 (* poll an mtime; Stdlib only, cross-platform *)
 let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
 
-(* spawn `dune build --watch <target>`; returns the pid *)
-let start_watch target =
-  let args = [| "dune"; "build"; "--watch"; target |] in
+(* spawn `dune build --watch <targets…>`; returns the pid *)
+let start_watch targets =
+  let args = Array.of_list ("dune" :: "build" :: "--watch" :: targets) in
   Unix.create_process "dune" args Unix.stdin Unix.stderr Unix.stderr
+
+(* The OCaml stublibs dir, so a directly-spawned BYTECODE server can dlopen its C stubs
+   (dllcstruct_stubs.so, …) — the path `dune exec` / an active `opam env` would provide. We
+   set it ourselves so `fennec dev` works even from a shell that didn't export
+   CAML_LD_LIBRARY_PATH, without giving up bytecode's fast rebuilds. *)
+(* is [dir] already one of the ':'-separated entries in [paths]? *)
+let contains_path paths dir = List.mem dir (String.split_on_char ':' paths)
+
+let stublibs_dir () =
+  match Sys.getenv_opt "OPAM_SWITCH_PREFIX" with
+  | Some p when p <> "" -> Some (Filename.concat p "lib/stublibs")
+  | _ -> (
+    match (try Some (String.trim (input_line (Unix.open_process_in "opam var lib 2>/dev/null"))) with _ -> None) with
+    | Some lib when lib <> "" -> Some (Filename.concat lib "stublibs")
+    | _ -> None)
+
+(* prepend the stublibs dir to CAML_LD_LIBRARY_PATH in this process, so spawned children
+   (which inherit our environment) can load bytecode C stubs. Idempotent enough for one call. *)
+let ensure_stublibs_path () =
+  match stublibs_dir () with
+  | None -> ()
+  | Some dir ->
+    let cur = try Sys.getenv "CAML_LD_LIBRARY_PATH" with Not_found -> "" in
+    if not (contains_path cur dir) then
+      Unix.putenv "CAML_LD_LIBRARY_PATH" (if cur = "" then dir else dir ^ ":" ^ cur)
 
 (* (re)spawn the server exe; returns the pid *)
 let start_server exe extra_env =
@@ -60,12 +85,14 @@ let start_esbuild_worker socket =
   let exe = Sys.executable_name in
   Unix.create_process exe [| exe; "__esbuild-worker"; socket |] Unix.stdin Unix.stderr Unix.stderr
 
-let run target exe assets =
+let run targets exe assets =
   if not (Sys.file_exists "dune-project") then begin
     ef "fennec dev: run from a dune project root (no dune-project here)\n";
     exit 1
   end;
-  pf "fennec dev: watching %s, serving %s\n%!" target exe;
+  pf "fennec dev: watching %s, serving %s\n%!" (String.concat " " targets) exe;
+  (* make the bytecode server's C stubs loadable regardless of the parent shell's env *)
+  ensure_stublibs_path ();
 
   (* 0. the warm esbuild worker — started BEFORE dune so even the first build
      delegates to it. We export its socket; dune passes the env through to the
@@ -82,7 +109,7 @@ let run target exe assets =
   else pf "fennec dev: esbuild worker did not start; falling back to cold builds\n%!";
 
   (* 1. dune --watch: the one source watcher + builder *)
-  let watch_pid = start_watch target in
+  let watch_pid = start_watch targets in
 
   (* wait for the first build to produce the exe *)
   let waited = ref 0.0 in

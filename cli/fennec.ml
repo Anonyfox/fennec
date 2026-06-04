@@ -6,8 +6,9 @@
    JS and CSS entry points: the engine is chosen per input from its file
    extension, so callers never pick a tool by hand.
 
-   A long-running [dev] subcommand (a livereload dev server holding a warm build
-   context) will be added later; [build] is the one-shot production path. *)
+   A long-running [dev] subcommand runs the livereload dev loop: it discovers the
+   server (the one executable calling [Fennec.serve], via {!Discover}), watches and
+   supervises it, and hot-reloads the frontend. [build] is the one-shot production path. *)
 
 let version = "0.0.1"
 
@@ -281,12 +282,15 @@ let build_cmd =
 
 let dev_cmd =
   let target_arg =
-    let doc = "The dune target to build and watch (default: the whole project)." in
-    Arg.(value & opt string "@@default" & info [ "target" ] ~docv:"TARGET" ~doc)
+    let doc = "Override the dune target(s) to build and watch (default: derived from the server)." in
+    Arg.(value & opt (some string) None & info [ "target" ] ~docv:"TARGET" ~doc)
   in
   let exe_arg =
-    let doc = "Path to the built server executable to run and supervise (under _build)." in
-    Arg.(required & pos 0 (some string) None & info [] ~docv:"SERVER_EXE" ~doc)
+    let doc =
+      "Path to the built server executable to run (under _build). Optional: with no path, the \
+       server is discovered as the one executable that calls $(b,Fennec.serve)."
+    in
+    Arg.(value & pos 0 (some string) None & info [] ~docv:"SERVER_EXE" ~doc)
   in
   let assets_arg =
     let doc =
@@ -295,7 +299,37 @@ let dev_cmd =
     in
     Arg.(value & opt string "webroot" & info [ "assets" ] ~docv:"DIR" ~doc)
   in
-  let go target exe assets = Dev.run target exe assets in
+  let dry_arg =
+    let doc = "Print the discovered server (target/exe) and exit, without running." in
+    Arg.(value & flag & info [ "dry-run"; "print" ] ~doc)
+  in
+  let go target exe assets dry =
+    let targets_or d = match target with Some t -> [ t ] | None -> d in
+    if dry then (
+      match Discover.find () with
+      | Ok d ->
+        Printf.printf "server:  %s\nroot:    %s\ntargets: %s\nexe:     %s\n" d.Discover.name d.Discover.root
+          (String.concat " " (targets_or d.Discover.targets))
+          d.Discover.exe;
+        0
+      | Error msg ->
+        Printf.eprintf "fennec dev: %s\n" msg;
+        1)
+    else
+      match exe with
+      | Some exe_path ->
+        (* Dev.run never returns (it supervises until killed); its type unifies with int *)
+        Dev.run (match target with Some t -> [ t ] | None -> [ "@@default" ]) exe_path assets
+      | None -> (
+        match Discover.find () with
+        | Error msg ->
+          Printf.eprintf "fennec dev: %s\n" msg;
+          1
+        | Ok d ->
+          (* Dev expects to run from the workspace root; discovery already scoped to the cwd *)
+          Sys.chdir d.Discover.root;
+          Dev.run (targets_or d.Discover.targets) d.Discover.exe assets)
+  in
   let doc = "Run the dev server with livereload" in
   let man =
     [ `S Manpage.s_description;
@@ -307,14 +341,20 @@ let dev_cmd =
          restarted; a frontend-only edit live-reloads without a restart, the CLI signalling the \
          server's dev control socket to hot-swap CSS or reload.";
       `P
+        "With no $(i,SERVER_EXE), the server is found by asking dune (via $(b,dune describe)) for \
+         the one executable whose source calls $(b,Fennec.serve) — so $(b,fennec dev) just works \
+         from a project (or app sub-)directory, with nothing to configure. Zero or more than one \
+         such executable is a clean error.";
+      `P
         "This command is pure convenience. The project is a plain dune project: $(b,dune build \
          --watch) plus $(b,dune exec) still builds and runs it — you lose only the automated \
          restart and CSS hot-swap.";
       `S Manpage.s_examples;
-      `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc";
-      `Pre "  fennec dev --target examples/site/ _build/default/examples/site/server.exe" ]
+      `Pre "  fennec dev                 # discover the server and run it";
+      `Pre "  fennec dev --dry-run       # show what would run";
+      `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
-  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg)
+  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg)
 
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =
