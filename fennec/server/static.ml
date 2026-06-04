@@ -210,6 +210,10 @@ let respond ?(cache_control = "public, max-age=3600") (src : source) (req : H.re
                 ("Content-Range", Printf.sprintf "bytes */%d" len) :: base_headers;
               body = "";
             }
+        | `Range _ when len = 0 ->
+          (* any range over a zero-length resource is unsatisfiable; without this the
+             clamp below would compute String.sub "" 0 1 and raise *)
+          Some { H.status = 416; headers = ("Content-Range", "bytes */0") :: base_headers; body = "" }
         | `Range { first; last } ->
           (* clamp defensively so a bad range can never raise (which would drop
              the connection instead of returning a clean response) *)

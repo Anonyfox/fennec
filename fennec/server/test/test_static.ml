@@ -153,6 +153,14 @@ let () =
   eq "bundle B serves its own bytes (no collision)" (body_of (Static.respond b (req "/x.txt"))) "BBBB";
   eq "bundle A unchanged after B served" (body_of (Static.respond a (req "/x.txt"))) "AAAA";
 
+  (* a Range over a ZERO-length asset must not raise (String.sub "" 0 1) — 416, not a crash *)
+  let empty = Static.Embedded ("empty", fun k -> if k = "e.css" then Some "" else None) in
+  eq "empty asset served (200)" (status_of (Static.respond empty (req "/e.css"))) 200;
+  eq "suffix Range on empty asset -> 416 (no crash)"
+    (status_of (Static.respond empty (req ~headers:[ ("Range", "bytes=-5") ] "/e.css"))) 416;
+  eq "0- Range on empty asset -> 416 (no crash)"
+    (status_of (Static.respond empty (req ~headers:[ ("Range", "bytes=0-9") ] "/e.css"))) 416;
+
   (* cleanup *)
   (try Sys.remove (Filename.concat root "escape") with _ -> ());
   List.iter (fun f -> try Sys.remove (Filename.concat root f) with _ -> ())

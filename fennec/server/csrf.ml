@@ -27,8 +27,11 @@ let hmac ~(secret : string) (msg : string) : string =
   Digestif.SHA256.(to_raw_string (hmac_string ~key:secret msg))
 
 let secure_random (n : int) : string =
-  let ic = open_in_bin "/dev/urandom" in
-  Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () -> really_input_string ic n)
+  match open_in_bin "/dev/urandom" with
+  | ic -> Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () -> really_input_string ic n)
+  | exception Sys_error msg ->
+    (* fail CLOSED: never weaken a CSRF secret with a non-CSPRNG fallback *)
+    failwith ("fennec: secure randomness unavailable (/dev/urandom): " ^ msg)
 
 let xor (a : string) (b : string) : string =
   String.mapi (fun i ch -> Char.chr (Char.code ch lxor Char.code b.[i])) a
