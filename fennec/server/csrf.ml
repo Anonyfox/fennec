@@ -1,28 +1,35 @@
-(* CSRF protection (Plug.CSRFProtection equivalent). A per-session secret token guards
-   state-changing requests: a form embeds {!token} (a fresh MASKED encoding of the secret,
-   so the value differs on every render — defeating BREACH-style compression oracles), and
-   {!plug} rejects an unsafe request whose submitted token doesn't unmask to the session
-   secret. Verification is constant-time.
-
-   Requires {!Session.plug} earlier in the pipeline (the secret lives in the session). *)
+(* CSRF protection (Plug.CSRFProtection / Dream.csrf-grade). A per-session secret guards
+   state-changing requests. A token embedded in a form is:
+     - MASKED with fresh randomness each render (so the value differs every time —
+       defeating BREACH-style compression oracles),
+     - carries an EXPIRY, and
+     - is HMAC-signed with the app secret (so the expiry/payload can't be forged).
+   {!verify} returns a distinguishable outcome (Ok / Expired / Wrong_session / Invalid),
+   and {!plug} rejects unsafe requests whose token isn't [Ok]. Constant-time throughout.
+   Requires {!Session.plug} earlier in the pipeline. *)
 
 module Conn = Fennec_paw.Conn
 module Paw = Fennec_paw.Paw
 module H = Fennec_core.Http
 
-let token_len = 18 (* raw secret bytes *)
-let session_key = "_csrf_token"
+(** Why a CSRF token did or didn't validate. [Expired]/[Wrong_session] happen in normal use
+    (a form or session that aged out); [Invalid] means a bad signature or forged payload. *)
+type outcome = Ok | Expired | Wrong_session | Invalid
+
+let token_len = 18 (* per-session secret bytes *)
+let session_key = "_csrf_secret"
+let now () = Unix.gettimeofday ()
 
 let b64e (s : string) : string = Base64.encode_string ~alphabet:Base64.uri_safe_alphabet ~pad:false s
 let b64d (s : string) : string option =
   match Base64.decode ~alphabet:Base64.uri_safe_alphabet ~pad:false s with Ok x -> Some x | Error _ -> None
+let hmac ~(secret : string) (msg : string) : string =
+  Digestif.SHA256.(to_raw_string (hmac_string ~key:secret msg))
 
-(* cryptographically-strong random bytes from the OS CSPRNG *)
 let secure_random (n : int) : string =
   let ic = open_in_bin "/dev/urandom" in
   Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () -> really_input_string ic n)
 
-(* byte-wise XOR of two equal-length strings *)
 let xor (a : string) (b : string) : string =
   String.mapi (fun i ch -> Char.chr (Char.code ch lxor Char.code b.[i])) a
 
@@ -33,8 +40,8 @@ let constant_eq (a : string) (b : string) : bool =
   String.iteri (fun i ch -> acc := !acc lor (Char.code ch lxor Char.code b.[i])) a;
   !acc = 0
 
-(* the session's raw secret, creating + storing one if absent (for [token]) *)
-let secret (c : Conn.t) : string =
+(* the per-session CSRF secret, creating + storing one if absent (for {!token}) *)
+let session_secret (c : Conn.t) : string =
   match Option.bind (Session.get c session_key) b64d with
   | Some raw when String.length raw = token_len -> raw
   | _ ->
@@ -42,29 +49,47 @@ let secret (c : Conn.t) : string =
     ignore (Session.set c session_key (b64e raw));
     raw
 
-(* the session's raw secret WITHOUT creating one (for [verify]) *)
-let secret_opt (c : Conn.t) : string option =
+(* the per-session CSRF secret WITHOUT creating one (for {!verify}) *)
+let session_secret_opt (c : Conn.t) : string option =
   match Option.bind (Session.get c session_key) b64d with
   | Some raw when String.length raw = token_len -> Some raw
   | _ -> None
 
-(* a masked, embeddable token — different on every call, all valid for the same secret *)
-let token (c : Conn.t) : string =
-  let raw = secret c in
+(* a fresh, embeddable token: masked secret + expiry, signed with the app [secret] *)
+let token ~(secret : string) ?(valid_for = 3600.) (c : Conn.t) : string =
+  let raw = session_secret c in
   let mask = secure_random token_len in
-  b64e (mask ^ xor mask raw)
+  let masked = b64e (mask ^ xor mask raw) in
+  let payload = Printf.sprintf "%s|%.0f" masked (now () +. valid_for) in
+  payload ^ "." ^ b64e (hmac ~secret payload)
 
-(* does [submitted] unmask to the session secret? (constant-time, no session mutation) *)
-let verify (c : Conn.t) (submitted : string) : bool =
-  match (b64d submitted, secret_opt c) with
-  | Some s, Some raw when String.length s = 2 * token_len ->
-    let mask = String.sub s 0 token_len and masked = String.sub s token_len token_len in
-    constant_eq (xor mask masked) raw
-  | _ -> false
+(* validate a submitted token against the app [secret] and the session secret *)
+let verify ~(secret : string) (c : Conn.t) (tok : string) : outcome =
+  match String.rindex_opt tok '.' with
+  | None -> Invalid
+  | Some i ->
+    let payload = String.sub tok 0 i and sig_ = String.sub tok (i + 1) (String.length tok - i - 1) in
+    if not (constant_eq sig_ (b64e (hmac ~secret payload))) then Invalid
+    else (
+      match String.index_opt payload '|' with
+      | None -> Invalid
+      | Some j -> (
+        let masked_b64 = String.sub payload 0 j in
+        let exp_str = String.sub payload (j + 1) (String.length payload - j - 1) in
+        match float_of_string_opt exp_str with
+        | None -> Invalid
+        | Some exp when now () > exp -> Expired
+        | Some _ -> (
+          match (b64d masked_b64, session_secret_opt c) with
+          | Some s, Some raw when String.length s = 2 * token_len ->
+            let mask = String.sub s 0 token_len and m = String.sub s token_len token_len in
+            if constant_eq (xor mask m) raw then Ok else Wrong_session
+          | _, None -> Wrong_session
+          | _ -> Invalid)))
 
-(* The CSRF plug: verify the token on unsafe methods, decline otherwise. The token comes
-   from the [header] (X-CSRF-Token) or a [field] in the form body. *)
-let plug ?(field = "_csrf_token") ?(header = "x-csrf-token")
+(* The CSRF plug: verify the token on unsafe methods (from the [header] or a body [field]),
+   answer 403 unless it is [Ok], decline on [safe] methods. [secret] signs the tokens. *)
+let plug ~(secret : string) ?(field = "_csrf_token") ?(header = "x-csrf-token")
     ?(safe = [ "GET"; "HEAD"; "OPTIONS" ]) () : Paw.t =
  fun c ->
   if List.mem (H.string_of_meth (Conn.meth c)) safe then c
@@ -73,5 +98,5 @@ let plug ?(field = "_csrf_token") ?(header = "x-csrf-token")
       match Conn.req_header c header with Some v -> Some v | None -> Conn.body_param c field
     in
     match submitted with
-    | Some tok when verify c tok -> c
+    | Some tok when verify ~secret c tok = Ok -> c
     | _ -> Conn.text ~status:403 c "CSRF token invalid or missing"

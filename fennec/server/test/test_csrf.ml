@@ -1,5 +1,5 @@
-(* CSRF protection: masked-token generation, verify (accept/tamper/missing), the
-   double-submit through the session, and the plug gating unsafe methods. *)
+(* CSRF: masked + signed + expiring tokens; the distinguishable outcomes
+   (Ok/Expired/Wrong_session/Invalid); and the plug gating unsafe methods. *)
 
 module Csrf = Fennec_server.Csrf
 module Session = Fennec_server.Session
@@ -10,63 +10,59 @@ let fails = ref 0
 let check name c = if c then Printf.printf "  ok   %s\n" name else (incr fails; Printf.printf "  FAIL %s\n" name)
 let eq name a b = check name (a = b)
 let req ?(meth = H.GET) ?(headers = []) ?(body = "") path = H.make_request ~meth ~path ~headers ~body ()
-let secret = "csrf-test-secret"
+let app_secret = "app-signing-secret"
+let sess_secret = "session-signing-secret"
 
-(* a conn with an active session (so CSRF has somewhere to store its secret) *)
-let with_session ?(cookie = "") () =
-  let headers = if cookie = "" then [] else [ ("Cookie", cookie) ] in
-  Session.plug ~secret () (Conn.make (req ~headers "/"))
-
-(* extract the session cookie's name=value to echo back on the next request *)
-let session_cookie c =
-  let r = Conn.apply_before_send c (Option.value (Conn.resp c) ~default:(H.text "")) in
-  match Fennec_core.Headers.get_all r.H.headers "set-cookie" with
-  | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
-  | [] -> ""
+(* a conn with an active session (so CSRF has somewhere to store its per-session secret) *)
+let with_session () = Session.plug ~secret:sess_secret () (Conn.make (req "/"))
 
 let () =
-  print_endline "Csrf token + verify:";
+  print_endline "Csrf token + verify (outcomes):";
   let c = with_session () in
-  let t1 = Csrf.token c in
-  let t2 = Csrf.token c in
-  check "tokens are non-empty" (t1 <> "" && t2 <> "");
+  let t1 = Csrf.token ~secret:app_secret c in
+  let t2 = Csrf.token ~secret:app_secret c in
+  check "tokens non-empty" (t1 <> "" && t2 <> "");
   check "each render masks differently (BREACH-safe)" (t1 <> t2);
-  check "a freshly minted token verifies" (Csrf.verify c t1);
-  check "the other masked token also verifies" (Csrf.verify c t2);
-  check "a tampered token is rejected" (not (Csrf.verify c (t1 ^ "AA")));
-  check "garbage is rejected" (not (Csrf.verify c "!!!not-base64!!!"));
-  (* a different session (no shared secret) must not validate this token *)
+  eq "a fresh token is Ok" (Csrf.verify ~secret:app_secret c t1) Csrf.Ok;
+  eq "the other masked token is also Ok" (Csrf.verify ~secret:app_secret c t2) Csrf.Ok;
+  eq "wrong app secret -> Invalid" (Csrf.verify ~secret:"other" c t1) Csrf.Invalid;
+  eq "tampered token -> Invalid" (Csrf.verify ~secret:app_secret c (t1 ^ "AA")) Csrf.Invalid;
+  eq "garbage -> Invalid" (Csrf.verify ~secret:app_secret c "no-dot") Csrf.Invalid;
+  (* a token bound to a different session -> Wrong_session *)
   let other = with_session () in
-  check "token from another session is rejected" (not (Csrf.verify other t1))
+  eq "token from another session -> Wrong_session" (Csrf.verify ~secret:app_secret other t1) Csrf.Wrong_session;
+  (* an already-expired token -> Expired *)
+  let expired = Csrf.token ~secret:app_secret ~valid_for:(-1.0) c in
+  eq "past-expiry token -> Expired" (Csrf.verify ~secret:app_secret c expired) Csrf.Expired
 
 let () =
   print_endline "Csrf plug:";
-  (* establish a session + token on a GET, capture the cookie *)
+  (* establish a session + token on a GET, capture the session cookie *)
   let g = with_session () in
-  let tok = Csrf.token g in
+  let tok = Csrf.token ~secret:app_secret g in
   let g = Conn.text g "form" in
-  let cookie = session_cookie g in
+  let cookie =
+    match
+      Fennec_core.Headers.get_all
+        (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
+        "set-cookie"
+    with
+    | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
+    | [] -> ""
+  in
   let mk ?(meth = H.POST) ?(headers = []) ?(body = "") () =
-    Session.plug ~secret () (Conn.make (req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+    Session.plug ~secret:sess_secret () (Conn.make (req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
   in
-  let csrf = Csrf.plug () in
-  (* safe method: always passes *)
+  let csrf = Csrf.plug ~secret:app_secret () in
   check "GET is not gated" (not (Conn.answered (csrf (mk ~meth:H.GET ()))));
-  (* unsafe with a valid token in the body field: passes *)
+  check "POST with a valid header token passes" (not (Conn.answered (csrf (mk ~headers:[ ("x-csrf-token", tok) ] ()))));
   let body = "_csrf_token=" ^ tok in
-  let c_ok =
-    csrf (mk ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body ())
-  in
-  check "POST with a valid token passes" (not (Conn.answered c_ok));
-  (* unsafe with a valid token in the header: passes *)
-  let c_hdr = csrf (mk ~headers:[ ("x-csrf-token", tok) ] ()) in
-  check "POST with a valid header token passes" (not (Conn.answered c_hdr));
-  (* unsafe with no token: 403 *)
-  let c_no = csrf (mk ()) in
-  eq "POST with no token -> 403" (match Conn.resp c_no with Some r -> r.H.status | None -> 0) 403;
-  (* unsafe with a wrong token: 403 *)
-  let c_bad = csrf (mk ~headers:[ ("x-csrf-token", "wrong") ] ()) in
-  eq "POST with a bad token -> 403" (match Conn.resp c_bad with Some r -> r.H.status | None -> 0) 403
+  check "POST with a valid body token passes"
+    (not (Conn.answered (csrf (mk ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body ()))));
+  eq "POST with no token -> 403" (match Conn.resp (csrf (mk ())) with Some r -> r.H.status | None -> 0) 403;
+  eq "POST with a bad token -> 403"
+    (match Conn.resp (csrf (mk ~headers:[ ("x-csrf-token", "wrong") ] ())) with Some r -> r.H.status | None -> 0)
+    403
 
 let () =
   if !fails = 0 then print_endline "all CSRF tests passed."

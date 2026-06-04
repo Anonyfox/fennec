@@ -61,6 +61,48 @@ let () =
   let c5 = Session.clear c5 in
   eq "clear empties the session" (Session.get c5 "user") None
 
+let set_cookie c =
+  match Headers.get_all (finalize c).H.headers "set-cookie" with s :: _ -> s | [] -> ""
+
+let () =
+  print_endline "Session expiry + refresh:";
+  let cookie payload = "_fennec_session=" ^ Session.sign ~secret payload in
+  (* a far-future _exp loads normally *)
+  let c = Session.plug ~secret () (Conn.make (req ~headers:[ (cookie "_exp=9999999999&user=ada" |> fun kv -> ("Cookie", kv)) ] "/")) in
+  eq "unexpired session loads its data" (Session.get c "user") (Some "ada");
+  (* a past _exp loads empty *)
+  let c = Session.plug ~secret () (Conn.make (req ~headers:[ ("Cookie", cookie "_exp=1&user=ada") ] "/")) in
+  eq "expired session loads empty" (Session.get c "user") None;
+  (* _exp is hidden from get_all *)
+  let c = Session.plug ~secret () (Conn.make (req ~headers:[ ("Cookie", cookie "_exp=9999999999&user=ada") ] "/")) in
+  eq "_exp hidden from get_all" (Session.get_all c) [ ("user", "ada") ];
+  (* a past-half-life session is auto-refreshed even if unchanged *)
+  let near = Printf.sprintf "_exp=%.0f&user=ada" (Unix.gettimeofday () +. 10.) in
+  let c = Session.plug ~secret ~lifetime:100. () (Conn.make (req ~headers:[ ("Cookie", cookie near) ] "/")) in
+  let c = Conn.text c "x" in
+  check "half-expired session is refreshed (Set-Cookie emitted)" (set_cookie c <> "");
+  (* a fresh, unchanged session is not refreshed *)
+  let fresh = Printf.sprintf "_exp=%.0f&user=ada" (Unix.gettimeofday () +. 1000.) in
+  let c = Session.plug ~secret ~lifetime:100. () (Conn.make (req ~headers:[ ("Cookie", cookie fresh) ] "/")) in
+  let c = Conn.text c "x" in
+  check "fresh unchanged session: no refresh" (set_cookie c = "")
+
+let () =
+  print_endline "Session server-side store:";
+  let store = Session.memory_store () in
+  (* request 1: write a value via the store *)
+  let c1 = Session.plug ~secret ~store () (Conn.make (req "/")) in
+  let c1 = Session.set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let kv = cookie_kv (set_cookie c1) in
+  let value = match String.index_opt kv '=' with Some i -> String.sub kv (i + 1) (String.length kv - i - 1) | None -> "" in
+  let sid = Option.get (Session.verify ~secret value) in
+  (* the DATA lives server-side (the cookie only carries the signed id) *)
+  eq "data is in the server store, keyed by id" (store.Session.load sid) (Some [ ("user", "ada") ]);
+  (* request 2: echo the id cookie -> the store rehydrates the session *)
+  let c2 = Session.plug ~secret ~store () (Conn.make (req ~headers:[ ("Cookie", kv) ] "/")) in
+  eq "store: session rehydrated by id" (Session.get c2 "user") (Some "ada")
+
 let () =
   if !fails = 0 then print_endline "all Session tests passed."
   else (Printf.printf "%d FAILED\n" !fails; exit 1)

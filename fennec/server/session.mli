@@ -1,25 +1,36 @@
-(** Signed-cookie sessions (Plug.Session's default store). A small [string -> string]
-    map is serialized into a cookie and HMAC-SHA256 signed with a server secret, so the
-    client can read but not tamper with it (signed, not encrypted — do not store secrets
-    in it). Verification is constant-time.
+(** Sessions (Plug.Session / Dream-grade). A small [string -> string] map per request.
 
-    Add {!plug} early in a pipeline, then read/write with {!get}/{!set} downstream. The
-    plug loads + verifies the cookie inbound and, via a before_send hook, re-signs + resets
-    it outbound — only when the session changed. *)
+    Two stores: the default {b signed-cookie} store (stateless — the signed data rides in
+    the cookie, so it scales horizontally for free) and an optional {b server-side} store
+    ([?store]) where the cookie holds only a signed id. Either way a session has a
+    [lifetime]: expired sessions load empty and a past-half-life session is auto-refreshed.
+    Add {!plug} early, read/write with {!get}/{!set} downstream. Constant-time verify. *)
 
-(** Sign a payload: ["<b64 payload>.<b64 hmac>"]. (Also usable as a generic signed token.) *)
+(** Sign a payload: ["<b64 payload>.<b64 hmac>"] (also usable as a generic signed token). *)
 val sign : secret:string -> string -> string
 
 (** Verify a signed token (constant-time), returning the payload if the signature holds. *)
 val verify : secret:string -> string -> string option
 
+(** A server-side session store (keyed by session id). Provide your own (Redis, SQL, …) or
+    use {!memory_store}. *)
+type store = {
+  load : string -> (string * string) list option;
+  save : string -> (string * string) list -> unit;
+  delete : string -> unit;
+}
+
+(** A process-local, Mutex-guarded (domain-safe) in-memory store with a [ttl] (default 1 day)
+    after which an idle session is evicted. *)
+val memory_store : ?ttl:float -> unit -> store
+
 (** A session value, if {!plug} ran and the key is set. *)
 val get : Fennec_paw.Conn.t -> string -> string option
 
-(** The whole session map. *)
+(** The session map (reserved ["_"]-prefixed keys hidden). *)
 val get_all : Fennec_paw.Conn.t -> (string * string) list
 
-(** Set a session value (returns the same conn, for piping). *)
+(** Set a value (returns the same conn, for piping). *)
 val set : Fennec_paw.Conn.t -> string -> string -> Fennec_paw.Conn.t
 
 (** Remove one key. *)
@@ -28,15 +39,18 @@ val delete : Fennec_paw.Conn.t -> string -> Fennec_paw.Conn.t
 (** Empty the session. *)
 val clear : Fennec_paw.Conn.t -> Fennec_paw.Conn.t
 
-(** The session plug. [secret] signs the cookie (keep it secret + stable). The cookie is
-    HttpOnly + SameSite=Lax by default; [secure] defaults to whether the request is https. *)
+(** The session plug. [secret] signs the cookie; [lifetime] is the max age (seconds, default
+    1 day). With [store], the cookie holds a signed id and the data lives server-side;
+    without it, the cookie holds the signed data. [secure] defaults to whether the request
+    is https; the cookie is HttpOnly + SameSite=Lax by default. *)
 val plug :
   secret:string ->
   ?cookie:string ->
   ?path:string ->
-  ?max_age:int ->
+  ?lifetime:float ->
   ?same_site:Fennec_core.Cookie.same_site ->
   ?http_only:bool ->
   ?secure:bool ->
+  ?store:store ->
   unit ->
   Fennec_paw.Paw.t

@@ -1,16 +1,21 @@
-(** CSRF protection (Plug.CSRFProtection equivalent). A per-session secret guards
-    state-changing requests: embed {!token} in a form (a fresh MASKED encoding each render,
-    so the value differs every time — defeating BREACH-style oracles), and {!plug} rejects
-    an unsafe request whose submitted token doesn't unmask to the session secret
-    (constant-time). Requires {!Session.plug} earlier in the pipeline. *)
+(** CSRF protection (Plug.CSRFProtection / Dream.csrf-grade). A per-session secret guards
+    state-changing requests. {!token} returns a value that is MASKED fresh each render
+    (BREACH-safe), carries an EXPIRY, and is HMAC-signed with the app secret; {!verify}
+    returns a distinguishable {!outcome}; {!plug} rejects unsafe requests whose token isn't
+    [Ok]. Constant-time throughout. Requires {!Session.plug} earlier in the pipeline. *)
 
-(** A masked, embeddable token — different on every call, all valid for the same session
-    secret (which is minted on first use). *)
-val token : Fennec_paw.Conn.t -> string
+(** Why a token did or didn't validate. [Expired]/[Wrong_session] occur in normal use (an
+    aged-out form or session); [Invalid] indicates a bad signature or forged payload. *)
+type outcome = Ok | Expired | Wrong_session | Invalid
 
-(** Whether a submitted token unmasks to the session secret (constant-time; no mutation). *)
-val verify : Fennec_paw.Conn.t -> string -> bool
+(** A fresh, embeddable token signed with the app [secret], valid for [valid_for] seconds
+    (default 3600). Mints the session secret on first use. *)
+val token : secret:string -> ?valid_for:float -> Fennec_paw.Conn.t -> string
+
+(** Validate a submitted token against the app [secret] and the session secret. *)
+val verify : secret:string -> Fennec_paw.Conn.t -> string -> outcome
 
 (** The CSRF plug: verify the token on unsafe methods (from the [header] or a body [field]),
-    answer 403 on a missing/invalid token, decline on [safe] methods. *)
-val plug : ?field:string -> ?header:string -> ?safe:string list -> unit -> Fennec_paw.Paw.t
+    answer 403 unless it is [Ok], decline on [safe] methods. *)
+val plug :
+  secret:string -> ?field:string -> ?header:string -> ?safe:string list -> unit -> Fennec_paw.Paw.t

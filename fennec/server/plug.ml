@@ -54,9 +54,17 @@ let websocket (path : string) (setup : Fennec_core.Ws_channel.t -> unit) : Paw.t
   if Conn.path c = path then Conn.upgrade c setup else c
 
 (* ---- request id: tag each request with a unique id (reusing an inbound one for
-   trace propagation), in an assign and a response header. ---- *)
-let () = Random.self_init ()
-let rid_counter = ref 0
+   trace propagation), in an assign and a response header. Domain-SAFE: a one-time
+   CSPRNG prefix + an Atomic counter, so ids stay unique across worker domains. ---- *)
+let rid_prefix =
+  let bytes =
+    try
+      let ic = open_in_bin "/dev/urandom" in
+      Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () -> really_input_string ic 4)
+    with _ -> "seed"
+  in
+  String.concat "" (List.init (String.length bytes) (fun i -> Printf.sprintf "%02x" (Char.code bytes.[i])))
+let rid_counter = Atomic.make 0
 let request_id_key : string Assigns.key = Assigns.key "fennec.request_id"
 
 let request_id ?(header = "x-request-id") () : Paw.t =
@@ -64,9 +72,7 @@ let request_id ?(header = "x-request-id") () : Paw.t =
   let id =
     match Conn.req_header c header with
     | Some v when v <> "" -> v
-    | _ ->
-      incr rid_counter;
-      Printf.sprintf "%08x%06x" (Random.bits ()) (!rid_counter land 0xffffff)
+    | _ -> Printf.sprintf "%s-%x" rid_prefix (Atomic.fetch_and_add rid_counter 1)
   in
   Conn.set_header (Conn.assign c request_id_key id) header id
 

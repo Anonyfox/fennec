@@ -42,7 +42,40 @@ let contains hay needle =
   let rec go i = i + nn <= nh && (String.sub hay i nn = needle || go (i + 1)) in
   nn = 0 || go 0
 
-let read_request (r : Eio.Buf_read.t) : request_result =
+(* Decode a Transfer-Encoding: chunked request body. Each chunk is "<hex-size>[;ext]\r\n
+   <bytes>\r\n"; a 0-size chunk ends it (then optional trailers up to a blank line).
+   Bounded by [max_body_size]. *)
+let read_chunked (r : Eio.Buf_read.t) : (string, string) result =
+  let buf = Buffer.create 4096 in
+  let rec loop () =
+    match Eio.Buf_read.line r with
+    | exception (End_of_file | Failure _) -> Error "truncated chunked body"
+    | size_line ->
+      let hex =
+        String.trim (match String.index_opt size_line ';' with Some i -> String.sub size_line 0 i | None -> size_line)
+      in
+      (match int_of_string_opt ("0x" ^ hex) with
+       | None -> Error "bad chunk size"
+       | Some 0 ->
+         (* consume trailer headers up to the final blank line *)
+         let rec drain () =
+           match Eio.Buf_read.line r with "" -> () | _ -> drain () | exception _ -> ()
+         in
+         drain ();
+         Ok (Buffer.contents buf)
+       | Some n when n < 0 || Buffer.length buf + n > max_body_size -> Error "chunked body too large"
+       | Some n -> (
+         match Eio.Buf_read.take n r with
+         | data ->
+           Buffer.add_string buf data;
+           (match Eio.Buf_read.line r with _ -> () | exception _ -> ()); (* trailing CRLF *)
+           loop ()
+         | exception (End_of_file | Failure _) -> Error "truncated chunk data"))
+  in
+  loop ()
+
+(* [continue] is invoked just before the body is read, to honour Expect: 100-continue. *)
+let read_request ~(continue : unit -> unit) (r : Eio.Buf_read.t) : request_result =
   match try `Line (Eio.Buf_read.line r) with End_of_file | Failure _ -> `Eof with
   | `Eof -> Conn_eof
   | `Line "" -> Conn_eof (* leading blank line: treat as end *)
@@ -67,20 +100,30 @@ let read_request (r : Eio.Buf_read.t) : request_result =
       (match headers [] 0 with
        | `Too_many -> Too_large "too many headers"
        | `Done hs -> (
-         (* body: validate Content-Length strictly *)
-         match header hs "content-length" with
-         | None -> Req { meth; target; version; headers = hs; body = "" }
-         | Some n -> (
-           match int_of_string_opt (String.trim n) with
-           | None -> Bad_request "invalid content-length"
-           | Some len when len < 0 -> Bad_request "negative content-length"
-           | Some len when len > max_body_size -> Too_large "request body too large"
-           | Some 0 -> Req { meth; target; version; headers = hs; body = "" }
-           | Some len -> (
-             match Eio.Buf_read.take len r with
-             | body -> Req { meth; target; version; headers = hs; body }
-             | exception (End_of_file | Failure _) ->
-               Bad_request "truncated body" (* fewer bytes than Content-Length *)))))
+         let mk body = Req { meth; target; version; headers = hs; body } in
+         let te = header hs "transfer-encoding" and cl = header hs "content-length" in
+         let chunked = match te with Some v -> contains (String.lowercase_ascii v) "chunked" | None -> false in
+         (* Content-Length AND Transfer-Encoding together is a request-smuggling vector *)
+         if chunked && cl <> None then Bad_request "content-length with transfer-encoding"
+         else begin
+           (match header hs "expect" with
+            | Some v when contains (String.lowercase_ascii v) "100-continue" -> continue ()
+            | _ -> ());
+           if chunked then (match read_chunked r with Ok body -> mk body | Error e -> Bad_request e)
+           else
+             match cl with
+             | None -> mk ""
+             | Some n -> (
+               match int_of_string_opt (String.trim n) with
+               | None -> Bad_request "invalid content-length"
+               | Some len when len < 0 -> Bad_request "negative content-length"
+               | Some len when len > max_body_size -> Too_large "request body too large"
+               | Some 0 -> mk ""
+               | Some len -> (
+                 match Eio.Buf_read.take len r with
+                 | body -> mk body
+                 | exception (End_of_file | Failure _) -> Bad_request "truncated body"))
+         end))
     | _ -> Bad_request "malformed request line")
 
 let to_request ~host ~scheme ~remote_ip (p : parsed) : CH.request =
@@ -95,18 +138,24 @@ let is_ws_upgrade (p : parsed) =
 
 let has_header_ci headers k = Fennec_core.Headers.mem headers k
 
+(* write the bytes directly to the buffer — no per-line Printf.sprintf allocation *)
+let bw = Eio.Buf_write.string
+let write_status_line w status =
+  bw w "HTTP/1.1 "; bw w (string_of_int status); bw w " "; bw w (CH.reason_phrase status); bw w "\r\n"
+let write_header_line w k v = bw w k; bw w ": "; bw w v; bw w "\r\n"
+let write_conn_header w ~keep_alive =
+  bw w "connection: "; bw w (if keep_alive then "keep-alive" else "close"); bw w "\r\n"
+
 let write_http (w : Eio.Buf_write.t) (resp : CH.response) ~keep_alive =
-  Eio.Buf_write.string w (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status (CH.reason_phrase resp.CH.status));
-  List.iter
-    (fun (k, v) -> Eio.Buf_write.string w (Printf.sprintf "%s: %s\r\n" k v))
-    resp.CH.headers;
+  write_status_line w resp.CH.status;
+  List.iter (fun (k, v) -> write_header_line w k v) resp.CH.headers;
   (* Responder normally sets Content-Length; add it only if absent (e.g. for the
      bare 404 error path that bypasses the app) *)
   if not (has_header_ci resp.CH.headers "content-length") then
-    Eio.Buf_write.string w (Printf.sprintf "content-length: %d\r\n" (String.length resp.CH.body));
-  Eio.Buf_write.string w
-    (Printf.sprintf "connection: %s\r\n\r\n" (if keep_alive then "keep-alive" else "close"));
-  Eio.Buf_write.string w resp.CH.body
+    write_header_line w "content-length" (string_of_int (String.length resp.CH.body));
+  write_conn_header w ~keep_alive;
+  bw w "\r\n";
+  bw w resp.CH.body
 
 (* returns whether permessage-deflate was negotiated for this connection *)
 let ws_handshake (w : Eio.Buf_write.t) (p : parsed) : bool =
@@ -215,15 +264,11 @@ module Headers = Fennec_core.Headers
 (* Write a STREAMED response — the body is produced without buffering it in memory.
    [resp] carries the status + headers (after before_send); its body is ignored. *)
 let write_stream w flow ~fs ~(resp : CH.response) ~keep_alive (stream : Conn.stream) =
-  let conn_hdr = Printf.sprintf "connection: %s\r\n" (if keep_alive then "keep-alive" else "close") in
-  let status_line () =
-    Eio.Buf_write.string w
-      (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status (CH.reason_phrase resp.CH.status))
-  in
+  let status_line () = write_status_line w resp.CH.status in
   let write_headers hs =
-    List.iter (fun (k, v) -> Eio.Buf_write.string w (Printf.sprintf "%s: %s\r\n" k v)) hs;
-    Eio.Buf_write.string w conn_hdr;
-    Eio.Buf_write.string w "\r\n";
+    List.iter (fun (k, v) -> write_header_line w k v) hs;
+    write_conn_header w ~keep_alive;
+    bw w "\r\n";
     Eio.Buf_write.flush w
   in
   match stream with
@@ -268,10 +313,26 @@ let select_endpoint (endpoints : Endpoint.t list) (p : parsed) : Endpoint.t opti
   | Some e -> Some e
   | None -> ( match endpoints with e :: _ -> Some e | [] -> None)
 
+(* Run a handler under a per-request deadline. On timeout, Eio CANCELS the whole handler
+   fiber tree — including any sub-fibers it forked (parallel fetches) and their in-flight
+   IO — and we answer 503. A thrown exception becomes a clean 500. This is structured,
+   propagating cancellation that BEAM/Node/Go can't do for free. (It bounds the handler's
+   logic; a streamed body — send_chunked/SSE — is produced afterwards, so SSE isn't cut.) *)
+let run_handler ~clock ~timeout (handler : Paw.t) (req : CH.request) : Conn.t =
+  match
+    Eio.Time.with_timeout clock timeout (fun () ->
+        try Ok (Paw.run_conn handler req) with exn -> Error (`Exn exn))
+  with
+  | Ok conn -> conn
+  | Error `Timeout -> Conn.respond (Conn.make req) (CH.text ~status:503 "Service Unavailable")
+  | Error (`Exn exn) ->
+    Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
+    Conn.respond (Conn.make req) (CH.text ~status:500 "Internal Server Error")
+
 (* Handle one connection. [endpoints] are those sharing this listen port; each
    request picks its endpoint by Host. A paw pipeline may answer with an HTTP
    response OR a websocket upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs (endpoints : Endpoint.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -283,9 +344,11 @@ let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
     write_http w resp ~keep_alive:false;
     Eio.Buf_write.flush w
   in
+  (* honour Expect: 100-continue: tell the client to go ahead before we read the body *)
+  let continue () = Eio.Buf_write.string w "HTTP/1.1 100 Continue\r\n\r\n"; Eio.Buf_write.flush w in
   let rec loop () =
     (* read the next request under an idle/header timeout (slowloris defense) *)
-    match Eio.Time.Timeout.run timeout (fun () -> Ok (read_request r)) with
+    match Eio.Time.Timeout.run timeout (fun () -> Ok (read_request ~continue r)) with
     | Error `Timeout -> ()
     | Ok Conn_eof -> ()
     | Ok (Bad_request _) -> respond_and_close (CH.text ~status:400 "Bad Request")
@@ -301,11 +364,7 @@ let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
       let conn =
         match endpoint with
         | None -> Conn.respond (Conn.make req) (CH.text ~status:404 "no endpoint")
-        | Some e -> (
-          try Paw.run_conn (Endpoint.handler e) req
-          with exn ->
-            Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
-            Conn.respond (Conn.make req) (CH.text ~status:500 "Internal Server Error"))
+        | Some e -> run_handler ~clock ~timeout:request_timeout (Endpoint.handler e) req
       in
       match Conn.upgrade_handler conn with
       | Some setup when is_ws_upgrade p ->
@@ -317,7 +376,8 @@ let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
         | Some stream ->
           (* a streamed response (file / chunks): run before_send over the status+headers,
              then stream the body without buffering it (no compression/Responder pass) *)
-          let resp = Conn.apply_before_send conn (Conn.resp_skeleton conn) in
+          let skel = Conn.resp_skeleton conn in
+          let resp = try Conn.apply_before_send conn skel with _ -> skel in
           let keep_alive = want_keep_alive p in
           write_stream w flow ~fs ~resp ~keep_alive stream;
           if keep_alive then loop ()
@@ -327,7 +387,9 @@ let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
           let resp =
             match Conn.resp conn with Some r -> r | None -> CH.text ~status:404 "404 Not Found"
           in
-          let resp = Conn.apply_before_send conn resp in
+          (* a throwing before_send hook must not kill the connection — fall back to the
+             un-hooked response *)
+          let resp = try Conn.apply_before_send conn resp with _ -> resp in
           let resp = try Responder.finalize ~now:(now ()) ~req resp with _ -> resp in
           let keep_alive = want_keep_alive p in
           write_http w resp ~keep_alive;
@@ -340,15 +402,30 @@ let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
    socket and selected per-request by Host pattern (prod) — so one process serves
    many subdomains/wildcards. In dev each endpoint listens on its own [dev_port]
    on localhost (no /etc/hosts / proxy needed).
-   @param dev       dev mode (use dev_port + lenient host). Default from FENNEC_ENV.
-   @param timeout   per-request idle/header read timeout, seconds (default 30).
-   @param max_conns concurrent-connection cap (default 10_000). *)
-let run ?(timeout = 30.0) ?(max_conns = 10_000) ?dev ~env (endpoints : Endpoint.t list) =
+   @param dev             dev mode (use dev_port + lenient host). Default from FENNEC_ENV.
+   @param timeout         per-request idle/header read timeout, seconds (default 30).
+   @param request_timeout per-request handler deadline; on expiry the handler tree is
+                          cancelled and a 503 is returned (default 30).
+   @param max_conns       concurrent-connection cap (default 10_000). *)
+let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domains ?dev ~env
+    (endpoints : Endpoint.t list) =
   let dev =
     match dev with
     | Some d -> d
     | None -> ( try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true)
   in
+  (* worker domains for true multicore: each handles whole connections independently (the
+     nginx-worker model). Default: 1 in dev (deterministic; the livereload relay is shared),
+     all cores in prod. Override with ~domains or FENNEC_DOMAINS. *)
+  let domains =
+    match domains with
+    | Some n -> max 1 n
+    | None -> (
+      match Option.bind (Sys.getenv_opt "FENNEC_DOMAINS") int_of_string_opt with
+      | Some n -> max 1 n
+      | None -> if dev then 1 else Domain.recommended_domain_count ())
+  in
+  let domain_mgr = Eio.Stdenv.domain_mgr env in
   let clock = Eio.Stdenv.clock env in
   let now () = Eio.Time.now clock in
   let fs = Eio.Stdenv.fs env in
@@ -373,9 +450,13 @@ let run ?(timeout = 30.0) ?(max_conns = 10_000) ?dev ~env (endpoints : Endpoint.
         Eio.Semaphore.acquire slots;
         Fun.protect
           ~finally:(fun () -> Eio.Semaphore.release slots)
-          (fun () -> handle_conn ~now ~timeout ~fs group flow addr)
+          (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs group flow addr)
+      in
+      let on_error e =
+        Printf.eprintf "fennec: connection error: %s\n%!" (Printexc.to_string e)
       in
       Eio.Fiber.fork ~sw (fun () ->
-          Eio.Net.run_server socket handle ~on_error:(fun e ->
-              Printf.eprintf "fennec: connection error: %s\n%!" (Printexc.to_string e))))
+          if domains > 1 then
+            Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, domains - 1) ~on_error
+          else Eio.Net.run_server socket handle ~on_error))
     ports

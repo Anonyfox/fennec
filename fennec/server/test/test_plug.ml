@@ -23,7 +23,12 @@ let () =
   check "sets the response header"
     (match Conn.resp (Conn.text c "x") with Some r -> Headers.mem r.H.headers "x-request-id" | None -> false);
   let c2 = Plug.request_id () (Conn.make (req ~headers:[ ("X-Request-Id", "abc123") ] "/")) in
-  eq "reuses an inbound id" (Plug.current_request_id c2) (Some "abc123")
+  eq "reuses an inbound id" (Plug.current_request_id c2) (Some "abc123");
+  (* freshly minted ids are unique (atomic counter, domain-safe) *)
+  let id_of c = Option.value (Plug.current_request_id c) ~default:"" in
+  let a = id_of (Plug.request_id () (Conn.make (req "/"))) in
+  let b = id_of (Plug.request_id () (Conn.make (req "/"))) in
+  check "minted request ids are unique" (a <> "" && a <> b)
 
 let () =
   print_endline "Plug.method_override:";

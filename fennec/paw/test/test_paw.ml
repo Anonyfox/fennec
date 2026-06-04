@@ -159,7 +159,17 @@ let () =
   let c = Conn.text (Conn.make (req "/")) "body" in
   let c = Conn.set_header c "X-Late" "y" in
   check "header added post-answer is present"
-    (match Conn.resp c with Some r -> List.mem ("X-Late", "y") r.H.headers | None -> false)
+    (match Conn.resp c with Some r -> List.mem ("X-Late", "y") r.H.headers | None -> false);
+  (* a content-type pre-set via set_header is replaced by the answerer's — exactly one ships *)
+  let c = Conn.set_header (Conn.make (req "/")) "content-type" "text/plain" in
+  let c = Conn.json c "{}" in
+  let cts =
+    match Conn.resp c with
+    | Some r -> List.filter (fun (k, _) -> String.lowercase_ascii k = "content-type") r.H.headers
+    | None -> []
+  in
+  check "exactly one content-type after answer" (List.length cts = 1);
+  check "the answerer's content-type wins" (List.assoc_opt "content-type" cts = Some "application/json")
 
 let () =
   print_endline "Paw pipeline (short-circuit):";
@@ -191,6 +201,26 @@ let () =
   let ft = Route.fallthrough (fun r -> if r.H.path = "/f" then Some (H.text "F") else None) in
   eq "fallthrough hit" (Paw.run (Paw.seq [ ft ]) (req "/f")).H.body "F";
   eq "fallthrough miss -> 404" (Paw.run (Paw.seq [ ft ]) (req "/g")).H.status 404
+
+let () =
+  print_endline "Route path params:";
+  let app =
+    Paw.seq
+      [ Route.get "/users/:id" (fun c -> Conn.text c (Option.value (Conn.path_param c "id") ~default:"?"));
+        Route.get "/files/*rest" (fun c -> Conn.text c (Option.value (Conn.path_param c "rest") ~default:"?"));
+        Route.get "/a/:x/b/:y" (fun c ->
+            Conn.text c (Option.value (Conn.param c "x") ~default:"?" ^ "-"
+                        ^ Option.value (Conn.param c "y") ~default:"?")) ]
+  in
+  eq "captures :id" (Paw.run app (req "/users/42")).H.body "42";
+  eq "splat captures the rest" (Paw.run app (req "/files/a/b/c.txt")).H.body "a/b/c.txt";
+  eq "two params" (Paw.run app (req "/a/1/b/2")).H.body "1-2";
+  eq "param count mismatch -> 404" (Paw.run app (req "/users/42/extra")).H.status 404;
+  eq "no match -> 404" (Paw.run app (req "/nope")).H.status 404;
+  (* path param takes precedence over a query param of the same name in [param] *)
+  let one = Paw.seq [ Route.get "/p/:id" (fun c -> Conn.text c (Option.value (Conn.param c "id") ~default:"?")) ] in
+  eq "path param beats query in param"
+    (Paw.run one (H.make_request ~meth:H.GET ~path:"/p/path" ~query_string:"id=query" ())).H.body "path"
 
 let () =
   if !fails = 0 then print_endline "all Paw tests passed."

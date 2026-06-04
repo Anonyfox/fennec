@@ -51,13 +51,14 @@ type t = {
   mutable body_params : (string * string) list option;    (* lazily parsed form fields *)
   mutable files : Fennec_core.Multipart.part list option; (* lazily parsed file parts *)
   mutable meth_override : H.meth option;                   (* set by a method-override plug *)
+  mutable path_params : (string * string) list;            (* captured by a :param / *splat route *)
 }
 
 (* a fresh conn for an incoming request *)
 let make (req : H.request) : t =
   { req; status = 200; resp_headers = []; resp_body = ""; state = Unset;
     upgrade = None; stream = None; before_send = []; assigns = Assigns.empty; query_params = None;
-    cookies = None; body_params = None; files = None; meth_override = None }
+    cookies = None; body_params = None; files = None; meth_override = None; path_params = [] }
 
 (* register a hook to run on the final response just before sending. O(1): we
    prepend and reverse on apply, so the hooks run in registration order (FIFO).
@@ -101,7 +102,14 @@ let upgrade (c : t) (setup : Fennec_core.Ws_channel.t -> unit) : t =
    merged in front of them. *)
 let respond (c : t) (r : H.response) : t =
   c.status <- r.H.status;
-  c.resp_headers <- r.H.headers @ c.resp_headers;
+  (* the answer's content-type wins: drop any one pre-set via set_header, so exactly one
+     content-type ships *)
+  let prior =
+    if Fennec_core.Headers.mem r.H.headers "content-type" then
+      Fennec_core.Headers.delete c.resp_headers "content-type"
+    else c.resp_headers
+  in
+  c.resp_headers <- r.H.headers @ prior;
   c.resp_body <- r.H.body;
   c.state <- Set;
   c
@@ -247,9 +255,16 @@ let ensure_body (c : t) : unit =
 let body_params (c : t) : (string * string) list = ensure_body c; Option.value c.body_params ~default:[]
 let body_param (c : t) (k : string) : string option = List.assoc_opt k (body_params c)
 
-(* the value for [k] from the query string, falling back to a form body field *)
+(* ---- path params (captured by a :param / *splat route) ---- *)
+let path_params (c : t) : (string * string) list = c.path_params
+let path_param (c : t) (k : string) : string option = List.assoc_opt k c.path_params
+let set_path_params (c : t) (ps : (string * string) list) : t = c.path_params <- ps; c
+
+(* the value for [k], checked in order: path param, then query string, then form body *)
 let param (c : t) (k : string) : string option =
-  match query c k with Some v -> Some v | None -> body_param c k
+  match List.assoc_opt k c.path_params with
+  | Some v -> Some v
+  | None -> ( match query c k with Some v -> Some v | None -> body_param c k)
 
 let files (c : t) : Fennec_core.Multipart.part list = ensure_body c; Option.value c.files ~default:[]
 let file (c : t) (name : string) : Fennec_core.Multipart.part option =

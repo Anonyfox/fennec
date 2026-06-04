@@ -20,6 +20,23 @@ module Csrf = Fennec_server.Csrf
 
 let is_dev = try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true
 
+(* Structured-concurrency helpers for handlers. A handler runs inside an Eio fiber, so it
+   can fan out concurrent work (parallel DB queries / HTTP calls): the sub-fibers overlap
+   their waits, and if the request's deadline fires or the client goes away, the whole tree
+   is cancelled together. No threads, no manual cancellation tokens. *)
+
+(* run thunks concurrently, returning their results in order *)
+let parallel (thunks : (unit -> 'a) list) : 'a list =
+  let out = Array.make (List.length thunks) None in
+  Eio.Fiber.all (List.mapi (fun i t () -> out.(i) <- Some (t ())) thunks);
+  Array.to_list out |> List.map Option.get
+
+(* run two thunks (of different types) concurrently *)
+let both (f : unit -> 'a) (g : unit -> 'b) : 'a * 'b =
+  let a = ref None and b = ref None in
+  Eio.Fiber.both (fun () -> a := Some (f ())) (fun () -> b := Some (g ()));
+  (Option.get !a, Option.get !b)
+
 (* A web root for an app: dev reads the assembled webroot/ dir next to the exe
    (the per-app dune assembly), prod serves the embedded map. [name] disambiguates
    per-app dev webroots ("webroot_web", "webroot_admin"). *)
