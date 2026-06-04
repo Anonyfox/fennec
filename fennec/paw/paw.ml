@@ -12,7 +12,8 @@
 
    This is Plug's model with one refinement: an answered conn auto-skips downstream paws, so
    a pipeline reads as a clean top-to-bottom |> chain and precedence is just order. The
-   higher-level batteries (logger, auth, …) live in {!Fennec_server.Plug}. *)
+   higher-level batteries (logger, auth, …) live in their own modules under the [Paw]
+   namespace ([Paw.Logger], [Paw.Session], …), each a [make] returning one of these paws. *)
 
 module H = Fennec_core.Http
 

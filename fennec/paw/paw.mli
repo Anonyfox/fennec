@@ -4,7 +4,8 @@
 
     Two halves: the {b algebra} ({!seq}/{!pass}/{!run_conn}/{!run}) and the {b constructors}
     (the route verbs and {!fallthrough} — a route is just a paw guarded by method + path).
-    The batteries (logger, auth, …) live in [Fennec_server.Plug]. *)
+    The batteries (logger, auth, …) live in their own modules under the [Paw] namespace
+    ([Paw.Logger], [Paw.Session], …), each a [make] returning one of these paws. *)
 
 (** A paw is just a function; write one as [fun c -> …]. *)
 type t = Conn.t -> Conn.t

@@ -4,7 +4,7 @@
    each endpoint also has a [dev_port] so every endpoint is reachable on localhost
    with no /etc/hosts or proxy.
 
-   The builders (pipe/get/post/plug/…) just append paws — an endpoint's handler is
+   The builders (pipe/get/post/use/…) just append paws — an endpoint's handler is
    one composed paw. *)
 
 module Paw = Fennec_paw.Paw
@@ -26,8 +26,8 @@ let add (p : Paw.t) (t : t) : t = { t with paws = t.paws @ [ p ] }
 (* mount a reusable pipeline (a paw list) *)
 let pipe (paws : Paw.t list) (t : t) : t = { t with paws = t.paws @ paws }
 
-(* a single paw (e.g. a prebuilt Plug.* ) *)
-let plug (p : Paw.t) (t : t) : t = add p t
+(* mount a single paw (e.g. a prebuilt battery like [Paw.Logger.make ()]) *)
+let use (p : Paw.t) (t : t) : t = add p t
 
 (* prepend a paw so it runs BEFORE the rest of the pipeline. Needed for a paw that
    must register a before_send hook before an answering paw short-circuits the

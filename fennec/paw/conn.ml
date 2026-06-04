@@ -54,7 +54,7 @@ type t = {
   mutable cookies : (string * string) list option;
   mutable body_params : (string * string) list option;   (* form fields *)
   mutable files : Fennec_core.Multipart.part list option; (* multipart uploads *)
-  mutable meth_override : H.meth option;                   (* set by a method-override plug *)
+  mutable meth_override : H.meth option;                   (* set by a method-override paw *)
   mutable path_params : (string * string) list;           (* captured by a :param / *splat route *)
 }
 
@@ -95,7 +95,7 @@ let answered (c : t) : bool = c.state <> Unset
 
 let path (c : t) : string = c.req.H.path
 
-(* the effective method — a method-override plug may have replaced it *)
+(* the effective method — a method-override paw may have replaced it *)
 let meth (c : t) : H.meth = match c.meth_override with Some m -> m | None -> c.req.H.meth
 
 let host (c : t) : string = c.req.H.host
@@ -223,7 +223,7 @@ let delete_cookie (c : t) ?path ?domain (name : string) : t =
   c.resp_headers <- ("set-cookie", sc) :: c.resp_headers;
   c
 
-(* override the effective method (used by a method-override plug) *)
+(* override the effective method (used by a method-override paw) *)
 let override_method (c : t) (m : H.meth) : t = c.meth_override <- Some m; c
 
 (* set the captured path params (used by a :param/route) *)

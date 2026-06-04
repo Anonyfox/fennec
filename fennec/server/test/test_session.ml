@@ -1,5 +1,5 @@
 (* Signed-cookie sessions: HMAC sign/verify (incl. tamper + wrong-secret rejection)
-   and a full plug round-trip (write -> Set-Cookie -> feed back -> read). *)
+   and a full paw round-trip (write -> Set-Cookie -> feed back -> read). *)
 
 module Session = Fennec_server.Session
 module Conn = Fennec_paw.Conn
@@ -28,8 +28,8 @@ let () =
   eq "empty -> rejected" (Session.verify ~secret "") None
 
 let () =
-  print_endline "Session plug (round-trip):";
-  let sp = Session.plug ~secret () in
+  print_endline "Session paw (round-trip):";
+  let sp = Session.make ~secret () in
   (* request 1: no cookie; put a value *)
   let c1 = sp (Conn.make (req "/")) in
   let c1 = Session.set c1 "user" "ada" in
@@ -68,22 +68,22 @@ let () =
   print_endline "Session expiry + refresh:";
   let cookie payload = "_fennec_session=" ^ Session.sign ~secret payload in
   (* a far-future _exp loads normally *)
-  let c = Session.plug ~secret () (Conn.make (req ~headers:[ (cookie "_exp=9999999999&user=ada" |> fun kv -> ("Cookie", kv)) ] "/")) in
+  let c = Session.make ~secret () (Conn.make (req ~headers:[ (cookie "_exp=9999999999&user=ada" |> fun kv -> ("Cookie", kv)) ] "/")) in
   eq "unexpired session loads its data" (Session.get c "user") (Some "ada");
   (* a past _exp loads empty *)
-  let c = Session.plug ~secret () (Conn.make (req ~headers:[ ("Cookie", cookie "_exp=1&user=ada") ] "/")) in
+  let c = Session.make ~secret () (Conn.make (req ~headers:[ ("Cookie", cookie "_exp=1&user=ada") ] "/")) in
   eq "expired session loads empty" (Session.get c "user") None;
   (* _exp is hidden from get_all *)
-  let c = Session.plug ~secret () (Conn.make (req ~headers:[ ("Cookie", cookie "_exp=9999999999&user=ada") ] "/")) in
+  let c = Session.make ~secret () (Conn.make (req ~headers:[ ("Cookie", cookie "_exp=9999999999&user=ada") ] "/")) in
   eq "_exp hidden from get_all" (Session.get_all c) [ ("user", "ada") ];
   (* a past-half-life session is auto-refreshed even if unchanged *)
   let near = Printf.sprintf "_exp=%.0f&user=ada" (Unix.gettimeofday () +. 10.) in
-  let c = Session.plug ~secret ~lifetime:100. () (Conn.make (req ~headers:[ ("Cookie", cookie near) ] "/")) in
+  let c = Session.make ~secret ~lifetime:100. () (Conn.make (req ~headers:[ ("Cookie", cookie near) ] "/")) in
   let c = Conn.text c "x" in
   check "half-expired session is refreshed (Set-Cookie emitted)" (set_cookie c <> "");
   (* a fresh, unchanged session is not refreshed *)
   let fresh = Printf.sprintf "_exp=%.0f&user=ada" (Unix.gettimeofday () +. 1000.) in
-  let c = Session.plug ~secret ~lifetime:100. () (Conn.make (req ~headers:[ ("Cookie", cookie fresh) ] "/")) in
+  let c = Session.make ~secret ~lifetime:100. () (Conn.make (req ~headers:[ ("Cookie", cookie fresh) ] "/")) in
   let c = Conn.text c "x" in
   check "fresh unchanged session: no refresh" (set_cookie c = "")
 
@@ -91,7 +91,7 @@ let () =
   print_endline "Session server-side store:";
   let store = Session.memory_store () in
   (* request 1: write a value via the store *)
-  let c1 = Session.plug ~secret ~store () (Conn.make (req "/")) in
+  let c1 = Session.make ~secret ~store () (Conn.make (req "/")) in
   let c1 = Session.set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let kv = cookie_kv (set_cookie c1) in
@@ -100,8 +100,25 @@ let () =
   (* the DATA lives server-side (the cookie only carries the signed id) *)
   eq "data is in the server store, keyed by id" (store.Session.load sid) (Some [ ("user", "ada") ]);
   (* request 2: echo the id cookie -> the store rehydrates the session *)
-  let c2 = Session.plug ~secret ~store () (Conn.make (req ~headers:[ ("Cookie", kv) ] "/")) in
+  let c2 = Session.make ~secret ~store () (Conn.make (req ~headers:[ ("Cookie", kv) ] "/")) in
   eq "store: session rehydrated by id" (Session.get c2 "user") (Some "ada")
+
+let contains s sub =
+  let ls = String.length s and lb = String.length sub in
+  let rec go i = i + lb <= ls && (String.sub s i lb = sub || go (i + 1)) in
+  lb = 0 || go 0
+
+let () =
+  print_endline "Session Secure flag (proxy-aware):";
+  (* a write so a Set-Cookie is emitted, then inspect its attributes *)
+  let cookie_for headers =
+    let c = Session.make ~secret () (Conn.make (req ~headers "/")) in
+    set_cookie (Conn.text (Session.set c "user" "ada") "ok")
+  in
+  (* behind a TLS-terminating proxy the inner scheme is http but X-Forwarded-Proto is https,
+     so the cookie MUST still be marked Secure *)
+  check "X-Forwarded-Proto=https -> Secure cookie" (contains (cookie_for [ ("X-Forwarded-Proto", "https") ]) "Secure");
+  check "plain http -> cookie not Secure" (not (contains (cookie_for []) "Secure"))
 
 let () =
   if !fails = 0 then print_endline "all Session tests passed."

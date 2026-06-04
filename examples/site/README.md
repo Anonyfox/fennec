@@ -6,7 +6,7 @@ js_of_ocaml hydration. **No Melange, no React, no npm, no hand-written JS.** The
 
 ```
 examples/site/
-  server.ml            endpoints + Plug pipeline + serve. SSR = Fur_ssr.handler per app,
+  server.ml            endpoints + paw pipeline + serve. SSR = Fur_ssr.handler per app,
                        with ~source (in-process data) + ~styles (inlined component CSS).
   public/              ONE shared static tree, served at / (favicon, robots.txt)
   frontend/            the authored userland — every file is a REAL Dune module (LSP works)

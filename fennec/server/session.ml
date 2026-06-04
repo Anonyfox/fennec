@@ -1,5 +1,4 @@
-(* Sessions (Plug.Session / Dream-grade). A small [string -> string] map per request, with
-   two stores:
+(* Sessions (Dream-grade). A small [string -> string] map per request, with two stores:
 
    - the default SIGNED-COOKIE store: the data is serialized into a cookie, HMAC-SHA256
      signed with a server secret so the client can read but not tamper with it (signed, not
@@ -8,7 +7,7 @@
      the data lives in the store ({!memory_store}, or your own Redis/etc.).
 
    Either way the session has a [lifetime]: an expired session loads empty, and a session
-   past half its life is auto-refreshed (its cookie re-set) on the next request. Add {!plug}
+   past half its life is auto-refreshed (its cookie re-set) on the next request. Add {!make}
    early in a pipeline, then read/write with {!get}/{!set} downstream. Constant-time verify. *)
 
 module Conn = Fennec_paw.Conn
@@ -94,7 +93,11 @@ type t = { mutable data : (string * string) list; loaded : (string * string) lis
 let key : t Assigns.key = Assigns.key "fennec.session"
 let current (c : Conn.t) : t option = Conn.get c key
 
-(* read/write the session from any paw downstream of {!plug}. Reserved "_"-prefixed keys are
+(* whether {!make} ran upstream on this conn (so the session assign is present) — lets a
+   dependent paw (e.g. CSRF) fail loudly on a misordered pipeline instead of silently. *)
+let active (c : Conn.t) : bool = current c <> None
+
+(* read/write the session from any paw downstream of {!make}. Reserved "_"-prefixed keys are
    hidden from [get_all]. *)
 let get (c : Conn.t) (k : string) : string option =
   match current c with Some s -> List.assoc_opt k s.data | None -> None
@@ -116,13 +119,25 @@ let clear (c : Conn.t) : Conn.t =
   (match current c with Some s -> s.data <- [] | None -> ());
   c
 
-(* The session plug. [secret] signs the cookie; [lifetime] is the session's max age (and
+(* the request scheme as seen by the client — honouring an upstream X-Forwarded-Proto from a
+   TLS-terminating proxy (the standard prod deploy, where [Conn.scheme] is the plain inner
+   "http"). The header may list several protos ("https, http"); the first is the client-side
+   one. Without this, the session cookie's [Secure] default would be wrong behind a proxy. *)
+let forwarded_scheme (c : Conn.t) : string =
+  match Conn.req_header c "x-forwarded-proto" with
+  | Some p -> (
+    match String.split_on_char ',' p with
+    | first :: _ when String.trim first <> "" -> String.lowercase_ascii (String.trim first)
+    | _ -> Conn.scheme c)
+  | None -> Conn.scheme c
+
+(* The session paw. [secret] signs the cookie; [lifetime] is the session's max age (and
    the cookie Max-Age). With [store], the cookie holds a signed session id and the data
    lives server-side; without it, the cookie holds the signed data. *)
-let plug ~(secret : string) ?(cookie = "_fennec_session") ?(path = "/") ?(lifetime = 86400.)
+let make ~(secret : string) ?(cookie = "_fennec_session") ?(path = "/") ?(lifetime = 86400.)
     ?(same_site = Cookie.Lax) ?(http_only = true) ?secure ?store () : Paw.t =
  fun c ->
-  let secure = match secure with Some b -> b | None -> Conn.scheme c = "https" in
+  let secure = match secure with Some b -> b | None -> forwarded_scheme c = "https" in
   let tok = Conn.cookie c cookie in
   let loaded, loaded_exp, id =
     match store with

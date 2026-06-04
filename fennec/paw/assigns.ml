@@ -48,6 +48,6 @@ let get (t : t) (k : 'a key) : 'a option =
 
 let mem (t : t) (k : 'a key) : bool = Option.is_some (get t k)
 
-(* get or raise — for keys a plug guarantees upstream (e.g. current_user after auth) *)
+(* get or raise — for keys a paw guarantees upstream (e.g. current_user after auth) *)
 let get_exn (t : t) (k : 'a key) : 'a =
   match get t k with Some v -> v | None -> invalid_arg ("Assigns.get_exn: missing " ^ k.name)

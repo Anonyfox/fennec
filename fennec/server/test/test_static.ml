@@ -131,7 +131,7 @@ let () =
     [ ("index.html", "<h1>baked</h1>"); ("robots.txt", "User-agent: *\nDisallow: /\n");
       ("app.js", String.make 2000 'j') ]
   in
-  let emb = Static.Embedded (fun k -> List.assoc_opt k table) in
+  let emb = Static.Embedded ("test", fun k -> List.assoc_opt k table) in
   let eserve r = Static.respond emb r in
   eq "embedded index served" (status_of (eserve (req "/"))) 200;
   eq "embedded index body" (body_of (eserve (req "/"))) "<h1>baked</h1>";
@@ -145,6 +145,13 @@ let () =
     (status_of (eserve (req ~headers:[ ("If-None-Match", eetag) ] "/robots.txt"))) 304;
   eq "embedded Range -> 206"
     (status_of (eserve (req ~headers:[ ("Range", "bytes=0-9") ] "/app.js"))) 206;
+
+  (* two distinct embedded bundles with the SAME key must not collide in the shared cache *)
+  let a = Static.Embedded ("bundle_a", fun k -> if k = "x.txt" then Some "AAAA" else None) in
+  let b = Static.Embedded ("bundle_b", fun k -> if k = "x.txt" then Some "BBBB" else None) in
+  eq "bundle A serves its own bytes" (body_of (Static.respond a (req "/x.txt"))) "AAAA";
+  eq "bundle B serves its own bytes (no collision)" (body_of (Static.respond b (req "/x.txt"))) "BBBB";
+  eq "bundle A unchanged after B served" (body_of (Static.respond a (req "/x.txt"))) "AAAA";
 
   (* cleanup *)
   (try Sys.remove (Filename.concat root "escape") with _ -> ());

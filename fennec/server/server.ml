@@ -142,7 +142,14 @@ let has_header_ci headers k = Fennec_core.Headers.mem headers k
 let bw = Eio.Buf_write.string
 let write_status_line w status =
   bw w "HTTP/1.1 "; bw w (string_of_int status); bw w " "; bw w (CH.reason_phrase status); bw w "\r\n"
-let write_header_line w k v = bw w k; bw w ": "; bw w v; bw w "\r\n"
+(* defang CR/LF in a header value so no paw can split the response by reflecting client
+   input into a header (header injection / response splitting). The common case has no
+   control byte, so we only allocate when one is present. *)
+let sanitize_header_value v =
+  if String.exists (fun c -> c = '\r' || c = '\n') v then
+    String.map (fun c -> if c = '\r' || c = '\n' then ' ' else c) v
+  else v
+let write_header_line w k v = bw w k; bw w ": "; bw w (sanitize_header_value v); bw w "\r\n"
 let write_conn_header w ~keep_alive =
   bw w "connection: "; bw w (if keep_alive then "keep-alive" else "close"); bw w "\r\n"
 
@@ -355,7 +362,7 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs (endpoints : Endpoint.
     | Ok (Too_large _) -> respond_and_close (CH.text ~status:413 "Payload Too Large")
     | Ok (Req p) -> (
       (* scheme is http at the transport (no in-process TLS); a force-https / proxy
-         plug can rewrite from X-Forwarded-Proto. host is the normalized Host header. *)
+         a force-https paw can rewrite from X-Forwarded-Proto. host is the normalized Host header. *)
       let host = Host.normalize (match header p.headers "host" with Some h -> h | None -> "") in
       let req = to_request ~host ~scheme:"http" ~remote_ip p in
       let endpoint = select_endpoint endpoints p in

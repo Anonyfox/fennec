@@ -1,6 +1,6 @@
 ; The userland facade — `Fennec`. The one server-side library an app's server.ml
 ; depends on: owns Eio, the dev/prod web-root flip, dev livereload, and serve.
-; Re-exports Endpoint/Plug/Conn/Static so userland opens one module.
+; Re-exports Endpoint/Conn/Http + the Paw battery namespace so userland opens one module.
 (library
  (name fennec)
  (public_name fennec)

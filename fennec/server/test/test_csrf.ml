@@ -1,5 +1,5 @@
 (* CSRF: masked + signed + expiring tokens; the distinguishable outcomes
-   (Ok/Expired/Wrong_session/Invalid); and the plug gating unsafe methods. *)
+   (Ok/Expired/Wrong_session/Invalid); and the paw gating unsafe methods. *)
 
 module Csrf = Fennec_server.Csrf
 module Session = Fennec_server.Session
@@ -14,7 +14,7 @@ let app_secret = "app-signing-secret"
 let sess_secret = "session-signing-secret"
 
 (* a conn with an active session (so CSRF has somewhere to store its per-session secret) *)
-let with_session () = Session.plug ~secret:sess_secret () (Conn.make (req "/"))
+let with_session () = Session.make ~secret:sess_secret () (Conn.make (req "/"))
 
 let () =
   print_endline "Csrf token + verify (outcomes):";
@@ -36,7 +36,7 @@ let () =
   eq "past-expiry token -> Expired" (Csrf.verify ~secret:app_secret c expired) Csrf.Expired
 
 let () =
-  print_endline "Csrf plug:";
+  print_endline "Csrf paw:";
   (* establish a session + token on a GET, capture the session cookie *)
   let g = with_session () in
   let tok = Csrf.token ~secret:app_secret g in
@@ -51,9 +51,9 @@ let () =
     | [] -> ""
   in
   let mk ?(meth = H.POST) ?(headers = []) ?(body = "") () =
-    Session.plug ~secret:sess_secret () (Conn.make (req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+    Session.make ~secret:sess_secret () (Conn.make (req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
   in
-  let csrf = Csrf.plug ~secret:app_secret () in
+  let csrf = Csrf.make ~secret:app_secret () in
   check "GET is not gated" (not (Conn.answered (csrf (mk ~meth:H.GET ()))));
   check "POST with a valid header token passes" (not (Conn.answered (csrf (mk ~headers:[ ("x-csrf-token", tok) ] ()))));
   let body = "_csrf_token=" ^ tok in
@@ -63,6 +63,14 @@ let () =
   eq "POST with a bad token -> 403"
     (match Conn.resp (csrf (mk ~headers:[ ("x-csrf-token", "wrong") ] ())) with Some r -> r.H.status | None -> 0)
     403
+
+let () =
+  print_endline "Csrf requires a session:";
+  let no_sess () = Conn.make (req "/") in
+  check "make raises without an upstream session"
+    (try ignore (Csrf.make ~secret:app_secret () (no_sess ())); false with Failure _ -> true);
+  check "token raises without an upstream session"
+    (try ignore (Csrf.token ~secret:app_secret (no_sess ())); false with Failure _ -> true)
 
 let () =
   if !fails = 0 then print_endline "all CSRF tests passed."

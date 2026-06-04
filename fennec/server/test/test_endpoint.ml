@@ -53,7 +53,7 @@ let () =
   let guard : Paw.t = fun c -> if Conn.path c = "/blocked" then Conn.text ~status:403 c "no" else c in
   let e2 =
     Endpoint.make ~host:"*" ()
-    |> Endpoint.plug guard
+    |> Endpoint.use guard
     |> Endpoint.get "/blocked" (fun c -> Conn.text c "should-not-reach")
     |> Endpoint.get "/ok" (fun c -> Conn.text c "ok")
   in

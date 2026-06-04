@@ -4,19 +4,34 @@
    a dev control socket the CLI pings), and starting the server. Userland writes
    endpoints as paw pipelines and hands them to [serve].
 
-   Re-exports the pieces an app needs (Endpoint, Plug, Conn, Router, Head) so a
-   userland file opens one module. *)
+   Re-exports the pieces an app needs (Endpoint, Conn, Http, …) so a userland file
+   opens one module. The prebuilt batteries live under {!Paw} as submodules
+   ([Paw.Logger], [Paw.Session], [Paw.Csrf], …), each a [make] returning a paw. *)
 
 module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
 module Endpoint = Fennec_server.Endpoint
-module Plug = Fennec_server.Plug
-module Static = Fennec_server.Static
 module Livereload = Fennec_server.Livereload
 module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
-module Session = Fennec_server.Session
-module Csrf = Fennec_server.Csrf
+
+(* The verb namespace: the primitive + its algebra + the route verbs (from
+   [Fennec_paw.Paw]) plus every prebuilt battery as a submodule. So userland reaches
+   for [Paw.seq], [Paw.get], and [Paw.Logger.make ()] / [Paw.Session.make ~secret ()]
+   from one place — each battery [make] returns a plain [Paw.t]. *)
+module Paw = struct
+  include Fennec_paw.Paw
+  module Logger = Fennec_server.Logger
+  module Security_headers = Fennec_server.Security_headers
+  module Request_id = Fennec_server.Request_id
+  module Method_override = Fennec_server.Method_override
+  module Basic_auth = Fennec_server.Basic_auth
+  module Force_https = Fennec_server.Force_https
+  module Metrics = Fennec_server.Metrics
+  module Websocket = Fennec_server.Websocket
+  module Static = Fennec_server.Static
+  module Session = Fennec_server.Session
+  module Csrf = Fennec_server.Csrf
+end
 
 let is_dev = try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true
 
@@ -40,12 +55,12 @@ let both (f : unit -> 'a) (g : unit -> 'b) : 'a * 'b =
 (* A web root for an app: dev reads the assembled webroot/ dir next to the exe
    (the per-app dune assembly), prod serves the embedded map. [name] disambiguates
    per-app dev webroots ("webroot_web", "webroot_admin"). *)
-let web_source ~name ~assets : Static.source =
-  if is_dev then Static.Dir (Filename.concat (Filename.dirname Sys.executable_name) name)
-  else Static.Embedded assets
+let web_source ~name ~assets : Fennec_server.Static.source =
+  if is_dev then Fennec_server.Static.Dir (Filename.concat (Filename.dirname Sys.executable_name) name)
+  else Fennec_server.Static.Embedded (name, assets)
 
 (* the static-serving paw for an app's web root *)
-let static ~name ~assets : Paw.t = Plug.static (web_source ~name ~assets)
+let static ~name ~assets : Paw.t = Fennec_server.Static.make (web_source ~name ~assets)
 
 (* The dev control socket. The CLI owns ALL filesystem watching (it's the one
    process that links the native fs-event watcher); the framework watches nothing.

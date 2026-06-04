@@ -51,7 +51,7 @@ val answered : t -> bool
 
 val path : t -> string
 
-(** The effective method (a method-override plug may have replaced it). *)
+(** The effective method (a method-override paw may have replaced it). *)
 val meth : t -> Fennec_core.Http.meth
 
 val host : t -> string
@@ -129,7 +129,7 @@ val set_cookie :
 (** Expire a cookie now. *)
 val delete_cookie : t -> ?path:string -> ?domain:string -> string -> t
 
-(** Set the effective method (used by a method-override plug). *)
+(** Set the effective method (used by a method-override paw). *)
 val override_method : t -> Fennec_core.Http.meth -> t
 
 (** Set the captured path params (used by a :param/route). *)

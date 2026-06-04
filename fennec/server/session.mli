@@ -1,10 +1,10 @@
-(** Sessions (Plug.Session / Dream-grade). A small [string -> string] map per request.
+(** Sessions (Dream-grade). A small [string -> string] map per request.
 
     Two stores: the default {b signed-cookie} store (stateless — the signed data rides in
     the cookie, so it scales horizontally for free) and an optional {b server-side} store
     ([?store]) where the cookie holds only a signed id. Either way a session has a
     [lifetime]: expired sessions load empty and a past-half-life session is auto-refreshed.
-    Add {!plug} early, read/write with {!get}/{!set} downstream. Constant-time verify. *)
+    Add {!make} early, read/write with {!get}/{!set} downstream. Constant-time verify. *)
 
 (** Sign a payload: ["<b64 payload>.<b64 hmac>"] (also usable as a generic signed token). *)
 val sign : secret:string -> string -> string
@@ -24,7 +24,11 @@ type store = {
     after which an idle session is evicted. *)
 val memory_store : ?ttl:float -> unit -> store
 
-(** A session value, if {!plug} ran and the key is set. *)
+(** Whether {!make} ran upstream on this conn (so {!get}/{!set} are meaningful). A dependent
+    paw can use this to fail loudly on a misordered pipeline. *)
+val active : Fennec_paw.Conn.t -> bool
+
+(** A session value, if {!make} ran and the key is set. *)
 val get : Fennec_paw.Conn.t -> string -> string option
 
 (** The session map (reserved ["_"]-prefixed keys hidden). *)
@@ -39,11 +43,11 @@ val delete : Fennec_paw.Conn.t -> string -> Fennec_paw.Conn.t
 (** Empty the session. *)
 val clear : Fennec_paw.Conn.t -> Fennec_paw.Conn.t
 
-(** The session plug. [secret] signs the cookie; [lifetime] is the max age (seconds, default
+(** The session paw. [secret] signs the cookie; [lifetime] is the max age (seconds, default
     1 day). With [store], the cookie holds a signed id and the data lives server-side;
     without it, the cookie holds the signed data. [secure] defaults to whether the request
     is https; the cookie is HttpOnly + SameSite=Lax by default. *)
-val plug :
+val make :
   secret:string ->
   ?cookie:string ->
   ?path:string ->

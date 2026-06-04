@@ -1,12 +1,12 @@
-(* CSRF protection (Plug.CSRFProtection / Dream.csrf-grade). A per-session secret guards
+(* CSRF protection (Dream.csrf-grade). A per-session secret guards
    state-changing requests. A token embedded in a form is:
      - MASKED with fresh randomness each render (so the value differs every time —
        defeating BREACH-style compression oracles),
      - carries an EXPIRY, and
      - is HMAC-signed with the app secret (so the expiry/payload can't be forged).
    {!verify} returns a distinguishable outcome (Ok / Expired / Wrong_session / Invalid),
-   and {!plug} rejects unsafe requests whose token isn't [Ok]. Constant-time throughout.
-   Requires {!Session.plug} earlier in the pipeline. *)
+   and {!make} rejects unsafe requests whose token isn't [Ok]. Constant-time throughout.
+   Requires {!Session.make} earlier in the pipeline. *)
 
 module Conn = Fennec_paw.Conn
 module Paw = Fennec_paw.Paw
@@ -40,6 +40,13 @@ let constant_eq (a : string) (b : string) : bool =
   String.iteri (fun i ch -> acc := !acc lor (Char.code ch lxor Char.code b.[i])) a;
   !acc = 0
 
+(* CSRF stores its per-session secret in the session, so a session paw MUST run first. A
+   misordered pipeline would otherwise fail silently (tokens unverifiable, every POST 403) —
+   surface it loudly instead. *)
+let require_session (c : Conn.t) : unit =
+  if not (Session.active c) then
+    failwith "Fennec.Paw.Csrf: no active session — add Paw.Session.make earlier in the pipeline"
+
 (* the per-session CSRF secret, creating + storing one if absent (for {!token}) *)
 let session_secret (c : Conn.t) : string =
   match Option.bind (Session.get c session_key) b64d with
@@ -57,6 +64,7 @@ let session_secret_opt (c : Conn.t) : string option =
 
 (* a fresh, embeddable token: masked secret + expiry, signed with the app [secret] *)
 let token ~(secret : string) ?(valid_for = 3600.) (c : Conn.t) : string =
+  require_session c;
   let raw = session_secret c in
   let mask = secure_random token_len in
   let masked = b64e (mask ^ xor mask raw) in
@@ -87,11 +95,12 @@ let verify ~(secret : string) (c : Conn.t) (tok : string) : outcome =
           | _, None -> Wrong_session
           | _ -> Invalid)))
 
-(* The CSRF plug: verify the token on unsafe methods (from the [header] or a body [field]),
+(* The CSRF paw: verify the token on unsafe methods (from the [header] or a body [field]),
    answer 403 unless it is [Ok], decline on [safe] methods. [secret] signs the tokens. *)
-let plug ~(secret : string) ?(field = "_csrf_token") ?(header = "x-csrf-token")
+let make ~(secret : string) ?(field = "_csrf_token") ?(header = "x-csrf-token")
     ?(safe = [ "GET"; "HEAD"; "OPTIONS" ]) () : Paw.t =
  fun c ->
+  require_session c;
   if List.mem (H.string_of_meth (Conn.meth c)) safe then c
   else
     let submitted =

@@ -1,6 +1,6 @@
 (* The site server — TWO endpoints, each its own app on its own domain (dev: its own
    localhost port). The whole operational surface: a shared paw pipeline (logger,
-   security headers, a custom plug, ONE shared static web root), an API route, and the
+   security headers, a custom paw, ONE shared static web root), an API route, and the
    app's SSR render via [Endpoint.app]. Each endpoint mounts just its own app, whose
    document shell references its predictable asset URLs (/_apps/<name>/main.{js,css}).
    In prod endpoints are selected by Host pattern; in dev each gets its own port.
@@ -12,7 +12,7 @@
    compiled to JS via js_of_ocaml for the client (./client). *)
 
 module Endpoint = Fennec.Endpoint
-module Plug = Fennec.Plug
+module Paw = Fennec.Paw
 module Conn = Fennec.Conn
 
 (* The app's data: ONE place defines each value, used by BOTH the SSR source (in-process,
@@ -34,16 +34,16 @@ let download_path =
   close_out oc;
   p
 
-(* a custom plug — trivial to write and unit-test: stamp every response *)
+(* a custom paw — trivial to write and unit-test: stamp every response *)
 let powered_by : Fennec.Paw.t =
  fun c ->
   Conn.before_send c (fun r ->
       { r with Fennec.Http.headers = ("X-Powered-By", "fennec") :: r.Fennec.Http.headers })
 
-(* shared pipeline: logging, security headers, the custom plug, and ONE static web
+(* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)
 let common =
-  [ Plug.logger (); Plug.security_headers; powered_by;
+  [ Paw.Logger.make (); Paw.Security_headers.make (); powered_by;
     Fennec.static ~name:"webroot" ~assets:Assets.lookup ]
 
 let web =
