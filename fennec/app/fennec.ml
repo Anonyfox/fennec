@@ -121,18 +121,21 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
   Eio.Switch.run @@ fun sw ->
   if livereload_on then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
   (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
-     clean up after), we'd otherwise keep the port and make the next `fennec dev` fail to bind.
-     So in dev, watch for reparenting to init (getppid = 1) and exit — no orphan can hold the
-     port. Cheap: a 1s poll on a background fiber. *)
-  if livereload_on then
+     clean up after) we'd otherwise keep the port and make the next `fennec dev` fail to bind.
+     The supervisor passes its pid as FENNEC_DEV_PARENT; we poll whether THAT process is still
+     alive and exit the instant it isn't. (getppid is unreliable here — a killed supervisor
+     doesn't always reparent us to init.) Cheap: a 0.25s poll on a background fiber. *)
+  (match (if livereload_on then Option.bind (Sys.getenv_opt "FENNEC_DEV_PARENT") int_of_string_opt else None) with
+  | Some parent ->
     Eio.Fiber.fork ~sw (fun () ->
         let clock = Eio.Stdenv.clock env in
+        let alive pid = try Unix.kill pid 0; true with _ -> false in
         let rec watch () =
-          Eio.Time.sleep clock 1.0;
-          if Unix.getppid () = 1 then (Printf.eprintf "[fennec] dev supervisor gone — exiting\n%!"; exit 0)
-          else watch ()
+          Eio.Time.sleep clock 0.25;
+          if alive parent then watch () else (Printf.eprintf "[fennec] dev supervisor gone — exiting\n%!"; exit 0)
         in
-        watch ());
+        watch ())
+  | None -> ());
   Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints)
     (if livereload_on then " (dev: livereload on)" else "");
   Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~env endpoints

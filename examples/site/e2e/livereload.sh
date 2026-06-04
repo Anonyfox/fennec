@@ -40,11 +40,11 @@ pkill -9 -f "dune build --watch" 2>/dev/null || true; sleep 1
 up() { i=0; while ! grep -q "serving 2 endpoint" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
 
 echo "starting instance 1…"
-( cd examples/site && fennec dev ) >/tmp/fennec_lr_1.log 2>&1 & D1=$!
+( cd examples/site && exec fennec dev ) >/tmp/fennec_lr_1.log 2>&1 & D1=$!
 up /tmp/fennec_lr_1.log
 
 echo "1) single instance — a second start must reap the first…"
-( cd examples/site && fennec dev ) >/tmp/fennec_lr_2.log 2>&1 & D2=$!
+( cd examples/site && exec fennec dev ) >/tmp/fennec_lr_2.log 2>&1 & D2=$!
 up /tmp/fennec_lr_2.log
 sleep 2
 kill -0 "$D1" 2>/dev/null && fail "first instance still alive after a second start (orphans accumulate)"
@@ -64,4 +64,11 @@ sed -i.bak "s/Welcome to the Fennec site/$MARK/" "$SRC" && rm -f "$SRC.bak"
 i=0; while ! curl -s "$BUNDLE" | grep -q "$MARK"; do i=$((i+1)); [ $i -gt 40 ] && fail "client bundle never picked up the edit (stale hydration)"; sleep 0.5; done
 curl -s "$PAGE" | grep -q "$MARK" || fail "SSR never picked up the edit"
 
-echo "PASS: single instance, fresh on startup, no-cache, and edits reach SSR + the rebuilt bundle."
+# revert WHILE fennec dev is alive, so the running dune --watch re-syncs and leaves no stale
+# _build (reverting after kill, e.g. via `git checkout`, is NOT seen by dune and freezes the
+# build at the marker). Asserting the revert propagates also guards that very failure.
+echo "5) revert propagation — undo the edit so no stale build is left behind…"
+sed -i.bak "s/$MARK/Welcome to the Fennec site/" "$SRC" && rm -f "$SRC.bak"
+i=0; while ! curl -s "$PAGE" | grep -q "Welcome to the Fennec site"; do i=$((i+1)); [ $i -gt 40 ] && fail "revert not picked up — dune left a stale build"; sleep 0.5; done
+
+echo "PASS: single instance, fresh on startup, no-cache, edit+revert both propagate cleanly."

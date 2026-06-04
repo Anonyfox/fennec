@@ -95,7 +95,9 @@ let run ~targets ~exe ~assets =
 
   let dw = ref (Dune_watch.start targets) in
   let control_path = tmp_socket "fennec-lr" in
-  let dev_env = [| "FENNEC_ENV=development"; "FENNEC_LIVERELOAD=" ^ control_path |] in
+  (* FENNEC_DEV_PARENT lets the server watch THIS supervisor and self-exit if we die (even on
+     SIGKILL), so it can never be left holding the dev port *)
+  let dev_env = [| "FENNEC_ENV=development"; "FENNEC_LIVERELOAD=" ^ control_path; "FENNEC_DEV_PARENT=" ^ string_of_int (Unix.getpid ()) |] in
   let server_pid = ref None in
   let last_exe = ref 0.0 in
   let assets = Assets.create ~dir:(Filename.concat (Filename.dirname exe) assets) in

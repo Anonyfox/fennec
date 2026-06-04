@@ -97,6 +97,11 @@ sh examples/site/e2e/run.sh
 # no browser). Fails if a watch-target or dev-caching regression makes edits not show.
 sh examples/site/e2e/livereload.sh
 
+# process-hygiene check: asserts `fennec dev` can never leave a leftover holding the dev port —
+# SIGKILL frees the port (server self-exits), restarts bind cleanly, a second start reaps the
+# first (single instance), and a clean shutdown leaves nothing behind.
+sh examples/site/e2e/no_leftovers.sh
+
 # prod: native server with the web root embedded in the binary
 dune build --profile release examples/site/server.exe
 ```
