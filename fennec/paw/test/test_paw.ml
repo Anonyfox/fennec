@@ -16,6 +16,10 @@ let check name cond =
     Printf.printf "  FAIL %s\n" name)
 
 let eq name a b = check name (a = b)
+let contains hay sub =
+  let n = String.length hay and m = String.length sub in
+  let rec go i = i + m <= n && (String.sub hay i m = sub || go (i + 1)) in
+  m = 0 || go 0
 let req ?(meth = H.GET) path = H.make_request ~meth ~path ()
 
 let () =
@@ -221,6 +225,72 @@ let () =
   let one = Paw.seq [ Route.get "/p/:id" (fun c -> Conn.text c (Option.value (Conn.param c "id") ~default:"?")) ] in
   eq "path param beats query in param"
     (Paw.run one (H.make_request ~meth:H.GET ~path:"/p/path" ~query_string:"id=query" ())).H.body "path"
+
+(* Direct coverage of every remaining public Conn function, so the surface is 100% exercised
+   at the unit level (the rest are tested above or via the server/e2e). *)
+let () =
+  print_endline "Conn (full surface):";
+  let base =
+    H.make_request ~meth:H.GET ~path:"/p" ~query_string:"a=1" ~host:"h" ~scheme:"https"
+      ~remote_ip:(Some "1.2.3.4") ~version:"HTTP/1.1"
+      ~headers:[ ("X-M", "a"); ("X-M", "b"); ("Cookie", "c=1") ] ()
+  in
+  let mk () = Conn.make base in
+  (* readers *)
+  eq "req returns the request" (Conn.req (mk ())).H.path "/p";
+  eq "path" (Conn.path (mk ())) "/p";
+  eq "version" (Conn.version (mk ())) "HTTP/1.1";
+  eq "req_headers (all values)" (Conn.req_headers (mk ()) "x-m") [ "a"; "b" ];
+  eq "query_params (list)" (Conn.query_params (mk ())) [ ("a", "1") ];
+  eq "cookies (list)" (Conn.cookies (mk ())) [ ("c", "1") ];
+  let cf =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/"
+         ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body:"k=v" ())
+  in
+  eq "body_params (list)" (Conn.body_params cf) [ ("k", "v") ];
+  eq "files (list, none)" (Conn.files cf) [];
+  eq "set_path_params + path_params" (Conn.path_params (Conn.set_path_params (mk ()) [ ("id", "7") ])) [ ("id", "7") ];
+  (* typed assigns: get_exn *)
+  let k : int Assigns.key = Assigns.key "n" in
+  eq "get_exn returns the value" (Conn.get_exn (Conn.assign (mk ()) k 9) k) 9;
+  check "get_exn raises on a missing key" (try ignore (Conn.get_exn (mk ()) k); false with Invalid_argument _ -> true);
+  (* override_method *)
+  eq "override_method changes the effective method" (Conn.meth (Conn.override_method (mk ()) H.DELETE)) H.DELETE;
+  (* respond directly *)
+  let cr = Conn.respond (mk ()) (H.text ~status:418 "teapot") in
+  eq "respond sets status + body" (match Conn.resp cr with Some r -> (r.H.status, r.H.body) | None -> (0, "")) (418, "teapot");
+  (* resp_skeleton: status + headers, empty body *)
+  let sk = Conn.resp_skeleton (Conn.set_header (mk ()) "X-S" "1") in
+  check "resp_skeleton keeps headers, empties the body" (sk.H.body = "" && List.mem ("X-S", "1") sk.H.headers);
+  (* redirect *)
+  let crd = Conn.redirect ~status:301 (mk ()) "/new" in
+  check "redirect: 301 + Location + answered"
+    (Conn.answered crd
+    && match Conn.resp crd with Some r -> r.H.status = 301 && List.mem ("location", "/new") r.H.headers | None -> false);
+  (* delete_cookie -> an expiring Set-Cookie *)
+  let dc = Conn.text (Conn.delete_cookie (mk ()) "sid") "x" in
+  check "delete_cookie expires the cookie (Max-Age=0)"
+    (match Conn.resp dc with
+     | Some r -> ( match Fennec_core.Headers.get_all r.H.headers "set-cookie" with [ s ] -> contains s "Max-Age=0" | _ -> false)
+     | None -> false);
+  (* upgrade + upgrade_handler *)
+  let cu = Conn.upgrade (mk ()) (fun _ -> ()) in
+  check "upgrade: handler set, answered, no buffered resp"
+    (Conn.upgrade_handler cu <> None && Conn.answered cu && Conn.resp cu = None);
+  (* send_file -> a File stream *)
+  let csf = Conn.send_file (mk ()) ~path:"/tmp/x.txt" () in
+  check "send_file sets a File stream + answers"
+    (Conn.answered csf && match Conn.stream csf with Some (Conn.File (p, _)) -> p = "/tmp/x.txt" | _ -> false);
+  (* send_chunked -> a Chunked stream whose producer emits in order *)
+  let got = ref [] in
+  let csc = Conn.send_chunked (mk ()) ~content_type:"text/event-stream" (fun emit -> emit "a"; emit "b") in
+  (match Conn.stream csc with
+   | Some (Conn.Chunked (ct, produce)) ->
+     eq "send_chunked content-type" ct "text/event-stream";
+     produce (fun s -> got := s :: !got)
+   | _ -> check "send_chunked sets a Chunked stream" false);
+  eq "send_chunked producer emits in order" (List.rev !got) [ "a"; "b" ]
 
 let () =
   if !fails = 0 then print_endline "all Paw tests passed."
