@@ -114,6 +114,19 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
   in
   Eio.Switch.run @@ fun sw ->
   if livereload_on then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
+  (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
+     clean up after), we'd otherwise keep the port and make the next `fennec dev` fail to bind.
+     So in dev, watch for reparenting to init (getppid = 1) and exit — no orphan can hold the
+     port. Cheap: a 1s poll on a background fiber. *)
+  if livereload_on then
+    Eio.Fiber.fork ~sw (fun () ->
+        let clock = Eio.Stdenv.clock env in
+        let rec watch () =
+          Eio.Time.sleep clock 1.0;
+          if Unix.getppid () = 1 then (Printf.eprintf "[fennec] dev supervisor gone — exiting\n%!"; exit 0)
+          else watch ()
+        in
+        watch ());
   Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints)
     (if livereload_on then " (dev: livereload on)" else "");
   Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~env endpoints

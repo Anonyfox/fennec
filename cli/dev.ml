@@ -69,6 +69,47 @@ let start_server exe extra_env =
 
 let kill_quietly pid = try Unix.kill pid Sys.sigterm with _ -> ()
 
+(* Cross-session cleanup. The supervised server self-exits when orphaned, but `dune build
+   --watch` (external) and the esbuild worker can't, so a SIGKILL'd `fennec dev` would leave a
+   stale dune daemon that breaks the NEXT run's `dune describe`/build. We record this run's
+   child pids in a pidfile and, on the next startup, SIGKILL whatever the previous run left —
+   self-healing without depending on a clean shutdown. *)
+let rec find_root dir =
+  if Sys.file_exists (Filename.concat dir "dune-project") then Some dir
+  else
+    let parent = Filename.dirname dir in
+    if parent = dir then None else find_root parent
+
+let pidfile_rel = Filename.concat "_build" ".fennec_dev.pids"
+
+let reap_stale () =
+  match find_root (Sys.getcwd ()) with
+  | None -> ()
+  | Some root -> (
+    let pf = Filename.concat root pidfile_rel in
+    match (try Some (open_in pf) with _ -> None) with
+    | None -> ()
+    | Some ic ->
+      let killed = ref false in
+      (try
+         while true do
+           match int_of_string_opt (String.trim (input_line ic)) with
+           | Some pid when pid > 1 -> (try Unix.kill pid Sys.sigkill; killed := true with _ -> ())
+           | _ -> ()
+         done
+       with End_of_file -> ());
+      close_in_noerr ic;
+      (try Sys.remove pf with _ -> ());
+      (* let the killed dune daemon release its lock before we run our own dune *)
+      if !killed then Unix.sleepf 0.3)
+
+let write_pids pids =
+  try
+    let oc = open_out pidfile_rel in
+    List.iter (fun p -> output_string oc (string_of_int p ^ "\n")) pids;
+    close_out oc
+  with _ -> ()
+
 (* A unix-socket path in the temp dir, unique to this CLI run. Kept short — unix
    socket paths cap around 100 bytes — falling back to /tmp if $TMPDIR is long. *)
 let tmp_socket prefix =
@@ -207,15 +248,22 @@ let run targets exe assets =
   if evented then ignore (Fennec_buildkit.Watch.add watcher ~recursive:true assets_dir);
   pf "fennec dev: server up (pid %d) — rebuilds via %s\n%!" !server_pid
     (if evented then "fs events" else "poll");
+  (* record our children so the NEXT run can reap them if we're killed without cleanup. The
+     server self-exits on orphan, but dune --watch + the worker need this. *)
+  write_pids [ watch_pid; worker_pid; !server_pid ];
 
   let shutdown _ =
     pf "\nfennec dev: shutting down\n%!";
     kill_quietly !server_pid;
     kill_quietly watch_pid;
     kill_quietly worker_pid;
+    (* ensure the server is actually gone (frees its port) even if it ignored SIGTERM *)
+    Unix.sleepf 0.15;
+    (try Unix.kill !server_pid Sys.sigkill with _ -> ());
     if evented then Fennec_buildkit.Watch.free watcher;
     (try Sys.remove control_path with _ -> ());
     (try Sys.remove worker_socket with _ -> ());
+    (try Sys.remove pidfile_rel with _ -> ());
     exit 0
   in
   Sys.set_signal Sys.sigint (Sys.Signal_handle shutdown);
@@ -244,7 +292,14 @@ let run targets exe assets =
   in
   let rec loop ~suspended =
     let event = await () in
-    if event then signal_assets (); (* frontend hot-swap: ping on a real asset change *)
+    if event then begin
+      (* coalesce a build's burst of writes: keep draining short quiet windows so we act on the
+         COMPLETED tree, not a half-written one (which would reload the browser to a stale
+         state — the "I only see the last label" symptom) *)
+      let rec settle () = if evented && Fennec_buildkit.Watch.wait watcher ~timeout_ms:120 then settle () in
+      settle ();
+      signal_assets () (* frontend hot-swap: ping once, on the settled asset change *)
+    end;
     let m = mtime exe in
     let rebuilt = m > !last_exe in
     if rebuilt then begin
@@ -257,32 +312,41 @@ let run targets exe assets =
     end
     else if suspended then loop ~suspended:true (* wait for the next rebuild *)
     else begin
-      let crashed =
+      let exited =
         match Unix.waitpid [ Unix.WNOHANG ] !server_pid with
-        | 0, _ -> false
-        | _, _ -> true
-        | exception _ -> false
+        | 0, _ -> None
+        | _, status -> Some status
+        | exception _ -> None
       in
-      if not crashed then loop ~suspended:false
-      else begin
+      match exited with
+      | None -> loop ~suspended:false
+      | Some status ->
+        (* EADDRINUSE: the server exits 98. Not a code bug a rebuild fixes — the port is held
+           (typically an orphan that's about to self-exit), so retry on a flat 1s and self-heal. *)
+        let port_busy = status = Unix.WEXITED 98 in
         crash_times := now () :: !crash_times;
         prune ();
         let n = List.length !crash_times in
         if n >= max_crashes then begin
-          ef
-            "fennec dev: server crashed %d times in %.0fs — giving up restarts. \
-             Fix the error and save to retry.\n%!"
-            n window;
+          (if port_busy then
+             ef
+               "fennec dev: the server's port is still in use after several tries — another \
+                dev server may be running. Free it and save to retry.\n%!"
+           else
+             ef
+               "fennec dev: server crashed %d times in %.0fs — giving up restarts. \
+                Fix the error and save to retry.\n%!"
+               n window);
           loop ~suspended:true
         end
         else begin
-          (* exponential backoff: 0.2s, 0.4s, 0.8s, … capped at ~3s *)
-          let delay = Float.min 3.0 (0.2 *. (2. ** float_of_int (n - 1))) in
+          let delay = if port_busy then 1.0 else Float.min 3.0 (0.2 *. (2. ** float_of_int (n - 1))) in
           Unix.sleepf delay;
-          restart (Printf.sprintf "server exited (crash %d/%d)" n max_crashes);
+          restart
+            (if port_busy then "port busy — retrying"
+             else Printf.sprintf "server exited (crash %d/%d)" n max_crashes);
           loop ~suspended:false
         end
-      end
     end
   in
   loop ~suspended:false

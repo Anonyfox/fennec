@@ -450,8 +450,14 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domai
     (fun port group ->
       let group = List.rev group (* preserve declaration order for host matching *) in
       let socket =
-        Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
-          (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
+        try
+          Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
+            (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
+        with Unix.Unix_error (Unix.EADDRINUSE, _, _) ->
+          (* a clear, actionable message + a distinct exit code the dev supervisor recognizes
+             (so it reports "port busy" and self-heals, instead of a generic crash-loop) *)
+          Printf.eprintf "fennec: port %d is already in use — another server is holding it.\n%!" port;
+          exit 98
       in
       let handle flow addr =
         Eio.Semaphore.acquire slots;

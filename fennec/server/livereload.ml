@@ -22,11 +22,19 @@ type t = {
 
 let create () = { clients = Hashtbl.create 16; next = 0 }
 
-(* register a browser's livereload socket; returns an unregister thunk *)
+(* the server's boot id: its OS process id. It is stable for the life of this server process
+   and DIFFERENT after a restart (the supervisor spawns a fresh process), so the client can
+   tell "reconnected to the same server" (a blip — don't reload) from "the server was replaced"
+   (a real backend rebuild — reload once). *)
+let boot_id = string_of_int (Unix.getpid ())
+
+(* register a browser's livereload socket; returns an unregister thunk. We greet the client
+   with our boot id so it only reloads on a genuine restart, not on every reconnect. *)
 let register t (send : string -> unit) : unit -> unit =
   t.next <- t.next + 1;
   let id = t.next in
   Hashtbl.replace t.clients id send;
+  (try send ("boot:" ^ boot_id) with _ -> ());
   fun () -> Hashtbl.remove t.clients id
 
 let broadcast t (msg : string) =

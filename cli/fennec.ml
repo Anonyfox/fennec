@@ -315,7 +315,10 @@ let dev_cmd =
       | Error msg ->
         Printf.eprintf "fennec dev: %s\n" msg;
         1)
-    else
+    else begin
+      (* reap any orphaned dune/server/worker from a previous (e.g. SIGKILL'd) run BEFORE we
+         run `dune describe` for discovery — a stale dune daemon would otherwise block it *)
+      Dev.reap_stale ();
       match exe with
       | Some exe_path ->
         (* Dev.run never returns (it supervises until killed); its type unifies with int *)
@@ -329,6 +332,7 @@ let dev_cmd =
           (* Dev expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
           Dev.run (targets_or d.Discover.targets) d.Discover.exe assets)
+    end
   in
   let doc = "Run the dev server with livereload" in
   let man =

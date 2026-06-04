@@ -17,28 +17,28 @@
 
 let endpoint = "/_fennec/livereload"
 
-(* A tiny, dependency-free client. Keeps a websocket open; when it drops (server
-   restart) it reconnects, and once the server is back it reloads. A "css" text
-   frame hot-swaps stylesheets with no reload; anything else does a full reload.
+(* A tiny, dependency-free client. Keeps a websocket open; on connect the server sends a
+   "boot:<id>" frame (its per-process id). The client adopts the FIRST id it sees and reloads
+   only when it later sees a DIFFERENT one — i.e. the server was actually replaced by a new
+   process (a real backend restart). A mere reconnect to the SAME server (a transient network
+   blip, a paused laptop, a flaky socket, a livereload ws that hiccupped) is NOT a restart, so
+   it does NOT reload. This is the fix for reload storms: the reload trigger is a change of
+   server identity, not the disconnect. "css" hot-swaps stylesheets with no reload; "reload"
+   forces one.
 
-   Reconnect strategy (mirrors what mature dev servers like Vite settled on, tuned
-   for a LOCAL server that's down only ~0.3–0.5s): a flat, fast retry interval — no
-   exponential backoff, because backoff exists to spare a remote/overloaded server
-   and only ADDS latency for localhost. While the tab is hidden we stop retrying
-   (pointless), and we reconnect IMMEDIATELY on focus / visibility-change — the
-   single biggest perceived-latency win, since the dev's tab-switch back from the
-   editor is exactly when they want the page fresh. The poll itself can't be
-   removed (no browser API signals "endpoint reachable again"), only made cheap,
-   fast, and event-gated. *)
+   Reconnect strategy (tuned for a LOCAL server down only ~0.3–0.5s): a flat, fast retry — no
+   backoff (it only adds latency for localhost). While the tab is hidden we stop retrying, and
+   reconnect IMMEDIATELY on focus/visibility-change — the dev's tab-switch back from the editor
+   is exactly when they want the page fresh. *)
 let client_script =
   Printf.sprintf
     {js|(function(){
   var EP = "%s";
   var url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + EP;
   var RETRY_MS = 250;
-  var hadConnection = false;
   var live = false;       // is a socket currently open?
   var pending = null;     // a scheduled reconnect timer, if any
+  var bootId = null;      // the server's process id, adopted on first sight
   function swapCss(){
     var links = document.querySelectorAll('link[rel="stylesheet"]');
     links.forEach(function(l){
@@ -59,13 +59,16 @@ let client_script =
     pending = null;
     var ws;
     try { ws = new WebSocket(url); } catch(e) { return schedule(); }
-    ws.onopen = function(){
-      live = true;
-      if (hadConnection) { location.reload(); return; }
-      hadConnection = true;
-    };
+    ws.onopen = function(){ live = true; };
     ws.onmessage = function(e){
-      if (e.data === "css") swapCss();
+      var d = e.data;
+      if (d.slice(0,5) === "boot:") {
+        var id = d.slice(5);
+        if (bootId === null) bootId = id;            // first connection: adopt, do not reload
+        else if (id !== bootId) location.reload();   // server is a NEW process: reload once
+        return;
+      }
+      if (d === "css") swapCss();
       else location.reload();
     };
     ws.onclose = function(){ live = false; schedule(); };
