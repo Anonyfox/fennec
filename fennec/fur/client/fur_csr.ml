@@ -21,4 +21,7 @@ let start (mounts : Fur.mount list) =
     Fur_dom.hydrate_root app (m.root ());
     Fur.Data.clear_seed ();
     Fur_head.start ();
-    Fur.flush_mounts ()
+    Fur.flush_mounts ();
+    (* a stable, app-agnostic "client booted + hydrated" signal, so e2e drivers can await
+       hydration deterministically instead of guessing at app-specific DOM. *)
+    Js.Unsafe.set Dom_html.window (Js.string "__fur_hydrated") Js._true

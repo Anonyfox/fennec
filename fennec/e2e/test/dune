@@ -1,0 +1,5 @@
+; Unit tests for the e2e driver's orchestration — pool, DSL, runner, and the failure
+; formatter — all against an in-memory fake backend (no real browser), deterministic.
+(test
+ (name test)
+ (libraries fennec.e2e eio eio_main yojson))

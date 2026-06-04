@@ -59,12 +59,18 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
 let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) : unit =
   Eio_main.run @@ fun env ->
   let lr = Livereload.create () in
+  (* Livereload is a dev convenience; it reloads the page on a frontend edit. For an e2e or
+     any controlled run it is pure nondeterminism (spontaneous navigations), so it can be
+     turned off while still serving the dev (on-disk) web root: set FENNEC_DEV_LIVERELOAD=0. *)
+  let livereload_on =
+    is_dev && (match Sys.getenv_opt "FENNEC_DEV_LIVERELOAD" with Some ("0" | "off" | "false" | "no") -> false | _ -> true)
+  in
   let endpoints =
-    if is_dev then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints
+    if livereload_on then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints
     else endpoints
   in
   Eio.Switch.run @@ fun sw ->
-  if is_dev then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
+  if livereload_on then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
   Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints)
-    (if is_dev then " (dev: livereload on)" else "");
+    (if livereload_on then " (dev: livereload on)" else "");
   Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~env endpoints

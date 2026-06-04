@@ -46,6 +46,9 @@
   eio_main
   digestif
   base64
+  ; yojson: used by fennec.e2e (the real-browser e2e driver) to speak the Chrome
+  ; DevTools Protocol JSON; base64/eio_main above are shared with it too.
+  yojson
   zlib
   bigstringaf
   (ppxlib

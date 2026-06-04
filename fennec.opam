@@ -23,6 +23,7 @@ depends: [
   "eio_main"
   "digestif"
   "base64"
+  "yojson"
   "zlib"
   "bigstringaf"
   "ppxlib" {>= "0.28"}
