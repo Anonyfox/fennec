@@ -1,0 +1,7 @@
+; The `fennec dev` supervisor, as a library of small focused modules so the testable logic
+; (dune-output parsing, artifact readiness, orphan reaping, asset change classification, the
+; restart limiter) is unit-tested in isolation. The CLI `dev` subcommand is a one-line call
+; into Supervisor.run.
+(library
+ (name fennec_dev)
+ (libraries unix))

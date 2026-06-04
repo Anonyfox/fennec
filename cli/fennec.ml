@@ -318,20 +318,22 @@ let dev_cmd =
     else begin
       (* reap any orphaned dune/server/worker from a previous (e.g. SIGKILL'd) run BEFORE we
          run `dune describe` for discovery — a stale dune daemon would otherwise block it *)
-      Dev.reap_stale ();
+      Fennec_dev.Pidfile.reap_stale ~cwd:(Sys.getcwd ());
       match exe with
       | Some exe_path ->
-        (* Dev.run never returns (it supervises until killed); its type unifies with int *)
-        Dev.run (match target with Some t -> [ t ] | None -> [ "@@default" ]) exe_path assets
+        (* Supervisor.run blocks until killed; the 0 is unreachable, only there for the type *)
+        Fennec_dev.Supervisor.run ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
+        0
       | None -> (
         match Discover.find () with
         | Error msg ->
           Printf.eprintf "fennec dev: %s\n" msg;
           1
         | Ok d ->
-          (* Dev expects to run from the workspace root; discovery already scoped to the cwd *)
+          (* Supervisor expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
-          Dev.run (targets_or d.Discover.targets) d.Discover.exe assets)
+          Fennec_dev.Supervisor.run ~targets:(targets_or d.Discover.targets) ~exe:d.Discover.exe ~assets;
+          0)
     end
   in
   let doc = "Run the dev server with livereload" in
