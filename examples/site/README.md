@@ -92,6 +92,11 @@ dune test examples/site/frontend_test
 # install; override with CHROME=/path/to/chrome). No npm, no Lwt, no chromedriver.
 sh examples/site/e2e/run.sh
 
+# livereload regression check: runs `fennec dev`, edits a source file, and asserts the
+# change reaches BOTH the SSR and the freshly-rebuilt, no-cache client bundle (deterministic,
+# no browser). Fails if a watch-target or dev-caching regression makes edits not show.
+sh examples/site/e2e/livereload.sh
+
 # prod: native server with the web root embedded in the binary
 dune build --profile release examples/site/server.exe
 ```
