@@ -5,14 +5,9 @@
 
 (* ---- small header helpers ---- *)
 
-(* case-insensitive header lookup over an assoc list *)
+(* case-insensitive header lookup (allocation-free; see {!Headers}) *)
 let header (headers : (string * string) list) (name : string) : string option =
-  let name = String.lowercase_ascii name in
-  let rec go = function
-    | [] -> None
-    | (k, v) :: rest -> if String.lowercase_ascii k = name then Some v else go rest
-  in
-  go headers
+  Headers.get headers name
 
 let trim = String.trim
 let lower = String.lowercase_ascii

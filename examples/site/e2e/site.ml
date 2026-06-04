@@ -127,3 +127,18 @@ let () = test "STRESS: assert immediately after navigation (no settle), many pag
 
 
 
+
+(* streaming responses (server send_chunked / send_file) proven over a real fetch *)
+let () = test "send_chunked streams + the client reassembles the chunks" @@ fun page ->
+  page
+  |> goto "/" |> hydrated
+  |> eval "fetch('/api/stream').then(r => r.text()).then(t => { window.__stream = t })"
+  |> wait_for ~descr:"chunked body reassembled" "window.__stream === 'chunk-1chunk-2chunk-3'"
+  |> ignore
+
+let () = test "send_file streams a file body with the right bytes" @@ fun page ->
+  page
+  |> goto "/" |> hydrated
+  |> eval "fetch('/api/download').then(r => r.text()).then(t => { window.__dl = t })"
+  |> wait_for ~descr:"downloaded file body" "window.__dl === 'hello from send_file'"
+  |> ignore

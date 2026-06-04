@@ -1,8 +1,8 @@
-; The framework core: portable HTTP types, the Plug-style plug pipeline (App),
-; routes-based matching, and the pure dev/livereload bits (client script + HTML
-; injection). No Eio here — pure Stdlib + routes, so it stays shareable. The Eio
-; server adapter lives in fennec/server (native-only).
+; The framework core: portable HTTP types (request/response, headers, cookies,
+; multipart, MIME, dates, semantics) and the pure dev/livereload bits. No Eio here —
+; Stdlib only (+ unix for dates), so it stays shareable. The Eio server adapter lives
+; in fennec/server (native-only).
 (library
  (name fennec_core)
  (public_name fennec.core)
- (libraries routes unix))
+ (libraries unix))

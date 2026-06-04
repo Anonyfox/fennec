@@ -16,7 +16,7 @@ let check name cond =
     Printf.printf "  FAIL %s\n" name)
 
 let eq name a b = check name (a = b)
-let req ?(meth = H.GET) path = { H.meth; path; query = []; headers = []; body = "" }
+let req ?(meth = H.GET) path = H.make_request ~meth ~path ()
 
 let () =
   print_endline "Assigns (typed):";
@@ -57,7 +57,109 @@ let () =
   eq "conn assign/get" (Conn.get c4 k) (Some 5);
   (* req header lookup (case-insensitive) *)
   let c5 = Conn.make { (req "/") with H.headers = [ ("X-Foo", "bar") ] } in
-  eq "req_header ci" (Conn.req_header c5 "x-foo") (Some "bar")
+  eq "req_header ci" (Conn.req_header c5 "x-foo") (Some "bar");
+  (* lazy, percent-decoded query params via the conn *)
+  let cq = Conn.make (H.make_request ~meth:H.GET ~path:"/s" ~query_string:"q=a+b&n=2" ()) in
+  eq "conn query decoded" (Conn.query cq "q") (Some "a b");
+  eq "conn query other" (Conn.query cq "n") (Some "2");
+  eq "conn query missing" (Conn.query cq "z") None;
+  (* request metadata *)
+  let cm =
+    Conn.make
+      (H.make_request ~meth:H.GET ~path:"/" ~host:"example.com" ~scheme:"https"
+         ~remote_ip:(Some "1.2.3.4") ())
+  in
+  eq "conn host" (Conn.host cm) "example.com";
+  eq "conn scheme" (Conn.scheme cm) "https";
+  eq "conn remote_ip" (Conn.remote_ip cm) (Some "1.2.3.4");
+  (* request cookies (lazy) *)
+  let cc = Conn.make { (req "/") with H.headers = [ ("Cookie", "sid=abc; theme=dark") ] } in
+  eq "conn cookie read" (Conn.cookie cc "sid") (Some "abc");
+  eq "conn cookie other" (Conn.cookie cc "theme") (Some "dark");
+  eq "conn cookie missing" (Conn.cookie cc "nope") None;
+  (* response cookie: set, does not answer, survives a later answer *)
+  let cw = Conn.set_cookie (Conn.make (req "/")) "sid" "xyz" in
+  check "set_cookie does not answer" (not (Conn.answered cw));
+  let cw = Conn.json cw "{}" in
+  let setcs =
+    match Conn.resp cw with
+    | Some r -> Fennec_core.Headers.get_all r.H.headers "set-cookie"
+    | None -> []
+  in
+  check "one Set-Cookie emitted" (List.length setcs = 1);
+  check "Set-Cookie carries the value"
+    (match setcs with
+     | [ s ] ->
+       let n = String.length s and sub = "sid=xyz" in
+       let m = String.length sub in
+       let rec go i = i + m <= n && (String.sub s i m = sub || go (i + 1)) in
+       go 0
+     | _ -> false);
+  (* form body params (urlencoded), percent-decoded *)
+  let cf =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/"
+         ~headers:[ ("content-type", "application/x-www-form-urlencoded") ]
+         ~body:"a=1&b=hello+world" ())
+  in
+  eq "body_param decoded" (Conn.body_param cf "b") (Some "hello world");
+  eq "param falls back to the body" (Conn.param cf "a") (Some "1");
+  (* query wins over body in [param] *)
+  let cf2 =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/" ~query_string:"a=q"
+         ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body:"a=b" ())
+  in
+  eq "param prefers the query string" (Conn.param cf2 "a") (Some "q");
+  (* multipart file upload *)
+  let mp =
+    "--B\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.txt\"\r\n\
+     Content-Type: text/plain\r\n\r\nDATA\r\n--B--\r\n"
+  in
+  let cu =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/"
+         ~headers:[ ("content-type", "multipart/form-data; boundary=B") ] ~body:mp ())
+  in
+  (match Conn.file cu "f" with
+   | Some p ->
+     eq "uploaded filename" p.Fennec_core.Multipart.filename (Some "x.txt");
+     eq "uploaded data" p.Fennec_core.Multipart.data "DATA"
+   | None -> check "uploaded file present" false)
+
+let () =
+  print_endline "Conn (build-vs-answer + state):";
+  (* set_header accumulates WITHOUT answering — the pipeline keeps running *)
+  let c = Conn.set_header (Conn.make (req "/")) "X-A" "1" in
+  check "set_header does not answer" (not (Conn.answered c));
+  (* ...and the pre-set header survives a later answering paw *)
+  let c = Conn.json c "{}" in
+  check "answered after json" (Conn.answered c);
+  let hdrs = match Conn.resp c with Some r -> r.H.headers | None -> [] in
+  check "pre-set header preserved through the answer" (List.mem ("X-A", "1") hdrs);
+  check "answer's content-type merged in too"
+    (List.exists (fun (k, _) -> String.lowercase_ascii k = "content-type") hdrs);
+  (* before_send hooks run in registration order (FIFO) *)
+  let order = ref [] in
+  let c = Conn.make (req "/") in
+  let c = Conn.before_send c (fun r -> order := "a" :: !order; r) in
+  let c = Conn.before_send c (fun r -> order := "b" :: !order; r) in
+  let c = Conn.text c "x" in
+  let _ = Conn.apply_before_send c (Option.value (Conn.resp c) ~default:(H.text "")) in
+  eq "before_send FIFO order" (List.rev !order) [ "a"; "b" ];
+  (* status alone answers with that code and an empty body *)
+  let cs = Conn.set_status 204 (Conn.make (req "/")) in
+  check "status answers" (Conn.answered cs);
+  eq "status code" (match Conn.resp cs with Some r -> r.H.status | None -> 0) 204;
+  (* halt answers but yields no response (the server turns this into a 404) *)
+  let ch = Conn.halt (Conn.make (req "/")) in
+  check "halt answers" (Conn.answered ch);
+  check "halt has no response" (Conn.resp ch = None);
+  (* answering short-circuits, so a header set AFTER the answer still applies (same conn) *)
+  let c = Conn.text (Conn.make (req "/")) "body" in
+  let c = Conn.set_header c "X-Late" "y" in
+  check "header added post-answer is present"
+    (match Conn.resp c with Some r -> List.mem ("X-Late", "y") r.H.headers | None -> false)
 
 let () =
   print_endline "Paw pipeline (short-circuit):";

@@ -83,37 +83,20 @@ let read_request (r : Eio.Buf_read.t) : request_result =
                Bad_request "truncated body" (* fewer bytes than Content-Length *)))))
     | _ -> Bad_request "malformed request line")
 
-let to_request (p : parsed) : CH.request =
-  let path, query = CH.split_target p.target in
-  { CH.meth = CH.meth_of_string p.meth; path; query; headers = p.headers; body = p.body }
+let to_request ~host ~scheme ~remote_ip (p : parsed) : CH.request =
+  let path, query_string = CH.split_target p.target in
+  CH.make_request ~meth:(CH.meth_of_string p.meth) ~path ~query_string ~headers:p.headers
+    ~body:p.body ~host ~scheme ~remote_ip ~version:p.version ()
 
 let is_ws_upgrade (p : parsed) =
   match header p.headers "upgrade" with
   | Some v -> contains (String.lowercase_ascii v) "websocket"
   | None -> false
 
-let reason_phrase = function
-  | 200 -> "OK"
-  | 204 -> "No Content"
-  | 206 -> "Partial Content"
-  | 301 -> "Moved Permanently"
-  | 302 -> "Found"
-  | 304 -> "Not Modified"
-  | 400 -> "Bad Request"
-  | 403 -> "Forbidden"
-  | 404 -> "Not Found"
-  | 405 -> "Method Not Allowed"
-  | 413 -> "Payload Too Large"
-  | 416 -> "Range Not Satisfiable"
-  | 500 -> "Internal Server Error"
-  | _ -> "OK"
-
-let has_header_ci headers k =
-  let kl = String.lowercase_ascii k in
-  List.exists (fun (hk, _) -> String.lowercase_ascii hk = kl) headers
+let has_header_ci headers k = Fennec_core.Headers.mem headers k
 
 let write_http (w : Eio.Buf_write.t) (resp : CH.response) ~keep_alive =
-  Eio.Buf_write.string w (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status (reason_phrase resp.CH.status));
+  Eio.Buf_write.string w (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status (CH.reason_phrase resp.CH.status));
   List.iter
     (fun (k, v) -> Eio.Buf_write.string w (Printf.sprintf "%s: %s\r\n" k v))
     resp.CH.headers;
@@ -227,6 +210,54 @@ let want_keep_alive (p : parsed) : bool =
 
 module Conn = Fennec_paw.Conn
 module Paw = Fennec_paw.Paw
+module Headers = Fennec_core.Headers
+
+(* Write a STREAMED response — the body is produced without buffering it in memory.
+   [resp] carries the status + headers (after before_send); its body is ignored. *)
+let write_stream w flow ~fs ~(resp : CH.response) ~keep_alive (stream : Conn.stream) =
+  let conn_hdr = Printf.sprintf "connection: %s\r\n" (if keep_alive then "keep-alive" else "close") in
+  let status_line () =
+    Eio.Buf_write.string w
+      (Printf.sprintf "HTTP/1.1 %d %s\r\n" resp.CH.status (CH.reason_phrase resp.CH.status))
+  in
+  let write_headers hs =
+    List.iter (fun (k, v) -> Eio.Buf_write.string w (Printf.sprintf "%s: %s\r\n" k v)) hs;
+    Eio.Buf_write.string w conn_hdr;
+    Eio.Buf_write.string w "\r\n";
+    Eio.Buf_write.flush w
+  in
+  match stream with
+  | Conn.File (path, ct) -> (
+    (* size up front -> a real Content-Length (keep-alive friendly); missing file -> 404 *)
+    match try Some (Unix.stat path).Unix.st_size with _ -> None with
+    | None -> write_http w (CH.text ~status:404 "Not Found") ~keep_alive:false; Eio.Buf_write.flush w
+    | Some size ->
+      let hs =
+        Headers.put (Headers.put resp.CH.headers "content-type" ct) "content-length"
+          (string_of_int size)
+      in
+      status_line ();
+      write_headers hs;
+      (* stream the bytes straight from the file to the socket (Eio may use sendfile) *)
+      (try Eio.Path.with_open_in Eio.Path.(fs / path) (fun f -> Eio.Flow.copy f flow) with _ -> ()))
+  | Conn.Chunked (ct, produce) ->
+    let hs =
+      ("transfer-encoding", "chunked")
+      :: Headers.put (Headers.delete resp.CH.headers "content-length") "content-type" ct
+    in
+    status_line ();
+    write_headers hs;
+    let emit s =
+      if String.length s > 0 then begin
+        Eio.Buf_write.string w (Printf.sprintf "%x\r\n" (String.length s));
+        Eio.Buf_write.string w s;
+        Eio.Buf_write.string w "\r\n";
+        Eio.Buf_write.flush w
+      end
+    in
+    (try produce emit with _ -> ());
+    Eio.Buf_write.string w "0\r\n\r\n";
+    Eio.Buf_write.flush w
 
 (* select the endpoint whose host pattern matches the request's Host header;
    first match wins, falling back to the first endpoint if none match (so a bare
@@ -240,8 +271,12 @@ let select_endpoint (endpoints : Endpoint.t list) (p : parsed) : Endpoint.t opti
 (* Handle one connection. [endpoints] are those sharing this listen port; each
    request picks its endpoint by Host. A paw pipeline may answer with an HTTP
    response OR a websocket upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~timeout (endpoints : Endpoint.t list) flow _addr =
+let handle_conn ~now ~timeout ~fs (endpoints : Endpoint.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
+  (* the peer IP, computed once for the connection (all its requests share it) *)
+  let remote_ip =
+    match addr with `Tcp (ip, _) -> Some (Format.asprintf "%a" Eio.Net.Ipaddr.pp ip) | _ -> None
+  in
   let r = Eio.Buf_read.of_flow flow ~max_size:(16 * 1024 * 1024) in
   Eio.Buf_write.with_flow flow @@ fun w ->
   let respond_and_close resp =
@@ -256,7 +291,10 @@ let handle_conn ~now ~timeout (endpoints : Endpoint.t list) flow _addr =
     | Ok (Bad_request _) -> respond_and_close (CH.text ~status:400 "Bad Request")
     | Ok (Too_large _) -> respond_and_close (CH.text ~status:413 "Payload Too Large")
     | Ok (Req p) -> (
-      let req = to_request p in
+      (* scheme is http at the transport (no in-process TLS); a force-https / proxy
+         plug can rewrite from X-Forwarded-Proto. host is the normalized Host header. *)
+      let host = Host.normalize (match header p.headers "host" with Some h -> h | None -> "") in
+      let req = to_request ~host ~scheme:"http" ~remote_ip p in
       let endpoint = select_endpoint endpoints p in
       (* run the endpoint's paw pipeline to a conn. A handler exception becomes a
          clean 500 (never a dropped connection / partial write). *)
@@ -274,18 +312,27 @@ let handle_conn ~now ~timeout (endpoints : Endpoint.t list) flow _addr =
         (* a paw requested a websocket upgrade *)
         let pmd = ws_handshake w p in
         serve_ws ~sw ~pmd r w setup
-      | _ ->
-        (* HTTP response: run before_send hooks (e.g. security headers), then
-           finalize (compression, ETag/304, Date, Content-Length) *)
-        let resp =
-          match Conn.resp conn with Some r -> r | None -> CH.text ~status:404 "404 Not Found"
-        in
-        let resp = Conn.apply_before_send conn resp in
-        let resp = try Responder.finalize ~now:(now ()) ~req resp with _ -> resp in
-        let keep_alive = want_keep_alive p in
-        write_http w resp ~keep_alive;
-        Eio.Buf_write.flush w;
-        if keep_alive then loop ())
+      | _ -> (
+        match Conn.stream conn with
+        | Some stream ->
+          (* a streamed response (file / chunks): run before_send over the status+headers,
+             then stream the body without buffering it (no compression/Responder pass) *)
+          let resp = Conn.apply_before_send conn (Conn.resp_skeleton conn) in
+          let keep_alive = want_keep_alive p in
+          write_stream w flow ~fs ~resp ~keep_alive stream;
+          if keep_alive then loop ()
+        | None ->
+          (* buffered HTTP response: run before_send hooks (e.g. security headers), then
+             finalize (compression, ETag/304, Date, Content-Length) *)
+          let resp =
+            match Conn.resp conn with Some r -> r | None -> CH.text ~status:404 "404 Not Found"
+          in
+          let resp = Conn.apply_before_send conn resp in
+          let resp = try Responder.finalize ~now:(now ()) ~req resp with _ -> resp in
+          let keep_alive = want_keep_alive p in
+          write_http w resp ~keep_alive;
+          Eio.Buf_write.flush w;
+          if keep_alive then loop ()))
   in
   loop ()
 
@@ -304,6 +351,7 @@ let run ?(timeout = 30.0) ?(max_conns = 10_000) ?dev ~env (endpoints : Endpoint.
   in
   let clock = Eio.Stdenv.clock env in
   let now () = Eio.Time.now clock in
+  let fs = Eio.Stdenv.fs env in
   let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) timeout in
   let slots = Eio.Semaphore.make max_conns in
   (* group endpoints by their listen port for this mode *)
@@ -325,7 +373,7 @@ let run ?(timeout = 30.0) ?(max_conns = 10_000) ?dev ~env (endpoints : Endpoint.
         Eio.Semaphore.acquire slots;
         Fun.protect
           ~finally:(fun () -> Eio.Semaphore.release slots)
-          (fun () -> handle_conn ~now ~timeout group flow addr)
+          (fun () -> handle_conn ~now ~timeout ~fs group flow addr)
       in
       Eio.Fiber.fork ~sw (fun () ->
           Eio.Net.run_server socket handle ~on_error:(fun e ->

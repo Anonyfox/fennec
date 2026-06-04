@@ -1,6 +1,6 @@
-(* Unit tests for Fennec_core.Http — request/response types, query parsing,
-   target splitting. Edge cases: empty/malformed query, multiple '?', missing
-   values, percent-looking input (no decoding yet — documented). *)
+(* Unit tests for Fennec_core.Http — request/response types, query parsing
+   (with percent-decoding), target splitting. Edge cases: empty/malformed query,
+   multiple '?', missing values, percent escapes, '+' as space. *)
 
 module H = Fennec_core.Http
 
@@ -34,21 +34,25 @@ let () =
   eq "double &&" (H.parse_query "a=1&&b=2") [ ("a", "1"); ("b", "2") ];
   eq "value with = kept" (H.parse_query "a=1=2") [ ("a", "1=2") ];
   eq "only &" (H.parse_query "&&&") [];
+  (* percent-decoding + '+' as space *)
+  eq "percent-decoded value" (H.parse_query "q=John%20Doe") [ ("q", "John Doe") ];
+  eq "plus is space" (H.parse_query "q=a+b") [ ("q", "a b") ];
+  eq "decoded key" (H.parse_query "a%2Bb=1") [ ("a+b", "1") ];
+  eq "utf-8 decoded" (H.parse_query "x=caf%C3%A9") [ ("x", "caf\xc3\xa9") ];
+  eq "lone percent kept" (H.parse_query "x=50%") [ ("x", "50%") ];
+  eq "bad hex kept literal" (H.parse_query "x=%zz") [ ("x", "%zz") ];
 
-  print_endline "Http.split_target:";
-  eq "no query" (H.split_target "/a/b") ("/a/b", []);
-  eq "with query" (H.split_target "/a?x=1") ("/a", [ ("x", "1") ]);
-  eq "empty query after ?" (H.split_target "/a?") ("/a", []);
-  eq "root" (H.split_target "/") ("/", []);
-  eq "empty" (H.split_target "") ("", []);
+  print_endline "Http.split_target (raw query string):";
+  eq "no query" (H.split_target "/a/b") ("/a/b", "");
+  eq "with query" (H.split_target "/a?x=1") ("/a", "x=1");
+  eq "empty query after ?" (H.split_target "/a?") ("/a", "");
+  eq "root" (H.split_target "/") ("/", "");
+  eq "empty" (H.split_target "") ("", "");
   (* a second '?' becomes part of the query string (split on first only) *)
-  eq "double ?" (H.split_target "/a?x=1?y=2") ("/a", [ ("x", "1?y=2") ]);
-  eq "query only" (H.split_target "?x=1") ("", [ ("x", "1") ]);
+  eq "double ?" (H.split_target "/a?x=1?y=2") ("/a", "x=1?y=2");
+  eq "query only" (H.split_target "?x=1") ("", "x=1");
 
-  print_endline "Http.query helper + responses:";
-  let r = { H.meth = H.GET; path = "/"; query = [ ("k", "v") ]; headers = []; body = "" } in
-  eq "query found" (H.query r "k") (Some "v");
-  eq "query missing" (H.query r "nope") None;
+  print_endline "Http responses:";
   let resp = H.json ~status:201 ~headers:[ ("x", "y") ] "{}" in
   eq "json status" resp.H.status 201;
   eq "json ct" (List.assoc "content-type" resp.H.headers) "application/json";

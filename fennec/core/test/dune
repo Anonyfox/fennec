@@ -1,6 +1,7 @@
 ; Colocated unit tests for the pure core modules. Each module gets its own test
 ; executable so a failure points straight at the module. All run on `dune test`.
 (tests
- (names test_http test_http_semantics test_http_date test_mime)
+ (names test_http test_http_semantics test_http_date test_mime test_headers test_cookie
+        test_multipart)
  (modes native)
- (libraries fennec.core routes))
+ (libraries fennec.core))

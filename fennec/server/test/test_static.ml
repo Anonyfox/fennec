@@ -27,7 +27,7 @@ let rec mkdir_p d =
     mkdir_p (Filename.dirname d);
     try Unix.mkdir d 0o755 with _ -> ())
 
-let req ?(meth = H.GET) ?(headers = []) path = { H.meth; path; query = []; headers; body = "" }
+let req ?(meth = H.GET) ?(headers = []) path = H.make_request ~meth ~path ~headers ()
 let status_of = function Some (r : H.response) -> r.H.status | None -> 0
 let body_of = function Some (r : H.response) -> r.H.body | None -> ""
 let hdr r k = match r with Some (resp : H.response) -> Fennec_core.Http_semantics.header resp.H.headers k | None -> None

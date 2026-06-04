@@ -17,7 +17,7 @@ let check name cond =
     Printf.printf "  FAIL %s\n" name)
 
 let eq name a b = check name (a = b)
-let req ?(meth = H.GET) path = { H.meth; path; query = []; headers = []; body = "" }
+let req ?(meth = H.GET) path = H.make_request ~meth ~path ()
 
 let () =
   print_endline "Host.matches:";

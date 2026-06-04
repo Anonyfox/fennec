@@ -14,6 +14,9 @@ module Plug = Fennec_server.Plug
 module Static = Fennec_server.Static
 module Livereload = Fennec_server.Livereload
 module Http = Fennec_core.Http
+module Cookie = Fennec_core.Cookie
+module Session = Fennec_server.Session
+module Csrf = Fennec_server.Csrf
 
 let is_dev = try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true
 

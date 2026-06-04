@@ -26,6 +26,14 @@ let api_source = function
   | "/api/browser-only" -> Some browser_only
   | _ -> None
 
+(* a small on-disk fixture so /api/download can stream a real file (send_file) *)
+let download_path =
+  let p = Filename.temp_file "fennec_download" ".txt" in
+  let oc = open_out p in
+  output_string oc "hello from send_file";
+  close_out oc;
+  p
+
 (* a custom plug — trivial to write and unit-test: stamp every response *)
 let powered_by : Fennec.Paw.t =
  fun c ->
@@ -44,6 +52,10 @@ let web =
   |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true,"app":"web"}|})
   |> Endpoint.get "/api/greeting" (fun c -> Conn.text c greeting)
   |> Endpoint.get "/api/browser-only" (fun c -> Conn.text c browser_only)
+  (* streaming: a chunked (SSE-style) body and a streamed file download *)
+  |> Endpoint.get "/api/stream"
+       (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
+  |> Endpoint.get "/api/download" (fun c -> Conn.send_file c ~path:download_path ())
   |> Endpoint.app
        (Fur_ssr.handler ~styles:Site_styles.css ~source:api_source
           ~mounts:[ Web_app.Routes.mount ])
