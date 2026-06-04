@@ -1,89 +1,98 @@
 # fennec
 
-A Meteor-style fullstack reactive framework for OCaml — native on the server,
-[Melange](https://melange.re) on the client. Built for the desert: lean, fast,
-and self-contained.
+An **isomorphic web framework for OCaml** — a native [Eio](https://github.com/ocaml-multicore/eio)
+server and a signals-based UI runtime (`Fennec.Fur`) that renders on the server and hydrates
+in the browser, from one source. **No npm, no React, no Melange, no Lwt.** One language, end
+to end. Built for the desert: lean, fast, self-contained.
 
-This is a **monorepo**: one root `dune-project` declares several independent,
-separately-publishable packages.
+You write components in OCaml. They server-render to HTML for the first paint and become
+interactive in the browser via [js_of_ocaml](https://ocsigen.org/js_of_ocaml/) — no client
+framework runtime, no bundler magic, no `node_modules`.
+
+## A taste — one isomorphic component
+
+```ocaml
+(* counter.mlx — server-rendered, then hydrated in the browser, same source *)
+[%%style {scss| .count { font-weight: 700; min-width: 2ch } |scss}]   (* colocated, auto-scoped *)
+
+let make ?(label = "count") () =
+  let count = signal 0 in                       (* local reactive state, live after hydration *)
+  fun () ->
+    <span className="counter">
+      <span className="clabel">(node (label ^ ":"))</span>
+      <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
+      <span className="count">(get count)</span>
+      <button className="cbtn inc" onClick=(count += 1)>"+"</button>
+    </span>
+```
+
+The `[%%style]` block is extracted and scoped to this component (a `data-fur` hash) — no
+external `.scss`, no className collisions. The same file is linked natively into the server
+for SSR and compiled to JS for the client. That's the whole model.
+
+## The monorepo
+
+One root `dune-project`, several independently-publishable packages:
 
 | Package | What it is | Status |
 | --- | --- | --- |
-| [`fennec-cli`](./cli) | The `fennec` binary — native JS bundler + CSS/SCSS engine, statically linked | ✅ working |
-| `fennec-mongo` | BSON, query, minimongo, Mongo driver | planned |
-| `fennec-ddp` | DDP protocol over WebSocket | planned |
-| `fennec` | Core: data, web, client, UI | planned |
+| **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, and the `Fur` UI runtime | ✅ working |
+| **`fennec-cli`** | The `fennec` binary — native JS/CSS bundlers + the dev loop, one self-contained binary | ✅ working |
+| **`fennec-e2e`** | Real-browser end-to-end testing over the Chrome DevTools Protocol, pure OCaml | ✅ working |
+| `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
 
-Concurrency is **Eio-only** — a deliberate, forward-looking choice.
+Concurrency is **Eio-only**, by design.
 
-## fennec-cli
+## What's in the box
 
-A single self-contained binary that bundles JavaScript (esbuild) and
-compiles/optimizes CSS and SCSS (Lightning CSS + grass). **No Node, no Go, no
-Rust, no toolchain** at the consumer side — the native engines are statically
-linked into the binary at release time. Download it and build.
+### `fennec` — the runtime
 
-```console
-$ fennec build src/main.ts styles/app.scss styles/extra.css
-  src/main.ts       -> dist/main.js    1.2 KB
-  styles/app.scss   -> dist/app.css    412 B
-  styles/extra.css  -> dist/extra.css  198 B
-```
+- **HTTP core** — request/response, MIME, HTTP-date and semantics, a WebSocket channel; RFC-correct, with colocated unit tests.
+- **Paw** — an Elixir/Plug-style `conn -> conn` primitive: typed assigns, pipelines, routes, halting. Middleware, static, the websocket, and the SSR app are all paws.
+- **Server** — a compact Eio HTTP + WebSocket server: static serving with strong ETag / 304 / Range / HEAD, gzip + deflate negotiation (in-process zlib), WebSocket permessage-deflate, multi-app routing by Host, and a dev livereload relay.
+- **Fur** — the isomorphic UI runtime: signals, a vdom + reconciler, SSR, js_of_ocaml hydration, a typed router, a `<Head>` manager, and data resources with fast-render seeds. No React, no Melange, no preact runtime.
 
-One invocation drives **both** engines at once: each input is routed to the
-right tool by its file extension (`.js/.mjs/.cjs/.jsx/.ts/.tsx` → esbuild;
-`.css` → Lightning CSS; `.scss/.sass` → grass → Lightning CSS). Production
-optimizations (minify, tree-shake, dead-code elimination, CSS nesting/`calc`
-reduction) are **on by default**.
+### `fennec-cli` — tooling
 
-### `fennec build` flags
+- **`fennec build`** — bundles JS (esbuild) and compiles/optimizes CSS + SCSS (Lightning CSS + grass) from a single statically-linked binary. The native engines (Go + Rust) are linked in at release time, so end users download a prebuilt binary — no Node, no toolchain.
+- **`fennec dev`** — runs `dune build --watch` (dune is the sole source watcher) and supervises the server; a native fs-watcher reacts to build *outputs* to restart the backend or hot-swap CSS. A felt dev loop around **~0.1 s** (measured). Delete the CLI and a plain `dune build --watch` + `dune exec` still works — the decoupling is a contract, not an accident (see [`CLI-INTEROP.md`](./examples/CLI-INTEROP.md)).
 
-| Flag | Default | Effect |
-| --- | --- | --- |
-| `-o, --outdir DIR` | `dist` | Output directory (created if missing). |
-| `--no-minify` | off | Disable minification. |
-| `--format FMT` | `esm` | JS output format: `esm`, `iife`, or `cjs`. |
-| `--global-name NAME` | — | Global var for the bundle's exports (with `--format iife`). |
-| `--external MODULE` | — | Leave an import unbundled. Repeatable. |
-| `--sourcemap` | off | Inline source map (JS only). |
-| `--banner TEXT` | — | Text prepended to each JS bundle. |
+### `fennec-e2e` — testing
 
-`fennec build --help` documents everything with examples.
+- A real-browser e2e driver: a hand-written WebSocket + Chrome DevTools Protocol client on Eio, an auto-waiting page DSL, a deterministic in-memory fake backend (so the DSL is unit-tested with no browser), self-explaining failure reports, and a reporter that adapts from a TTY to a CI log. No chromedriver, no Selenium. ([details](./fennec/e2e/README.md))
 
-A long-running `fennec dev` (livereload dev server holding a warm build context)
-is the next subcommand.
+## Design commitments
 
-### How the binary stays toolchain-free for users
+- **Eio-only** — direct-style, structured concurrency, leak-free teardown under one switch. No Lwt, no cohttp.
+- **No npm / no React / no Melange** — the client is a self-contained js_of_ocaml bundle.
+- **dev ≈ prod** — the app binds the real port in dev exactly as in prod; no dev proxy. A dev build is bytecode for speed, release is native, and prod servers embed their assets into a single binary.
+- **Curated interfaces** — `.mli` firewalls on the load-bearing modules, colocated tests throughout.
 
-The native complexity lives in **exactly one place — the release pipeline**:
+## Status & roadmap
 
-1. [`buildkit`](./buildkit) is an internal library that statically links the
-   esbuild shim (Go `c-archive`) and the CSS shim (Rust `staticlib`) into OCaml
-   via C FFI. A dune rule compiles both archives for the host and emits the
-   per-OS linker flags (`buildkit/native/emit_flags.sh`).
-2. CI builds and tests this on every target OS.
-3. On a `v*` tag, [`release.yml`](./.github/workflows/release.yml) builds the
-   `fennec` binary per platform and uploads it to GitHub Releases.
+The server, routing, isomorphic SSR + hydration, multi-app endpoints, the asset pipeline,
+the dev loop, and real-browser e2e are working and tested end to end (see
+[`examples/site`](./examples/site), the living DX benchmark). **Not yet built:** the
+Meteor-style reactive data layer — DDP over WebSocket and a mongo/minimongo client. That is
+the next major chapter.
 
-So end users get a prebuilt binary; only the framework's own CI ever needs Go and
-Rust.
-
-## Building from source
-
-Requires Go and Rust toolchains (only for building the binary itself):
+## Build
 
 ```sh
-dune build              # compiles the native archives + the CLI
-dune runtest            # runs the buildkit test suite
+dune build            # build everything
+dune runtest          # run the unit + integration suites
 dune exec -- fennec --help
 ```
 
-## Releasing
+Building the CLI binary needs Go and Rust toolchains (only for the native bundlers); the
+framework library itself needs neither. End users install a prebuilt `fennec` binary per
+platform from GitHub Releases.
 
-```sh
-git tag v0.0.1 && git push origin v0.0.1   # triggers the Release workflow
-```
+Deeper docs: [`examples/site/README.md`](./examples/site/README.md) ·
+[`examples/CLI-INTEROP.md`](./examples/CLI-INTEROP.md) ·
+[`fennec/fur/README.md`](./fennec/fur/README.md) ·
+[`fennec/e2e/README.md`](./fennec/e2e/README.md).
 
 ## License
 
-MIT
+MIT.
