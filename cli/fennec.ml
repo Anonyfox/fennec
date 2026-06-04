@@ -304,12 +304,16 @@ let dev_cmd =
     Arg.(value & flag & info [ "dry-run"; "print" ] ~doc)
   in
   let go target exe assets dry =
-    let targets_or d = match target with Some t -> [ t ] | None -> d in
+    (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
+       the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
+    let dev_targets (d : Discover.t) =
+      match target with Some t -> [ t ] | None -> d.Discover.targets @ [ Filename.concat d.Discover.src_dir assets ]
+    in
     if dry then (
       match Discover.find () with
       | Ok d ->
         Printf.printf "server:  %s\nroot:    %s\ntargets: %s\nexe:     %s\n" d.Discover.name d.Discover.root
-          (String.concat " " (targets_or d.Discover.targets))
+          (String.concat " " (dev_targets d))
           d.Discover.exe;
         0
       | Error msg ->
@@ -332,7 +336,7 @@ let dev_cmd =
         | Ok d ->
           (* Supervisor expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
-          Fennec_dev.Supervisor.run ~targets:(targets_or d.Discover.targets) ~exe:d.Discover.exe ~assets;
+          Fennec_dev.Supervisor.run ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
           0)
     end
   in

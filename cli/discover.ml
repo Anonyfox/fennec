@@ -181,9 +181,11 @@ let find () : (t, string) result =
              per edit). Spawning a .bc directly needs CAML_LD_LIBRARY_PATH for its C stubs — the
              dev runner sets that (see Dev.run) so it doesn't depend on the parent shell. *)
           let exe = Printf.sprintf "%s/_build/default/%s/%s.bc" root src_dir name in
-          (* watch the server bytecode AND its directory's default alias (which assembles the web
-             root), both derived from the discovered location — no alias name assumed *)
-          let targets = [ Printf.sprintf "%s/%s.bc" src_dir name; src_dir ] in
+          (* the server's BYTECODE target. The caller adds the served web-root dir target (it
+             knows its name, the [--assets] dir) — together they rebuild the SSR server AND the
+             client bundle, but NOT the directory's native server.exe, whose ocamlopt pass is
+             pure waste in a bytecode dev loop. *)
+          let targets = [ Printf.sprintf "%s/%s.bc" src_dir name ] in
           Ok { root; name; src_dir; exe; targets }
         | many ->
           let listed = String.concat "\n" (List.map (fun (n, d) -> Printf.sprintf "  - %s (%s)" n d) many) in
