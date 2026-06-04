@@ -27,9 +27,13 @@ let parse (s : string) : sexp =
       items []
     | c when c >= '0' && c <= '9' ->
       let start = !pos in
-      while !pos < n && s.[!pos] <> ':' do incr pos done;
+      (* read ONLY decimal digits (so int_of_string can't be fed a 0x.. / _ form), then require
+         the ':' separator and bounds-check the length before slicing *)
+      while !pos < n && s.[!pos] >= '0' && s.[!pos] <= '9' do incr pos done;
+      if !pos >= n || s.[!pos] <> ':' then failwith "csexp: malformed length";
       let len = int_of_string (String.sub s start (!pos - start)) in
       incr pos;
+      if len < 0 || !pos + len > n then failwith "csexp: length out of bounds";
       let a = String.sub s !pos len in
       pos := !pos + len;
       A a
@@ -75,9 +79,9 @@ let contains hay needle =
   let rec go i = i + ln <= lh && (String.sub hay i ln = needle || go (i + 1)) in
   ln = 0 || go 0
 
-(* strip OCaml [(* *)] comments (nested) and ["…"] string literals, so a mention of serve in a
-   doc-comment or a manpage string is NOT mistaken for a call. A small scanner, not a full lexer,
-   but enough to tell code from prose. *)
+(* strip OCaml [(* *)] comments (nested), ["…"] string literals AND [{tag|…|tag}] raw strings, so
+   a mention of serve in a doc-comment or a (possibly raw) manpage/SQL string is NOT mistaken for
+   a call. A small scanner, not a full lexer, but enough to tell code from prose. *)
 let strip_noise (s : string) : string =
   let n = String.length s in
   let b = Buffer.create n in
@@ -95,17 +99,40 @@ let strip_noise (s : string) : string =
     else if c = '(' && !i + 1 < n && s.[!i + 1] = '*' then (incr depth; i := !i + 2)
     else if c = '"' then (in_str := true; incr i)
     else if c = '\'' && !i + 2 < n && s.[!i + 1] <> '\\' && s.[!i + 2] = '\'' then i := !i + 3 (* 'x' *)
+    else if c = '{' && (let j = ref (!i + 1) in while !j < n && s.[!j] >= 'a' && s.[!j] <= 'z' do incr j done; !j < n && s.[!j] = '|') then (
+      (* {tag|raw string|tag} — skip to the matching close *)
+      let j = ref (!i + 1) in
+      while !j < n && s.[!j] >= 'a' && s.[!j] <= 'z' do incr j done;
+      let close = "|" ^ String.sub s (!i + 1) (!j - !i - 1) ^ "}" in
+      let lc = String.length close and k = ref (!j + 1) and found = ref false in
+      while (not !found) && !k + lc <= n do
+        if String.sub s !k lc = close then found := true else incr k
+      done;
+      i := if !found then !k + lc else n)
     else (Buffer.add_char b c; incr i)
   done;
   Buffer.contents b
 
+(* does [word] occur in [code] as a standalone identifier token (boundaries are non-identifier
+   chars), so "serve" matches a call but "preserve" / "self_serve" do not *)
+let is_ident_char c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '_' || c = '.'
+
+let calls_word (code : string) (word : string) : bool =
+  let lh = String.length code and lw = String.length word in
+  let rec go i =
+    if i + lw > lh then false
+    else if String.sub code i lw = word && (i = 0 || not (is_ident_char code.[i - 1])) && (i + lw >= lh || not (is_ident_char code.[i + lw])) then true
+    else go (i + 1)
+  in
+  lw > 0 && go 0
+
 (* does this source start a server? [Fennec.serve] is the qualified call; the aliased form
-   ([open Fennec] then [serve …]) is accepted too. Scanned on code only (comments/strings
-   stripped). Discovery heuristic — the runtime ({!Fennec.serve}) is the actual guarantee. *)
+   ([open Fennec] then a bare [serve] applied to anything) is accepted too. Scanned on code only
+   (comments/strings stripped). Discovery heuristic — the runtime ({!Fennec.serve}) is the
+   actual guarantee, so we lean toward catching real call shapes (e.g. [serve ~port], [serve app]). *)
 let calls_serve (src : string) : bool =
   let code = strip_noise src in
-  contains code "Fennec.serve"
-  || (contains code "open Fennec" && (contains code "serve [" || contains code "serve(" || contains code "serve\n"))
+  contains code "Fennec.serve" || (contains code "open Fennec" && calls_word code "serve")
 
 let strip_build p =
   let pfx = "_build/default/" in
@@ -113,7 +140,7 @@ let strip_build p =
     String.sub p (String.length pfx) (String.length p - String.length pfx)
   else p
 
-let slurp_cmd (cmd : string) : string =
+let slurp_cmd (cmd : string) : string * Unix.process_status =
   let ic = Unix.open_process_in cmd in
   let buf = Buffer.create 65536 and chunk = Bytes.create 65536 in
   let rec go () =
@@ -121,8 +148,8 @@ let slurp_cmd (cmd : string) : string =
     if k > 0 then (Buffer.add_subbytes buf chunk 0 k; go ())
   in
   go ();
-  ignore (Unix.close_process_in ic);
-  Buffer.contents buf
+  let status = Unix.close_process_in ic in
+  (Buffer.contents buf, status)
 
 (* cwd relative to the workspace root ("" when at the root); None if cwd is outside root *)
 let cwd_rel ~root =
@@ -138,8 +165,13 @@ let under ~scope dir = scope = "" || dir = scope || (String.length dir > String.
 
 (* find the single server executable in the cwd subtree, or a clean error message *)
 let find () : (t, string) result =
-  match (try Some (parse (slurp_cmd "dune describe --format csexp 2>/dev/null")) with _ -> None) with
-  | None -> Error "could not run `dune describe` — is this a dune project, and is dune on PATH?"
+  let out, status = slurp_cmd "dune describe --format csexp 2>/dev/null" in
+  (* separate "dune itself failed" (not a project / not on PATH) from "dune ran but we couldn't
+     parse it" (a dune version whose `describe` shape we don't understand) — the fixes differ. *)
+  if status <> Unix.WEXITED 0 then Error "could not run `dune describe` — is this a dune project, and is dune on PATH?"
+  else
+  match (try Some (parse out) with _ -> None) with
+  | None -> Error "could not parse `dune describe` output — unsupported dune version?"
   | Some tree -> (
     match root_of tree with
     | None -> Error "could not determine the dune workspace root"

@@ -1,6 +1,9 @@
 (* See artifact.mli. *)
 
-let magic_prefix = "Caml1999" (* the OCaml bytecode trailer is "Caml1999X<nnn>" *)
+(* the OCaml EXECUTABLE bytecode trailer is "Caml1999X<nnn>"; the 'X' is the exec discriminant.
+   Checking it (not just "Caml1999") rejects a .cmo/.cma ("Caml1999O"/"Caml1999A"/…) should [path]
+   ever point at the wrong artifact, as well as a half-written file lacking the trailer. *)
+let magic_prefix = "Caml1999X"
 
 let bytecode_ready path =
   match (try Some (open_in_bin path) with _ -> None) with

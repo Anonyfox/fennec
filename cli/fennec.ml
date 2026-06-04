@@ -321,27 +321,17 @@ let dev_cmd =
         1)
     else begin
       (* GUARANTEE a clean slate before this dev session — so no leftover from a previous run
-         (even a SIGKILL'd one) can hold the dev port. Three layered defences, each covering a
-         gap the others can't, run BEFORE discovery's `dune describe`:
+         (even a SIGKILL'd one) can hold the dev port. Two layered defences, run BEFORE
+         discovery's `dune describe`:
            1. `dune shutdown` — stop any orphaned `dune build --watch` for this workspace (its
               own RPC), so the new build isn't forwarded to a wedged daemon serving stale files;
-           2. SIGKILL any OTHER `fennec dev` supervisor on the machine — its server then
-              self-exits (it sees it's orphaned), releasing the port;
-           3. reap the recorded previous child tree from the pidfile (kills its server directly,
-              freeing the port immediately rather than waiting for the self-exit). *)
+           2. reap the recorded previous child tree from the pidfile (by pid AND identity, so a
+              recycled pid is never killed) — this frees the port directly, and the previous
+              supervisor's server also self-exits the moment it sees it's been reparented.
+         We deliberately do NOT scan the process table by name (e.g. `pgrep -f 'fennec dev'`):
+         a command-line substring match would SIGKILL unrelated processes like
+         `vim fennec dev notes.txt`, and the pidfile already covers the legitimate case. *)
       ignore (Sys.command "dune shutdown >/dev/null 2>&1");
-      let self = Unix.getpid () in
-      (match (try Some (Unix.open_process_in "pgrep -f 'fennec dev' 2>/dev/null") with _ -> None) with
-       | None -> ()
-       | Some ic ->
-         let others = ref [] in
-         (try
-            while true do
-              match int_of_string_opt (String.trim (input_line ic)) with Some p when p <> self && p > 1 -> others := p :: !others | _ -> ()
-            done
-          with End_of_file -> ());
-         ignore (Unix.close_process_in ic);
-         List.iter (fun p -> try Unix.kill p Sys.sigkill with _ -> ()) !others);
       Fennec_dev.Pidfile.reap_stale ~cwd:(Sys.getcwd ());
       match exe with
       | Some exe_path ->

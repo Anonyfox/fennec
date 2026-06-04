@@ -122,17 +122,20 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
   if livereload_on then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
   (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
      clean up after) we'd otherwise keep the port and make the next `fennec dev` fail to bind.
-     The supervisor passes its pid as FENNEC_DEV_PARENT; we poll whether THAT process is still
-     alive and exit the instant it isn't. (getppid is unreliable here — a killed supervisor
-     doesn't always reparent us to init.) Cheap: a 0.25s poll on a background fiber. *)
-  (match (if livereload_on then Option.bind (Sys.getenv_opt "FENNEC_DEV_PARENT") int_of_string_opt else None) with
+     The supervisor (our direct parent) passes its pid as FENNEC_DEV_PARENT; we exit the moment
+     getppid() stops matching it. When the supervisor dies we are reparented, so getppid changes
+     to WHATEVER reaper takes us (init, a subreaper, a shell) — this is robust regardless of the
+     reparent target, AND immune to pid recycling (getppid is our real current parent; a recycled
+     pid elsewhere is not it). Independent of livereload, so an e2e run self-exits too. Cheap: a
+     0.25s poll on a background fiber. *)
+  (match Option.bind (Sys.getenv_opt "FENNEC_DEV_PARENT") int_of_string_opt with
   | Some parent ->
     Eio.Fiber.fork ~sw (fun () ->
         let clock = Eio.Stdenv.clock env in
-        let alive pid = try Unix.kill pid 0; true with _ -> false in
         let rec watch () =
           Eio.Time.sleep clock 0.25;
-          if alive parent then watch () else (Printf.eprintf "[fennec] dev supervisor gone — exiting\n%!"; exit 0)
+          if Unix.getppid () = parent then watch ()
+          else (Printf.eprintf "[fennec] dev supervisor gone — exiting\n%!"; exit 0)
         in
         watch ())
   | None -> ());

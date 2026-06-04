@@ -20,6 +20,9 @@ let () =
   (* a truncated/tiny file *)
   write tmp "short";
   check "too short -> false" (not (A.bytecode_ready tmp));
+  (* a complete but WRONG artifact: a .cmo magic ("Caml1999O…"), not an executable image *)
+  write tmp (String.make 100 'x' ^ "Caml1999O008");
+  check "non-exec magic (.cmo) -> false" (not (A.bytecode_ready tmp));
   Sys.remove tmp;
   check "missing file -> false" (not (A.bytecode_ready "/no/such/file.bc"));
   if !fails = 0 then print_endline "all Artifact tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

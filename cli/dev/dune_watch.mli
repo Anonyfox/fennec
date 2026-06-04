@@ -48,6 +48,11 @@ type t
 (** Spawn [dune build --watch <targets>] with its stderr captured. *)
 val start : string list -> t
 
+(** Build a watcher reading from an arbitrary fd WITHOUT spawning dune. Test seam only: it lets
+    a test drive the full read/assemble/EOF path over a plain pipe (write dune-shaped bytes to
+    the other end, then [poll]). [pid] is 0. Not for production use. *)
+val of_fd : Unix.file_descr -> t
+
 (** The dune process id (for supervision / cleanup). *)
 val pid : t -> int
 

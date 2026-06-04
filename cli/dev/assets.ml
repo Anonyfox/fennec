@@ -22,8 +22,10 @@ let rec collect dir acc =
 
 let poll t =
   let css = ref false and other = ref false in
+  let seen = Hashtbl.create 64 in
   List.iter
     (fun p ->
+      Hashtbl.replace seen p ();
       match (try Some (Digest.file p) with _ -> None) with
       | None -> ()
       | Some h -> (
@@ -33,6 +35,12 @@ let poll t =
           Hashtbl.replace t.hashes p h;
           if Filename.extension p = ".css" then css := true else other := true))
     (collect t.dir []);
+  (* tracked files that vanished this pass were deleted: forget them (so their hash can't linger
+     forever) and force a full reload — a removed stylesheet/script changes the page, and a CSS
+     hot-swap would just re-request a now-404 file. *)
+  let deleted = Hashtbl.fold (fun p _ acc -> if Hashtbl.mem seen p then acc else p :: acc) t.hashes [] in
+  if deleted <> [] then other := true;
+  List.iter (Hashtbl.remove t.hashes) deleted;
   classify ~css:!css ~other:!other
 
 let seed t = ignore (poll t)

@@ -49,7 +49,9 @@ let client_script =
   }
   function schedule(){
     if (pending !== null || live || document.hidden) return; // hidden: resume on visibility
-    pending = setTimeout(connect, RETRY_MS);
+    // jitter the retry so that when the backend restarts, N open tabs don't reconnect AND reload
+    // in lockstep (a thundering herd against a just-booted server); spread them over RETRY_MS.
+    pending = setTimeout(connect, RETRY_MS + Math.floor(Math.random() * RETRY_MS));
   }
   function reconnectNow(){
     // Regaining focus/visibility is exactly when the dev wants the page fresh — and exactly
@@ -58,7 +60,7 @@ let client_script =
     // here — always tear the socket down and reconnect, re-reading the boot id (an unchanged
     // server just replies with the same id and nothing reloads; a new one triggers the reload).
     if (pending !== null) { clearTimeout(pending); pending = null; }
-    if (sock) { try { sock.onclose = null; sock.close(); } catch(_){} sock = null; }
+    if (sock) { try { sock.onclose = null; sock.onmessage = null; sock.close(); } catch(_){} sock = null; }
     live = false;
     connect();
   }
@@ -68,6 +70,7 @@ let client_script =
     sock.onopen = function(){ live = true; };
     sock.onmessage = function(e){
       var d = e.data;
+      if (typeof d !== "string") return;   // frames are always text; never throw on a Blob
       if (d.slice(0,5) === "boot:") {
         var id = d.slice(5);
         if (bootId === null) bootId = id;            // first connection: adopt, do not reload
@@ -88,22 +91,25 @@ let client_script =
 
 let script_tag = Printf.sprintf "<script>%s</script>" client_script
 
-(* find the last occurrence of [needle] in [hay], Stdlib only *)
-let rfind hay needle =
+(* Last index of [needle] in [hay], case-insensitive, Stdlib only. Allocation-free: compares
+   char-by-char rather than [String.sub]'ing a fresh substring at every position (which, on a
+   page with no match, would allocate O(n) garbage). Case-insensitive so a legal "</BODY>" or
+   "</Body>" is still found. *)
+let rfind_ci hay needle =
   let nh = String.length hay and nn = String.length needle in
   if nn = 0 || nn > nh then None
   else
-    let rec go i =
-      if i < 0 then None
-      else if String.sub hay i nn = needle then Some i
-      else go (i - 1)
+    let matches i =
+      let rec go k = k >= nn || (Char.lowercase_ascii hay.[i + k] = Char.lowercase_ascii needle.[k] && go (k + 1)) in
+      go 0
     in
-    go (nh - nn)
+    let rec scan i = if i < 0 then None else if matches i then Some i else scan (i - 1) in
+    scan (nh - nn)
 
-(* Insert the livereload script before the last </body> (or append if absent).
-   In-memory only — the response body the server already produced, lightly
-   transformed. *)
+(* Insert the livereload script before the last </body> (or append if absent). In-memory only —
+   the response body the server already produced, lightly transformed; spliced into the ORIGINAL
+   body so its casing is preserved. *)
 let inject_html (body : string) : string =
-  match rfind body "</body>" with
+  match rfind_ci body "</body>" with
   | Some i -> String.sub body 0 i ^ script_tag ^ String.sub body i (String.length body - i)
   | None -> body ^ script_tag

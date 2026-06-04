@@ -29,7 +29,30 @@ let () =
   check "blank line -> Other" (W.classify_line "" = W.Other);
   (* robustness: a 'waiting' line wins even if oddly formatted; never raises *)
   check "status detection is substring-based, not anchored"
-    (match W.classify_line "  Success, waiting for filesystem changes... " with W.Settled W.Ok -> true | _ -> false)
+    (match W.classify_line "  Success, waiting for filesystem changes... " with W.Settled W.Ok -> true | _ -> false);
+  (* error count is robust to ANSI colour and to digits appearing before "Had " *)
+  check "ANSI-wrapped error count parses the real number"
+    (W.classify_line "\027[1;31mHad 3 errors, waiting for filesystem changes...\027[0m" = W.Settled (W.Errors 3));
+  check "a digit before 'Had' doesn't corrupt the count"
+    (W.classify_line "12:34 Had 3 errors, waiting for filesystem changes..." = W.Settled (W.Errors 3))
+
+(* the real IO assembler over a pipe: line-splitting across reads + the EOF flush *)
+let () =
+  print_endline "Dune_watch IO assembler (over a pipe):";
+  let rd, wr = Unix.pipe () in
+  let t = W.of_fd rd in
+  let w s = ignore (Unix.write_substring wr s 0 (String.length s)) in
+  let rec drain n = if n <= 0 then None else match W.poll t ~timeout:0.2 with Some e -> Some e | None -> drain (n - 1) in
+  w "********** NEW BUILD (a.ml changed) **********\n";
+  w "Succ";
+  check "a settle split across reads yields no event until complete" (W.poll t ~timeout:0.2 = None);
+  w "ess, waiting for filesystem changes...\n";
+  check "the rejoined line settles as Ok" (match drain 3 with Some (W.Settled_build { outcome = W.Ok; _ }) -> true | _ -> false);
+  (* a final settle with NO trailing newline, then EOF, must not be lost as a bare Exited *)
+  w "Had 2 errors, waiting for filesystem changes...";
+  Unix.close wr;
+  check "a newline-less final settle is flushed on EOF" (match drain 4 with Some (W.Settled_build { outcome = W.Errors 2; _ }) -> true | _ -> false);
+  Unix.close rd
 
 let () =
   if !fails = 0 then print_endline "all Dune_watch tests passed."

@@ -30,6 +30,10 @@ let () =
   write (Filename.concat dir "main.js") "x=2";
   eq "js edit -> Reload" (As.poll a) As.Reload;
   eq "stable again -> Nothing" (As.poll a) As.Nothing;
+  (* deleting a tracked asset must force a reload (and not linger as a stale hash) *)
+  Sys.remove (Filename.concat dir "main.css");
+  eq "deleting a tracked file -> Reload" (As.poll a) As.Reload;
+  eq "deletion settled -> Nothing" (As.poll a) As.Nothing;
   List.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ()) [ "main.css"; "main.js" ];
   (try Unix.rmdir dir with _ -> ());
   if !fails = 0 then print_endline "all Assets tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

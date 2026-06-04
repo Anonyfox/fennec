@@ -22,11 +22,12 @@ type t = {
 
 let create () = { clients = Hashtbl.create 16; next = 0 }
 
-(* the server's boot id: its OS process id. It is stable for the life of this server process
-   and DIFFERENT after a restart (the supervisor spawns a fresh process), so the client can
-   tell "reconnected to the same server" (a blip — don't reload) from "the server was replaced"
-   (a real backend rebuild — reload once). *)
-let boot_id = string_of_int (Unix.getpid ())
+(* the server's boot id: a per-process nonce, stable for this process's life and DIFFERENT after
+   a restart, so the client can tell "reconnected to the same server" (a blip — don't reload)
+   from "the server was replaced" (a real backend rebuild — reload once). pid ALONE is not enough
+   — the OS recycles pids, so a restart could land on the same number and the client would miss
+   the reload; pairing it with the start time makes a genuine collision impossible. *)
+let boot_id = Printf.sprintf "%d-%d" (Unix.getpid ()) (int_of_float (Unix.gettimeofday () *. 1000.))
 
 (* register a browser's livereload socket; returns an unregister thunk. We greet the client
    with our boot id so it only reloads on a genuine restart, not on every reconnect. *)
@@ -55,7 +56,11 @@ let count t = Hashtbl.length t.clients
    though the app short-circuits the pipeline. *)
 let is_html_response (r : Fennec_core.Http.response) : bool =
   match Fennec_core.Http_semantics.header r.Fennec_core.Http.headers "content-type" with
-  | Some ct -> String.length ct >= 9 && String.sub ct 0 9 = "text/html"
+  (* tolerate casing/whitespace in the value: "Text/HTML", " text/html; charset=utf-8", … all
+     count — otherwise such a page would silently get no script AND no no-cache override *)
+  | Some ct ->
+    let ct = String.lowercase_ascii (String.trim ct) in
+    String.length ct >= 9 && String.sub ct 0 9 = "text/html"
   | None -> false
 
 let paw (t : t) : Fennec_paw.Paw.t =

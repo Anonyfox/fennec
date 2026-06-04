@@ -29,10 +29,32 @@ let parenthetical (s : string) : string =
   | Some i, Some j when j > i + 1 -> String.sub s (i + 1) (j - i - 1)
   | _ -> ""
 
-let classify_line (line : string) : line =
+(* strip ANSI CSI escapes (e.g. colour). dune's piped stderr is normally plain, but
+   CLICOLOR_FORCE / some CI wrappers force colour even on a pipe — and a leading "\027[31m"
+   carries digits ("31") that would otherwise corrupt the error-count scan below. *)
+let strip_ansi (s : string) : string =
+  if not (String.contains s '\027') then s
+  else begin
+    let b = Buffer.create (String.length s) and n = String.length s and i = ref 0 in
+    while !i < n do
+      if s.[!i] = '\027' && !i + 1 < n && s.[!i + 1] = '[' then begin
+        i := !i + 2;
+        while !i < n && not (s.[!i] >= '@' && s.[!i] <= '~') do incr i done; (* CSI params … *)
+        if !i < n then incr i (* … then the final byte *)
+      end
+      else (Buffer.add_char b s.[!i]; incr i)
+    done;
+    Buffer.contents b
+  end
+
+let classify_line (raw : string) : line =
+  let line = strip_ansi raw in
   if contains line "waiting for filesystem changes" then
-    (* "Success, waiting…" vs "Had <n> error(s), waiting…" — the count rides along *)
-    if contains line "error" then Settled (Errors (match int_from line 0 with Some n -> n | None -> 1))
+    (* "Success, waiting…" vs "Had <n> error(s), waiting…". Anchor the count AFTER the "Had "
+       token so a stray digit elsewhere (a path, a timestamp) can't be read as the error count. *)
+    if contains line "error" then
+      let n = match find_sub line "Had " with Some i -> int_from line (i + 4) | None -> int_from line 0 in
+      Settled (Errors (match n with Some n -> n | None -> 1))
     else Settled Ok
   else if contains line "NEW BUILD" && String.contains line '(' then Trigger (parenthetical line)
   else Other
@@ -86,9 +108,12 @@ let feed_line t (raw : string) =
     Buffer.clear t.msg;
     t.started <- None
   | Other ->
-    (* keep real diagnostics, drop blank lines and the asterisk banner remnants *)
+    (* keep real diagnostics, drop blank lines and the asterisk banner remnants. Cap the buffer
+       so a pathological non-settling error stream can't grow it without bound. *)
     let trimmed = String.trim line in
-    if trimmed <> "" && not (contains trimmed "**********") then (Buffer.add_string t.msg line; Buffer.add_char t.msg '\n')
+    if trimmed <> "" && (not (contains trimmed "**********")) && Buffer.length t.msg < 65536 then (
+      Buffer.add_string t.msg line;
+      Buffer.add_char t.msg '\n')
 
 (* drain complete lines out of [carry] *)
 let drain_lines t =
@@ -103,10 +128,19 @@ let drain_lines t =
   done;
   if !start < n then Buffer.add_string t.carry (String.sub s !start (n - !start))
 
+(* build a watcher over an arbitrary fd WITHOUT spawning dune — test seam only (see .mli) *)
+let of_fd (fd : Unix.file_descr) : t =
+  { pid = 0; fd; carry = Buffer.create 1024; triggers = []; msg = Buffer.create 1024; started = None; building = false; queue = Queue.create (); eof = false }
+
 let read_once t =
   let buf = Bytes.create 8192 in
   match Unix.read t.fd buf 0 (Bytes.length buf) with
-  | 0 -> t.eof <- true
+  | 0 ->
+    (* dune closed the pipe. If its final write was a complete line WITHOUT a trailing newline
+       (a process dying mid-flush), it's sitting in [carry] — flush it so that last settle isn't
+       silently lost and reported as a bare [Exited]. *)
+    if Buffer.length t.carry > 0 then (feed_line t (Buffer.contents t.carry); Buffer.clear t.carry);
+    t.eof <- true
   | k ->
     Buffer.add_subbytes t.carry buf 0 k;
     drain_lines t

@@ -16,7 +16,10 @@ let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
 
 (* ---- status output (colour only on a terminal, NO_COLOR-aware) ---- *)
 let use_color =
-  lazy ((try Unix.isatty Unix.stderr with _ -> false) && match Sys.getenv_opt "NO_COLOR" with Some s when s <> "" -> false | _ -> true)
+  lazy
+    (let tty = try Unix.isatty Unix.stderr with _ -> false in
+     let no_color = match Sys.getenv_opt "NO_COLOR" with Some s -> s <> "" | None -> false in
+     tty && not no_color)
 
 let paint code s = if Lazy.force use_color then "\027[" ^ code ^ "m" ^ s ^ "\027[0m" else s
 let dim s = paint "2" s
@@ -52,7 +55,11 @@ let kill_reap pid =
   (try Unix.kill pid Sys.sigterm with _ -> ());
   let dead = ref false and i = ref 0 in
   while (not !dead) && !i < 6 do
-    (match (try Unix.waitpid [ Unix.WNOHANG ] pid with _ -> (pid, Unix.WEXITED 0)) with 0, _ -> Unix.sleepf 0.05 | _ -> dead := true);
+    (match Unix.waitpid [ Unix.WNOHANG ] pid with
+    | 0, _ -> Unix.sleepf 0.05 (* still alive: wait a beat *)
+    | _ -> dead := true
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> () (* a signal interrupted us: just retry *)
+    | exception _ -> dead := true (* ECHILD &c: already reaped/gone *));
     incr i
   done;
   if not !dead then (try Unix.kill pid Sys.sigkill with _ -> ());
@@ -88,8 +95,14 @@ let run ~targets ~exe ~assets =
   (* warm esbuild worker BEFORE dune, so even the first build delegates to it *)
   let worker_socket = tmp_socket "fennec-esb" in
   let worker_pid = start_esbuild_worker worker_socket in
-  let ww = ref 0.0 in
-  while (not (Sys.file_exists worker_socket)) && !ww < 3.0 do Unix.sleepf 0.05; ww := !ww +. 0.05 done;
+  let ww = ref 0.0 and worker_dead = ref false in
+  while (not (Sys.file_exists worker_socket)) && !ww < 3.0 && not !worker_dead do
+    Unix.sleepf 0.05;
+    ww := !ww +. 0.05;
+    (* if the worker exited (bad binary), stop waiting for a socket that will never appear
+       instead of burning the full 3s of dead startup latency *)
+    match (try Unix.waitpid [ Unix.WNOHANG ] worker_pid with _ -> (0, Unix.WEXITED 0)) with 0, _ -> () | _ -> worker_dead := true
+  done;
   if Sys.file_exists worker_socket then Unix.putenv "FENNEC_ESBUILD_WORKER" worker_socket
   else pf "fennec dev: esbuild worker did not start; falling back to cold builds\n%!";
 
@@ -102,6 +115,8 @@ let run ~targets ~exe ~assets =
   let last_exe = ref 0.0 in
   let assets = Assets.create ~dir:(Filename.concat (Filename.dirname exe) assets) in
   let limiter = Crash_limiter.create () in
+  let dune_exits = ref 0 in
+  (* reset to 0 on every good build *)
   let pidfile = Pidfile.path_for ~root:(Sys.getcwd ()) in
   (* record OUR pid too, not just the children: a previous `fennec dev` that wasn't shut down
      cleanly would otherwise keep supervising (respawning a server that fights for the port).
@@ -122,12 +137,19 @@ let run ~targets ~exe ~assets =
       if Artifact.bytecode_ready exe then
         match (try Some (start_server exe dev_env) with _ -> None) with
         | Some pid -> server_pid := Some pid; last_exe := mtime exe; Assets.seed assets; record_pids (); label ()
-        | None -> ef "fennec dev: could not start the server (%s missing?)\n%!" exe)
+        (* re-record even on failure so the pidfile no longer lists the dead old server pid (we
+           just killed it) — otherwise the next run would SIGKILL whatever now owns that pid *)
+        | None -> ef "fennec dev: could not start the server (%s missing?)\n%!" exe; record_pids ())
   in
 
+  let shutting_down = ref false in
   let shutdown _ =
+    (* idempotent: a second signal (Ctrl-C mashed, or SIGTERM right after SIGINT) must not re-enter
+       the teardown — just leave now. Keeps the handler from racing its own kill/reap. *)
+    if !shutting_down then exit 0;
+    shutting_down := true;
     pf "\nfennec dev: shutting down\n%!";
-    (match !server_pid with Some pid -> kill pid; Unix.sleepf 0.15; (try Unix.kill pid Sys.sigkill with _ -> ()) | None -> ());
+    (match !server_pid with Some pid -> kill_reap pid | None -> ()); (* frees the port before we go *)
     kill (Dune_watch.pid !dw);
     kill worker_pid;
     (try Sys.remove control_path with _ -> ());
@@ -141,6 +163,7 @@ let run ~targets ~exe ~assets =
 
   let on_build_ok triggers dur =
     Crash_limiter.reset limiter;
+    dune_exits := 0;
     (* dune already rolling another build (a still-running edit burst): its artifact is being
        rewritten. Do nothing — the next settle restarts once, on a stable image. Coalesces the
        storm AND dodges a half-written load, with no wait: it's a state check, not a debounce. *)
@@ -167,15 +190,23 @@ let run ~targets ~exe ~assets =
   in
 
   let on_dune_exit () =
-    ef "%s dune watcher exited — restarting it\n%!" (paint "33" "[fennec] ⚠");
-    Unix.sleepf 0.5;
-    dw := Dune_watch.start targets;
-    record_pids ()
+    incr dune_exits;
+    (* a healthy dune --watch never exits on its own; if it keeps dying, the build environment is
+       broken and respawning every 0.5s would just spin and spam. Give up cleanly after a few. *)
+    if !dune_exits > 5 then (
+      ef "%s dune --watch keeps exiting — fix the build environment, then restart `fennec dev`.\n%!" (paint "31" "[fennec] ✗");
+      shutdown Sys.sigterm)
+    else (
+      ef "%s dune watcher exited — restarting it\n%!" (paint "33" "[fennec] ⚠");
+      Unix.sleepf 0.5;
+      dw := Dune_watch.start targets;
+      record_pids ())
   in
 
   let on_server_crash status =
     let port_busy = status = Unix.WEXITED 98 in
-    (match !server_pid with Some pid -> (try ignore (Unix.waitpid [] pid) with _ -> ()) | None -> ());
+    (* the crashed child was already reaped by [check_server]'s WNOHANG waitpid (it returned this
+       [status]); just drop our handle — no second blocking waitpid on an already-reaped pid *)
     server_pid := None;
     match Crash_limiter.record limiter ~now:(now ()) ~flat:port_busy () with
     | Crash_limiter.Give_up ->
@@ -196,13 +227,18 @@ let run ~targets ~exe ~assets =
   (* collapse to the NEWEST buffered event (zero wait): a burst yields many settles; act on the
      latest only, restarting once on the final state instead of racing dune's in-flight builds *)
   let rec newest ev = match (try Dune_watch.poll !dw ~timeout:0. with _ -> None) with Some e -> newest e | None -> ev in
+  (* did the server exit on its own? reap it (WNOHANG) and report a crash. *)
+  let check_server () =
+    match !server_pid with
+    | None -> ()
+    | Some pid -> (match (try Unix.waitpid [ Unix.WNOHANG ] pid with _ -> (0, Unix.WEXITED 0)) with 0, _ -> () | _, status -> on_server_crash status)
+  in
   let step () =
-    match Dune_watch.poll !dw ~timeout:0.5 with
-    | Some ev -> handle (newest ev)
-    | None -> (
-      match !server_pid with
-      | None -> ()
-      | Some pid -> (match (try Unix.waitpid [ Unix.WNOHANG ] pid with _ -> (0, Unix.WEXITED 0)) with 0, _ -> () | _, status -> on_server_crash status))
+    (* check the server EVERY iteration, not only when the dune poll times out — otherwise a
+       server that crashed on boot during an edit burst (steady stream of settles) wouldn't be
+       noticed until the burst quieted. *)
+    check_server ();
+    match Dune_watch.poll !dw ~timeout:0.5 with Some ev -> handle (newest ev) | None -> ()
   in
   let rec loop () =
     (try step () with e -> ef "fennec dev: internal error (continuing): %s\n%!" (Printexc.to_string e); Unix.sleepf 0.1);
