@@ -62,3 +62,16 @@
  (modes byte exe)
  (modules server assets)
  (libraries fennec fennec.fur.server web_app admin_app site_styles))
+
+; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test
+; machinery or its yojson dep. A pure-OCaml guard reads the native server.exe and fails if
+; any forbidden module-name appears. Runs under `dune runtest`, so a regression trips CI. ----
+(executable
+ (name check_lean)
+ (modules check_lean))
+
+(rule
+ (alias runtest)
+ (deps server.exe)
+ (action
+  (run %{exe:check_lean.exe} %{dep:server.exe})))

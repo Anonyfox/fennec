@@ -26,19 +26,6 @@ module Cond = struct
     | Actionable of string                      (* visible + stable + enabled + hit-testable *)
     | Js of string                              (* a SYNC boolean JS expression is true *)
 
-  let describe = function
-    | Visible s -> Printf.sprintf "%S to be visible" s
-    | Hidden s -> Printf.sprintf "%S to be hidden" s
-    | Present s -> Printf.sprintf "%S to be present" s
-    | Detached s -> Printf.sprintf "%S to be detached" s
-    | Text (s, t) -> Printf.sprintf "%S to contain text %S" s t
-    | Value (s, v) -> Printf.sprintf "%S to have value %S" s v
-    | Attr (s, n, v) -> Printf.sprintf "%S to have [%s]=%S" s n v
-    | Count (s, n) -> Printf.sprintf "%S to match %d element(s)" s n
-    | Url u -> Printf.sprintf "url to contain %S" u
-    | Actionable s -> Printf.sprintf "%S to be actionable" s
-    | Js e -> Printf.sprintf "JS (%s) to be true" e
-
   (* the selector a condition is about, for diagnostics (None for url / raw js) *)
   let selector = function
     | Visible s | Hidden s | Present s | Detached s | Text (s, _) | Value (s, _)

@@ -1,14 +1,27 @@
-; fennec.e2e — a self-contained real-browser e2e driver: a hand-written WebSocket +
+; fennec-e2e — a self-contained real-browser e2e driver: a hand-written WebSocket +
 ; Chrome DevTools Protocol client on Eio, a leak-proof browser/process lifecycle, a
-; bounded worker pool, and a pipe-shaped page DSL. Depends only on Eio + yojson + base64
-; (the WebSocket handshake key) — no npm, no Lwt, no chromedriver, no Selenium. The only
-; runtime requirement is a Chromium-family browser installed on the host.
+; pipe-shaped page DSL, and a cross-platform reporter. Depends only on Eio + yojson +
+; base64 (the WebSocket handshake key) — no npm, no Lwt, no chromedriver, no Selenium. The
+; only runtime requirement is a Chromium-family browser installed on the host.
 ;
-; The orchestration (pool, runner, DSL, matchers) is written against an abstract page
-; BACKEND, so all of it is unit-tested against an in-memory fake; only the thin Cdp
-; backend touches a real browser (integration-tested by the dogfood suite).
+; Its OWN opam package (fennec-e2e), NOT part of the runtime `fennec` package — so a
+; production server that depends on `fennec` never links this or its yojson dep. The
+; module is still `Fennec_e2e`; only the install/library name is `fennec-e2e`.
+;
+; The orchestration (runner, DSL, matchers) is written against an abstract page BACKEND, so
+; all of it is unit-tested against an in-memory fake; only the thin Cdp backend touches a
+; real browser (integration-tested by the dogfood suite).
 (library
  (name fennec_e2e)
- (public_name fennec.e2e)
+ (public_name fennec-e2e)
  (libraries eio eio.unix eio_main unix yojson base64)
+ ; the CDP wire client, the in-page harness backend, and Chrome process control are
+ ; implementation detail — kept out of the public API. Users see Backend/Driver/Live/
+ ; Run/Reporter/Failure. (Conformance is a compile-time `Cdp_backend : Backend.S` proof.)
+ (private_modules cdp cdp_backend chrome conformance)
  (modes byte native))
+
+; the package landing page for odoc (`dune build @doc`)
+(documentation
+ (package fennec-e2e)
+ (mld_files index))

@@ -1,9 +1,9 @@
-; Real-browser e2e for the site example, written with the fennec.e2e DSL. The suites
+; Real-browser e2e for the site example, written with the fennec-e2e DSL. The suites
 ; (site.ml, …) register their tests; run.ml boots the server + browser and runs them.
 ; NOT part of `dune test` (needs a system Chrome); run via ./run.sh. -linkall so every
 ; suite module's registration runs even though run.ml never references them by name.
 (executable
  (name run)
  (modules run site)
- (libraries fennec.e2e)
+ (libraries fennec-e2e)
  (link_flags (-linkall)))

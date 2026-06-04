@@ -11,8 +11,10 @@ module Make (B : Backend.S) = struct
   module Cond = Backend.Cond
   module Diag = Backend.Diag
 
+  type backend = B.t
+
   type page = {
-    backend : B.t;
+    backend : backend;
     now : unit -> float;        (* for per-step timing in the trace *)
     base_url : string;          (* prepended to a leading-'/' path in [goto] *)
     scope : string;             (* selector prefix from enclosing [within] blocks *)
@@ -23,8 +25,9 @@ module Make (B : Backend.S) = struct
   exception Step_failed
 
   let scoped p sel = if p.scope = "" then sel else p.scope ^ " " ^ sel
-  let q = Failure.q
-  let trunc = Failure.truncate
+  (* labels quote selectors and clip long values, so a trace line stays one readable row *)
+  let q s = "\"" ^ s ^ "\""
+  let trunc n s = if String.length s <= n then s else String.sub s 0 (max 0 (n - 1)) ^ "..."
 
   let set_head p f = match !(p.trace) with hd :: tl -> p.trace := f hd :: tl | [] -> ()
 
@@ -104,7 +107,6 @@ module Make (B : Backend.S) = struct
   let registry : test list ref = ref []
   let test name body = registry := { name; body } :: !registry
   let registered () = List.rev !registry
-  let clear_registry () = registry := []
 
   (* the runner's result/outcome/summary types live in {!Reporter} (they don't depend on the
      backend), re-exported here so callers keep using [D.result], [D.Failed_assert], etc. *)
@@ -127,24 +129,24 @@ module Make (B : Backend.S) = struct
     let prefix = match Sys.getenv_opt "FENNEC_E2E_RERUN" with Some p when p <> "" -> p | _ -> Filename.basename Sys.executable_name in
     Printf.sprintf "%s --grep %s" prefix (shell_quote name)
 
-  (* one attempt: returns (failure kind option, trace) *)
+  (* one attempt: returns (failure kind option, trace). [provision] only has to run the body
+     with a fresh backend and clean up — the outcome is captured in a ref, so [provision]
+     stays the natural [(backend -> unit) -> unit] rather than threading our result type. *)
   let run_once ~clock ~config ~provision t : Failure.kind option * Failure.step list =
-    let trace = ref [] in
-    let kind =
-      try
-        provision (fun backend ->
-            let page =
-              { backend; now = (fun () -> Eio.Time.now clock); base_url = config.base_url;
-                scope = ""; timeout = config.step_timeout; trace }
-            in
-            match Eio.Time.with_timeout clock config.test_timeout (fun () -> t.body page; Ok ()) with
-            | Ok () -> None
-            | Error `Timeout -> Some (Failure.Timed_out config.test_timeout))
-      with
-      | Step_failed -> Some Failure.Assertion
-      | e -> Some (Failure.Errored (Printexc.to_string e))
-    in
-    (kind, List.rev !trace)
+    let trace = ref [] and kind = ref None in
+    (try
+       provision (fun backend ->
+           let page =
+             { backend; now = (fun () -> Eio.Time.now clock); base_url = config.base_url;
+               scope = ""; timeout = config.step_timeout; trace }
+           in
+           match Eio.Time.with_timeout clock config.test_timeout (fun () -> t.body page; Ok ()) with
+           | Ok () -> ()
+           | Error `Timeout -> kind := Some (Failure.Timed_out config.test_timeout))
+     with
+     | Step_failed -> kind := Some Failure.Assertion
+     | e -> kind := Some (Failure.Errored (Printexc.to_string e)));
+    (!kind, List.rev !trace)
 
   let outcome_of_kind = function
     | Failure.Assertion -> Failed_assert
@@ -202,6 +204,4 @@ module Make (B : Backend.S) = struct
     in
     let passed = List.length (List.filter (fun r -> r.outcome = Passed) results) in
     { results; passed; failed = List.length results - passed }
-
-  let run_registered ?reporter ~clock ~config ~provision () = run ?reporter ~clock ~config ~provision (registered ())
 end

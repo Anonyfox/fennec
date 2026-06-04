@@ -35,8 +35,9 @@ let main ?binary ?reporter ?(browsers = 1) ?(headless = true) ?server_exe ~base_
   (match server_exe with
    | None -> ()
    | Some exe ->
-     (* deterministic experiment: serve the dev web root WITHOUT livereload (which would
-        otherwise reload the page spontaneously). The spawned server inherits this env. *)
+     (* serve the dev web root WITHOUT livereload, which would otherwise reload the page
+        spontaneously and make a controlled run non-deterministic. The spawned server
+        inherits this env. (Fennec-specific; harmless to any other server, which ignores it.) *)
      Unix.putenv "FENNEC_DEV_LIVERELOAD" "0";
      let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) (Eio.Path.(/) fs "/dev/null") in
      ignore (Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull [ exe ]);

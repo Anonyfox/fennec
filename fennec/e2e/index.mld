@@ -1,0 +1,71 @@
+{0 fennec-e2e}
+
+Real-browser end-to-end testing for OCaml, in pure OCaml. A hand-written WebSocket +
+Chrome DevTools Protocol client drives a headless Chromium directly — {b no Node, no
+chromedriver, no Selenium, no Lwt}. The only thing you install is a Chromium-family
+browser; the rest is one OCaml library.
+
+Tests read as pipes, waits are event-driven (one in-page MutationObserver/rAF round-trip,
+never a poll), and a failure prints a report that says exactly which step failed, what the
+page looked like at that instant, why it matters, and how to re-run just that test.
+
+{1 Quick start}
+
+{[
+open Fennec_e2e.Live
+
+let () = test "adds an item to the cart" @@ fun page ->
+  page
+  |> goto "/products"
+  |> click ".product:first-child .add-to-cart"
+  |> expect_text ".cart .count" "1"
+  |> expect_visible ".cart .line-item"
+  |> ignore
+
+(* boot a server, launch Chrome, run every registered test, exit non-zero on failure;
+   flags: --grep, --bail, --jobs N, --headed, --timeout S, --reporter plain|pretty, … *)
+let () = Fennec_e2e.Run.main_cli ~base_url:"http://localhost:8080" ()
+]}
+
+A step like [expect_text ".cart .count" "1"] blocks until the element's text contains
+["1"] or the step times out; on timeout the pipe short-circuits and the runner renders the
+failure. You never write an explicit wait.
+
+{1 What you get}
+
+- {b Auto-waiting DSL} — [goto], [click], [fill], [press], [within], [expect_*], [read_*],
+  [eval]; each step waits for its own precondition.
+- {b Event-driven, deterministic} — no polling and no retry hacks; navigation is matched by
+  loader id and evaluations are pinned to the live execution context.
+- {b Self-explaining failures} — a numbered pipeline trace, the captured [outerHTML] /
+  selector probe / URL / console, a tuned hint, and a copy-pasteable rerun command.
+- {b A reporter that travels} — colour, unicode, and a live status line on a TTY; plain
+  ASCII with no cursor control on a CI log or pipe. Detected automatically; airtight under
+  parallelism.
+- {b A fake backend} — the DSL and runner are written against an abstract {!Fennec_e2e.Backend.S},
+  so they are unit-tested with no browser at all and behave identically live.
+
+{1 API}
+
+{!modules:
+  Fennec_e2e.Live
+  Fennec_e2e.Run
+  Fennec_e2e.Backend
+  Fennec_e2e.Driver
+  Fennec_e2e.Reporter
+  Fennec_e2e.Failure
+}
+
+Most test files only need {!Fennec_e2e.Live} (the DSL, instantiated for a real browser) and
+{!Fennec_e2e.Run} (the harness). {!Fennec_e2e.Backend}, {!Fennec_e2e.Driver} (the functor),
+{!Fennec_e2e.Reporter}, and {!Fennec_e2e.Failure} are for custom backends and custom
+reporting.
+
+{1 Notes}
+
+- {b Concurrency model:} the library is Eio-only by design (direct-style, structured
+  concurrency, leak-free teardown under a single switch) — hence OCaml 5+.
+- {b Browser:} any Chromium-family browser on [PATH], or set [CHROME] / pass [~binary].
+- This package is intentionally separate from the [fennec] web framework it grew up beside,
+  so a production server never links the test/CDP machinery. It has no dependency on
+  [fennec] and works against any web server.

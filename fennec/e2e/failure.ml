@@ -31,7 +31,6 @@ type t = {
 }
 
 (* ---------------------------------------------------------------- small helpers ---- *)
-let buf_add = Buffer.add_string
 let line b s = Buffer.add_string b s; Buffer.add_char b '\n'
 let truncate n s = if String.length s <= n then s else String.sub s 0 (max 0 (n - 1)) ^ "..."
 let pad_right n s = if String.length s >= n then s else s ^ String.make (n - String.length s) ' '

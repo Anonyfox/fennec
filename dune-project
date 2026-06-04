@@ -46,15 +46,41 @@
   eio_main
   digestif
   base64
-  ; yojson: used by fennec.e2e (the real-browser e2e driver) to speak the Chrome
-  ; DevTools Protocol JSON; base64/eio_main above are shared with it too.
-  yojson
   zlib
   bigstringaf
   (ppxlib
    (>= 0.28))
   js_of_ocaml
   js_of_ocaml-ppx))
+
+; The real-browser e2e testing driver (Fennec_e2e). A DEV/TEST tool, kept in its OWN
+; package so the runtime `fennec` — and therefore every production server that links it —
+; never carries the e2e/CDP machinery or its yojson dependency. It is a standalone Eio
+; library (no dependency on the framework): a hand-written WebSocket + Chrome DevTools
+; Protocol client, an auto-waiting page DSL, an in-memory fake backend for unit tests, and
+; a cross-platform reporter. No npm, no Lwt, no chromedriver — only a Chromium-family
+; browser at runtime. (The prod-lean guarantee is enforced by a runtest tripwire in the
+; site example: examples/site/check_lean.ml.)
+(package
+ (name fennec-e2e)
+ (synopsis "Real-browser end-to-end testing for Fennec — pure OCaml/Eio over the Chrome DevTools Protocol")
+ (description
+  "A self-contained headless-browser e2e driver for Fennec apps: a hand-written WebSocket\nand Chrome DevTools Protocol client on Eio, an auto-waiting page DSL with rich failure\ndiagnostics, a deterministic in-memory fake backend (so the DSL/runner are unit-tested\nwithout a browser), and a terminal reporter that adapts from a TTY to a CI log. No Node,\nno chromedriver, no Selenium, no Lwt — only a Chromium-family browser at runtime. Shipped\nas a separate package so production servers never link it.")
+ (tags
+  ("testing" "e2e" "browser" "chrome" "devtools-protocol" "eio"))
+ (depends
+  ; Eio is direct-style effects, so OCaml 5+ is required (not 4.14).
+  (ocaml
+   (>= 5.0))
+  (dune
+   (>= 3.16))
+  (eio
+   (>= 1.0))
+  eio_main
+  (yojson
+   (>= 2.0))
+  (base64
+   (>= 3.0))))
 
 ; The CLI is the distributable: a self-contained `fennec` binary that statically
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a
@@ -92,10 +118,8 @@
    (>= 3.16))
   fennec
   fennec-cli
+  ; the site example's real-browser e2e suite (examples/site/e2e) uses the standalone
+  ; e2e driver; it brings yojson/base64 transitively. No npm, no Lwt, no chromedriver.
+  fennec-e2e
   (mlx
-   (>= 0.11))
-  ; the site example's real-browser e2e (examples/site/e2e) drives headless Chrome over
-  ; the DevTools Protocol from Eio; it needs yojson (CDP JSON) and base64 (the WebSocket
-  ; handshake key — base64 is already a fennec dep). No npm, no Lwt, no chromedriver.
-  yojson
-  base64))
+   (>= 0.11))))

@@ -8,7 +8,12 @@
 module Cond = Fennec_e2e.Backend.Cond
 module Diag = Fennec_e2e.Backend.Diag
 
-let contains = Fennec_e2e.Cdp.contains
+(* local substring test (the lib's internal Cdp.contains is not part of the public API) *)
+let contains hay ndl =
+  let hl = String.length hay and nl = String.length ndl in
+  let rec matches i j = j = nl || (hay.[i + j] = ndl.[j] && matches i (j + 1)) in
+  let rec scan i = i + nl <= hl && (matches i 0 || scan (i + 1)) in
+  nl = 0 || scan 0
 
 type world = {
   mutable url : string;

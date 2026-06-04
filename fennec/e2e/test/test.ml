@@ -1,59 +1,23 @@
-(* Orchestration unit tests for fennec.e2e — no real browser. The pool uses integer
-   resources; the DSL/runner use the in-memory {!Fake} backend. Everything is deterministic
-   and runs in milliseconds: the fake's [wait] returns immediately (Ok or a timeout Diag),
-   so there is no real time involved except the runner's own test-timeout backstop. *)
+(* Unit tests for fennec-e2e's orchestration — DSL, runner, failure formatter, reporter —
+   all against an in-memory fake backend (no real browser). Deterministic and millisecond-
+   fast: the fake's [wait] returns immediately (Ok or a timeout Diag), so there is no real
+   time except the runner's own test-timeout backstop. *)
 
-module Pool = Fennec_e2e.Pool
 module D = Fennec_e2e.Driver.Make (Fake)
 module Failure = Fennec_e2e.Failure
 module Reporter = Fennec_e2e.Reporter
 module Diag = Fennec_e2e.Backend.Diag
 module Cond = Fennec_e2e.Backend.Cond
 
-let contains = Fennec_e2e.Cdp.contains
+(* a local substring test (the lib's internal Cdp.contains is no longer public) *)
+let contains hay ndl =
+  let hl = String.length hay and nl = String.length ndl in
+  let rec matches i j = j = nl || (hay.[i + j] = ndl.[j] && matches i (j + 1)) in
+  let rec scan i = i + nl <= hl && (matches i 0 || scan (i + 1)) in
+  nl = 0 || scan 0
+
 let passed = ref 0 and failed = ref 0
 let check name c = if c then (incr passed; Printf.printf "  ok   %s\n" name) else (incr failed; Printf.printf "  FAIL %s\n" name)
-
-(* ------------------------------------------------------------------ Pool ---------- *)
-let test_pool () =
-  print_endline "— pool —";
-  Eio_main.run @@ fun _env ->
-  Eio.Switch.run (fun sw ->
-      let spawned = ref 0 in
-      let pool = Pool.create ~sw ~capacity:3 ~spawn:(fun () -> incr spawned; !spawned) ~dispose:(fun _ -> ()) in
-      let cur = ref 0 and mx = ref 0 in
-      Eio.Fiber.all
-        (List.init 12 (fun _ () ->
-             Pool.use pool (fun _ ->
-                 incr cur;
-                 if !cur > !mx then mx := !cur;
-                 for _ = 1 to 5 do Eio.Fiber.yield () done;
-                 decr cur)));
-      check "capacity never exceeded" (!mx <= 3);
-      check "resources reused (spawned <= capacity)" (!spawned <= 3));
-  Eio.Switch.run (fun sw ->
-      let spawned = ref 0 and disposed = ref 0 in
-      let pool = Pool.create ~sw ~capacity:2 ~spawn:(fun () -> incr spawned; !spawned) ~dispose:(fun _ -> incr disposed) in
-      (try Pool.use pool (fun _ -> failwith "boom") with Failure _ -> ());
-      Pool.use pool (fun _ -> ());
-      check "failed lease released its permit (no deadlock)" true;
-      check "healthy resource kept after body failure" (!disposed = 0));
-  Eio.Switch.run (fun sw ->
-      let spawned = ref 0 and disposed = ref 0 in
-      let alive = Hashtbl.create 8 in
-      let pool =
-        Pool.create ~sw ~capacity:1
-          ~spawn:(fun () -> incr spawned; let id = !spawned in Hashtbl.replace alive id true; id)
-          ~dispose:(fun id -> incr disposed; Hashtbl.replace alive id false)
-      in
-      let validate id = try Hashtbl.find alive id with Not_found -> false in
-      Pool.use ~validate pool (fun id -> Hashtbl.replace alive id false);
-      check "dead resource disposed" (!disposed = 1);
-      Pool.use ~validate pool (fun _ -> ());
-      check "fresh resource spawned to replace the dead one" (!spawned = 2));
-  Eio.Switch.run (fun sw ->
-      check "capacity < 1 rejected"
-        (try ignore (Pool.create ~sw ~capacity:0 ~spawn:(fun () -> 0) ~dispose:ignore); false with Invalid_argument _ -> true))
 
 (* ------------------------------------------------------------------ DSL ----------- *)
 let mkpage w : D.page =
@@ -548,7 +512,6 @@ let test_reporter () =
   check "style Plain == no ANSI even on a capable terminal" (not (has_ansi s))
 
 let () =
-  test_pool ();
   test_dsl ();
   test_dsl_reasons ();
   test_format ();
