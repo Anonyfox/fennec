@@ -139,6 +139,12 @@ let () =
   eq "embedded js served" (status_of (eserve (req "/app.js"))) 200;
   eq "embedded missing -> None" (status_of (eserve (req "/nope.js"))) 0;
   eq "embedded traversal -> 403" (status_of (eserve (req "/../etc/passwd"))) 403;
+  (* content-aware default Cache-Control: HTML revalidates, other assets cache; an explicit
+     value overrides for every type *)
+  eq "html default -> no-cache" (hdr (eserve (req "/")) "cache-control") (Some "no-cache");
+  eq "js default -> public max-age" (hdr (eserve (req "/app.js")) "cache-control") (Some "public, max-age=3600");
+  eq "explicit cache-control overrides html"
+    (hdr (Static.respond ~cache_control:"max-age=60" emb (req "/")) "cache-control") (Some "max-age=60");
   let eetag = match hdr (eserve (req "/robots.txt")) "etag" with Some e -> e | None -> "" in
   check "embedded has etag" (eetag <> "");
   eq "embedded If-None-Match -> 304"

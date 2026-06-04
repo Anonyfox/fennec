@@ -7,6 +7,7 @@ module Basic_auth = Fennec_server.Basic_auth
 module Force_https = Fennec_server.Force_https
 module Metrics = Fennec_server.Metrics
 module Security_headers = Fennec_server.Security_headers
+module Logger = Fennec_server.Logger
 module Conn = Fennec_paw.Conn
 module H = Fennec_core.Http
 module Headers = Fennec_core.Headers
@@ -14,6 +15,11 @@ module Headers = Fennec_core.Headers
 let fails = ref 0
 let check name c = if c then Printf.printf "  ok   %s\n" name else (incr fails; Printf.printf "  FAIL %s\n" name)
 let eq name a b = check name (a = b)
+
+let contains s sub =
+  let ls = String.length s and lb = String.length sub in
+  let rec go i = i + lb <= ls && (String.sub s i lb = sub || go (i + 1)) in
+  lb = 0 || go 0
 
 let req ?(meth = H.GET) ?(headers = []) ?(body = "") ?(host = "") ?(scheme = "http") path =
   H.make_request ~meth ~path ~headers ~body ~host ~scheme ()
@@ -98,6 +104,23 @@ let () =
   let c = Conn.text ~status:201 c "ok" in
   let _ = finalize c in
   eq "reports method/path/status at send" !seen (Some ("POST", "/m", 201))
+
+let () =
+  print_endline "Logger:";
+  let buf = Buffer.create 64 in
+  let lg = Logger.make ~sink:(Buffer.add_string buf) () in
+  let _ = finalize (Conn.text ~status:201 (lg (Conn.make (req ~meth:H.POST "/x"))) "ok") in
+  let out = Buffer.contents buf in
+  check "logs method" (contains out "POST");
+  check "logs path" (contains out "/x");
+  check "logs status" (contains out "201");
+  check "logs duration in ms" (contains out "ms");
+  check "custom sink is never colourised" (not (contains out "\027["));
+  (* zero-config correlation: with Request_id upstream, the id is appended *)
+  let buf2 = Buffer.create 64 in
+  let c = Request_id.make () (Conn.make (req ~headers:[ ("X-Request-Id", "abc123") ] "/")) in
+  let _ = finalize (Conn.text (Logger.make ~sink:(Buffer.add_string buf2) () c) "ok") in
+  check "logs the request id when present" (contains (Buffer.contents buf2) "abc123")
 
 let () =
   if !fails = 0 then print_endline "all middleware tests passed."

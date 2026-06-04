@@ -120,6 +120,16 @@ let () =
   check "X-Forwarded-Proto=https -> Secure cookie" (contains (cookie_for [ ("X-Forwarded-Proto", "https") ]) "Secure");
   check "plain http -> cookie not Secure" (not (contains (cookie_for []) "Secure"))
 
+(* did the paw construct without raising Invalid_argument? (Some-wrap so the returned paw,
+   a function, isn't flagged as a discarded partial application) *)
+let constructs f = match (try Some (f ()) with Invalid_argument _ -> None) with Some _ -> true | None -> false
+
+let () =
+  print_endline "Session weak-secret guard:";
+  check "empty secret rejected" (not (constructs (fun () -> Session.make ~secret:"" ())));
+  check "short secret rejected" (not (constructs (fun () -> Session.make ~secret:"tooshort" ())));
+  check "16+ byte secret accepted" (constructs (fun () -> Session.make ~secret:(String.make 16 'x') ()))
+
 let () =
   if !fails = 0 then print_endline "all Session tests passed."
   else (Printf.printf "%d FAILED\n" !fails; exit 1)

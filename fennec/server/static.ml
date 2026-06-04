@@ -171,10 +171,18 @@ let embedded_lookup (name : string) (f : string -> string option) (key : string)
 let lookup (src : source) (key : string) : entry option =
   match src with Dir root -> dir_lookup root key | Embedded (name, f) -> embedded_lookup name f key
 
+(* The default Cache-Control, by content type. HTML is the app shell: it references the
+   (often fingerprinted) asset URLs, so it must always revalidate — "no-cache" still lets the
+   browser store it but forces an ETag check, which is ~free via 304, so a deploy is seen
+   immediately instead of after an hour of staleness. Other assets may sit in cache. An
+   explicit [?cache_control] overrides this for every type. *)
+let default_cache_control (ct : string) : string =
+  if String.length ct >= 9 && String.sub ct 0 9 = "text/html" then "no-cache"
+  else "public, max-age=3600"
+
 (* Build a response for a static asset. Returns None when there is no such asset
    (caller falls through to the next route / 404). [now] is epoch seconds. *)
-let respond ?(cache_control = "public, max-age=3600") (src : source) (req : H.request) :
-    H.response option =
+let respond ?cache_control (src : source) (req : H.request) : H.response option =
   match safe_key req.H.path with
   | None -> Some (H.text ~status:403 "Forbidden")
   | Some key -> (
@@ -182,11 +190,12 @@ let respond ?(cache_control = "public, max-age=3600") (src : source) (req : H.re
     | None -> None
     | Some e ->
       let ct = Mime.of_path key in
+      let cc = match cache_control with Some c -> c | None -> default_cache_control ct in
       let base_headers =
         [ ("Content-Type", ct);
           ("ETag", e.etag);
           ("Last-Modified", Date.format e.mtime);
-          ("Cache-Control", cache_control);
+          ("Cache-Control", cc);
           ("Accept-Ranges", "bytes") ]
       in
       let len = String.length e.bytes in

@@ -14,8 +14,11 @@ module H = Fennec_core.Http
     once; the cache is domain-safe and LRU-bounded by total body bytes. *)
 type source = Dir of string | Embedded of string * (string -> string option)
 
-(** Build a response for [req] against [src]. [None] means "no such asset"
-    (caller falls through to pages / 404). A 403 is returned for an unsafe path. *)
+(** Build a response for [req] against [src]. [None] means "no such asset" (caller falls
+    through to pages / 404). A 403 is returned for an unsafe path. Without [cache_control] the
+    default is content-aware — HTML revalidates ([no-cache], cheap via ETag/304, so deploys
+    are seen at once) while other assets get [public, max-age=3600]; an explicit
+    [cache_control] applies to every type. *)
 val respond : ?cache_control:string -> source -> H.request -> H.response option
 
 (** A request → optional-response function (the raw form, wrapped by {!make}). *)

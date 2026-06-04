@@ -139,7 +139,13 @@ let forwarded_scheme (c : Conn.t) : string =
    lives server-side; without it, the cookie holds the signed data. *)
 let make ~(secret : string) ?(cookie = "_fennec_session") ?(path = "/") ?(lifetime = 86400.)
     ?(same_site = Cookie.Lax) ?(http_only = true) ?secure ?store () : Paw.t =
- fun c ->
+  (* fail fast on a missing/weak secret — an empty or tiny secret yields real-looking but
+     trivially forgeable cookies, with no other signal that anything is wrong *)
+  if String.length secret < 16 then
+    invalid_arg
+      (Printf.sprintf "Fennec.Paw.Session.make: ~secret must be at least 16 bytes (got %d) — use a long random string"
+         (String.length secret));
+  fun c ->
   let secure = match secure with Some b -> b | None -> forwarded_scheme c = "https" in
   let tok = Conn.cookie c cookie in
   let loaded, loaded_exp, id =

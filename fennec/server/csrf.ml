@@ -102,7 +102,11 @@ let verify ~(secret : string) (c : Conn.t) (tok : string) : outcome =
    answer 403 unless it is [Ok], decline on [safe] methods. [secret] signs the tokens. *)
 let make ~(secret : string) ?(field = "_csrf_token") ?(header = "x-csrf-token")
     ?(safe = [ "GET"; "HEAD"; "OPTIONS" ]) () : Paw.t =
- fun c ->
+  if String.length secret < 16 then
+    invalid_arg
+      (Printf.sprintf "Fennec.Paw.Csrf.make: ~secret must be at least 16 bytes (got %d) — use a long random string"
+         (String.length secret));
+  fun c ->
   require_session c;
   if List.mem (H.string_of_meth (Conn.meth c)) safe then c
   else

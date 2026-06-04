@@ -70,7 +70,9 @@ let () =
   check "make raises without an upstream session"
     (try ignore (Csrf.make ~secret:app_secret () (no_sess ())); false with Failure _ -> true);
   check "token raises without an upstream session"
-    (try ignore (Csrf.token ~secret:app_secret (no_sess ())); false with Failure _ -> true)
+    (try ignore (Csrf.token ~secret:app_secret (no_sess ())); false with Failure _ -> true);
+  check "weak ~secret rejected at construction"
+    (match (try Some (Csrf.make ~secret:"short" ()) with Invalid_argument _ -> None) with Some _ -> false | None -> true)
 
 let () =
   if !fails = 0 then print_endline "all CSRF tests passed."
