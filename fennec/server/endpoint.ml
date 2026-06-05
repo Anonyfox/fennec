@@ -1,50 +1,64 @@
 (* An Endpoint is an app's IDENTITY — a [name] plus the host pattern(s) it answers — and its
-   BEHAVIOR (a paw pipeline). Ports live nowhere here: the runtime routes by Host in prod (see
-   {!Host_router}) and assigns localhost ports in dev (see {!Port_plan}). A server runs many
-   endpoints; one is selected per request by Host pattern (Phoenix-style), so a single process
-   serves arbitrary subdomains/wildcards with no /etc/hosts or proxy.
+   BEHAVIOR (a two-phase paw pipeline). Ports live nowhere here: the runtime routes by Host in
+   prod (see {!Host_router}) and assigns localhost ports in dev (see {!Port_plan}).
 
-   The builders (pipe/get/post/use/…) just append paws — an endpoint's handler is one composed paw. *)
+   Two pipeline phases prevent the "404 becomes 401" bug class:
+   - ALWAYS paws: run on every request, matched or not. Logger, CORS, security headers, static
+     file serving, route verbs, and SSR app mounts belong here.
+   - MATCHED paws: run ONLY when an always-phase paw answered the conn (i.e. a route matched).
+     Auth, rate limiting, and other business middleware belong here — they should never fire on
+     a request that didn't match any route.
+
+   For simple apps (no pipe_matched), the matched list is empty and behavior is identical to a
+   flat pipeline — zero DX cost for the common case. *)
 
 module Paw = Fennec_paw.Paw
 module Conn = Fennec_paw.Conn
 module H = Fennec_core.Http
 
 type t = {
-  name : string; (* a stable handle — for the dev banner, tests, tooling (people + LLMs read names) *)
-  hosts : string list; (* host PATTERNS this endpoint answers (validated by Host_router); default ["*"] *)
-  paws : Paw.t list; (* the pipeline, in order *)
+  name : string;
+  hosts : string list;
+  paws : Paw.t list; (* always-phase *)
+  matched : Paw.t list; (* matched-phase: only runs when an always paw answered *)
 }
 
-let make ~name ?(hosts = [ "*" ]) () : t = { name; hosts; paws = [] }
+let make ~name ?(hosts = [ "*" ]) () : t = { name; hosts; paws = []; matched = [] }
 
-(* append a single paw — the one implementation path for both [use] and the verb shortcuts *)
+(* ---- always-phase (runs on every request) ---- *)
+
 let use (p : Paw.t) (t : t) : t = { t with paws = t.paws @ [ p ] }
-
-(* mount a reusable pipeline (a paw list), defined in terms of [use] *)
 let pipe (paws : Paw.t list) (t : t) : t = List.fold_left (Fun.flip use) t paws
-
-(* prepend a paw so it runs BEFORE the rest of the pipeline. Needed for a paw that must register a
-   before_send hook before an answering paw short-circuits the chain (e.g. the dev livereload
-   script injector). *)
 let prepend (p : Paw.t) (t : t) : t = { t with paws = p :: t.paws }
 
-(* route verbs — each is a paw *)
 let get path h t = use (Paw.get path h) t
 let post path h t = use (Paw.post path h) t
 let put path h t = use (Paw.put path h) t
 let delete path h t = use (Paw.delete path h) t
 let patch path h t = use (Paw.patch path h) t
 
-(* Mount an SSR app: a [render : path -> string option] (the universal router's render) becomes a
-   paw answering with an HTML document when it matches, else declining (so static/404 follow). Kept
-   generic (a function, not a Router type) so fennec.server needn't depend on the heavy router libs. *)
 let app ?(at = "/") (render : string -> string option) (t : t) : t =
   let prefix_ok path = at = "/" || path = at || (String.length path > String.length at && String.sub path 0 (String.length at) = at) in
   use (fun c -> if (Conn.meth c = H.GET || Conn.meth c = H.HEAD) && prefix_ok (Conn.path c) then (match render (Conn.path c) with Some html -> Conn.html c html | None -> c) else c) t
 
-(* the composed handler paw for this endpoint *)
-let handler (t : t) : Paw.t = Paw.seq t.paws
+(* ---- matched-phase (runs only after a route matched) ---- *)
+
+let use_matched (p : Paw.t) (t : t) : t = { t with matched = t.matched @ [ p ] }
+let pipe_matched (paws : Paw.t list) (t : t) : t = List.fold_left (Fun.flip use_matched) t paws
+
+(* ---- composition ---- *)
+
+let handler (t : t) : Paw.t =
+  let always = Paw.seq t.paws in
+  match t.matched with
+  | [] -> always (* no matched-phase paws: flat pipeline, zero overhead *)
+  | matched_paws ->
+    (* the matched phase runs UNCONDITIONALLY on the (already-answered) conn — it's
+       post-processing (auth checks, header stamps, logging), not route matching. We use a
+       plain fold, not Paw.seq (which short-circuits on answered and would skip them). *)
+    fun conn ->
+      let c = always conn in
+      if Conn.answered c then List.fold_left (fun c p -> p c) c matched_paws else c
 
 let name (t : t) : string = t.name
 let hosts (t : t) : string list = t.hosts
