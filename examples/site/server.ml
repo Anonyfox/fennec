@@ -47,7 +47,7 @@ let common =
     Fennec.static ~name:"webroot" ~assets:Assets.lookup ]
 
 let web =
-  Endpoint.make ~host:"localhost" ~port:80 ~dev_port:8200 ()
+  Endpoint.make ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
   |> Endpoint.pipe common
   |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true,"app":"web"}|})
   |> Endpoint.get "/api/greeting" (fun c -> Conn.text c greeting)
@@ -61,7 +61,7 @@ let web =
           ~mounts:[ Web_app.Routes.mount ])
 
 let admin =
-  Endpoint.make ~host:"admin.localhost" ~port:80 ~dev_port:8201 ()
+  Endpoint.make ~name:"admin" ~hosts:[ "admin.localhost" ] () (* scoped by host; more specific, so it wins *)
   |> Endpoint.pipe common
   |> Endpoint.app (Fur_ssr.handler ~styles:Site_styles.css ~mounts:[ Admin_app.Routes.mount ])
 

@@ -9,7 +9,7 @@ module Dev_proto = Fennec_core.Dev_proto
 type t = { pid : int; fd : Unix.file_descr; carry : Buffer.t }
 
 type parsed =
-  | Urls of string list (* the server bound and reported its dev URLs *)
+  | Urls of (string * string) list (* the server bound and reported its dev URLs, as (name, url) pairs *)
   | Port_busy of int (* the server could not bind: this port is held *)
   | Chatter (* the server's own framework noise (or a blank line) — ignore *)
   | App_log of string (* the user's application output — relay verbatim *)

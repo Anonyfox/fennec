@@ -311,15 +311,6 @@ let write_stream w flow ~fs ~(resp : CH.response) ~keep_alive (stream : Conn.str
     Eio.Buf_write.string w "0\r\n\r\n";
     Eio.Buf_write.flush w
 
-(* select the endpoint whose host pattern matches the request's Host header;
-   first match wins, falling back to the first endpoint if none match (so a bare
-   IP / missing Host still gets served) *)
-let select_endpoint (endpoints : Endpoint.t list) (p : parsed) : Endpoint.t option =
-  let host = match header p.headers "host" with Some h -> h | None -> "" in
-  match List.find_opt (fun e -> Endpoint.host_matches e host) endpoints with
-  | Some e -> Some e
-  | None -> ( match endpoints with e :: _ -> Some e | [] -> None)
-
 (* Run a handler under a per-request deadline. On timeout, Eio CANCELS the whole handler
    fiber tree — including any sub-fibers it forked (parallel fetches) and their in-flight
    IO — and we answer 503. A thrown exception becomes a clean 500. This is structured,
@@ -336,10 +327,10 @@ let run_handler ~clock ~timeout (handler : Paw.t) (req : CH.request) : Conn.t =
     Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
     Conn.respond (Conn.make req) (CH.text ~status:500 "Internal Server Error")
 
-(* Handle one connection. [endpoints] are those sharing this listen port; each
-   request picks its endpoint by Host. A paw pipeline may answer with an HTTP
-   response OR a websocket upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs (endpoints : Endpoint.t list) flow addr =
+(* Handle one connection. [resolve ~host] picks the endpoint for a request: in prod (and on the dev
+   gateway) it routes by Host pattern; on a dev convenience port it always returns that one endpoint.
+   A paw pipeline may answer with an HTTP response OR a websocket upgrade (the ws is itself a paw). *)
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~(resolve : host:string -> Endpoint.t option) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -363,9 +354,9 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs (endpoints : Endpoint.
     | Ok (Req p) -> (
       (* scheme is http at the transport (no in-process TLS); a force-https / proxy
          a force-https paw can rewrite from X-Forwarded-Proto. host is the normalized Host header. *)
-      let host = Host.normalize (match header p.headers "host" with Some h -> h | None -> "") in
+      let host = Host_pattern.normalize (match header p.headers "host" with Some h -> h | None -> "") in
       let req = to_request ~host ~scheme:"http" ~remote_ip p in
-      let endpoint = select_endpoint endpoints p in
+      let endpoint = resolve ~host in
       (* run the endpoint's paw pipeline to a conn. A handler exception becomes a
          clean 500 (never a dropped connection / partial write). *)
       let conn =
@@ -405,32 +396,27 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs (endpoints : Endpoint.
   in
   loop ()
 
-(* Run [endpoints], blocking. Endpoints sharing a listen port are grouped onto one
-   socket and selected per-request by Host pattern (prod) — so one process serves
-   many subdomains/wildcards. In dev each endpoint listens on its own [dev_port]
-   on localhost (no /etc/hosts / proxy needed).
-   @param dev             dev mode (use dev_port + lenient host). Default from FENNEC_ENV.
+(* Run a {!Host_router} table, blocking. In PROD the whole table is served on ONE port
+   ([FENNEC_PORT], default 80) and selected per request by Host pattern — one process, arbitrary
+   subdomains/wildcards. In DEV the same table is served on the GATEWAY port ([FENNEC_PORT] base,
+   default 8020) with identical Host routing (prod fidelity), and EACH non-catch-all endpoint also
+   gets a forced convenience port ([base + 1 + i], declaration order) so a browser reaches it with
+   no /etc/hosts. A different base (--port) shifts the whole block, so instances never collide.
+   @param dev             dev mode. Default from FENNEC_ENV.
    @param timeout         per-request idle/header read timeout, seconds (default 30).
-   @param request_timeout per-request handler deadline; on expiry the handler tree is
-                          cancelled and a 503 is returned (default 30).
-   @param max_conns       concurrent-connection cap (default 10_000). *)
-let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domains ?dev ?(on_listen = fun () -> ()) ~env
-    (endpoints : Endpoint.t list) =
-  let dev =
-    match dev with
-    | Some d -> d
-    | None -> ( try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true)
-  in
-  (* worker domains for true multicore: each handles whole connections independently (the
-     nginx-worker model). Default: 1 in dev (deterministic; the livereload relay is shared),
-     all cores in prod. Override with ~domains or FENNEC_DOMAINS. *)
-  let domains =
-    match domains with
+   @param request_timeout per-request handler deadline (503 on expiry; default 30).
+   @param max_conns       concurrent-connection cap (default 10_000).
+   @param parallelism     worker domains (per-core); auto by default, or FENNEC_PARALLELISM.
+   @param on_listen       called post-bind with the (endpoint name, url) pairs for the banner. *)
+let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
+  let dev = match dev with Some d -> d | None -> ( try Sys.getenv Fennec_core.Dev_proto.env_mode <> "production" with Not_found -> true) in
+  (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
+     Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
+     ~parallelism / FENNEC_PARALLELISM. (Named "parallelism", not "domains", which now means hosts.) *)
+  let parallelism =
+    match parallelism with
     | Some n -> max 1 n
-    | None -> (
-      match Option.bind (Sys.getenv_opt "FENNEC_DOMAINS") int_of_string_opt with
-      | Some n -> max 1 n
-      | None -> if dev then 1 else Domain.recommended_domain_count ())
+    | None -> ( match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_parallelism) int_of_string_opt with Some n -> max 1 n | None -> if dev then 1 else Domain.recommended_domain_count ())
   in
   let domain_mgr = Eio.Stdenv.domain_mgr env in
   let clock = Eio.Stdenv.clock env in
@@ -438,49 +424,50 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domai
   let fs = Eio.Stdenv.fs env in
   let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) timeout in
   let slots = Eio.Semaphore.make max_conns in
-  (* group endpoints by their listen port for this mode *)
-  let ports = Hashtbl.create 8 in
-  List.iter
-    (fun e ->
-      let port = Endpoint.listen_port ~dev e in
-      Hashtbl.replace ports port (e :: (try Hashtbl.find ports port with Not_found -> [])))
-    endpoints;
+  let entries = Host_router.entries router in
+  let is_default (e : Endpoint.t Host_router.entry) = List.mem Host_pattern.Any e.Host_router.patterns in
+  (* base port: FENNEC_PORT, else 8020 (dev) / 80 (prod) *)
+  let base = match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with Some p -> p | None -> if dev then 8020 else 80 in
+  let plan = match Port_plan.of_base ~base ~count:(List.length entries) with Ok p -> p | Error msg -> Printf.eprintf "fennec: %s\n%!" msg; exit 1 in
+  let by_host ~(host : string) : Endpoint.t option = Host_router.route router ~host in
+  (* (port, resolver) bindings: prod = one routed port; dev = the routed gateway (prod-identical)
+     + a forced port per NON-catch-all endpoint (the catch-all is reached as the gateway's default) *)
+  let binds =
+    if not dev then [ (base, by_host) ]
+    else
+      let forced =
+        List.mapi (fun i e -> (i, e)) entries
+        |> List.filter (fun (_, e) -> not (is_default e))
+        |> List.map (fun (i, (e : Endpoint.t Host_router.entry)) -> (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> Some e.Host_router.ep))
+      in
+      (Port_plan.gateway plan, by_host) :: forced
+  in
   Eio.Switch.run @@ fun sw ->
-  Hashtbl.iter
-    (fun port group ->
-      let group = List.rev group (* preserve declaration order for host matching *) in
+  List.iter
+    (fun (port, resolve) ->
       let socket =
-        try
-          Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
-            (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
+        try Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env) (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
         with Unix.Unix_error (Unix.EADDRINUSE, _, _) ->
-          (* a clear, actionable message + a distinct exit code the dev supervisor recognizes
-             (so it reports "port busy" and self-heals, instead of a generic crash-loop). Both the
-             line format and the code are the shared CLI<->server wire — see {!Fennec_core.Dev_proto}. *)
+          (* a clear message + a distinct exit code the supervisor recognizes (port busy → self-heal,
+             not a generic crash-loop) — the shared wire, see {!Fennec_core.Dev_proto} *)
           Printf.eprintf "%s\n%!" (Fennec_core.Dev_proto.port_busy_line port);
           exit Fennec_core.Dev_proto.port_in_use_exit
       in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
-        Fun.protect
-          ~finally:(fun () -> Eio.Semaphore.release slots)
-          (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs group flow addr)
+        Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~resolve flow addr)
       in
       let on_error e =
-        (* a client going away mid-request (reset / broken pipe / EOF) is normal — e.g. a browser
-           reload abandons in-flight connections — not a server error, so don't log the noise.
-           Only genuinely unexpected errors are worth a line. *)
+        (* a client going away mid-request (reset / broken pipe / EOF) is normal (a reload abandons
+           in-flight connections) — not a server error; only genuinely unexpected errors get a line *)
         let s = Printexc.to_string e in
-        let client_gone =
-          e = End_of_file || contains s "Connection reset" || contains s "Connection_reset" || contains s "Broken pipe" || contains s "EPIPE"
-        in
+        let client_gone = e = End_of_file || contains s "Connection reset" || contains s "Connection_reset" || contains s "Broken pipe" || contains s "EPIPE" in
         if not client_gone then Printf.eprintf "fennec: connection error: %s\n%!" s
       in
-      Eio.Fiber.fork ~sw (fun () ->
-          if domains > 1 then
-            Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, domains - 1) ~on_error
-          else Eio.Net.run_server socket handle ~on_error))
-    ports;
-  (* every port is now bound and serving — announce ONLY here, so a server that failed to bind
-     (exit 98 above) never prints a misleading "ready" before it dies *)
-  on_listen ()
+      Eio.Fiber.fork ~sw (fun () -> if parallelism > 1 then Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, parallelism - 1) ~on_error else Eio.Net.run_server socket handle ~on_error))
+    binds;
+  (* every port is now bound — announce ONLY here (a failed bind exit 98'd above). Each endpoint's
+     URL: the catch-all at the gateway (base), others at their forced port. *)
+  let url p = Printf.sprintf "http://localhost:%d" p in
+  let named = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (e.Host_router.name, if is_default e then url (Port_plan.gateway plan) else url (Port_plan.endpoint_port plan ~index:i))) entries in
+  on_listen named

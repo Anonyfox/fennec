@@ -23,6 +23,12 @@ val env_dev_livereload : string
 (** [FENNEC_ESBUILD_WORKER] — path of the warm esbuild worker socket. *)
 val env_esbuild_worker : string
 
+(** [FENNEC_PORT] — the base port: dev allocates its block from here, prod listens on it. *)
+val env_port : string
+
+(** [FENNEC_PARALLELISM] — optional worker-domain (per-core) count; auto by default. *)
+val env_parallelism : string
+
 (** {1 Exit code} *)
 
 (** Distinct exit code the server uses on [EADDRINUSE], so the supervisor self-heals a port
@@ -37,11 +43,12 @@ val port_busy_prefix : string
 (** Prefix of the server's own human chatter; the CLI suppresses such lines (its UI says it better). *)
 val chatter_prefix : string
 
-(** The dev-URL report the server prints (after a successful bind) for the CLI's banner. *)
-val urls_line : string list -> string
+(** The dev-URL report the server prints (after a successful bind) for the CLI's banner: a list of
+    [(endpoint name, url)] pairs rendered as ["name=url"] tokens. *)
+val urls_line : (string * string) list -> string
 
-(** [Some urls] iff [line] is a URL report; [None] otherwise. Inverse of {!urls_line}. *)
-val parse_urls_line : string -> string list option
+(** [Some named] iff [line] is a URL report; [None] otherwise. Inverse of {!urls_line}. *)
+val parse_urls_line : string -> (string * string) list option
 
 (** The port-conflict line the server prints before exiting {!port_in_use_exit}. *)
 val port_busy_line : int -> string

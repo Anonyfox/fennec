@@ -140,17 +140,19 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
         in
         watch ())
   | None -> ());
-  (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen), so
-     a failed bind never prints a misleading "ready"/URL line before it exits *)
-  let announce () =
+  (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
+     the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
+     line first. The dev supervisor owns the terminal: report named URLs for its banner, else stay quiet. *)
+  let announce (named : (string * string) list) =
     match (if is_dev then Sys.getenv_opt Dev_proto.env_dev_ui else None) with
-    | Some ("1" | "on" | "true") ->
-      (* the dev supervisor owns the terminal: report our dev URLs for its banner (it renders the
-         status itself) and otherwise stay quiet *)
-      let urls =
-        endpoints |> List.map (Fennec_server.Endpoint.listen_port ~dev:true) |> List.sort_uniq compare |> List.map (Printf.sprintf "http://localhost:%d")
-      in
-      Printf.eprintf "%s\n%!" (Dev_proto.urls_line urls)
-    | _ -> Printf.eprintf "%s serving %d endpoint(s)%s\n%!" Dev_proto.chatter_prefix (List.length endpoints) (if livereload_on then " (dev: livereload on)" else "")
+    | Some ("1" | "on" | "true") -> Printf.eprintf "%s\n%!" (Dev_proto.urls_line named)
+    | _ -> Printf.eprintf "%s serving %d endpoint(s)%s\n%!" Dev_proto.chatter_prefix (List.length named) (if livereload_on then " (dev: livereload on)" else "")
   in
-  Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env endpoints
+  (* the routing table is the single source of truth for which domains we answer. Build it from the
+     endpoints (name + host patterns); an invalid config (clashing domains, two catch-alls, a bad
+     pattern, …) fails loudly here rather than mis-routing at runtime. *)
+  match Fennec_server.Host_router.build (List.map (fun e -> (Endpoint.name e, Endpoint.hosts e, e)) endpoints) with
+  | Error err ->
+    Printf.eprintf "fennec: invalid endpoint configuration — %s\n%!" (Fennec_server.Host_router.describe_error err);
+    exit 1
+  | Ok router -> Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env router

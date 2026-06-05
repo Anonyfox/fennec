@@ -21,10 +21,10 @@ val create : ?out:(string -> unit) -> ?caps:Tty.t -> unit -> t
 (** Print the startup header and record the watched [dir] (shown by {!ready}). *)
 val start : t -> dir:string -> unit
 
-(** First server up: print the clickable dev URL(s) and "ready in <ms>". Idempotent — only the
-    first call prints (later calls just refresh the stored URLs), so a server restart doesn't
-    reprint the banner. *)
-val ready : t -> urls:string list -> ms:float option -> unit
+(** First server up: print the named clickable dev URL(s) ([(name, url)] pairs) and "ready in <ms>".
+    Idempotent — only the first call prints (later calls just refresh the stored URLs), so a server
+    restart doesn't reprint the banner. *)
+val ready : t -> urls:(string * string) list -> ms:float option -> unit
 
 (** A backend rebuild that restarted the server (the page will full-reload). *)
 val rebuilt : t -> trigger:string list -> ms:float option -> unit

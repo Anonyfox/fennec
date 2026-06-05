@@ -192,7 +192,7 @@ let ready t ~urls ~ms =
     t.ready_shown <- true;
     (match ms with Some m -> t.builds <- t.builds + 1; t.total_ms <- t.total_ms +. m | None -> ());
     let block = Buffer.create 128 in
-    List.iter (fun u -> Buffer.add_string block (Printf.sprintf "  %s  %s\n" (cyan t "➜") (Tty.hyperlink t.caps ~url:u ~text:u))) urls;
+    List.iter (fun (name, url) -> Buffer.add_string block (Printf.sprintf "  %s  %s %s %s\n" (cyan t "➜") name (dim t "→") (Tty.hyperlink t.caps ~url ~text:url))) urls;
     let timing = match ms with Some m -> Printf.sprintf "ready in %.0fms" m | None -> "ready" in
     Buffer.add_string block (Printf.sprintf "     %s\n" (dim t (Printf.sprintf "%s · watching %s" timing t.dir)));
     if t.caps.interactive then (erase_region t; t.out (Buffer.contents block); draw_region t) else t.out (Buffer.contents block)
