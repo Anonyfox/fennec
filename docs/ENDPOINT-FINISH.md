@@ -18,11 +18,11 @@ happens to get the very best.
 - [x] **E2. Collapse `Endpoint.use` / `Endpoint.add`** (`9fcfefa`)
 - [x] **E3. Report all `Host_router.build` errors at once** (`475b086`)
 - [x] **E4. `Server.run` returns a result, never calls `exit`** (`64f6aa7`)
-- [ ] **E5. Trie-based host router**
-- [ ] **E6. Unified error funnel**
-- [ ] **E7. Route-matched middleware phase**
-- [ ] **E8. Document the pipeline execution model**
-- [ ] **E9. Collapse task list + final e2e proof**
+- [x] **E5. Trie-based host router** (`233fba1`)
+- [x] **E6. Unified error funnel** (`c4bfa6f`)
+- [x] **E7. Route-matched middleware phase** (`bb9d713`)
+- [x] **E8. Document the pipeline execution model** (`637a8e1`)
+- [x] **E9. Collapse task list + final e2e proof** (all green: 63+147 unit, 6/6 e2e)
 
 ---
 
