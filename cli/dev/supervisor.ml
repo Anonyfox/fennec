@@ -285,33 +285,42 @@ let run ~targets ~exe ~assets =
       record_pids ())
   in
 
+  (* a code crash (not a port conflict): rate-limit restarts so a crash-loop doesn't spin *)
+  let on_code_crash () =
+    match Crash_limiter.record limiter ~now:(now ()) () with
+    | Crash_limiter.Give_up -> Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry"
+    | Crash_limiter.Retry backoff -> Unix.sleepf backoff; start_or_restart (fun () -> Ui.notice ui Ui.Warn "server exited — restarted")
+  in
   let on_server_crash status =
     let port_busy = status = Unix.WEXITED 98 in
     (* the crashed child was already reaped by [check_server]'s WNOHANG waitpid (it returned this
        [status]); just drop our handle — no second blocking waitpid on an already-reaped pid *)
     close_server_out ();
     server_pid := None;
-    match Crash_limiter.record limiter ~now:(now ()) ~flat:port_busy () with
-    | Crash_limiter.Give_up ->
-      if not port_busy then Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry"
-      else (
-        (* couldn't take the port after retries → it's held by something that ISN'T ours. Name it
-           and hand the dev a one-command fix, rather than a vague "free it". *)
-        match Option.bind !busy_port foreign_holder with
-        | Some (pid, cmd) ->
-          let short = if String.length cmd > 60 then String.sub cmd 0 57 ^ "…" else cmd in
-          Ui.notice ui Ui.Error (Printf.sprintf "port %d is held by another process — pid %d: %s" (Option.value ~default:0 !busy_port) pid short);
-          Ui.notice ui Ui.Error (Printf.sprintf "free it with:  kill %d   (then save any file to retry)" pid)
-        | None -> Ui.notice ui Ui.Error "the dev port is in use — free it and save any file to retry")
-    | Crash_limiter.Retry backoff ->
-      (* port held by a LEFTOVER of our own server? reclaim it transparently and retry at once.
-         Anything else: wait out the backoff and retry (the Give_up path names a foreign holder). *)
-      let reclaimed = port_busy && (match !busy_port with Some p -> reclaim_port p | None -> false) in
-      Unix.sleepf (if reclaimed then 0.1 else backoff);
-      start_or_restart (fun () ->
-          if reclaimed then Ui.notice ui Ui.Warn (Printf.sprintf "cleared a leftover dev server on :%d — restarted" (Option.value ~default:0 !busy_port))
-          else if not port_busy then Ui.notice ui Ui.Warn "server exited — restarted"
-          (* port still held by something that isn't ours: stay quiet here, the Give_up path names it *))
+    if not port_busy then on_code_crash ()
+    else
+      (* a held dev port: resolve it DECISIVELY on the FIRST failure. (A rate-limited retry loop
+         is wrong here — it's slow, and under load the crashes can span the limiter's window so it
+         never gives up, leaving the dev with a silent forever-retry instead of an answer.) *)
+      match !busy_port with
+      | None -> on_code_crash () (* never parsed the port — treat as a generic crash *)
+      | Some p ->
+        if reclaim_port p then (
+          (* it was a LEFTOVER of our own server — killed it, take the port now *)
+          Unix.sleepf 0.15;
+          start_or_restart (fun () -> Ui.notice ui Ui.Warn (Printf.sprintf "cleared a leftover dev server on :%d — restarted" p)))
+        else (
+          match foreign_holder p with
+          | Some (pid, cmd) ->
+            (* held by something that isn't ours: retrying can't help — name it + a one-command fix *)
+            let short = if String.length cmd > 60 then String.sub cmd 0 57 ^ "…" else cmd in
+            Ui.notice ui Ui.Error (Printf.sprintf "port %d is held by another process — pid %d: %s" p pid short);
+            Ui.notice ui Ui.Error (Printf.sprintf "free it with:  kill %d   (then save any file to retry)" pid)
+          | None ->
+            (* nobody's holding it this instant (a transient blip): a rate-limited retry is right *)
+            (match Crash_limiter.record limiter ~now:(now ()) ~flat:true () with
+            | Crash_limiter.Give_up -> Ui.notice ui Ui.Error "the dev port is in use — free it and save any file to retry"
+            | Crash_limiter.Retry backoff -> Unix.sleepf backoff; start_or_restart (fun () -> Ui.notice ui Ui.Warn "port freed — restarted")))
   in
 
   let handle = function
