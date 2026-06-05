@@ -180,34 +180,10 @@ let run ~targets ~exe ~assets =
       go ()
   in
 
-  (* who is LISTENING on [port] now, as (pid, full command) — via lsof + ps; [] if lsof is absent *)
-  let port_listeners port =
-    match (try Some (Unix.open_process_in (Printf.sprintf "lsof -nP -iTCP:%d -sTCP:LISTEN -t 2>/dev/null" port)) with _ -> None) with
-    | None -> []
-    | Some ic ->
-      let pids = ref [] in
-      (try while true do (match int_of_string_opt (String.trim (input_line ic)) with Some p when p > 1 -> pids := p :: !pids | _ -> ()) done with End_of_file -> ());
-      ignore (Unix.close_process_in ic);
-      List.map
-        (fun p ->
-          let cmd = match (try Some (input_line (Unix.open_process_in (Printf.sprintf "ps -p %d -o args= 2>/dev/null" p))) with _ -> None) with Some s -> String.trim s | None -> "" in
-          (p, cmd))
-        !pids
-  in
-  (* a holder is OURS iff its command runs our server binary. We match the build-relative tail
-     (e.g. "_build/default/examples/site/server.bc") rather than the absolute path, so a leftover
-     started either way (absolute by a prior supervisor, or relative) is recognised — yet it's
-     still our specific artifact, never an unrelated process that merely sits on the port. *)
-  let exe_tail = match Dune_watch.find_sub exe "_build/" with Some i -> String.sub exe i (String.length exe - i) | None -> exe in
-  let ours (_, cmd) = exe_tail <> "" && Dune_watch.find_sub cmd exe_tail <> None in
-  (* free [port] by SIGKILLing any leftover of OUR server holding it; true if we killed something *)
-  let reclaim_port port =
-    let mine = List.filter ours (port_listeners port) in
-    List.iter (fun (pid, _) -> try Unix.kill pid Sys.sigkill with _ -> ()) mine;
-    if mine <> [] then Unix.sleepf 0.2; (* let the port actually free before the retry binds *)
-    mine <> []
-  in
-  let foreign_holder port = List.find_opt (fun h -> not (ours h)) (port_listeners port) in
+  (* a held dev port is resolved via {!Port}: reclaim a leftover of OUR server (SIGKILL), or name a
+     foreign holder. The "is it ours" gate is pure + anchored + unit-tested there (it's a kill). *)
+  let reclaim_port port = Port.reclaim ~exe port in
+  let foreign_holder port = Port.foreign_holder ~exe port in
 
   let start_or_restart label =
     (* don't disturb the running server while the artifact is mid-write; the next settle restarts *)
