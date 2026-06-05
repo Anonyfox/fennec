@@ -18,13 +18,11 @@ type t = {
 
 let make ~name ?(hosts = [ "*" ]) () : t = { name; hosts; paws = [] }
 
-let add (p : Paw.t) (t : t) : t = { t with paws = t.paws @ [ p ] }
+(* append a single paw — the one implementation path for both [use] and the verb shortcuts *)
+let use (p : Paw.t) (t : t) : t = { t with paws = t.paws @ [ p ] }
 
-(* mount a reusable pipeline (a paw list) *)
-let pipe (paws : Paw.t list) (t : t) : t = { t with paws = t.paws @ paws }
-
-(* mount a single paw (e.g. a prebuilt battery like [Paw.Logger.make ()]) *)
-let use (p : Paw.t) (t : t) : t = add p t
+(* mount a reusable pipeline (a paw list), defined in terms of [use] *)
+let pipe (paws : Paw.t list) (t : t) : t = List.fold_left (Fun.flip use) t paws
 
 (* prepend a paw so it runs BEFORE the rest of the pipeline. Needed for a paw that must register a
    before_send hook before an answering paw short-circuits the chain (e.g. the dev livereload
@@ -32,18 +30,18 @@ let use (p : Paw.t) (t : t) : t = add p t
 let prepend (p : Paw.t) (t : t) : t = { t with paws = p :: t.paws }
 
 (* route verbs — each is a paw *)
-let get path h t = add (Paw.get path h) t
-let post path h t = add (Paw.post path h) t
-let put path h t = add (Paw.put path h) t
-let delete path h t = add (Paw.delete path h) t
-let patch path h t = add (Paw.patch path h) t
+let get path h t = use (Paw.get path h) t
+let post path h t = use (Paw.post path h) t
+let put path h t = use (Paw.put path h) t
+let delete path h t = use (Paw.delete path h) t
+let patch path h t = use (Paw.patch path h) t
 
 (* Mount an SSR app: a [render : path -> string option] (the universal router's render) becomes a
    paw answering with an HTML document when it matches, else declining (so static/404 follow). Kept
    generic (a function, not a Router type) so fennec.server needn't depend on the heavy router libs. *)
 let app ?(at = "/") (render : string -> string option) (t : t) : t =
   let prefix_ok path = at = "/" || path = at || (String.length path > String.length at && String.sub path 0 (String.length at) = at) in
-  add (fun c -> if (Conn.meth c = H.GET || Conn.meth c = H.HEAD) && prefix_ok (Conn.path c) then (match render (Conn.path c) with Some html -> Conn.html c html | None -> c) else c) t
+  use (fun c -> if (Conn.meth c = H.GET || Conn.meth c = H.HEAD) && prefix_ok (Conn.path c) then (match render (Conn.path c) with Some html -> Conn.html c html | None -> c) else c) t
 
 (* the composed handler paw for this endpoint *)
 let handler (t : t) : Paw.t = Paw.seq t.paws
