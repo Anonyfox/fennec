@@ -48,6 +48,17 @@ let () =
   U.resolved ui ~ms:(Some 5.);
   check "resolved is silent when nothing is outstanding" (take () = "");
 
+  (* a SYNTAX error (no dune excerpt) — the UI reads the source itself for a context frame *)
+  let tmp = Filename.temp_file "fennec_cf" ".ml" in
+  (let oc = open_out tmp in output_string oc "let a = 1\nlet b = (\nlet c = 3\nlet d = 4\n"; close_out oc);
+  U.failed ui ~raw:(Printf.sprintf "File %S, line 2, characters 8-9:\nError: Syntax error\n" tmp) ~trigger:[] ~serving:false;
+  let s = take () in
+  check "code frame shows the error line read from source" (contains s "let b = (");
+  check "code frame includes a line of context" (contains s "let a = 1");
+  check "code frame draws a caret" (contains s "^");
+  U.resolved ui ~ms:None;
+  (try Sys.remove tmp with _ -> ());
+
   print_endline "Ui (interactive — live region):";
   let ibuf = Buffer.create 512 in
   let iout s = Buffer.add_string ibuf s in

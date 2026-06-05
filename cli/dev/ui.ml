@@ -57,19 +57,40 @@ let erase_region t =
   if t.caps.interactive && t.region > 0 then (t.out (Tty.cursor_up t.region); t.out Tty.erase_below);
   t.region <- 0
 
-(* when dune gives no code frame (mlx/ocaml SYNTAX errors usually don't), read the offending line
-   ourselves and point at the column — best-effort, empty if the file/line can't be read *)
-let source_frame file line col =
+(* A code frame read from the source itself — for errors where dune gives no excerpt (mlx/ocaml
+   SYNTAX errors). dune's line:col is a real byte offset, but it marks the parser's point of
+   confusion (often past the actual typo), so we show a few lines of CONTEXT around it: the user
+   sees the structure and can spot the real mistake even when the caret lands downstream. The
+   error line is shown bright, its neighbours dim, with a red caret under dune's column. Returns
+   pre-coloured lines; [] if the file/line can't be read. *)
+let code_frame t ~file ~line ~col : string list =
   if line <= 0 then []
   else
     match (try Some (In_channel.with_open_text file In_channel.input_all) with _ -> None) with
     | None -> []
-    | Some content -> (
-      match List.nth_opt (String.split_on_char '\n' content) (line - 1) with
-      | None -> []
-      | Some src ->
-        let gutter = Printf.sprintf "%d | " line in
-        [ gutter ^ src; String.make (String.length gutter + max 0 (col - 1)) ' ' ^ "^" ])
+    | Some content ->
+      let arr = Array.of_list (String.split_on_char '\n' content) in
+      let n = Array.length arr in
+      if line > n then []
+      else begin
+        let lo = max 1 (line - 2) and hi = min n (line + 2) in
+        let gutw = String.length (string_of_int hi) in
+        let acc = ref [] in
+        for ln = lo to hi do
+          let src = arr.(ln - 1) in
+          let g = Printf.sprintf "%*d | " gutw ln in
+          if ln = line then begin
+            acc := (g ^ src) :: !acc;
+            if col > 0 then begin
+              (* indent by the DISPLAY width of the prefix (so multibyte before the caret aligns) *)
+              let prefix = String.sub src 0 (min (String.length src) (col - 1)) in
+              acc := (String.make (String.length g + Tty.visible_width prefix) ' ' ^ red t "^") :: !acc
+            end
+          end
+          else acc := dim t (g ^ src) :: !acc
+        done;
+        List.rev !acc
+      end
 
 let render_region t : string =
   if t.problems = [] && t.raw = "" then ""
@@ -92,8 +113,11 @@ let render_region t : string =
           Buffer.add_char b '\n';
           let loc = if p.col > 0 then Printf.sprintf "%s:%d:%d" p.file p.line p.col else Printf.sprintf "%s:%d" p.file p.line in
           Buffer.add_string b (Printf.sprintf "     %s\n" (cyan t loc));
-          let frame = if p.excerpt <> [] then p.excerpt else source_frame p.file p.line p.col in
-          List.iter (fun l -> Buffer.add_string b (Printf.sprintf "     %s\n" (dim t l))) frame;
+          (* use dune's own excerpt when it gave one (type errors — it underlines the exact span);
+             otherwise read the source ourselves for a context frame (syntax errors give no
+             excerpt). Both render as indented lines under the location. *)
+          let frame = if p.excerpt <> [] then List.map (dim t) p.excerpt else code_frame t ~file:p.file ~line:p.line ~col:p.col in
+          List.iter (fun l -> Buffer.add_string b (Printf.sprintf "     %s\n" l)) frame;
           if p.message <> "" then Buffer.add_string b (Printf.sprintf "     %s\n" p.message);
           List.iter (fun l -> Buffer.add_string b (Printf.sprintf "     %s\n" (dim t l))) p.related)
         t.problems;
