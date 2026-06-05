@@ -263,6 +263,42 @@ let json_is_array path (r : response) =
   | Some v -> failwith (Printf.sprintf "JSON %s: expected array, got %s" path (Yojson.Safe.to_string v))
   | None -> failwith (Printf.sprintf "JSON path %S not found" path)
 
+(* regex match on a JSON string field *)
+let json_path_matches path pattern (r : response) =
+  let re = Re.Pcre.re pattern |> Re.compile in
+  match json_path_value path r with
+  | Some (`String s) when Re.execp re s -> ()
+  | Some (`String s) -> failwith (Printf.sprintf "JSON %s: %S does not match /%s/" path s pattern)
+  | Some v -> failwith (Printf.sprintf "JSON %s: not a string (%s)" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+let uuid_re = Re.Pcre.re "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" |> Re.compile
+let json_is_uuid path (r : response) =
+  match json_path_value path r with
+  | Some (`String s) when Re.execp uuid_re (String.lowercase_ascii s) -> ()
+  | Some (`String s) -> failwith (Printf.sprintf "JSON %s: %S is not a UUID" path s)
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected UUID string, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+let iso_date_re = Re.Pcre.re "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2})" |> Re.compile
+let json_is_datetime path (r : response) =
+  match json_path_value path r with
+  | Some (`String s) when Re.execp iso_date_re s -> ()
+  | Some (`String s) -> failwith (Printf.sprintf "JSON %s: %S is not an ISO datetime" path s)
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected datetime string, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+(* body emptiness *)
+let body_empty (r : response) =
+  if r.body <> "" then failwith (Printf.sprintf "expected empty body, got %d bytes: %s" (String.length r.body) (preview r.body))
+
+let body_not_empty (r : response) =
+  if r.body = "" then failwith "expected non-empty body, got empty"
+
+(* status negation *)
+let status_not code (r : response) =
+  if r.status = code then failwith (Printf.sprintf "expected any status except %d, got %d" code r.status)
+
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  URL + body encoding helpers                                               *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
@@ -286,7 +322,13 @@ let encode_form pairs =
 (*  Request functions                                                         *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
-let run_expect r = function None -> () | Some checks -> List.iter (fun (a : assertion) -> a r) checks
+let run_expect r = function
+  | None -> ()
+  | Some checks ->
+    try List.iter (fun (a : assertion) -> a r) checks
+    with Failure msg ->
+      let path = match (current ()).url.base_path with "" -> "" | p -> p in
+      failwith (Printf.sprintf "%s\n  elapsed: %.0fms\n  url: %s" msg !last_elapsed path)
 
 let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : assertion list option) path =
   let c = current () in

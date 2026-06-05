@@ -54,6 +54,9 @@ val status_3xx : assertion
 val status_4xx : assertion
 val status_5xx : assertion
 
+(** Status is anything EXCEPT the given code (e.g. [status_not 500] for smoke tests). *)
+val status_not : int -> assertion
+
 (** {1 Body assertions} *)
 
 val body_contains : string -> assertion
@@ -64,6 +67,12 @@ val min_body_length : int -> assertion
 
 (** Body matches a PCRE regex pattern. *)
 val body_matches : string -> assertion
+
+(** Body is empty (zero bytes). *)
+val body_empty : assertion
+
+(** Body is non-empty. *)
+val body_not_empty : assertion
 
 (** {1 Header assertions} *)
 
@@ -107,6 +116,15 @@ val json_is_number : string -> assertion
 val json_is_bool : string -> assertion
 val json_is_null : string -> assertion
 val json_is_array : string -> assertion
+
+(** Assert a JSON string field at the path matches a PCRE regex. *)
+val json_path_matches : string -> string -> assertion
+
+(** Assert a JSON string field is a UUID (hex-8-4-4-4-12). *)
+val json_is_uuid : string -> assertion
+
+(** Assert a JSON string field is an ISO 8601 datetime. *)
+val json_is_datetime : string -> assertion
 
 (** {1 Cookie assertions (on Set-Cookie in the response)} *)
 
