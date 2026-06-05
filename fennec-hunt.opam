@@ -22,6 +22,7 @@ depends: [
   "eio_main"
   "yojson" {>= "2.0"}
   "base64" {>= "3.0"}
+  "re" {>= "1.10"}
   "odoc" {with-doc}
 ]
 build: [

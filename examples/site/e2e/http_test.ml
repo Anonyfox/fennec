@@ -11,21 +11,40 @@ let site = let d = Sys.getcwd () in
 let opam_bin = try let ic = Unix.open_process_in "opam var bin 2>/dev/null" in
   let v = String.trim (input_line ic) in ignore (Unix.close_process_in ic); v with _ -> ""
 
-let fennec_cmd =
-  ["sh"; "-c"; Printf.sprintf "cd '%s' && exec fennec dev" site]
+let fennec_cmd = ["sh"; "-c"; Printf.sprintf "cd '%s' && exec fennec dev" site]
 
-let base_env =
+let env =
   let path = let cur = try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin" in
     if opam_bin = "" then cur else opam_bin ^ ":" ^ cur in
   [| "FENNEC_DEV_LIVERELOAD=0"; "PATH=" ^ path |]
 
-let () = hunt "site server" ~url:"http://localhost:4000" ~spawn:fennec_cmd ~env:base_env @@ fun () ->
+let () = hunt "site server" ~url:"http://localhost:4000" ~spawn:fennec_cmd ~env @@ fun () ->
 
-  check "web health endpoint" (fun () ->
-    get "/api/health" ~expect:[status 200; is_json; body_contains {|"ok":true|}]);
+  (* ── basic HTTP ── *)
 
-  check "web home page" (fun () ->
-    get "/" ~expect:[status 200; is_html; body_contains "Welcome to the Fennec site"]);
+  check "health endpoint returns JSON" (fun () ->
+    get "/api/health" ~expect:[
+      status 200;
+      is_json;
+      json_path_is "ok" "true";
+      json_path_is "app" "web";
+      max_elapsed 500.0]);
+
+  check "home page is HTML" (fun () ->
+    get "/" ~expect:[
+      status 200;
+      is_html;
+      body_contains "Welcome to the Fennec site";
+      body_not_contains "error"]);
+
+  check "streaming endpoint" (fun () ->
+    get "/api/stream" ~expect:[
+      status 200;
+      body_contains "chunk-1";
+      body_contains "chunk-2";
+      body_contains "chunk-3"]);
+
+  (* ── host routing (virtual hosts on the gateway) ── *)
 
   check "admin without auth → 401 (matched-phase)" (fun () ->
     get "/" ~host:"admin.localhost" ~expect:[status 401]);
@@ -36,13 +55,15 @@ let () = hunt "site server" ~url:"http://localhost:4000" ~spawn:fennec_cmd ~env:
 
   check "unknown host falls to web default" (fun () ->
     get "/" ~host:"random.example.com"
-      ~expect:[status 200; body_contains "Welcome to the Fennec site"]);
+      ~expect:[status_2xx; body_contains "Welcome to the Fennec site"]);
 
-  check "API returns JSON with app identifier" (fun () ->
-    get "/api/health" ~expect:[is_json; body_contains {|"app":"web"|}]);
+  (* ── response inspection ── *)
 
-  check "streaming endpoint" (fun () ->
-    get "/api/stream" ~expect:[status 200; body_contains "chunk-1"; body_contains "chunk-2"; body_contains "chunk-3"]);
+  check "extract JSON field from API" (fun () ->
+    get "/api/health";
+    let app = json_field "app" in
+    assert (app = "web"));
 
-  check "response time is sane" (fun () ->
-    get "/api/health" ~expect:[status 200; max_elapsed 500.0])
+  check "response timing is recorded" (fun () ->
+    get "/api/health";
+    assert (elapsed_ms () < 500.0))

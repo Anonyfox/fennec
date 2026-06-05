@@ -78,7 +78,9 @@
   (yojson
    (>= 2.0))
   (base64
-   (>= 3.0))))
+   (>= 3.0))
+  (re
+   (>= 1.10))))
 
 ; The CLI is the distributable: a self-contained `fennec` binary that statically
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a

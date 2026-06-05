@@ -168,15 +168,146 @@ let min_body_length n (r : response) =
   let actual = String.length r.body in
   if actual < n then failwith (Printf.sprintf "body length %d, expected >= %d" actual n)
 
+let body_length n (r : response) =
+  let actual = String.length r.body in
+  if actual <> n then failwith (Printf.sprintf "body length: expected %d, got %d" n actual)
+
+(* regex match on the body *)
+let body_matches pattern (r : response) =
+  let re = Re.Pcre.re pattern |> Re.compile in
+  if not (Re.execp re r.body) then
+    failwith (Printf.sprintf "body does not match /%s/\n  body: %s" pattern (preview r.body))
+
+(* custom assertion — the escape hatch for anything we didn't think of *)
+let expect f (r : response) = f r
+
+(* ---- JSON assertions (nested path support) ---- *)
+
+let parse_json (r : response) =
+  try Yojson.Safe.from_string r.body
+  with Yojson.Json_error msg -> failwith (Printf.sprintf "invalid JSON: %s\n  body: %s" msg (preview r.body))
+
+let rec json_walk (j : Yojson.Safe.t) = function
+  | [] -> Some j
+  | key :: rest -> (
+    match j with
+    | `Assoc pairs -> ( match List.assoc_opt key pairs with Some v -> json_walk v rest | None -> None)
+    | _ -> None)
+
+let json_path_value path (r : response) : Yojson.Safe.t option =
+  let keys = String.split_on_char '.' path in
+  json_walk (parse_json r) keys
+
+(* stringify a JSON value for comparison: strings unwrap, everything else is JSON notation *)
+let json_to_comparable = function `String s -> s | v -> Yojson.Safe.to_string v
+
+(* assert a dotted JSON path equals a value (compared as strings — "42" matches both the
+   string "42" and the number 42; "true" matches the boolean true) *)
+let json_path_is path expected (r : response) =
+  match json_path_value path r with
+  | Some v when json_to_comparable v = expected -> ()
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected %S, got %s" path expected (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found\n  body: %s" path (preview r.body))
+
+(* assert a dotted JSON path contains a substring *)
+let json_path_contains path needle (r : response) =
+  match json_path_value path r with
+  | Some (`String s) when Fennec_hunt_util.contains s needle -> ()
+  | Some (`String s) -> failwith (Printf.sprintf "JSON %s: expected to contain %S, got %S" path needle s)
+  | Some v -> failwith (Printf.sprintf "JSON %s: not a string (%s)" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+(* assert a dotted JSON path exists (any value) *)
+let json_has path (r : response) =
+  match json_path_value path r with
+  | Some _ -> ()
+  | None -> failwith (Printf.sprintf "JSON path %S not found\n  body: %s" path (preview r.body))
+
+(* assert a JSON array at the path has N elements *)
+let json_length path n (r : response) =
+  match json_path_value path r with
+  | Some (`List l) ->
+    let actual = List.length l in
+    if actual <> n then failwith (Printf.sprintf "JSON %s: expected %d elements, got %d" path n actual)
+  | Some v -> failwith (Printf.sprintf "JSON %s: not an array (%s)" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+(* assert a dotted JSON path is a specific type *)
+let json_is_string path (r : response) =
+  match json_path_value path r with
+  | Some (`String _) -> ()
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected string, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+let json_is_number path (r : response) =
+  match json_path_value path r with
+  | Some (`Int _ | `Float _) -> ()
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected number, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+let json_is_bool path (r : response) =
+  match json_path_value path r with
+  | Some (`Bool _) -> ()
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected bool, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+let json_is_null path (r : response) =
+  match json_path_value path r with
+  | Some `Null -> ()
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected null, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+let json_is_array path (r : response) =
+  match json_path_value path r with
+  | Some (`List _) -> ()
+  | Some v -> failwith (Printf.sprintf "JSON %s: expected array, got %s" path (Yojson.Safe.to_string v))
+  | None -> failwith (Printf.sprintf "JSON path %S not found" path)
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  URL + body encoding helpers                                               *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+let url_encode s =
+  let buf = Buffer.create (String.length s) in
+  String.iter (fun c ->
+      match c with
+      | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' -> Buffer.add_char buf c
+      | _ -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
+    s;
+  Buffer.contents buf
+
+let encode_query pairs =
+  String.concat "&" (List.map (fun (k, v) -> url_encode k ^ "=" ^ url_encode v) pairs)
+
+let encode_form pairs =
+  (encode_query pairs, "application/x-www-form-urlencoded")
+
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Request functions                                                         *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
 let run_expect r = function None -> () | Some checks -> List.iter (fun (a : assertion) -> a r) checks
 
-let request meth ?(headers = []) ?host ?body ?(expect : assertion list option) path =
+let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : assertion list option) path =
   let c = current () in
-  let full_path = c.url.base_path ^ path in
+  (* query parameters *)
+  let full_path =
+    let base = c.url.base_path ^ path in
+    match query with None -> base | Some pairs -> base ^ "?" ^ encode_query pairs
+  in
+  (* body: ~json > ~form > ~body (first one wins), and set Content-Type automatically *)
+  let body, headers =
+    match json with
+    | Some j ->
+      let json_str = Yojson.Safe.to_string j in
+      (Some json_str, ("Content-Type", "application/json") :: headers)
+    | None -> (
+      match form with
+      | Some pairs ->
+        let encoded, ct = encode_form pairs in
+        (Some encoded, ("Content-Type", ct) :: headers)
+      | None -> (body, headers))
+  in
   let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
   let headers = match cookie_header c.cookies with Some ch -> ch :: headers | None -> headers in
   let t0 = Unix.gettimeofday () in
@@ -186,13 +317,13 @@ let request meth ?(headers = []) ?host ?body ?(expect : assertion list option) p
   c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
   run_expect r expect
 
-let get ?headers ?host ?expect path = request "GET" ?headers ?host ?expect path
-let post ?headers ?host ?body ?expect path = request "POST" ?headers ?host ?body ?expect path
-let put ?headers ?host ?body ?expect path = request "PUT" ?headers ?host ?body ?expect path
-let patch ?headers ?host ?body ?expect path = request "PATCH" ?headers ?host ?body ?expect path
-let delete ?headers ?host ?expect path = request "DELETE" ?headers ?host ?expect path
-let head ?headers ?host ?expect path = request "HEAD" ?headers ?host ?expect path
-let options ?headers ?host ?expect path = request "OPTIONS" ?headers ?host ?expect path
+let get ?headers ?host ?query ?expect path = request "GET" ?headers ?host ?query ?expect path
+let post ?headers ?host ?body ?query ?form ?json ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?expect path
+let put ?headers ?host ?body ?query ?form ?json ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?expect path
+let patch ?headers ?host ?body ?query ?form ?json ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?expect path
+let delete ?headers ?host ?query ?expect path = request "DELETE" ?headers ?host ?query ?expect path
+let head ?headers ?host ?query ?expect path = request "HEAD" ?headers ?host ?query ?expect path
+let options ?headers ?host ?query ?expect path = request "OPTIONS" ?headers ?host ?query ?expect path
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Extractors (from last response)                                           *)
@@ -208,6 +339,7 @@ let response_body () = (last ()).body
 let response_status () = (last ()).status
 let elapsed_ms () = !last_elapsed
 
+(* extract a top-level JSON field *)
 let json_field key =
   let body = (last ()).body in
   try
@@ -219,6 +351,37 @@ let json_field key =
       | None -> failwith (Printf.sprintf "JSON field %S not found" key))
     | _ -> failwith "response body is not a JSON object"
   with Yojson.Json_error msg -> failwith (Printf.sprintf "invalid JSON: %s\n  body: %s" msg (preview body))
+
+(* extract a nested JSON field via dotted path *)
+let json_path path =
+  let r = last () in
+  match json_path_value path r with
+  | Some (`String s) -> s
+  | Some v -> Yojson.Safe.to_string v
+  | None -> failwith (Printf.sprintf "JSON path %S not found\n  body: %s" path (preview r.body))
+
+(* get the full parsed JSON body *)
+let json () = parse_json (last ())
+
+(* cookie inspection *)
+let cookie name =
+  let c = current () in
+  match List.assoc_opt name c.cookies with
+  | Some v -> v
+  | None -> failwith (Printf.sprintf "cookie %S not in jar (have: %s)" name
+      (String.concat ", " (List.map fst c.cookies)))
+
+let cookie_opt name = List.assoc_opt name (current ()).cookies
+
+let has_cookie name (r : response) =
+  let cookies = parse_set_cookies r.headers in
+  if not (List.exists (fun (k, _) -> k = name) cookies) then
+    failwith (Printf.sprintf "expected Set-Cookie %S, but not set" name)
+
+let no_cookie name (r : response) =
+  let cookies = parse_set_cookies r.headers in
+  if List.exists (fun (k, _) -> k = name) cookies then
+    failwith (Printf.sprintf "expected NO Set-Cookie %S, but found it" name)
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Helpers                                                                   *)
