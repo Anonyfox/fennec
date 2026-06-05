@@ -106,6 +106,10 @@ sh examples/site/e2e/no_leftovers.sh
 # panel — even a revert to byte-identical output (which dune rebuilds without bumping the mtime).
 sh examples/site/e2e/errors.sh
 
+# --clean check: a plain `fennec dev` leaves _build alone; `fennec dev --clean` runs a full
+# `dune clean` first (the opt-in escape hatch for a corrupt local build). Leaves _build cleaned.
+sh examples/site/e2e/heal.sh
+
 # prod: native server with the web root embedded in the binary
 dune build --profile release examples/site/server.exe
 ```

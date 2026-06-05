@@ -303,7 +303,16 @@ let dev_cmd =
     let doc = "Print the discovered server (target/exe) and exit, without running." in
     Arg.(value & flag & info [ "dry-run"; "print" ] ~doc)
   in
-  let go target exe assets dry =
+  let clean_arg =
+    let doc =
+      "Run $(b,dune clean) before starting — a full rebuild from scratch. Off by default; use it \
+       only to recover from a corrupt local $(b,_build) that a normal restart doesn't fix. For a \
+       normal fennec app (deps installed via opam) this rebuilds only your app; in a workspace \
+       with vendored dependencies it rebuilds those too, which is slow."
+    in
+    Arg.(value & flag & info [ "clean" ] ~doc)
+  in
+  let go target exe assets dry clean =
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -333,6 +342,11 @@ let dev_cmd =
          `vim fennec dev notes.txt`, and the pidfile already covers the legitimate case. *)
       ignore (Sys.command "dune shutdown >/dev/null 2>&1");
       Fennec_dev.Pidfile.reap_stale ~cwd:(Sys.getcwd ());
+      (* opt-in nuclear heal: a full `dune clean` (after the daemon is stopped) for the rare case
+         where _build is corrupt in a way a normal restart can't fix. The next build is from
+         scratch — fast for an opam-installed fennec (only your app rebuilds), slow with vendored
+         deps. Announced because it can pause a while. *)
+      if clean then (Printf.printf "fennec dev: dune clean (full rebuild)…\n%!"; ignore (Sys.command "dune clean >/dev/null 2>&1"));
       match exe with
       | Some exe_path ->
         (* Supervisor.run blocks until killed; the 0 is unreachable, only there for the type *)
@@ -374,7 +388,7 @@ let dev_cmd =
       `Pre "  fennec dev --dry-run       # show what would run";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
-  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg)
+  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg)
 
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =
