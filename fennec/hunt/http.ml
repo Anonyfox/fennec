@@ -336,7 +336,7 @@ let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : asser
   let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
   let headers = match cookie_header c.cookies with Some ch -> ch :: headers | None -> headers in
   let t0 = Unix.gettimeofday () in
-  let r = Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~meth ~path:full_path ~headers ?body () in
+  let r = Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~tls:(c.url.scheme = "https") ~meth ~path:full_path ~headers ?body () in
   last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
   c.last <- Some r;
   c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
@@ -444,8 +444,7 @@ let check label body =
 
 let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
   let target = Target.parse_url url in
-  if target.scheme = "https" then
-    failwith (Printf.sprintf "fennec_hunt: https is not supported (%s) — the test client is plain HTTP/1.1; test behind a local plaintext port" url);
+  let tls = target.scheme = "https" in
   Eio_main.run @@ fun eio_env ->
   Eio.Switch.run @@ fun sw ->
   let net = (Eio.Stdenv.net eio_env :> Target.net) in
@@ -453,10 +452,10 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
   (match spawn with
   | None ->
     (* no spawn: an already-running server. Still wait for it (it may be coming up). *)
-    Target.wait_ready ~net ~clock ~host:target.host ~port:target.port ~timeout
+    Target.wait_ready ~net ~clock ~host:target.host ~port:target.port ~tls ~timeout ()
   | Some argv ->
     Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
-      ~net ~clock ~env ~host:target.host ~port:target.port ~timeout argv);
+      ~net ~clock ~env ~host:target.host ~port:target.port ~tls ~timeout argv);
   let c = { url = target; net; last = None; cookies = []; checks_passed = 0; checks_failed = 0 } in
   ctx := Some c;
   Printf.printf "\n\027[1m⟐ %s\027[0m \027[2m(%s)\027[0m\n%!" label url;

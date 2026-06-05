@@ -80,8 +80,11 @@ Both layers share one server-lifecycle model (`Target`, internal):
 
 - **A target is a URL.** `~url:"http://localhost:4000"` is the identity — the host and port
   are parsed from it. The Http client connects to that host (DNS-resolved), so a target can
-  be local *or remote* (`~url:"http://staging.internal:8080"`). The client is plain HTTP/1.1;
-  `https://` URLs are rejected with a clear message (put a plaintext port in front for tests).
+  be local *or remote* (`~url:"http://staging.internal:8080"`). **`https://` works too** — the
+  connection is upgraded to TLS (via `tls-eio`) with an *accept-any-certificate* default,
+  which is the right behaviour for testing your own server behind a self-signed localhost cert
+  or a staging box (you're checking behaviour, not validating a public CA). A non-TLS server
+  on an `https://` URL fails clearly at the handshake.
 - **Spawn or attach.** With `~spawn:["./server"]` (Http) / a positional server path (Browser),
   the harness starts that command, waits for the URL to accept connections (event-driven, up
   to `~timeout`, default 30s), and **kills it on exit** — the process is tied to the Eio

@@ -12,3 +12,15 @@
  (name http_test)
  (modules http_test)
  (libraries fennec-hunt))
+
+; TLS proof: a pure-OCaml self-signed HTTPS server (tls_server) + a hunt against it over
+; https:// (tls_check). Proves fennec_hunt.Http speaks TLS. Run manually, not in `dune test`.
+(executable
+ (name tls_check)
+ (modules tls_check)
+ (libraries fennec-hunt))
+
+(executable
+ (name tls_server)
+ (modules tls_server)
+ (libraries eio eio_main tls tls-eio x509 ptime mirage-crypto-rng.unix))

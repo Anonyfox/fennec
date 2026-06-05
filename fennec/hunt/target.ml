@@ -43,16 +43,17 @@ let parse_url (raw : string) : url =
   in
   { scheme; host; port; base_path }
 
-(* Block until [host]:[port] accepts a TCP connection and answers a line, or fail after
-   [timeout] seconds. Event-driven retry on the Eio clock — the ONE wait in the lifecycle
-   (a setup concern, before any test runs). *)
-let wait_ready ~(net : net) ~(clock : clock) ~host ~port ~timeout =
+(* Block until [host]:[port] accepts a connection and answers a line (over TLS if [tls]), or
+   fail after [timeout] seconds. Event-driven retry on the Eio clock — the ONE wait in the
+   lifecycle (a setup concern, before any test runs). Uses the same transport as the client,
+   so an https target is probed with a real TLS handshake. *)
+let wait_ready ~(net : net) ~(clock : clock) ~host ~port ?(tls = false) ~timeout () =
   let deadline = Eio.Time.now clock +. timeout in
   let rec loop () =
     if Eio.Time.now clock > deadline then
       failwith (Printf.sprintf "server at %s:%d never became ready (%.0fs timeout)" host port timeout);
     match
-      Eio.Net.with_tcp_connect ~host ~service:(string_of_int port) net (fun flow ->
+      Http_client.with_connection ~net ~host ~port ~tls (fun flow ->
           Eio.Flow.copy_string "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" flow;
           ignore (Eio.Buf_read.line (Eio.Buf_read.of_flow flow ~max_size:4096)))
     with
@@ -65,7 +66,7 @@ let wait_ready ~(net : net) ~(clock : clock) ~host ~port ~timeout =
    the process environment, then wait for the target to accept connections. The process is
    terminated when [sw] finishes (Eio ties the child to the switch — structural teardown,
    no manual kill). *)
-let spawn ~sw ~proc_mgr ~fs ~net ~clock ?(env = [||]) ~host ~port ~timeout (argv : string list) =
+let spawn ~sw ~proc_mgr ~fs ~net ~clock ?(env = [||]) ~host ~port ?(tls = false) ~timeout (argv : string list) =
   Array.iter
     (fun kv -> match String.index_opt kv '=' with
        | Some i -> Unix.putenv (String.sub kv 0 i) (String.sub kv (i + 1) (String.length kv - i - 1))
@@ -73,4 +74,4 @@ let spawn ~sw ~proc_mgr ~fs ~net ~clock ?(env = [||]) ~host ~port ~timeout (argv
     env;
   let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) Eio.Path.(fs / "/dev/null") in
   ignore (Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull argv);
-  wait_ready ~net ~clock ~host ~port ~timeout
+  wait_ready ~net ~clock ~host ~port ~tls ~timeout ()

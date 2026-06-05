@@ -98,9 +98,11 @@ fennec/hunt/
 ## Dependencies
 
 `eio`, `eio.unix`, `eio_main`, `unix`, `yojson` (JSON assertions), `base64` (basic-auth +
-the WebSocket handshake key), `re` (regex assertions). No npm, no Lwt, no chromedriver, no
-Selenium, no cohttp — the HTTP client is hand-written on raw Eio sockets. The only runtime
-requirement for Browser tests is a Chromium-family browser on the host.
+the WebSocket handshake key), `re` (regex assertions), and the `tls-eio` / `x509` /
+`mirage-crypto-rng` / `domain-name` stack (TLS for `https://` targets). No npm, no Lwt, no
+chromedriver, no Selenium, no cohttp — the HTTP client is hand-written on raw Eio sockets,
+upgraded to TLS via tls-eio for https. The only runtime requirement for Browser tests is a
+Chromium-family browser on the host.
 
 ## Design notes
 

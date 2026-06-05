@@ -22,7 +22,7 @@ let main ?binary ?reporter ?(browsers = 1) ?(headless = true) ?server_exe ~base_
         spontaneously and make a controlled run non-deterministic. (Fennec-specific; harmless
         to any other server, which ignores it.) Shared spawn+readiness+teardown via Target. *)
      Target.spawn ~sw ~proc_mgr ~fs ~net ~clock ~env:[| "FENNEC_DEV_LIVERELOAD=0" |]
-       ~host:target.host ~port:target.port ~timeout:30.0 [ exe ]);
+       ~host:target.host ~port:target.port ~tls:(target.scheme = "https") ~timeout:30.0 [ exe ]);
   let browsers = max 1 browsers in
   (* one browser process + one long-lived control connection each (reader alive for the whole
      run, so context teardown never hangs). Per test: an isolated context + its own page

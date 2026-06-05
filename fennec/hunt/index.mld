@@ -101,8 +101,10 @@ are for custom backends and custom reporting.
 Both layers share one server-lifecycle model:
 
 - {b A target is a URL.} The host and port are parsed from [~url]; the client connects to
-  that host (DNS-resolved), so a target can be local or remote. The client is plain HTTP/1.1
-  — [https://] is rejected with a clear message.
+  that host (DNS-resolved), so a target can be local or remote. [https://] works — the
+  connection is upgraded to TLS with an accept-any-certificate default (right for testing your
+  own server behind a self-signed/staging cert); a non-TLS server on an https URL fails at the
+  handshake.
 - {b Spawn or attach.} With a spawn command the harness starts it, waits for the URL to accept
   connections (event-driven, up to [~timeout]), and kills it on exit (tied to the Eio switch —
   structural teardown, no leak). Without one, it tests an already-running server and waits for it.

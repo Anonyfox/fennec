@@ -63,9 +63,9 @@
  (name fennec-hunt)
  (synopsis "HTTP + real-browser testing for OCaml web apps — pure OCaml/Eio, no Node or Selenium")
  (description
-  "A two-layer testing library for OCaml web apps, with no dependency on any framework. The\nHttp layer is a typed HTTP/1.1 client (hand-written on Eio sockets, no cohttp) with\ndeterministic assertions over any URL — status, body, headers, JSON-by-path, cookies,\nredirects, timing — plus an automatic per-test cookie jar. The Browser layer drives a real\nheadless Chromium via a hand-written Chrome DevTools Protocol client: an auto-waiting page\nDSL, rich self-explaining failures, a deterministic in-memory fake backend (so the DSL is\nunit-tested without a browser), and a terminal reporter that adapts from a TTY to a CI log.\nNo Node, no chromedriver, no Selenium, no Lwt. Shipped separately so production servers never link it.")
+  "A two-layer testing library for OCaml web apps, with no dependency on any framework. The\nHttp layer is a typed HTTP/1.1 client (hand-written on Eio sockets, no cohttp) with\ndeterministic assertions over any URL — status, body, headers, JSON-by-path, cookies,\nredirects, timing — plus an automatic per-test cookie jar. http and https targets both work\n(TLS via tls-eio, accept-any-cert by default for self-signed/staging servers). The Browser\nlayer drives a real headless Chromium via a hand-written Chrome DevTools Protocol client: an\nauto-waiting page DSL, rich self-explaining failures, a deterministic in-memory fake backend\n(so the DSL is unit-tested without a browser), and a terminal reporter that adapts from a TTY\nto a CI log. No Node, no chromedriver, no Selenium, no Lwt. Shipped separately so production servers never link it.")
  (tags
-  ("testing" "http" "integration" "e2e" "browser" "chrome" "devtools-protocol" "eio"))
+  ("testing" "http" "integration" "e2e" "browser" "chrome" "devtools-protocol" "tls" "eio"))
  (depends
   ; Eio is direct-style effects, so OCaml 5+ is required (not 4.14).
   (ocaml
@@ -80,7 +80,14 @@
   (base64
    (>= 3.0))
   (re
-   (>= 1.10))))
+   (>= 1.10))
+  ; TLS transport for https targets (accept-any-cert default — testing your own server)
+  (tls-eio
+   (>= 2.0))
+  (x509
+   (>= 1.0))
+  domain-name
+  mirage-crypto-rng))
 
 ; The CLI is the distributable: a self-contained `fennec` binary that statically
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a
