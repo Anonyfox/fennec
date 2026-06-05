@@ -15,6 +15,11 @@ type t = {
     and a TTY, and are off in CI. *)
 val detect : unit -> t
 
+(** Does the current terminal support OSC 8 hyperlinks? By an allow-list of known-good terminals,
+    off in CI. Reads the environment; exposed for testing (the [detect] result also requires a TTY,
+    which a test can't fake). *)
+val supports_hyperlinks : unit -> bool
+
 (** A fully plain capability set (no colour, no links, non-interactive) — for pipes/CI/tests. *)
 val plain : t
 

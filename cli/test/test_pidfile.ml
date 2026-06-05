@@ -13,7 +13,18 @@ let () =
   eq "parse drops pids <= 1 (no killing init)" (P.parse "0\n1\n2\n") [ 2 ];
   eq "render" (P.render [ 1; 2; 3 ]) "1\n2\n3\n";
   eq "render [] -> empty" (P.render []) "";
-  eq "round-trip" (P.parse (P.render [ 7; 8; 9 ])) [ 7; 8; 9 ]
+  eq "round-trip" (P.parse (P.render [ 7; 8; 9 ])) [ 7; 8; 9 ];
+  (* the identity gate: it must recognise OUR processes (so reaping actually fires — a bug making it
+     always-false would otherwise pass the suite), and reject look-alikes (the SIGKILL trusts it) *)
+  print_endline "Pidfile.comm_is_ours:";
+  check "dune is ours" (P.comm_is_ours "dune");
+  check "ocamlrun is ours" (P.comm_is_ours "ocamlrun");
+  check "fennec is ours" (P.comm_is_ours "fennec");
+  check "an abs server.bc path is ours (by basename + .bc suffix)" (P.comm_is_ours "/abs/_build/default/x/server.bc");
+  check "'dunelike' is NOT ours (no loose substring)" (not (P.comm_is_ours "dunelike"));
+  check "'x.bcfg' is NOT ours (.bc must be a suffix)" (not (P.comm_is_ours "x.bcfg"));
+  check "'sleep' is NOT ours" (not (P.comm_is_ours "sleep"));
+  check "'preserve' is NOT ours" (not (P.comm_is_ours "preserve"))
 
 (* reap_stale must be identity-safe: a recorded pid that has been recycled to an UNRELATED
    process (here a `sleep`, which is not one of our dune/server/worker binaries) must NOT be

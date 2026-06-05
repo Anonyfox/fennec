@@ -8,6 +8,11 @@
 (** Parse a pidfile body into pids (one per line; blanks and garbage ignored). Pure. *)
 val parse : string -> int list
 
+(** Is a process command name one of ours (supervisor, dune, server, esbuild worker)? The identity
+    gate that makes reaping recycle-safe — matched precisely (exact name / "fennec" prefix / ".bc"
+    suffix), not by loose substring. Pure; exposed for testing. *)
+val comm_is_ours : string -> bool
+
 (** Render pids as a pidfile body (one per line). Pure. *)
 val render : int list -> string
 

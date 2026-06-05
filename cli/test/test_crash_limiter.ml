@@ -31,4 +31,20 @@ let () =
   let t = C.create () in
   check "flat backoff is 1.0s" (C.record t ~now:0.0 ~flat:true () = C.Retry 1.0);
 
+  (* the backoff CURVE — 0.2 doubling, capped at 3.0. Without this, a regressed base/cap still
+     "is a Retry" and slips past the earlier is_retry checks. *)
+  let backoff = function C.Retry b -> b | C.Give_up -> Float.nan in
+  let approx a b = Float.abs (a -. b) < 1e-9 in
+  let t = C.create ~window:1000.0 ~max:100 () in
+  check "backoff #1 = 0.2" (approx (backoff (C.record t ~now:0.0 ())) 0.2);
+  check "backoff #2 = 0.4" (approx (backoff (C.record t ~now:0.0 ())) 0.4);
+  check "backoff #3 = 0.8" (approx (backoff (C.record t ~now:0.0 ())) 0.8);
+  check "backoff #4 = 1.6" (approx (backoff (C.record t ~now:0.0 ())) 1.6);
+  check "backoff #5 caps at 3.0" (approx (backoff (C.record t ~now:0.0 ())) 3.0);
+  check "backoff #6 stays at 3.0" (approx (backoff (C.record t ~now:0.0 ())) 3.0);
+
+  (* boundary: max=1 means the very first crash gives up *)
+  let t = C.create ~max:1 () in
+  check "max=1 -> first crash gives up" (is_giveup (C.record t ~now:0.0 ()));
+
   if !fails = 0 then print_endline "all Crash_limiter tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

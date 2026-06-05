@@ -22,4 +22,34 @@ let () =
   check "SGR is invisible" (T.visible_width "\027[32mhi\027[0m" = 2);
   check "OSC 8 is invisible" (T.visible_width "\027]8;;u\027\\link\027]8;;\027\\" = 4);
   check "emoji counts as one column" (T.visible_width "🦊x" = 2);
+  (* truncated escapes must terminate and count the visible prefix (the scan-loop boundaries) *)
+  check "a truncated CSI (ESC[ at end) terminates, counts prefix" (T.visible_width "ab\027[" = 2);
+  check "a truncated OSC (no ST) terminates, counts prefix" (T.visible_width "ab\027]8;;u" = 2);
+  (* documented limitation: codepoints, not graphemes — a ZWJ emoji counts as its codepoints (>1) *)
+  check "a ZWJ grapheme counts by codepoints (documented, not 1)" (T.visible_width "👩‍🚀" > 1);
+
+  print_endline "Tty.detect / supports_hyperlinks (env-driven):";
+  (* colour precedence NO_COLOR > FORCE_COLOR > tty — the first two are deterministic regardless of
+     whether stdout is a tty (so this is stable under `dune runtest`, which pipes stdout) *)
+  Unix.putenv "NO_COLOR" "";
+  Unix.putenv "FORCE_COLOR" "1";
+  check "FORCE_COLOR forces colour on" (T.detect ()).T.color;
+  Unix.putenv "NO_COLOR" "1";
+  check "NO_COLOR overrides FORCE_COLOR" (not (T.detect ()).T.color);
+  Unix.putenv "NO_COLOR" "";
+  Unix.putenv "FORCE_COLOR" "";
+  (* hyperlink allow-list *)
+  List.iter (fun k -> Unix.putenv k "") [ "CI"; "WT_SESSION"; "KITTY_WINDOW_ID"; "VTE_VERSION" ];
+  Unix.putenv "TERM_PROGRAM" "iTerm.app";
+  check "iTerm2 supports OSC 8" (T.supports_hyperlinks ());
+  Unix.putenv "TERM_PROGRAM" "Apple_Terminal";
+  check "Terminal.app does NOT (no OSC 8)" (not (T.supports_hyperlinks ()));
+  Unix.putenv "TERM_PROGRAM" "iTerm.app";
+  Unix.putenv "CI" "true";
+  check "CI disables hyperlinks (overrides the terminal)" (not (T.supports_hyperlinks ()));
+  Unix.putenv "CI" "";
+  Unix.putenv "TERM_PROGRAM" "";
+  Unix.putenv "WT_SESSION" "1";
+  check "Windows Terminal (WT_SESSION) supports OSC 8" (T.supports_hyperlinks ());
+  Unix.putenv "WT_SESSION" "";
   if !fails = 0 then print_endline "all Tty tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

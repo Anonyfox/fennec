@@ -41,16 +41,22 @@ let proc_comm pid =
     ignore (Unix.close_process_in ic);
     (match line with Some "" | None -> None | x -> x)
 
-(* IS this pid still one of OUR processes (supervisor / dune / server / esbuild worker)? Pids
-   recycle — and this file lives under [_build], so it can even outlive a reboot — so reaping by
-   bare number could SIGKILL whatever unrelated process now holds the pid. Verifying the command
-   name first makes that impossible. *)
-let is_fennec_proc pid =
-  match proc_comm pid with
-  | None -> false
-  | Some name ->
-    let b = Filename.basename name in
-    contains b "dune" || contains b "ocamlrun" || contains b "fennec" || contains b "esbuild" || contains b ".bc"
+let starts_with s pfx = let lp = String.length pfx in String.length s >= lp && String.sub s 0 lp = pfx
+let ends_with s sfx = let ls = String.length s and lf = String.length sfx in ls >= lf && String.sub s (ls - lf) lf = sfx
+
+(* is a process command name one of OURS (supervisor / dune / server / esbuild worker)? PURE — the
+   identity gate, tested in isolation. Matched PRECISELY (exact name, "fennec" prefix, ".bc"
+   suffix), never by loose substring: a recycled pid recorded under [_build] could otherwise be any
+   process whose name merely CONTAINS "dune"/".bc" (e.g. "dunelike", "x.bcfg"), and the verdict
+   gates a SIGKILL. *)
+let comm_is_ours (comm : string) : bool =
+  let b = Filename.basename comm in
+  b = "dune" || b = "ocamlrun" || starts_with b "fennec" || ends_with b ".bc" || contains b "esbuild"
+
+(* IS this pid still one of OUR processes? Pids recycle — and this file lives under [_build], so it
+   can even outlive a reboot — so reaping by bare number could SIGKILL whatever unrelated process
+   now holds the pid. Verifying the command name first ({!comm_is_ours}) makes that impossible. *)
+let is_fennec_proc pid = match proc_comm pid with None -> false | Some name -> comm_is_ours name
 
 let reap_stale ~cwd =
   match find_root cwd with

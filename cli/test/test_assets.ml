@@ -34,6 +34,15 @@ let () =
   Sys.remove (Filename.concat dir "main.css");
   eq "deleting a tracked file -> Reload" (As.poll a) As.Reload;
   eq "deletion settled -> Nothing" (As.poll a) As.Nothing;
+  (* recursion + the third tracked extension: a .mjs in a SUBDIR is collected and tracked like .js *)
+  Unix.mkdir (Filename.concat dir "sub") 0o755;
+  write (Filename.concat dir "sub/app.mjs") "export const x = 1";
+  eq "a new nested .mjs -> Reload" (As.poll a) As.Reload;
+  eq "nested .mjs unchanged -> Nothing" (As.poll a) As.Nothing;
+  write (Filename.concat dir "sub/app.mjs") "export const x = 2";
+  eq "editing the nested .mjs -> Reload" (As.poll a) As.Reload;
+  (try Sys.remove (Filename.concat dir "sub/app.mjs") with _ -> ());
+  (try Unix.rmdir (Filename.concat dir "sub") with _ -> ());
   List.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ()) [ "main.css"; "main.js" ];
   (try Unix.rmdir dir with _ -> ());
   if !fails = 0 then print_endline "all Assets tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)
