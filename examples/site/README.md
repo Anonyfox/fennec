@@ -81,7 +81,7 @@ links, `paths.ml` gives compile-checked builders: `Paths.products_id ~id:"7"`.
 ```sh
 # dev: from this directory, just run. `fennec dev` discovers the server (the one
 # executable that calls Fennec.serve), builds + watches it, supervises restarts, livereloads.
-cd examples/site && fennec dev           # gateway on :8020 (host-routed); each scoped app gets the next port
+cd examples/site && fennec dev           # gateway on :4000 (host-routed); each scoped app gets the next port
 #   fennec dev --dry-run                 # show the discovered server/target, don't run
 #   fennec dev --port 9000               # isolated instance on a different port block (parallel worktrees)
 #   fennec dev --target … SERVER_EXE     # explicit override (e.g. multi-server repos)
@@ -115,7 +115,7 @@ sh examples/site/e2e/heal.sh
 # OUR own server); a foreign process is left alone and named with a one-command fix. Needs python3.
 sh examples/site/e2e/reclaim.sh
 
-# host-routing + port check: the dev gateway (:8020) routes by Host EXACTLY as prod does (a
+# host-routing + port check: the dev gateway (:4000) routes by Host EXACTLY as prod does (a
 # specific domain wins, "*" is the default, an unknown host falls to the default), and
 # `fennec dev --port N` shifts the whole port block for isolated parallel instances. Needs curl.
 sh examples/site/e2e/domains.sh

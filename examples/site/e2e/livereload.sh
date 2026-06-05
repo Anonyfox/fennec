@@ -18,8 +18,8 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$ROOT"
-PAGE=http://localhost:8020/
-BUNDLE=http://localhost:8020/_apps/web/main.js
+PAGE=http://localhost:4001/
+BUNDLE=http://localhost:4001/_apps/web/main.js
 SRC=examples/site/frontend/apps/web/index.mlx
 MARK="LIVERELOAD_$(date +%s)"
 D1="" ; D2=""
@@ -37,7 +37,7 @@ echo "warming the dev build…"
 dune build examples/site/server.bc examples/site/webroot >/dev/null 2>&1
 pkill -9 -f "dune build --watch" 2>/dev/null || true; sleep 1
 
-up() { i=0; while ! grep -q "localhost:8020" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
+up() { i=0; while ! grep -q "ready" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
 
 echo "starting instance 1…"
 ( cd examples/site && exec fennec dev ) >/tmp/fennec_lr_1.log 2>&1 & D1=$!

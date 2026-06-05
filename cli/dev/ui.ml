@@ -187,12 +187,15 @@ let start t ~dir =
   t.dir <- dir;
   t.out (Printf.sprintf "\n  %s %s\n\n" "🦊" "fennec dev")
 
-let ready t ~urls ~ms =
+let ready t ~urls ~gateway ~ms =
   if not t.ready_shown then begin
     t.ready_shown <- true;
     (match ms with Some m -> t.builds <- t.builds + 1; t.total_ms <- t.total_ms +. m | None -> ());
     let block = Buffer.create 128 in
     List.iter (fun (name, url) -> Buffer.add_string block (Printf.sprintf "  %s  %s %s %s\n" (cyan t "➜") name (dim t "→") (Tty.hyperlink t.caps ~url ~text:url))) urls;
+    (* the host-routed gateway: prod-identical selection — reach any domain here via its Host header
+       (or an /etc/hosts entry). Dim, because the per-endpoint URLs above are the everyday targets. *)
+    Buffer.add_string block (Printf.sprintf "     %s %s\n" (dim t "host routing →") (Tty.hyperlink t.caps ~url:gateway ~text:(dim t gateway)));
     let timing = match ms with Some m -> Printf.sprintf "ready in %.0fms" m | None -> "ready" in
     Buffer.add_string block (Printf.sprintf "     %s\n" (dim t (Printf.sprintf "%s · watching %s" timing t.dir)));
     if t.caps.interactive then (erase_region t; t.out (Buffer.contents block); draw_region t) else t.out (Buffer.contents block)

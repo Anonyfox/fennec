@@ -37,9 +37,9 @@ second source watcher. This is what keeps the parts decoupled.
    - **CLI → app, on a frontend edit**: one line (`css`/`reload`) to the `FENNEC_LIVERELOAD` socket; the app relays it to browsers.
    - **app → CLI, on stderr**: a dev-URL report (`[fennec:urls] web=… admin=…`, named `name=url` pairs parsed for the banner) and a port-conflict line paired with a distinct exit code, so the CLI self-heals a held port instead of crash-looping.
 4. **app ↔ browser**: the framework's livereload websocket (`/_fennec/livereload`) + an injected client script. Framework's concern entirely.
-5. **Shared state across all of them**: the `_build` output dir + the port block (from `FENNEC_PORT`, default 8020 dev / 80 prod). That's it.
+5. **Shared state across all of them**: the `_build` output dir + the port block (from `FENNEC_PORT`, default 4000 dev / 80 prod). That's it.
 
-**Domains & ports.** An endpoint is identified by a **name** + its **host pattern(s)** (`Endpoint.make ~name ?hosts`); ports live nowhere in userland. Domains are declared ONLY there — exact (`acme.com`), wildcard (`*.acme.com`), or the single catch-all `*` (the default, sorted last). PROD serves the whole set on one port, routed by Host (most-specific wins). DEV serves the *same* routing on a **gateway** at the `FENNEC_PORT` base (so `-H Host:` is prod-identical) plus a forced convenience port (`base+1+i`) per non-catch-all endpoint for header-free browsing. `--port`/`FENNEC_PORT` shifts the whole block, so a different worktree runs an isolated instance.
+**Domains & ports.** An endpoint is identified by a **name** + its **host pattern(s)** (`Endpoint.make ~name ?hosts`); ports live nowhere in userland. Domains are declared ONLY there — exact (`acme.com`), wildcard (`*.acme.com`), or the single catch-all `*` (the default, sorted last). PROD serves the whole set on one port, routed by Host (most-specific wins). DEV serves the *same* routing on a **gateway** at `FENNEC_PORT` base (so `-H Host:` is prod-identical) plus a **contiguous forced convenience port** per endpoint (`base+1, base+2, …` in declaration order, no gaps) for header-free browsing. `--port`/`FENNEC_PORT` shifts the whole block, so a different worktree runs an isolated instance.
 
 ## Asset pipeline (how CSS/JS/npm get built)
 

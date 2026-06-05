@@ -3,14 +3,14 @@
    runs in its own fresh isolated browser context (own cookies/localStorage), so they are
    independent and the runner can fan them out in parallel.
 
-   The harness sets base_url to the web app (http://localhost:8020); a leading-'/' path is
+   The harness sets base_url to the web app (http://localhost:4001); a leading-'/' path is
    resolved against it, an absolute URL (the admin app) is used as-is. *)
 open Fennec_e2e.Live
 
 (* referenced by run.ml so this module (and thus its test registrations below) is linked *)
 let load = ()
 
-let admin = "http://localhost:8022"
+let admin = "http://localhost:4002"
 
 (* wait for the Fur client to finish hydrating — an app-agnostic signal set by Fur_csr,
    awaited evented (one round-trip) like every other condition *)

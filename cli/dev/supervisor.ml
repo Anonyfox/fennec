@@ -89,18 +89,19 @@ let run ?port ~targets ~exe ~assets =
 
   let dw = ref (Dune_watch.start targets) in
   let control_path = tmp_socket "fennec-lr" in
+  (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
+     explicitly so the supervisor and server agree, and so the banner can show the gateway URL. *)
+  let dev_base = Option.value port ~default:4000 in
+  let gateway_url = Printf.sprintf "http://localhost:%d" dev_base in
   (* FENNEC_DEV_PARENT lets the server watch THIS supervisor and self-exit if we die (even on
      SIGKILL), so it can never be left holding the dev port. FENNEC_DEV_UI asks the server to
-     report its dev URLs (a [fennec:urls] line) so the supervisor owns the clickable URL. *)
+     report its named dev URLs (a [fennec:urls] line) so the supervisor owns the clickable URLs. *)
   let dev_env =
-    let base =
-      [| Dev_proto.env_mode ^ "=development";
-         Dev_proto.env_livereload ^ "=" ^ control_path;
-         Dev_proto.env_dev_parent ^ "=" ^ string_of_int (Unix.getpid ());
-         Dev_proto.env_dev_ui ^ "=1" |]
-    in
-    (* --port sets the base port (FENNEC_PORT); omitted → the server defaults to 8020 *)
-    match port with Some p -> Array.append base [| Dev_proto.env_port ^ "=" ^ string_of_int p |] | None -> base
+    [| Dev_proto.env_mode ^ "=development";
+       Dev_proto.env_livereload ^ "=" ^ control_path;
+       Dev_proto.env_dev_parent ^ "=" ^ string_of_int (Unix.getpid ());
+       Dev_proto.env_dev_ui ^ "=1";
+       Dev_proto.env_port ^ "=" ^ string_of_int dev_base |]
   in
   let server = ref Down in
   (* [last_build_ms] is the MOST RECENT build's duration (shown in the ready banner) — a
@@ -127,7 +128,7 @@ let run ?port ~targets ~exe ~assets =
   let on_line : Server_proc.parsed -> unit = function
     | Server_proc.Urls urls ->
       (match !server with Up up -> up.busy_port <- None (* it bound — any earlier "port busy" is stale *) | Down -> ());
-      Ui.ready ui ~ms:!last_build_ms ~urls
+      Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url
     | Server_proc.Port_busy p -> ( match !server with Up up -> up.busy_port <- Some p | Down -> ())
     | Server_proc.Chatter -> ()
     | Server_proc.App_log line -> Ui.app ui line

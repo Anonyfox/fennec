@@ -24,13 +24,15 @@ let () =
   let ui = U.create ~out ~caps:T.plain () in
   U.start ui ~dir:"examples/site";
   check "banner shows the fox + name" (contains (take ()) "🦊 fennec dev");
-  U.ready ui ~urls:[ ("web", "http://localhost:8200") ] ~ms:(Some 412.);
+  U.ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~ms:(Some 412.);
   let s = take () in
-  check "ready shows the URL" (contains s "http://localhost:8200");
+  check "ready shows the endpoint URL" (contains s "http://localhost:4001");
   check "ready shows the endpoint name" (contains s "web");
+  check "ready shows the gateway URL" (contains s "http://localhost:4000");
+  check "ready shows the host-routing label" (contains s "host routing");
   check "ready shows the time" (contains s "ready in 412ms");
   check "ready shows the watched dir" (contains s "watching examples/site");
-  U.ready ui ~urls:[ ("web", "http://localhost:8200") ] ~ms:(Some 99.);
+  U.ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~ms:(Some 99.);
   check "ready is idempotent (a second report prints nothing)" (take () = "");
   U.rebuilt ui ~trigger:[ "index.mlx changed" ] ~ms:(Some 38.);
   let s = take () in

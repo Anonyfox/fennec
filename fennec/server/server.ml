@@ -399,7 +399,7 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~(resolve : host:strin
 (* Run a {!Host_router} table, blocking. In PROD the whole table is served on ONE port
    ([FENNEC_PORT], default 80) and selected per request by Host pattern — one process, arbitrary
    subdomains/wildcards. In DEV the same table is served on the GATEWAY port ([FENNEC_PORT] base,
-   default 8020) with identical Host routing (prod fidelity), and EACH non-catch-all endpoint also
+   default 4000) with identical Host routing (prod fidelity), and EACH non-catch-all endpoint also
    gets a forced convenience port ([base + 1 + i], declaration order) so a browser reaches it with
    no /etc/hosts. A different base (--port) shifts the whole block, so instances never collide.
    @param dev             dev mode. Default from FENNEC_ENV.
@@ -425,21 +425,17 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) timeout in
   let slots = Eio.Semaphore.make max_conns in
   let entries = Host_router.entries router in
-  let is_default (e : Endpoint.t Host_router.entry) = List.mem Host_pattern.Any e.Host_router.patterns in
-  (* base port: FENNEC_PORT, else 8020 (dev) / 80 (prod) *)
-  let base = match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with Some p -> p | None -> if dev then 8020 else 80 in
+  (* base port: FENNEC_PORT, else 4000 (dev) / 80 (prod) *)
+  let base = match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with Some p -> p | None -> if dev then 4000 else 80 in
   let plan = match Port_plan.of_base ~base ~count:(List.length entries) with Ok p -> p | Error msg -> Printf.eprintf "fennec: %s\n%!" msg; exit 1 in
   let by_host ~(host : string) : Endpoint.t option = Host_router.route router ~host in
-  (* (port, resolver) bindings: prod = one routed port; dev = the routed gateway (prod-identical)
-     + a forced port per NON-catch-all endpoint (the catch-all is reached as the gateway's default) *)
+  (* (port, resolver) bindings: prod = one routed port; dev = the routed GATEWAY (prod-identical,
+     at the base) plus ONE forced port per endpoint at base+1+i — contiguous, in declaration order,
+     so the ports read cleanly: the base routes by Host, base+1.. are the named endpoints, no gaps. *)
   let binds =
     if not dev then [ (base, by_host) ]
     else
-      let forced =
-        List.mapi (fun i e -> (i, e)) entries
-        |> List.filter (fun (_, e) -> not (is_default e))
-        |> List.map (fun (i, (e : Endpoint.t Host_router.entry)) -> (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> Some e.Host_router.ep))
-      in
+      let forced = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> Some e.Host_router.ep)) entries in
       (Port_plan.gateway plan, by_host) :: forced
   in
   Eio.Switch.run @@ fun sw ->
@@ -466,8 +462,9 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
       in
       Eio.Fiber.fork ~sw (fun () -> if parallelism > 1 then Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, parallelism - 1) ~on_error else Eio.Net.run_server socket handle ~on_error))
     binds;
-  (* every port is now bound — announce ONLY here (a failed bind exit 98'd above). Each endpoint's
-     URL: the catch-all at the gateway (base), others at their forced port. *)
+  (* every port is now bound — announce ONLY here (a failed bind exit 98'd above). Each endpoint is
+     announced at its own contiguous forced port (base+1+i); the gateway (base) is the supervisor's
+     to show, since it owns the banner and knows the base. *)
   let url p = Printf.sprintf "http://localhost:%d" p in
-  let named = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (e.Host_router.name, if is_default e then url (Port_plan.gateway plan) else url (Port_plan.endpoint_port plan ~index:i))) entries in
+  let named = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (e.Host_router.name, url (Port_plan.endpoint_port plan ~index:i))) entries in
   on_listen named
