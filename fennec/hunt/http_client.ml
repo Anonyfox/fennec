@@ -1,8 +1,9 @@
 (* A minimal, typed HTTP/1.1 client for testing — one request per connection, raw Eio sockets,
-   zero external deps. Returns a structured response the assertion DSL pipes through.
+   zero external deps. Returns a structured response the assertion DSL inspects.
 
    Not a general-purpose HTTP library: no keep-alive, no redirects, no chunked decoding, no TLS.
-   Exactly what a test needs: send a request, read the full response, assert on it. *)
+   Exactly what a test needs: send a request, read the full response, assert on it. Connects to
+   the real [host] (DNS-resolved), so it works against remote servers, not just localhost. *)
 
 type response = {
   status : int;
@@ -13,15 +14,13 @@ type response = {
 let header_value name resp =
   List.find_map (fun (k, v) -> if String.lowercase_ascii k = String.lowercase_ascii name then Some v else None) resp.headers
 
-let request ~net ~port ~meth ~path ?(headers = []) ?body () : response =
+let request ~net ~host ~port ~meth ~path ?(headers = []) ?body () : response =
   let body = Option.value body ~default:"" in
-  let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
-  Eio.Net.with_tcp_connect ~host:"127.0.0.1" ~service:(string_of_int port) net @@ fun flow ->
-  ignore addr;
+  Eio.Net.with_tcp_connect ~host ~service:(string_of_int port) net @@ fun flow ->
   let has_host = List.exists (fun (k, _) -> String.lowercase_ascii k = "host") headers in
   let buf = Buffer.create 1024 in
   Buffer.add_string buf (Printf.sprintf "%s %s HTTP/1.1\r\n" meth path);
-  if not has_host then Buffer.add_string buf (Printf.sprintf "Host: localhost:%d\r\n" port);
+  if not has_host then Buffer.add_string buf (Printf.sprintf "Host: %s:%d\r\n" host port);
   Buffer.add_string buf "Connection: close\r\n";
   List.iter (fun (k, v) -> Buffer.add_string buf (Printf.sprintf "%s: %s\r\n" k v)) headers;
   if body <> "" then Buffer.add_string buf (Printf.sprintf "Content-Length: %d\r\n" (String.length body));

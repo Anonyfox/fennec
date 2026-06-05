@@ -28,11 +28,11 @@ type assertion = response -> unit
 (*  Ambient context                                                           *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
-type url_parts = { scheme : string [@warning "-69"]; host : string [@warning "-69"]; port : int; base_path : string }
-
+(* the server under test — its URL (parsed once) and the net capability to reach it. The
+   ambient context every bare function reads; set by [hunt], cleared on exit. *)
 type context = {
-  url : url_parts;
-  net : [ `Generic ] Eio.Net.ty Eio.Resource.t;
+  url : Target.url;
+  net : Target.net;
   mutable last : response option;
   mutable cookies : (string * string) list;
   mutable checks_passed : int;
@@ -42,32 +42,13 @@ type context = {
 let preview s = if String.length s <= 200 then s else String.sub s 0 197 ^ "..."
 
 let ctx : context option ref = ref None
-let current () = match !ctx with Some c -> c | None -> failwith "fennec_hunt: not inside a `hunt` block"
 
-(* ════════════════════════════════════════════════════════════════════════════ *)
-(*  URL parsing                                                               *)
-(* ════════════════════════════════════════════════════════════════════════════ *)
-
-let parse_url url =
-  let scheme, rest =
-    if Fennec_hunt_util.contains url "://" then
-      let i = String.index url ':' in (String.sub url 0 i, String.sub url (i + 3) (String.length url - i - 3))
-    else ("http", url)
-  in
-  let host_port, base_path =
-    match String.index_opt rest '/' with
-    | Some i -> (String.sub rest 0 i, String.sub rest i (String.length rest - i))
-    | None -> (rest, "")
-  in
-  let host, port =
-    match String.rindex_opt host_port ':' with
-    | Some i ->
-      let h = String.sub host_port 0 i in
-      let p = try int_of_string (String.sub host_port (i + 1) (String.length host_port - i - 1)) with _ -> if scheme = "https" then 443 else 80 in
-      (h, p)
-    | None -> (host_port, if scheme = "https" then 443 else 80)
-  in
-  { scheme; host; port; base_path }
+(* every request/assertion/extractor reads the ambient context. It is [None] only when called
+   outside a [hunt] block — a usage error, reported clearly (never a silent miscompute). *)
+let current () =
+  match !ctx with
+  | Some c -> c
+  | None -> failwith "fennec_hunt: a request/assertion was used outside a `hunt` block — wrap it in `hunt \"…\" ~url:\"…\" @@ fun () -> …`"
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Timing                                                                    *)
@@ -350,10 +331,12 @@ let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : asser
         (Some encoded, ("Content-Type", ct) :: headers)
       | None -> (body, headers))
   in
+  (* [~host] overrides the Host HEADER (virtual-host testing) — the CONNECTION still goes to
+     the target's real host:port (so `~host:"admin.localhost"` hits the gateway, routed by Host) *)
   let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
   let headers = match cookie_header c.cookies with Some ch -> ch :: headers | None -> headers in
   let t0 = Unix.gettimeofday () in
-  let r = Http_client.request ~net:c.net ~port:c.url.port ~meth ~path:full_path ~headers ?body () in
+  let r = Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~meth ~path:full_path ~headers ?body () in
   last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
   c.last <- Some r;
   c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
@@ -459,37 +442,22 @@ let check label body =
 (*  hunt                                                                      *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
-(* Block until the spawned server accepts a TCP connection on [port], or fail after [timeout].
-   Event-driven retry on the Eio clock — the ONE wait in the whole layer, a setup concern. *)
-let wait_ready ~net ~clock ~port ~timeout =
-  let deadline = Eio.Time.now clock +. timeout in
-  let rec loop () =
-    if Eio.Time.now clock > deadline then failwith (Printf.sprintf "server on port %d never became ready (%.0fs timeout)" port timeout);
-    match
-      Eio.Net.with_tcp_connect ~host:"127.0.0.1" ~service:(string_of_int port) net (fun flow ->
-          Eio.Flow.copy_string "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" flow;
-          ignore (Eio.Buf_read.line (Eio.Buf_read.of_flow flow ~max_size:4096)))
-    with
-    | () -> ()
-    | exception _ -> Eio.Time.sleep clock 0.05; loop ()
-  in
-  loop ()
-
 let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
-  let url_parts = parse_url url in
+  let target = Target.parse_url url in
+  if target.scheme = "https" then
+    failwith (Printf.sprintf "fennec_hunt: https is not supported (%s) — the test client is plain HTTP/1.1; test behind a local plaintext port" url);
   Eio_main.run @@ fun eio_env ->
   Eio.Switch.run @@ fun sw ->
-  let net = (Eio.Stdenv.net eio_env :> [ `Generic ] Eio.Net.ty Eio.Resource.t) in
+  let net = (Eio.Stdenv.net eio_env :> Target.net) in
   let clock = Eio.Stdenv.clock eio_env in
   (match spawn with
-  | None -> ()
+  | None ->
+    (* no spawn: an already-running server. Still wait for it (it may be coming up). *)
+    Target.wait_ready ~net ~clock ~host:target.host ~port:target.port ~timeout
   | Some argv ->
-    Array.iter (fun kv -> match String.index_opt kv '=' with Some i -> Unix.putenv (String.sub kv 0 i) (String.sub kv (i + 1) (String.length kv - i - 1)) | None -> ()) env;
-    let proc_mgr = Eio.Stdenv.process_mgr eio_env in
-    let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) Eio.Path.(Eio.Stdenv.fs eio_env / "/dev/null") in
-    ignore (Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull argv);
-    wait_ready ~net ~clock ~port:url_parts.port ~timeout);
-  let c = { url = url_parts; net; last = None; cookies = []; checks_passed = 0; checks_failed = 0 } in
+    Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
+      ~net ~clock ~env ~host:target.host ~port:target.port ~timeout argv);
+  let c = { url = target; net; last = None; cookies = []; checks_passed = 0; checks_failed = 0 } in
   ctx := Some c;
   Printf.printf "\n\027[1m⟐ %s\027[0m \027[2m(%s)\027[0m\n%!" label url;
   Fun.protect body ~finally:(fun () -> ctx := None);

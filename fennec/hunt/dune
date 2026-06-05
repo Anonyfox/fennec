@@ -17,7 +17,7 @@
  (name fennec_hunt)
  (public_name fennec-hunt)
  (libraries eio eio.unix eio_main unix yojson base64 re re.pcre)
- (private_modules cdp cdp_backend chrome conformance fennec_hunt_util http_client)
+ (private_modules cdp cdp_backend chrome conformance fennec_hunt_util http_client target)
  (modes byte native))
 
 ; the package landing page for odoc (`dune build @doc`)
