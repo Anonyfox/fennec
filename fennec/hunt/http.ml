@@ -168,7 +168,8 @@ let hunt label ?cmd ?(port = 4000) ?(env = [||]) ?(timeout = 30.0) body =
     | Some argv ->
       Array.iter (fun kv -> match String.index_opt kv '=' with Some i -> Unix.putenv (String.sub kv 0 i) (String.sub kv (i + 1) (String.length kv - i - 1)) | None -> ()) env;
       let proc_mgr = Eio.Stdenv.process_mgr eio_env in
-      let proc = Eio.Process.spawn ~sw proc_mgr argv in
+      let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) Eio.Path.(Eio.Stdenv.fs eio_env / "/dev/null") in
+      let proc = Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull argv in
       let pid = Eio.Process.pid proc in
       Test_server.wait_ready ~net ~clock ~port ~timeout;
       Some pid

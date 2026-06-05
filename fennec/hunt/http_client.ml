@@ -17,9 +17,10 @@ let request ~net ~port ~meth ~path ?(headers = []) ?(body = "") () : response =
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
   Eio.Net.with_tcp_connect ~host:"127.0.0.1" ~service:(string_of_int port) net @@ fun flow ->
   ignore addr;
+  let has_host = List.exists (fun (k, _) -> String.lowercase_ascii k = "host") headers in
   let buf = Buffer.create 1024 in
   Buffer.add_string buf (Printf.sprintf "%s %s HTTP/1.1\r\n" meth path);
-  Buffer.add_string buf (Printf.sprintf "Host: localhost:%d\r\n" port);
+  if not has_host then Buffer.add_string buf (Printf.sprintf "Host: localhost:%d\r\n" port);
   Buffer.add_string buf "Connection: close\r\n";
   List.iter (fun (k, v) -> Buffer.add_string buf (Printf.sprintf "%s: %s\r\n" k v)) headers;
   if body <> "" then Buffer.add_string buf (Printf.sprintf "Content-Length: %d\r\n" (String.length body));
