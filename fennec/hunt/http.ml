@@ -1,35 +1,40 @@
-(* The Http testing layer — bare functions that read from an ambient context.
+(* fennec_hunt.Http — a full-featured, deterministic HTTP testing layer.
+
+   Every request is ONE TCP call → ONE response → immediate pass or fail. No polling, no
+   retry, no timing dependencies in the test path. The only wait is the optional spawn
+   readiness probe (one-time setup before any test runs).
 
    {[open Fennec_hunt.Http
 
-     let () = hunt "site server" ~cmd:["fennec"; "dev"] ~port:4001 @@ fun () ->
+     let () = hunt "my server" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun () ->
 
-       check "health endpoint" @@ fun () ->
-         get "/health" ~expect:[status 200; body_contains "ok"]
-       ;
+       check "health" (fun () ->
+         get "/health" ~expect:[status 200; is_json; body_contains {|"ok":true|}]);
 
-       check "admin needs auth" @@ fun () ->
-         get "/admin" ~expect:[status 401];
-         get "/admin" ~headers:[basic_auth "admin" "admin"] ~expect:[status 200]
-   ]}
+       check "auth flow" (fun () ->
+         post "/login" ~body:{|{"user":"admin"}|} ~headers:[json_content_type]
+           ~expect:[status 200];
+         get "/dashboard" ~expect:[status 200; body_contains "Welcome"])
+   ]} *)
 
-   [hunt] spawns a server, sets up the ambient context, runs the body, tears down.
-   [check] is a labeled test case. [get], [post], etc. make requests and optionally assert.
-   [status], [body_contains], etc. are assertion constructors for [~expect].
-   [header], [elapsed_ms], etc. extract from the last response. All bare — no prefix. *)
-
-(* ---- types ---- *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Types                                                                     *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
 type response = Http_client.response = { status : int; headers : (string * string) list; body : string }
 type assertion = response -> unit
 
-(* ---- ambient context ---- *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Ambient context                                                           *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+type url_parts = { scheme : string [@warning "-69"]; host : string [@warning "-69"]; port : int; base_path : string }
 
 type context = {
-  port : int;
+  url : url_parts;
   net : [ `Generic ] Eio.Net.ty Eio.Resource.t;
   mutable last : response option;
-  server_pid : int option;
+  mutable cookies : (string * string) list;
   mutable checks_passed : int;
   mutable checks_failed : int;
 }
@@ -39,110 +44,200 @@ let preview s = if String.length s <= 200 then s else String.sub s 0 197 ^ "..."
 let ctx : context option ref = ref None
 let current () = match !ctx with Some c -> c | None -> failwith "fennec_hunt: not inside a `hunt` block"
 
-(* ---- timing ---- *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  URL parsing                                                               *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+let parse_url url =
+  let scheme, rest =
+    if Fennec_hunt_util.contains url "://" then
+      let i = String.index url ':' in (String.sub url 0 i, String.sub url (i + 3) (String.length url - i - 3))
+    else ("http", url)
+  in
+  let host_port, base_path =
+    match String.index_opt rest '/' with
+    | Some i -> (String.sub rest 0 i, String.sub rest i (String.length rest - i))
+    | None -> (rest, "")
+  in
+  let host, port =
+    match String.rindex_opt host_port ':' with
+    | Some i ->
+      let h = String.sub host_port 0 i in
+      let p = try int_of_string (String.sub host_port (i + 1) (String.length host_port - i - 1)) with _ -> if scheme = "https" then 443 else 80 in
+      (h, p)
+    | None -> (host_port, if scheme = "https" then 443 else 80)
+  in
+  { scheme; host; port; base_path }
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Timing                                                                    *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
 let last_elapsed = ref 0.0
 
-(* ---- assertions (response -> unit, for ~expect lists) ---- *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Cookie jar (automatic, per-check)                                         *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+let parse_set_cookies (headers : (string * string) list) : (string * string) list =
+  List.filter_map (fun (k, v) ->
+      if String.lowercase_ascii k = "set-cookie" then
+        match String.index_opt v '=' with
+        | Some i ->
+          let name = String.sub v 0 i in
+          let rest = String.sub v (i + 1) (String.length v - i - 1) in
+          let value = match String.index_opt rest ';' with Some j -> String.sub rest 0 j | None -> rest in
+          Some (String.trim name, String.trim value)
+        | None -> None
+      else None)
+    headers
+
+let cookie_header jar =
+  if jar = [] then None
+  else Some ("Cookie", String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) jar))
+
+let update_jar jar new_cookies =
+  let updated = List.fold_left (fun acc (k, v) -> (k, v) :: List.filter (fun (k2, _) -> k2 <> k) acc) jar new_cookies in
+  updated
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Assertion constructors (response -> unit)                                 *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
 let status code (r : response) =
-  if r.status <> code then
-    failwith (Printf.sprintf "expected status %d, got %d\n  body: %s" code r.status (preview r.body))
+  if r.status <> code then failwith (Printf.sprintf "expected status %d, got %d\n  body: %s" code r.status (preview r.body))
 
 let status_2xx (r : response) =
-  if r.status < 200 || r.status > 299 then
-    failwith (Printf.sprintf "expected status 2xx, got %d\n  body: %s" r.status (preview r.body))
+  if r.status < 200 || r.status > 299 then failwith (Printf.sprintf "expected 2xx, got %d" r.status)
+
+let status_3xx (r : response) =
+  if r.status < 300 || r.status > 399 then failwith (Printf.sprintf "expected 3xx, got %d" r.status)
+
+let status_4xx (r : response) =
+  if r.status < 400 || r.status > 499 then failwith (Printf.sprintf "expected 4xx, got %d" r.status)
+
+let status_5xx (r : response) =
+  if r.status < 500 || r.status > 599 then failwith (Printf.sprintf "expected 5xx, got %d" r.status)
 
 let body_contains needle (r : response) =
   if not (Fennec_hunt_util.contains r.body needle) then
-    failwith (Printf.sprintf "expected body to contain %S\n  body: %s" needle (preview r.body))
+    failwith (Printf.sprintf "body does not contain %S\n  body: %s" needle (preview r.body))
 
 let body_is expected (r : response) =
-  if r.body <> expected then
-    failwith (Printf.sprintf "expected body %S\n  got: %s" expected r.body)
+  if r.body <> expected then failwith (Printf.sprintf "body mismatch\n  expected: %s\n  got:      %s" (preview expected) (preview r.body))
+
+let body_not_contains needle (r : response) =
+  if Fennec_hunt_util.contains r.body needle then
+    failwith (Printf.sprintf "body should NOT contain %S but does\n  body: %s" needle (preview r.body))
 
 let header_is name expected (r : response) =
   match Http_client.header_value name r with
   | Some v when v = expected -> ()
-  | Some v -> failwith (Printf.sprintf "expected header %S = %S, got %S" name expected v)
-  | None -> failwith (Printf.sprintf "expected header %S = %S, but header is absent" name expected)
+  | Some v -> failwith (Printf.sprintf "header %S: expected %S, got %S" name expected v)
+  | None -> failwith (Printf.sprintf "header %S: expected %S, but absent" name expected)
 
 let header_contains name needle (r : response) =
   match Http_client.header_value name r with
   | Some v when Fennec_hunt_util.contains v needle -> ()
-  | Some v -> failwith (Printf.sprintf "expected header %S to contain %S, got %S" name needle v)
-  | None -> failwith (Printf.sprintf "expected header %S to contain %S, but header is absent" name needle)
+  | Some v -> failwith (Printf.sprintf "header %S: expected to contain %S, got %S" name needle v)
+  | None -> failwith (Printf.sprintf "header %S: expected to contain %S, but absent" name needle)
 
-(* ---- request functions ---- *)
+let has_header name (r : response) =
+  if Http_client.header_value name r = None then failwith (Printf.sprintf "expected header %S, but absent" name)
 
-let run_expect r = function None -> () | Some checks -> List.iter (fun (check : assertion) -> check r) checks
+let no_header name (r : response) =
+  match Http_client.header_value name r with
+  | Some v -> failwith (Printf.sprintf "expected NO header %S, but found %S" name v) | None -> ()
 
-let get ?(headers = []) ?host ?expect path =
+let content_type expected = header_contains "content-type" expected
+let is_json = content_type "json"
+let is_html = content_type "html"
+
+let redirect_to target (r : response) =
+  if r.status < 300 || r.status > 399 then failwith (Printf.sprintf "expected redirect, got %d" r.status);
+  match Http_client.header_value "location" r with
+  | Some loc when Fennec_hunt_util.contains loc target -> ()
+  | Some loc -> failwith (Printf.sprintf "redirect location: expected to contain %S, got %S" target loc)
+  | None -> failwith "expected redirect with Location header, but Location absent"
+
+let max_elapsed ms (r : response) =
+  ignore r;
+  if !last_elapsed > ms then failwith (Printf.sprintf "response took %.0fms, limit %.0fms" !last_elapsed ms)
+
+let min_body_length n (r : response) =
+  let actual = String.length r.body in
+  if actual < n then failwith (Printf.sprintf "body length %d, expected >= %d" actual n)
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Request functions                                                         *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+let run_expect r = function None -> () | Some checks -> List.iter (fun (a : assertion) -> a r) checks
+
+let request meth ?(headers = []) ?host ?body ?(expect : assertion list option) path =
   let c = current () in
+  let full_path = c.url.base_path ^ path in
   let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
+  let headers = match cookie_header c.cookies with Some ch -> ch :: headers | None -> headers in
   let t0 = Unix.gettimeofday () in
-  let r = Http_client.get ~net:c.net ~port:c.port ~headers path in
+  let r = Http_client.request ~net:c.net ~port:c.url.port ~meth ~path:full_path ~headers ?body () in
   last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
   c.last <- Some r;
+  c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
   run_expect r expect
 
-let post ?(headers = []) ?host ?(body = "") ?expect path =
-  let c = current () in
-  let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
-  let t0 = Unix.gettimeofday () in
-  let r = Http_client.post ~net:c.net ~port:c.port ~headers ~body path in
-  last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
-  c.last <- Some r;
-  run_expect r expect
+let get ?headers ?host ?expect path = request "GET" ?headers ?host ?expect path
+let post ?headers ?host ?body ?expect path = request "POST" ?headers ?host ?body ?expect path
+let put ?headers ?host ?body ?expect path = request "PUT" ?headers ?host ?body ?expect path
+let patch ?headers ?host ?body ?expect path = request "PATCH" ?headers ?host ?body ?expect path
+let delete ?headers ?host ?expect path = request "DELETE" ?headers ?host ?expect path
+let head ?headers ?host ?expect path = request "HEAD" ?headers ?host ?expect path
+let options ?headers ?host ?expect path = request "OPTIONS" ?headers ?host ?expect path
 
-let put ?(headers = []) ?host ?(body = "") ?expect path =
-  let c = current () in
-  let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
-  let t0 = Unix.gettimeofday () in
-  let r = Http_client.put ~net:c.net ~port:c.port ~headers ~body path in
-  last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
-  c.last <- Some r;
-  run_expect r expect
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Extractors (from last response)                                           *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
-let delete ?(headers = []) ?host ?expect path =
-  let c = current () in
-  let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
-  let t0 = Unix.gettimeofday () in
-  let r = Http_client.delete ~net:c.net ~port:c.port ~headers path in
-  last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
-  c.last <- Some r;
-  run_expect r expect
+let last () = match (current ()).last with Some r -> r | None -> failwith "no response yet"
 
-(* ---- extractors (read from last response) ---- *)
+let header name =
+  match Http_client.header_value name (last ()) with Some v -> v | None -> failwith (Printf.sprintf "header %S absent" name)
 
-let last () = match (current ()).last with Some r -> r | None -> failwith "fennec_hunt: no response yet (make a request first)"
-let header name = match Http_client.header_value name (last ()) with Some v -> v | None -> failwith (Printf.sprintf "header %S not found in last response" name)
+let header_opt name = Http_client.header_value name (last ())
 let response_body () = (last ()).body
 let response_status () = (last ()).status
 let elapsed_ms () = !last_elapsed
 
-(* ---- helpers ---- *)
+let json_field key =
+  let body = (last ()).body in
+  try
+    match Yojson.Safe.from_string body with
+    | `Assoc pairs -> (
+      match List.assoc_opt key pairs with
+      | Some (`String s) -> s
+      | Some v -> Yojson.Safe.to_string v
+      | None -> failwith (Printf.sprintf "JSON field %S not found" key))
+    | _ -> failwith "response body is not a JSON object"
+  with Yojson.Json_error msg -> failwith (Printf.sprintf "invalid JSON: %s\n  body: %s" msg (preview body))
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Helpers                                                                   *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
 let basic_auth user pass =
   ("Authorization", "Basic " ^ Base64.encode_string (user ^ ":" ^ pass))
 
-(* ---- process lifecycle ---- *)
+let bearer token = ("Authorization", "Bearer " ^ token)
+let json_content_type = ("Content-Type", "application/json")
 
-let signal sig_ =
-  match (current ()).server_pid with
-  | Some pid -> (try Unix.kill pid sig_ with _ -> ())
-  | None -> failwith "fennec_hunt: no server process (hunt was called without ~cmd)"
-
-let wait_port_free ?(timeout = 10.0) () =
-  Test_server.port_free_within ~timeout (current ()).port
-
-let port_held () = Test_server.port_held (current ()).port
-
-(* ---- check (a labeled test case) ---- *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  check                                                                     *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
 let check label body =
   let c = current () in
   c.last <- None;
+  c.cookies <- [];
   let t0 = Unix.gettimeofday () in
   match body () with
   | () ->
@@ -155,28 +250,27 @@ let check label body =
     Printf.printf "  \027[31m✗\027[0m  %s \027[2m(%.0fms)\027[0m\n%!" label ms;
     Printf.printf "     %s\n%!" (Printexc.to_string e)
 
-(* ---- hunt (the top-level block) ---- *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  hunt                                                                      *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
 
-let hunt label ?cmd ?(port = 4000) ?(env = [||]) ?(timeout = 30.0) body =
+let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
+  let url_parts = parse_url url in
   Eio_main.run @@ fun eio_env ->
   Eio.Switch.run @@ fun sw ->
   let net = (Eio.Stdenv.net eio_env :> [ `Generic ] Eio.Net.ty Eio.Resource.t) in
   let clock = Eio.Stdenv.clock eio_env in
-  let server_pid =
-    match cmd with
-    | None -> None
-    | Some argv ->
-      Array.iter (fun kv -> match String.index_opt kv '=' with Some i -> Unix.putenv (String.sub kv 0 i) (String.sub kv (i + 1) (String.length kv - i - 1)) | None -> ()) env;
-      let proc_mgr = Eio.Stdenv.process_mgr eio_env in
-      let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) Eio.Path.(Eio.Stdenv.fs eio_env / "/dev/null") in
-      let proc = Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull argv in
-      let pid = Eio.Process.pid proc in
-      Test_server.wait_ready ~net ~clock ~port ~timeout;
-      Some pid
-  in
-  let c = { port; net; last = None; server_pid; checks_passed = 0; checks_failed = 0 } in
+  (match spawn with
+  | None -> ()
+  | Some argv ->
+    Array.iter (fun kv -> match String.index_opt kv '=' with Some i -> Unix.putenv (String.sub kv 0 i) (String.sub kv (i + 1) (String.length kv - i - 1)) | None -> ()) env;
+    let proc_mgr = Eio.Stdenv.process_mgr eio_env in
+    let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) Eio.Path.(Eio.Stdenv.fs eio_env / "/dev/null") in
+    ignore (Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull argv);
+    Test_server.wait_ready ~net ~clock ~port:url_parts.port ~timeout);
+  let c = { url = url_parts; net; last = None; cookies = []; checks_passed = 0; checks_failed = 0 } in
   ctx := Some c;
-  Printf.printf "\n\027[1m⟐ %s\027[0m \027[2m(:%d)\027[0m\n%!" label port;
+  Printf.printf "\n\027[1m⟐ %s\027[0m \027[2m(%s)\027[0m\n%!" label url;
   Fun.protect body ~finally:(fun () -> ctx := None);
   Printf.printf "\n";
   if c.checks_failed > 0 then (

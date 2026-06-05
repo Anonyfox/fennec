@@ -13,7 +13,8 @@ type response = {
 let header_value name resp =
   List.find_map (fun (k, v) -> if String.lowercase_ascii k = String.lowercase_ascii name then Some v else None) resp.headers
 
-let request ~net ~port ~meth ~path ?(headers = []) ?(body = "") () : response =
+let request ~net ~port ~meth ~path ?(headers = []) ?body () : response =
+  let body = Option.value body ~default:"" in
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
   Eio.Net.with_tcp_connect ~host:"127.0.0.1" ~service:(string_of_int port) net @@ fun flow ->
   ignore addr;
