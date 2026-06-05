@@ -13,6 +13,7 @@ module Endpoint = Fennec_server.Endpoint
 module Livereload = Fennec_server.Livereload
 module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
+module Dev_proto = Fennec_core.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
 
 (* The verb namespace: the primitive + its algebra + the route verbs (from
    [Fennec_paw.Paw]) plus every prebuilt battery as a submodule. So userland reaches
@@ -33,7 +34,7 @@ module Paw = struct
   module Csrf = Fennec_server.Csrf
 end
 
-let is_dev = try Sys.getenv "FENNEC_ENV" <> "production" with Not_found -> true
+let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true
 
 (* Structured-concurrency helpers for handlers. A handler runs inside an Eio fiber, so it
    can fan out concurrent work (parallel DB queries / HTTP calls): the sub-fibers overlap
@@ -77,7 +78,7 @@ let static ~name ~assets : Paw.t =
    absent in prod. [reuse_addr] clears a stale socket from a prior run; Eio removes
    the path again when the switch finishes. *)
 let dev_control ~sw ~net (lr : Livereload.t) : unit =
-  match Sys.getenv_opt "FENNEC_LIVERELOAD" with
+  match Sys.getenv_opt Dev_proto.env_livereload with
   | None | Some "" -> ()
   | Some path -> (
     match try Some (Eio.Net.listen ~sw ~backlog:8 ~reuse_addr:true net (`Unix path)) with _ -> None with
@@ -112,7 +113,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
      any controlled run it is pure nondeterminism (spontaneous navigations), so it can be
      turned off while still serving the dev (on-disk) web root: set FENNEC_DEV_LIVERELOAD=0. *)
   let livereload_on =
-    is_dev && (match Sys.getenv_opt "FENNEC_DEV_LIVERELOAD" with Some ("0" | "off" | "false" | "no") -> false | _ -> true)
+    is_dev && (match Sys.getenv_opt Dev_proto.env_dev_livereload with Some ("0" | "off" | "false" | "no") -> false | _ -> true)
   in
   let endpoints =
     if livereload_on then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints
@@ -128,28 +129,28 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
      reparent target, AND immune to pid recycling (getppid is our real current parent; a recycled
      pid elsewhere is not it). Independent of livereload, so an e2e run self-exits too. Cheap: a
      0.25s poll on a background fiber. *)
-  (match Option.bind (Sys.getenv_opt "FENNEC_DEV_PARENT") int_of_string_opt with
+  (match Option.bind (Sys.getenv_opt Dev_proto.env_dev_parent) int_of_string_opt with
   | Some parent ->
     Eio.Fiber.fork ~sw (fun () ->
         let clock = Eio.Stdenv.clock env in
         let rec watch () =
           Eio.Time.sleep clock 0.25;
           if Unix.getppid () = parent then watch ()
-          else (Printf.eprintf "[fennec] dev supervisor gone — exiting\n%!"; exit 0)
+          else (Printf.eprintf "%s dev supervisor gone — exiting\n%!" Dev_proto.chatter_prefix; exit 0)
         in
         watch ())
   | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen), so
      a failed bind never prints a misleading "ready"/URL line before it exits *)
   let announce () =
-    match (if is_dev then Sys.getenv_opt "FENNEC_DEV_UI" else None) with
+    match (if is_dev then Sys.getenv_opt Dev_proto.env_dev_ui else None) with
     | Some ("1" | "on" | "true") ->
       (* the dev supervisor owns the terminal: report our dev URLs for its banner (it renders the
          status itself) and otherwise stay quiet *)
       let urls =
         endpoints |> List.map (Fennec_server.Endpoint.listen_port ~dev:true) |> List.sort_uniq compare |> List.map (Printf.sprintf "http://localhost:%d")
       in
-      Printf.eprintf "[fennec:urls] %s\n%!" (String.concat " " urls)
-    | _ -> Printf.eprintf "[fennec] serving %d endpoint(s)%s\n%!" (List.length endpoints) (if livereload_on then " (dev: livereload on)" else "")
+      Printf.eprintf "%s\n%!" (Dev_proto.urls_line urls)
+    | _ -> Printf.eprintf "%s serving %d endpoint(s)%s\n%!" Dev_proto.chatter_prefix (List.length endpoints) (if livereload_on then " (dev: livereload on)" else "")
   in
   Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env endpoints

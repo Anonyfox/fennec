@@ -9,6 +9,8 @@
    It is TOTAL: every iteration is exception-wrapped, so no syscall, dead child, or parser
    surprise can take the process down. *)
 
+module Dev_proto = Fennec_core.Dev_proto (* the shared CLI<->server wire (env names, stderr line formats, exit code) *)
+
 let ef = Printf.eprintf (* last-resort raw stderr (preflight + the total-loop guard) *)
 let now () = Unix.gettimeofday ()
 let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
@@ -99,7 +101,7 @@ let run ~targets ~exe ~assets =
        instead of burning the full 3s of dead startup latency *)
     match (try Unix.waitpid [ Unix.WNOHANG ] worker_pid with _ -> (0, Unix.WEXITED 0)) with 0, _ -> () | _ -> worker_dead := true
   done;
-  if Sys.file_exists worker_socket then Unix.putenv "FENNEC_ESBUILD_WORKER" worker_socket
+  if Sys.file_exists worker_socket then Unix.putenv Dev_proto.env_esbuild_worker worker_socket
   else Ui.notice ui Ui.Info "esbuild worker did not start — falling back to cold builds";
 
   let dw = ref (Dune_watch.start targets) in
@@ -108,7 +110,10 @@ let run ~targets ~exe ~assets =
      SIGKILL), so it can never be left holding the dev port. FENNEC_DEV_UI asks the server to
      report its dev URLs (a [fennec:urls] line) so the supervisor owns the clickable URL. *)
   let dev_env =
-    [| "FENNEC_ENV=development"; "FENNEC_LIVERELOAD=" ^ control_path; "FENNEC_DEV_PARENT=" ^ string_of_int (Unix.getpid ()); "FENNEC_DEV_UI=1" |]
+    [| Dev_proto.env_mode ^ "=development";
+       Dev_proto.env_livereload ^ "=" ^ control_path;
+       Dev_proto.env_dev_parent ^ "=" ^ string_of_int (Unix.getpid ());
+       Dev_proto.env_dev_ui ^ "=1" |]
   in
   let server_pid = ref None in
   let server_out = ref None in (* read-end of the server's merged stdout+stderr *)
@@ -131,26 +136,23 @@ let run ~targets ~exe ~assets =
   let close_server_out () = match !server_out with Some fd -> (try Unix.close fd with _ -> ()); server_out := None | None -> () in
 
   (* classify a line the server printed: its dev-URL report drives the UI banner, its own framework
-     chatter is suppressed (the UI says it better), everything else is the user's app log. *)
-  (* leading run of digits in [s] *)
-  let leading_int s =
-    let n = String.length s and i = ref 0 in
-    while !i < n && s.[!i] >= '0' && s.[!i] <= '9' do incr i done;
-    if !i > 0 then int_of_string_opt (String.sub s 0 !i) else None
-  in
+     chatter is suppressed (the UI says it better), everything else is the user's app log. The wire
+     formats are parsed via {!Dev_proto} — the single shared definition both sides reference. *)
   let route_server_line raw =
     let line = String.trim raw in
     if line = "" then ()
-    else if starts_with line "[fennec:urls]" then (
-      busy_port := None; (* it bound — any earlier "port busy" is stale *)
-      Ui.ready ui ~ms:!last_build_ms
-        ~urls:(String.sub line 13 (String.length line - 13) |> String.split_on_char ' ' |> List.filter (fun s -> s <> "")))
-    else if starts_with line "fennec: port " then
-      (* "fennec: port 8200 is already in use …": remember WHICH port so the crash handler can
-         reclaim it (if a leftover of ours holds it) or name the culprit (if it's foreign) *)
-      busy_port := leading_int (String.sub line 13 (String.length line - 13))
-    else if starts_with line "[fennec]" then () (* our own framework chatter — the UI says it better *)
-    else Ui.app ui line
+    else
+      match Dev_proto.parse_urls_line line with
+      | Some urls ->
+        busy_port := None; (* it bound — any earlier "port busy" is stale *)
+        Ui.ready ui ~ms:!last_build_ms ~urls
+      | None -> (
+        match Dev_proto.parse_port_busy line with
+        | Some p ->
+          (* remember WHICH port so the crash handler can reclaim it (if a leftover of ours holds
+             it) or name the culprit (if it's foreign) *)
+          busy_port := Some p
+        | None -> if starts_with line Dev_proto.chatter_prefix then () (* framework chatter *) else Ui.app ui line)
   in
   (* drain whatever the server has written (non-blocking), splitting it into lines *)
   let drain_server () =
@@ -292,7 +294,7 @@ let run ~targets ~exe ~assets =
     | Crash_limiter.Retry backoff -> Unix.sleepf backoff; start_or_restart (fun () -> Ui.notice ui Ui.Warn "server exited — restarted")
   in
   let on_server_crash status =
-    let port_busy = status = Unix.WEXITED 98 in
+    let port_busy = status = Unix.WEXITED Dev_proto.port_in_use_exit in
     (* the crashed child was already reaped by [check_server]'s WNOHANG waitpid (it returned this
        [status]); just drop our handle — no second blocking waitpid on an already-reaped pid *)
     close_server_out ();

@@ -4,4 +4,4 @@
 ; into Supervisor.run.
 (library
  (name fennec_dev)
- (libraries unix))
+ (libraries unix fennec.core)) ; fennec.core for Dev_proto — the shared CLI<->server wire (Stdlib-only, no Eio bleed)

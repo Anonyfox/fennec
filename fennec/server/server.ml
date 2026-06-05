@@ -455,9 +455,10 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domai
             (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
         with Unix.Unix_error (Unix.EADDRINUSE, _, _) ->
           (* a clear, actionable message + a distinct exit code the dev supervisor recognizes
-             (so it reports "port busy" and self-heals, instead of a generic crash-loop) *)
-          Printf.eprintf "fennec: port %d is already in use — another server is holding it.\n%!" port;
-          exit 98
+             (so it reports "port busy" and self-heals, instead of a generic crash-loop). Both the
+             line format and the code are the shared CLI<->server wire — see {!Fennec_core.Dev_proto}. *)
+          Printf.eprintf "%s\n%!" (Fennec_core.Dev_proto.port_busy_line port);
+          exit Fennec_core.Dev_proto.port_in_use_exit
       in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
