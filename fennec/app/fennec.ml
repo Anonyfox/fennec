@@ -152,7 +152,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
      endpoints (name + host patterns); an invalid config (clashing domains, two catch-alls, a bad
      pattern, …) fails loudly here rather than mis-routing at runtime. *)
   match Fennec_server.Host_router.build (List.map (fun e -> (Endpoint.name e, Endpoint.hosts e, e)) endpoints) with
-  | Error err ->
-    Printf.eprintf "fennec: invalid endpoint configuration — %s\n%!" (Fennec_server.Host_router.describe_error err);
+  | Error errs ->
+    Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Fennec_server.Host_router.describe_errors errs);
     exit 1
   | Ok router -> Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env router
