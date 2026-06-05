@@ -37,11 +37,18 @@ let int_after s from =
   while !j < n && s.[!j] >= '0' && s.[!j] <= '9' do incr j done;
   if !j > !i then int_of_string_opt (String.sub s !i (!j - !i)) else None
 
-(* the path inside the first pair of double-quotes *)
-let quoted s =
+(* split a `File "<path>", line N, characters A-B:` line into the quoted PATH and the REST that
+   follows the closing quote. The location fields are then read from REST, never the whole line —
+   a path can itself contain the substring "line"/"characters" (e.g. timeline2/x.ml, char1/x.ml),
+   and searching the whole line would lift the location out of the PATH and point the code frame
+   at the wrong spot. *)
+let split_at_path s =
   match String.index_opt s '"' with
-  | None -> None
-  | Some a -> ( match String.index_from_opt s (a + 1) '"' with Some b when b > a -> Some (String.sub s (a + 1) (b - a - 1)) | _ -> None)
+  | None -> ("", s)
+  | Some a -> (
+    match String.index_from_opt s (a + 1) '"' with
+    | Some b when b > a -> (String.sub s (a + 1) (b - a - 1), String.sub s (b + 1) (String.length s - b - 1))
+    | _ -> ("", s))
 
 let parse (raw : string) : problem list =
   let lines = String.split_on_char '\n' (strip_ansi raw) |> Array.of_list in
@@ -50,9 +57,9 @@ let parse (raw : string) : problem list =
   while !i < n do
     let l = lines.(!i) in
     if starts_with (String.trim l) "File \"" then begin
-      let file = match quoted l with Some f -> f | None -> "" in
-      let line = match find_sub l "line" with Some k -> Option.value ~default:0 (int_after l (k + 4)) | None -> 0 in
-      let col = match find_sub l "characters" with Some k -> Option.value ~default:0 (Option.map (( + ) 1) (int_after l (k + 10))) | None -> 0 in
+      let file, rest = split_at_path l in
+      let line = match find_sub rest "line" with Some k -> Option.value ~default:0 (int_after rest (k + 4)) | None -> 0 in
+      let col = match find_sub rest "characters" with Some k -> Option.value ~default:0 (Option.map (( + ) 1) (int_after rest (k + 10))) | None -> 0 in
       incr i;
       (* lines up to the next Error:/Warning:/File: *)
       let body = ref [] in

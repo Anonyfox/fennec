@@ -56,6 +56,21 @@ let () =
   (* two genuinely-distinct errors → two problems *)
   let two = "File \"a.ml\", line 1, characters 0-1:\nError: one\nFile \"b.ml\", line 2, characters 0-1:\nError: two\n" in
   check "two real errors -> count (2,0)" (D.count (D.parse two) = (2, 0));
+  (* a path that ITSELF contains "line"/"characters" must not corrupt the location: the fields are
+     read from after the path, not the whole line. (Regression: timeline2 -> line 2, char3 -> col 4.) *)
+  let trapline = "File \"frontend/timeline2/x.ml\", line 7, characters 9-16:\nError: boom\n" in
+  (match D.parse trapline with
+  | [ p ] ->
+    check "path with 'line' substring -> real line 7" (p.D.line = 7);
+    check "path with 'line' substring -> real col 10" (p.D.col = 10);
+    check "path with 'line' substring -> file intact" (p.D.file = "frontend/timeline2/x.ml")
+  | _ -> incr fails);
+  let trapchars = "File \"src/characters3/y.ml\", line 4, characters 2-3:\nError: boom\n" in
+  (match D.parse trapchars with
+  | [ p ] ->
+    check "path with 'characters' substring -> real line 4" (p.D.line = 4);
+    check "path with 'characters' substring -> real col 3" (p.D.col = 3)
+  | _ -> incr fails);
   (* unrecognised text → no structured problems *)
   check "unrecognised text -> []" (D.parse "ld: symbol not found\nmake: *** error" = []);
   check "empty -> []" (D.parse "" = []);
