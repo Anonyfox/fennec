@@ -466,7 +466,14 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domai
           (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs group flow addr)
       in
       let on_error e =
-        Printf.eprintf "fennec: connection error: %s\n%!" (Printexc.to_string e)
+        (* a client going away mid-request (reset / broken pipe / EOF) is normal — e.g. a browser
+           reload abandons in-flight connections — not a server error, so don't log the noise.
+           Only genuinely unexpected errors are worth a line. *)
+        let s = Printexc.to_string e in
+        let client_gone =
+          e = End_of_file || contains s "Connection reset" || contains s "Connection_reset" || contains s "Broken pipe" || contains s "EPIPE"
+        in
+        if not client_gone then Printf.eprintf "fennec: connection error: %s\n%!" s
       in
       Eio.Fiber.fork ~sw (fun () ->
           if domains > 1 then

@@ -85,7 +85,12 @@ let client_script =
   }
   addEventListener("visibilitychange", function(){ if (!document.hidden) reconnectNow(); });
   addEventListener("focus", reconnectNow);
-  connect();
+  // open the socket only AFTER the page has finished loading: a websocket opened mid-navigation
+  // is aborted by the browser ("interrupted while the page was loading"), which spams the console
+  // on every reload. Once loaded there's no navigation to interrupt it. (Reconnects are fine — by
+  // then the page is already loaded.)
+  if (document.readyState === "complete") connect();
+  else addEventListener("load", function(){ connect(); }, { once: true });
 })();|js}
     endpoint
 
