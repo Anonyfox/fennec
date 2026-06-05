@@ -1,15 +1,46 @@
 {0 fennec-hunt}
 
-Real-browser end-to-end testing for OCaml, in pure OCaml. A hand-written WebSocket +
-Chrome DevTools Protocol client drives a headless Chromium directly — {b no Node, no
-chromedriver, no Selenium, no Lwt}. The only thing you install is a Chromium-family
-browser; the rest is one OCaml library.
+Testing for OCaml web apps, in pure OCaml — two independent layers, one package:
 
-Tests read as pipes, waits are event-driven (one in-page MutationObserver/rAF round-trip,
-never a poll), and a failure prints a report that says exactly which step failed, what the
-page looked like at that instant, why it matters, and how to re-run just that test.
+- {b Http tests} ({!Fennec_hunt.Http}) — a typed HTTP/1.1 client and deterministic
+  assertions against any URL. No browser. One request → one response → immediate pass/fail.
+- {b Browser tests} ({!Fennec_hunt.Live}, {!Fennec_hunt.Run}) — a real headless Chromium
+  driven over a hand-written Chrome DevTools Protocol client. {b No Node, no chromedriver,
+  no Selenium, no Lwt.}
 
-{1 Quick start}
+Import whichever layer a test needs. The package is intentionally separate from the
+[fennec] web framework, so a production server never links the test machinery; it has no
+dependency on [fennec] and works against any web server.
+
+{1 Http tests}
+
+{[
+open Fennec_hunt.Http
+
+let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun () ->
+
+  check "health" (fun () ->
+    get "/health" ~expect:[status 200; is_json; json_path_is "ok" "true"]);
+
+  check "create user" (fun () ->
+    post "/users" ~json:(`Assoc [("name", `String "alice")])
+      ~expect:[status 201; json_is_uuid "id"; json_path_is "name" "alice"]);
+
+  check "auth flow" (fun () ->
+    post "/login" ~form:[("user", "admin"); ("pass", "secret")] ~expect:[status 200];
+    get "/dashboard" ~expect:[status 200; body_contains "Welcome"])  (* cookies carry over *)
+]}
+
+[hunt] runs a suite against a URL; with [~spawn] it starts a server and waits for it to
+respond, otherwise it tests an already-running one (local, remote, CI, staging). [check]
+is one test case with a fresh cookie jar. Requests take [~headers] / [~host] / [~query] /
+[~body] / [~form] / [~json] and an [~expect] list of assertions: status families, body
+(substring / exact / regex / emptiness), headers, JSON by dotted path (value, type, UUID,
+datetime, array length), cookies, redirects, and response timing — plus the escape hatch
+[expect (fun r -> …)]. No retry, no polling: a failed assertion fails immediately with a
+structured message.
+
+{1 Browser tests}
 
 {[
 open Fennec_hunt.Live
@@ -29,25 +60,29 @@ let () = Fennec_hunt.Run.main_cli ~base_url:"http://localhost:8080" ()
 
 A step like [expect_text ".cart .count" "1"] blocks until the element's text contains
 ["1"] or the step times out; on timeout the pipe short-circuits and the runner renders the
-failure. You never write an explicit wait.
+failure. You never write an explicit wait. Waits are event-driven (one in-page
+MutationObserver/rAF round-trip, never a poll), navigation is matched by loader id, and
+evaluations are pinned to the live execution context.
 
 {1 What you get}
 
-- {b Auto-waiting DSL} — [goto], [click], [fill], [press], [within], [expect_*], [read_*],
-  [eval]; each step waits for its own precondition.
-- {b Event-driven, deterministic} — no polling and no retry hacks; navigation is matched by
-  loader id and evaluations are pinned to the live execution context.
-- {b Self-explaining failures} — a numbered pipeline trace, the captured [outerHTML] /
-  selector probe / URL / console, a tuned hint, and a copy-pasteable rerun command.
-- {b A reporter that travels} — colour, unicode, and a live status line on a TTY; plain
-  ASCII with no cursor control on a CI log or pipe. Detected automatically; airtight under
-  parallelism.
-- {b A fake backend} — the DSL and runner are written against an abstract {!Fennec_hunt.Backend.S},
-  so they are unit-tested with no browser at all and behave identically live.
+- {b Http: a full assertion vocabulary} — status, body, headers, JSON-by-path, cookies,
+  redirects, timing; request bodies as raw / form / JSON; an automatic per-check cookie jar.
+- {b Browser: an auto-waiting DSL} — [goto], [click], [fill], [press], [within], [expect_*],
+  [read_*], [eval]; each step waits for its own precondition.
+- {b Self-explaining failures} — Http assertions report expected/actual/elapsed/URL; Browser
+  failures render a numbered pipeline trace, the captured [outerHTML] / selector probe / URL /
+  console, a hint, and a copy-pasteable rerun command.
+- {b A reporter that travels} — colour, unicode, and a live status line on a TTY; plain ASCII
+  with no cursor control on a CI log. Detected automatically; airtight under parallelism.
+- {b A fake backend} — the Browser DSL/runner are written against an abstract
+  {!Fennec_hunt.Backend.S}, so they are unit-tested with no browser at all and behave
+  identically live.
 
 {1 API}
 
 {!modules:
+  Fennec_hunt.Http
   Fennec_hunt.Live
   Fennec_hunt.Run
   Fennec_hunt.Backend
@@ -56,16 +91,16 @@ failure. You never write an explicit wait.
   Fennec_hunt.Failure
 }
 
-Most test files only need {!Fennec_hunt.Live} (the DSL, instantiated for a real browser) and
-{!Fennec_hunt.Run} (the harness). {!Fennec_hunt.Backend}, {!Fennec_hunt.Driver} (the functor),
-{!Fennec_hunt.Reporter}, and {!Fennec_hunt.Failure} are for custom backends and custom
-reporting.
+Http test files need only {!Fennec_hunt.Http}. Browser test files need {!Fennec_hunt.Live}
+(the DSL) and {!Fennec_hunt.Run} (the harness). {!Fennec_hunt.Backend},
+{!Fennec_hunt.Driver} (the functor), {!Fennec_hunt.Reporter}, and {!Fennec_hunt.Failure}
+are for custom backends and custom reporting.
 
 {1 Notes}
 
-- {b Concurrency model:} the library is Eio-only by design (direct-style, structured
-  concurrency, leak-free teardown under a single switch) — hence OCaml 5+.
+- {b Concurrency model:} Eio-only by design (direct-style, structured concurrency, leak-free
+  teardown under a single switch) — hence OCaml 5+.
 - {b Browser:} any Chromium-family browser on [PATH], or set [CHROME] / pass [~binary].
-- This package is intentionally separate from the [fennec] web framework it grew up beside,
-  so a production server never links the test/CDP machinery. It has no dependency on
-  [fennec] and works against any web server.
+- {b Dependencies:} [eio], [yojson] (JSON assertions), [base64] (basic-auth + the WebSocket
+  key), [re] (regex assertions). The HTTP client is hand-written on raw Eio sockets — no
+  cohttp.

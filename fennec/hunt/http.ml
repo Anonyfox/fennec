@@ -459,6 +459,22 @@ let check label body =
 (*  hunt                                                                      *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
+(* Block until the spawned server accepts a TCP connection on [port], or fail after [timeout].
+   Event-driven retry on the Eio clock — the ONE wait in the whole layer, a setup concern. *)
+let wait_ready ~net ~clock ~port ~timeout =
+  let deadline = Eio.Time.now clock +. timeout in
+  let rec loop () =
+    if Eio.Time.now clock > deadline then failwith (Printf.sprintf "server on port %d never became ready (%.0fs timeout)" port timeout);
+    match
+      Eio.Net.with_tcp_connect ~host:"127.0.0.1" ~service:(string_of_int port) net (fun flow ->
+          Eio.Flow.copy_string "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" flow;
+          ignore (Eio.Buf_read.line (Eio.Buf_read.of_flow flow ~max_size:4096)))
+    with
+    | () -> ()
+    | exception _ -> Eio.Time.sleep clock 0.05; loop ()
+  in
+  loop ()
+
 let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
   let url_parts = parse_url url in
   Eio_main.run @@ fun eio_env ->
@@ -472,7 +488,7 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
     let proc_mgr = Eio.Stdenv.process_mgr eio_env in
     let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) Eio.Path.(Eio.Stdenv.fs eio_env / "/dev/null") in
     ignore (Eio.Process.spawn ~sw proc_mgr ~stdout:devnull ~stderr:devnull argv);
-    Test_server.wait_ready ~net ~clock ~port:url_parts.port ~timeout);
+    wait_ready ~net ~clock ~port:url_parts.port ~timeout);
   let c = { url = url_parts; net; last = None; cookies = []; checks_passed = 0; checks_failed = 0 } in
   ctx := Some c;
   Printf.printf "\n\027[1m⟐ %s\027[0m \027[2m(%s)\027[0m\n%!" label url;

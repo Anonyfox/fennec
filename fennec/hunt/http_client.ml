@@ -57,9 +57,3 @@ let request ~net ~port ~meth ~path ?(headers = []) ?body () : response =
      done
    with End_of_file -> ());
   { status; headers; body = Buffer.contents body_buf }
-
-let get ~net ~port ?(headers = []) path = request ~net ~port ~meth:"GET" ~path ~headers ()
-let post ~net ~port ?(headers = []) ?(body = "") path = request ~net ~port ~meth:"POST" ~path ~headers ~body ()
-let put ~net ~port ?(headers = []) ?(body = "") path = request ~net ~port ~meth:"PUT" ~path ~headers ~body ()
-let delete ~net ~port ?(headers = []) path = request ~net ~port ~meth:"DELETE" ~path ~headers ()
-let head ~net ~port ?(headers = []) path = request ~net ~port ~meth:"HEAD" ~path ~headers ()

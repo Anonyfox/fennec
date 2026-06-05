@@ -51,21 +51,21 @@
   js_of_ocaml
   js_of_ocaml-ppx))
 
-; The real-browser e2e testing driver (Fennec_hunt). A DEV/TEST tool, kept in its OWN
-; package so the runtime `fennec` — and therefore every production server that links it —
-; never carries the e2e/CDP machinery or its yojson dependency. It is a standalone Eio
-; library (no dependency on the framework): a hand-written WebSocket + Chrome DevTools
-; Protocol client, an auto-waiting page DSL, an in-memory fake backend for unit tests, and
-; a cross-platform reporter. No npm, no Lwt, no chromedriver — only a Chromium-family
-; browser at runtime. (The prod-lean guarantee is enforced by a runtest tripwire in the
-; site example: examples/site/check_lean.ml.)
+; The testing package (Fennec_hunt). A DEV/TEST tool, kept in its OWN package so the runtime
+; `fennec` — and every production server that links it — never carries the test machinery or
+; its yojson dependency. Two independent layers, standalone (no dependency on the framework):
+; an Http layer (a typed HTTP/1.1 client + deterministic assertions over any URL) and a
+; Browser layer (a hand-written WebSocket + Chrome DevTools Protocol client, an auto-waiting
+; page DSL, an in-memory fake backend for unit tests, a cross-platform reporter). No npm, no
+; Lwt, no chromedriver, no cohttp — only a Chromium-family browser at runtime, for the Browser
+; layer. (The prod-lean guarantee is enforced by a runtest tripwire: examples/site/check_lean.ml.)
 (package
  (name fennec-hunt)
- (synopsis "Real-browser end-to-end testing for Fennec — pure OCaml/Eio over the Chrome DevTools Protocol")
+ (synopsis "HTTP + real-browser testing for OCaml web apps — pure OCaml/Eio, no Node or Selenium")
  (description
-  "A self-contained headless-browser e2e driver for Fennec apps: a hand-written WebSocket\nand Chrome DevTools Protocol client on Eio, an auto-waiting page DSL with rich failure\ndiagnostics, a deterministic in-memory fake backend (so the DSL/runner are unit-tested\nwithout a browser), and a terminal reporter that adapts from a TTY to a CI log. No Node,\nno chromedriver, no Selenium, no Lwt — only a Chromium-family browser at runtime. Shipped\nas a separate package so production servers never link it.")
+  "A two-layer testing library for OCaml web apps, with no dependency on any framework. The\nHttp layer is a typed HTTP/1.1 client (hand-written on Eio sockets, no cohttp) with\ndeterministic assertions over any URL — status, body, headers, JSON-by-path, cookies,\nredirects, timing — plus an automatic per-test cookie jar. The Browser layer drives a real\nheadless Chromium via a hand-written Chrome DevTools Protocol client: an auto-waiting page\nDSL, rich self-explaining failures, a deterministic in-memory fake backend (so the DSL is\nunit-tested without a browser), and a terminal reporter that adapts from a TTY to a CI log.\nNo Node, no chromedriver, no Selenium, no Lwt. Shipped separately so production servers never link it.")
  (tags
-  ("testing" "e2e" "browser" "chrome" "devtools-protocol" "eio"))
+  ("testing" "http" "integration" "e2e" "browser" "chrome" "devtools-protocol" "eio"))
  (depends
   ; Eio is direct-style effects, so OCaml 5+ is required (not 4.14).
   (ocaml

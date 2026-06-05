@@ -1,22 +1,23 @@
 ; fennec-hunt — the testing package. The fennec hunts for bugs. Two layers:
 ;
-;   Http tests: typed HTTP client + server lifecycle + pipe-shaped assertions.
-;               For "does my API return 401?" and "does the dev server survive SIGKILL?"
+;   Http tests (Fennec_hunt.Http): a typed HTTP/1.1 client + deterministic assertions over
+;     any URL. hunt/check blocks, get/post/…, status/body/header/json/cookie assertions.
+;     For "does my API return 401?" and "does host routing work?"
 ;
-;   Browser tests: a real Chrome over CDP — hand-written WebSocket + DevTools Protocol,
-;                  a pipe-shaped page DSL, auto-waiting conditions, rich failure diagnostics.
-;                  For "does the counter hydrate?" and "does livereload work visually?"
+;   Browser tests (Fennec_hunt.Live + Run): a real Chrome over CDP — hand-written WebSocket
+;     + DevTools Protocol, an auto-waiting page DSL, rich failure diagnostics.
+;     For "does the counter hydrate?" and "does the page render correctly?"
 ;
-; One package, layered. Import what you need. The Browser layer reuses the Http layer's
-; server lifecycle. Its OWN opam package (fennec-hunt) — production servers never link it.
+; One package, two independent layers — import what you need. Its OWN opam package
+; (fennec-hunt), so production servers depending on `fennec` never link it.
 ;
-; The Browser orchestration is written against an abstract page BACKEND, so the DSL/runner
-; are unit-tested against an in-memory fake; only the thin Cdp backend touches a real browser.
+; The Browser DSL is written against an abstract page BACKEND, so the DSL/runner are
+; unit-tested against an in-memory fake; only the thin Cdp backend touches a real browser.
 (library
  (name fennec_hunt)
  (public_name fennec-hunt)
  (libraries eio eio.unix eio_main unix yojson base64 re re.pcre)
- (private_modules cdp cdp_backend chrome conformance fennec_hunt_util http_client test_server expect)
+ (private_modules cdp cdp_backend chrome conformance fennec_hunt_util http_client)
  (modes byte native))
 
 ; the package landing page for odoc (`dune build @doc`)
