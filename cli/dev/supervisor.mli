@@ -12,4 +12,4 @@
 (** Watch [targets] with [dune build --watch], supervise the server executable [exe], and serve
     livereload from the [assets] subdirectory of the exe's build dir. Blocks until killed
     (SIGINT/SIGTERM clean up the children). *)
-val run : targets:string list -> exe:string -> assets:string -> unit
+val run : ?port:int -> targets:string list -> exe:string -> assets:string -> unit

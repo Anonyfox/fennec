@@ -314,7 +314,15 @@ let dev_cmd =
     in
     Arg.(value & flag & info [ "clean" ] ~doc)
   in
-  let go target exe assets dry clean =
+  let port_arg =
+    let doc =
+      "Base port for the dev server (default 8020). The host-routed gateway listens here and each \
+       non-default endpoint gets the next port up. A distinct $(b,--port) runs a fully isolated \
+       instance — useful for parallel worktrees/agents — since it shifts the whole port block."
+    in
+    Arg.(value & opt (some int) None & info [ "port" ] ~docv:"PORT" ~doc)
+  in
+  let go target exe assets dry clean port =
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -356,7 +364,7 @@ let dev_cmd =
            discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
            needed, but it's CORRECT: @@default includes the web root, so frontend livereload still
            works. Pass --target to scope it. (Supervisor.run blocks until killed; 0 is for the type.) *)
-        Fennec_dev.Supervisor.run ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
+        Fennec_dev.Supervisor.run ?port ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
         0
       | None -> (
         match Discover.find () with
@@ -366,7 +374,7 @@ let dev_cmd =
         | Ok d ->
           (* Supervisor expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
-          Fennec_dev.Supervisor.run ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
+          Fennec_dev.Supervisor.run ?port ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
           0)
     end
   in
@@ -392,9 +400,10 @@ let dev_cmd =
       `S Manpage.s_examples;
       `Pre "  fennec dev                 # discover the server and run it";
       `Pre "  fennec dev --dry-run       # show what would run";
+      `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
-  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg)
+  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg)
 
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =

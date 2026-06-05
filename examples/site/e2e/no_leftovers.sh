@@ -14,13 +14,13 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$ROOT"
-PORT=8200
+PORT=8020
 fail() { echo "FAIL: $1"; cleanup; exit 1; }
 cleanup() { pkill -9 -f "fennec dev" 2>/dev/null || true; pkill -9 -f "dune build --watch" 2>/dev/null || true; pkill -9 -f "ocamlrun.*server" 2>/dev/null || true; }
 trap cleanup EXIT
 port_held() { lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; }
 n_supervisors() { pgrep -f "fennec dev" 2>/dev/null | wc -l | tr -d ' '; }
-wait_serving() { i=0; while ! grep -q "localhost:8200" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
+wait_serving() { i=0; while ! grep -q "localhost:8020" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
 
 echo "clean slate…"; cleanup; sleep 2; port_held && fail "port $PORT held before we even start" || true
 dune build examples/site/server.bc examples/site/webroot >/dev/null 2>&1; pkill -9 -f "dune build --watch" 2>/dev/null || true; sleep 1

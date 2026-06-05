@@ -25,7 +25,7 @@ echo "warming…"; dune build examples/site/server.bc examples/site/webroot >/de
 pkill -9 -f "dune build --watch" 2>/dev/null || true; sleep 1
 
 ( cd examples/site && exec fennec dev ) >"$LOG" 2>&1 & DEV=$!
-i=0; while ! grep -q "localhost:8200" "$LOG" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done
+i=0; while ! grep -q "localhost:8020" "$LOG" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done
 sleep 1
 
 echo "1) provoke a syntax error (remove a delimiter)…"

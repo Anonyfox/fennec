@@ -27,9 +27,9 @@ pkill -9 -f "dune build --watch" 2>/dev/null || true; sleep 1
 echo "1) a plain start leaves _build alone…"
 touch "$SENT"
 ( cd examples/site && exec fennec dev ) >/tmp/heal_1.log 2>&1 & DEV=$!
-i=0; while ! grep -q "localhost:8200" /tmp/heal_1.log 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done
+i=0; while ! grep -q "localhost:8020" /tmp/heal_1.log 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done
 [ -f "$SENT" ] || fail "a plain start wrongly cleaned _build"
-curl -s http://localhost:8200/ | grep -q "Welcome to the Fennec site" || fail "plain start didn't serve"
+curl -s http://localhost:8020/ | grep -q "Welcome to the Fennec site" || fail "plain start didn't serve"
 kill -INT "$DEV" 2>/dev/null || true; DEV=""; sleep 2; pkill -9 -f "dune build --watch" 2>/dev/null || true
 
 echo "2) --clean runs a full dune clean before starting…"

@@ -18,8 +18,8 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$ROOT"
-PAGE=http://localhost:8200/
-BUNDLE=http://localhost:8200/_apps/web/main.js
+PAGE=http://localhost:8020/
+BUNDLE=http://localhost:8020/_apps/web/main.js
 SRC=examples/site/frontend/apps/web/index.mlx
 MARK="LIVERELOAD_$(date +%s)"
 D1="" ; D2=""
@@ -37,7 +37,7 @@ echo "warming the dev build…"
 dune build examples/site/server.bc examples/site/webroot >/dev/null 2>&1
 pkill -9 -f "dune build --watch" 2>/dev/null || true; sleep 1
 
-up() { i=0; while ! grep -q "localhost:8200" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
+up() { i=0; while ! grep -q "localhost:8020" "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 80 ] && fail "server did not come up"; sleep 0.5; done; }
 
 echo "starting instance 1…"
 ( cd examples/site && exec fennec dev ) >/tmp/fennec_lr_1.log 2>&1 & D1=$!
@@ -62,7 +62,9 @@ curl -sI "$BUNDLE" | grep -qi 'cache-control: *no-cache' || fail "client bundle 
 echo "4) edit propagation — SSR and the client bundle must both pick up an edit…"
 sed -i.bak "s/Welcome to the Fennec site/$MARK/" "$SRC" && rm -f "$SRC.bak"
 i=0; while ! curl -s "$BUNDLE" | grep -q "$MARK"; do i=$((i+1)); [ $i -gt 40 ] && fail "client bundle never picked up the edit (stale hydration)"; sleep 0.5; done
-curl -s "$PAGE" | grep -q "$MARK" || fail "SSR never picked up the edit"
+# the SSR comes from a server RESTART (relinked server.bc), which can lag the bundle file landing in
+# the webroot by a beat — so poll for it too, rather than assume bundle + SSR flip in lockstep
+i=0; while ! curl -s "$PAGE" | grep -q "$MARK"; do i=$((i+1)); [ $i -gt 40 ] && fail "SSR never picked up the edit"; sleep 0.5; done
 
 # revert WHILE fennec dev is alive, so the running dune --watch re-syncs and leaves no stale
 # _build (reverting after kill, e.g. via `git checkout`, is NOT seen by dune and freezes the

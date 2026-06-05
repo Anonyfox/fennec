@@ -67,7 +67,7 @@ let ping control_path frame =
         ignore (Unix.write_substring fd msg 0 (String.length msg)))
   with _ -> ()
 
-let run ~targets ~exe ~assets =
+let run ?port ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
@@ -93,10 +93,14 @@ let run ~targets ~exe ~assets =
      SIGKILL), so it can never be left holding the dev port. FENNEC_DEV_UI asks the server to
      report its dev URLs (a [fennec:urls] line) so the supervisor owns the clickable URL. *)
   let dev_env =
-    [| Dev_proto.env_mode ^ "=development";
-       Dev_proto.env_livereload ^ "=" ^ control_path;
-       Dev_proto.env_dev_parent ^ "=" ^ string_of_int (Unix.getpid ());
-       Dev_proto.env_dev_ui ^ "=1" |]
+    let base =
+      [| Dev_proto.env_mode ^ "=development";
+         Dev_proto.env_livereload ^ "=" ^ control_path;
+         Dev_proto.env_dev_parent ^ "=" ^ string_of_int (Unix.getpid ());
+         Dev_proto.env_dev_ui ^ "=1" |]
+    in
+    (* --port sets the base port (FENNEC_PORT); omitted → the server defaults to 8020 *)
+    match port with Some p -> Array.append base [| Dev_proto.env_port ^ "=" ^ string_of_int p |] | None -> base
   in
   let server = ref Down in
   (* [last_build_ms] is the MOST RECENT build's duration (shown in the ready banner) — a
