@@ -351,7 +351,11 @@ let dev_cmd =
       if clean then (Printf.printf "fennec dev: dune clean (full rebuild)…\n%!"; ignore (Sys.command "dune clean >/dev/null 2>&1"));
       match exe with
       | Some exe_path ->
-        (* Supervisor.run blocks until killed; the 0 is unreachable, only there for the type *)
+        (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
+           server's precise build targets. With no --target we watch [@@default] — broader than the
+           discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
+           needed, but it's CORRECT: @@default includes the web root, so frontend livereload still
+           works. Pass --target to scope it. (Supervisor.run blocks until killed; 0 is for the type.) *)
         Fennec_dev.Supervisor.run ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
         0
       | None -> (

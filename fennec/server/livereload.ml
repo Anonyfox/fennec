@@ -26,8 +26,12 @@ let create () = { clients = Hashtbl.create 16; next = 0 }
    a restart, so the client can tell "reconnected to the same server" (a blip — don't reload)
    from "the server was replaced" (a real backend rebuild — reload once). pid ALONE is not enough
    — the OS recycles pids, so a restart could land on the same number and the client would miss
-   the reload; pairing it with the start time makes a genuine collision impossible. *)
-let boot_id = Printf.sprintf "%d-%d" (Unix.getpid ()) (int_of_float (Unix.gettimeofday () *. 1000.))
+   the reload. We pair it with the start time AND a random nonce (from a local PRNG, so the global
+   Random state is untouched), so two boots can't collide even on a recycled pid within the same
+   millisecond. *)
+let boot_id =
+  let nonce = Random.State.bits (Random.State.make_self_init ()) in
+  Printf.sprintf "%d-%d-%d" (Unix.getpid ()) (int_of_float (Unix.gettimeofday () *. 1000.)) nonce
 
 (* register a browser's livereload socket; returns an unregister thunk. We greet the client
    with our boot id so it only reloads on a genuine restart, not on every reconnect. *)

@@ -32,7 +32,10 @@ second source watcher. This is what keeps the parts decoupled.
 
 1. **CLI → dune**: a standard `dune build --watch <target>` invocation. No custom protocol.
 2. **dune → CLI**: asset rules call `%{bin:fennec} build …`. Outputs are ordinary dune targets.
-3. **CLI → app**: process lifecycle (spawn / signal / wait) + dev config via env (`FENNEC_ENV`, and `FENNEC_LIVERELOAD` = a unix-socket path). On a frontend edit the CLI sends one line (`css`/`reload`) to that dev-only loopback socket; the app relays it to browsers. That one line is the whole protocol.
+3. **CLI ↔ app**: process lifecycle (spawn / signal / wait) + a small wire defined in ONE place — `Fennec_core.Dev_proto`, referenced by both sides (constants + typed (de)serializers, round-tripped in tests) so it can't drift silently:
+   - **CLI → app, via env**: `FENNEC_ENV`; `FENNEC_LIVERELOAD` (a dev-only loopback socket path); `FENNEC_DEV_PARENT` (the supervisor's pid — the server self-exits when orphaned); `FENNEC_DEV_UI`; `FENNEC_ESBUILD_WORKER`.
+   - **CLI → app, on a frontend edit**: one line (`css`/`reload`) to the `FENNEC_LIVERELOAD` socket; the app relays it to browsers.
+   - **app → CLI, on stderr**: a dev-URL report (`[fennec:urls] …`, parsed for the banner) and a port-conflict line paired with a distinct exit code, so the CLI self-heals a held port instead of crash-looping.
 4. **app ↔ browser**: the framework's livereload websocket (`/_fennec/livereload`) + an injected client script. Framework's concern entirely.
 5. **Shared state across all of them**: the `_build` output dir + the port. That's it.
 
@@ -120,11 +123,18 @@ mode, so a prod build ships none of it.
   (dev≈prod fidelity). OCaml's sub-second rebuild + the browser's reconnect poll
   make restart downtime invisible. We accept it over a proxy that would diverge
   from prod.
-- **Diagnostics / error overlay: DEFERRED (explicitly).** Basic livereload needs
-  zero dune RPC. A browser error overlay (showing a compile error instead of a
-  stale page) needs dune's *diagnostics* stream. We will adopt **`dune rpc`** for
-  that when its surface is stable enough — NOT by parsing dune output (that would
-  violate the principle). Marked here so it isn't forgotten. **← TODO: diagnostics.**
+- **Terminal diagnostics: we parse dune's stderr (deliberate change of stance).**
+  The original decision was to take diagnostics ONLY from a future `dune rpc`, never
+  by parsing dune's human output. In practice the CLI now parses `dune build --watch`'s
+  stderr for both build *status* (the settle/error grammar, in `Fennec_dev.Dune_watch`)
+  and a *terminal* code-frame (`Fennec_dev.Diagnostics`). This is pragmatic and well-
+  tested, and degrades gracefully — an unrecognised format falls back to showing the raw
+  text rather than losing it. Adopting `dune rpc` now would add a dependency on a surface
+  that still isn't stable, for no terminal-UX gain. Updating the record here deliberately
+  (per the meta-rule above), rather than letting code and doc disagree.
+- **Browser error overlay: still DEFERRED.** Showing a compile error *in the page*
+  (instead of a stale render) is the one piece that would still benefit from `dune rpc`'s
+  structured stream; not built yet. **← TODO: browser overlay.**
 
 ## The web root: bundles + `public/`, one tree
 

@@ -38,6 +38,10 @@ let red t s = c t "31" s
 
 let count_lines s = String.fold_left (fun n ch -> if ch = '\n' then n + 1 else n) 0 s
 
+(* the trigger-label column width: event lines pad the trigger to this so the timing column lines
+   up, and [fmt_trigger] trims the label to fit the terminal minus this gutter *)
+let trigger_col = 28
+
 (* trigger files → a short "first/path +N" label, with the long head trimmed from the left so the
    filename always survives *)
 let fmt_trigger (caps : Tty.t) trig =
@@ -46,7 +50,7 @@ let fmt_trigger (caps : Tty.t) trig =
   | [] -> "filesystem change"
   | first :: rest ->
     let head = strip first in
-    let budget = max 16 (caps.width - 28) in
+    let budget = max 16 (caps.width - trigger_col) in
     let head = if String.length head > budget then "…" ^ String.sub head (String.length head - budget + 1) (budget - 1) else head in
     if rest = [] then head else Printf.sprintf "%s +%d" head (List.length rest)
 
@@ -144,7 +148,7 @@ let event t glyph color trigger ms verb =
   let g = color t glyph in
   let trg = fmt_trigger t.caps trigger in
   (* pad trigger so the timing column lines up *)
-  let pad = max 0 (28 - Tty.visible_width trg) in
+  let pad = max 0 (trigger_col - Tty.visible_width trg) in
   let line = Printf.sprintf "  %s  %s%s  %s  %s" g trg (String.make pad ' ') (dim t (Printf.sprintf "%6s" (fmt_ms ms))) (dim t verb) in
   log t line
 
@@ -167,7 +171,7 @@ let resolved t ~ms =
   if t.problems <> [] || t.raw <> "" then begin
     t.problems <- [];
     t.raw <- "";
-    let pad = String.make (max 0 (28 - 8)) ' ' (* "resolved" is 8 cols *) in
+    let pad = String.make (max 0 (trigger_col - 8)) ' ' (* "resolved" is 8 cols *) in
     log t (Printf.sprintf "  %s  resolved%s  %s" (green t "●") pad (dim t (Printf.sprintf "%6s" (fmt_ms ms))))
   end
 
