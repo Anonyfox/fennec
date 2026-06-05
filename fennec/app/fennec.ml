@@ -155,4 +155,12 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
   | Error errs ->
     Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Fennec_server.Host_router.describe_errors errs);
     exit 1
-  | Ok router -> Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env router
+  | Ok router -> (
+    match Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env router with
+    | Ok () -> ()
+    | Error (`Port_in_use port) ->
+      Printf.eprintf "%s\n%!" (Dev_proto.port_busy_line port);
+      exit Dev_proto.port_in_use_exit
+    | Error (`Bad_plan msg) ->
+      Printf.eprintf "fennec: %s\n%!" msg;
+      exit 1)

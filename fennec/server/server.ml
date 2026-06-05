@@ -427,7 +427,11 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   let entries = Host_router.entries router in
   (* base port: FENNEC_PORT, else 4000 (dev) / 80 (prod) *)
   let base = match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with Some p -> p | None -> if dev then 4000 else 80 in
-  let plan = match Port_plan.of_base ~base ~count:(List.length entries) with Ok p -> p | Error msg -> Printf.eprintf "fennec: %s\n%!" msg; exit 1 in
+  match Port_plan.of_base ~base ~count:(List.length entries) with
+  | Error msg -> Error (`Bad_plan msg)
+  | Ok plan ->
+  let exception Port_in_use of int in
+  (try
   let by_host ~(host : string) : Endpoint.t option = Host_router.route router ~host in
   (* (port, resolver) bindings: prod = one routed port; dev = the routed GATEWAY (prod-identical,
      at the base) plus ONE forced port per endpoint at base+1+i — contiguous, in declaration order,
@@ -443,11 +447,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
     (fun (port, resolve) ->
       let socket =
         try Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env) (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
-        with Unix.Unix_error (Unix.EADDRINUSE, _, _) ->
-          (* a clear message + a distinct exit code the supervisor recognizes (port busy → self-heal,
-             not a generic crash-loop) — the shared wire, see {!Fennec_core.Dev_proto} *)
-          Printf.eprintf "%s\n%!" (Fennec_core.Dev_proto.port_busy_line port);
-          exit Fennec_core.Dev_proto.port_in_use_exit
+        with Unix.Unix_error (Unix.EADDRINUSE, _, _) -> raise (Port_in_use port)
       in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
@@ -467,4 +467,6 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
      to show, since it owns the banner and knows the base. *)
   let url p = Printf.sprintf "http://localhost:%d" p in
   let named = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (e.Host_router.name, url (Port_plan.endpoint_port plan ~index:i))) entries in
-  on_listen named
+  on_listen named;
+  Ok ()
+  with Port_in_use port -> Error (`Port_in_use port))
