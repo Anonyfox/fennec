@@ -58,6 +58,10 @@ let () =
   check "code frame draws a caret" (contains s "^");
   U.resolved ui ~ms:None;
   (try Sys.remove tmp with _ -> ());
+  (* a failed FIRST build (no last-good server) must say the server isn't running *)
+  U.failed ui ~raw:sample ~trigger:[] ~serving:false;
+  check "with no server the panel says 'server not running'" (contains (take ()) "server not running");
+  U.resolved ui ~ms:None;
 
   print_endline "Ui (interactive — live region):";
   let ibuf = Buffer.create 512 in

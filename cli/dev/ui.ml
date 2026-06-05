@@ -73,7 +73,10 @@ let code_frame t ~file ~line ~col : string list =
       let n = Array.length arr in
       if line > n then []
       else begin
-        let lo = max 1 (line - 2) and hi = min n (line + 2) in
+        (* favour lines BEFORE the marked line: a syntax error's real cause (an unterminated
+           string, an unmatched open delimiter) is almost always above dune's confusion point, so
+           more upward context makes it visible even when the caret lands downstream *)
+        let lo = max 1 (line - 4) and hi = min n (line + 2) in
         let gutw = String.length (string_of_int hi) in
         let acc = ref [] in
         for ln = lo to hi do
@@ -101,7 +104,9 @@ let render_region t : string =
       let parts = (if errors > 0 then [ Printf.sprintf "%d error%s" errors (if errors = 1 then "" else "s") ] else [])
         @ (if warnings > 0 then [ Printf.sprintf "%d warning%s" warnings (if warnings = 1 then "" else "s") ] else []) in
       let summary = if parts = [] then "build failed" else "build failed · " ^ String.concat " · " parts in
-      summary ^ if t.serving then dim t " · last good build still serving" else ""
+      (* make the server state explicit: a last-good server still answers, OR (a failed first
+         build) there is NO server yet — so the dev URL / livereload won't connect until it's fixed *)
+      summary ^ dim t (if t.serving then " · last good build still serving" else " · server not running")
     in
     Buffer.add_string b (Printf.sprintf "  %s %s\n" (red t "✗") head);
     if t.problems = [] then (
