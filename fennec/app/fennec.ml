@@ -34,6 +34,11 @@ module Paw = struct
   module Csrf = Fennec_server.Csrf
 end
 
+type request_error = Fennec_server.Server.request_error =
+  | Handler_exception of exn * Http.request
+  | Handler_timeout of Http.request
+  | No_route of Http.request
+
 let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true
 
 (* Structured-concurrency helpers for handlers. A handler runs inside an Eio fiber, so it
@@ -104,7 +109,7 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) : unit =
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?on_error (endpoints : Endpoint.t list) : unit =
   if not (Atomic.compare_and_set started false true) then
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
@@ -156,7 +161,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) (endpoints : Endpoint.t list) 
     Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Fennec_server.Host_router.describe_errors errs);
     exit 1
   | Ok router -> (
-    match Fennec_server.Server.run ~timeout ~max_conns ~dev:is_dev ~on_listen:announce ~env router with
+    match Fennec_server.Server.run ~timeout ~max_conns ?on_error ~dev:is_dev ~on_listen:announce ~env router with
     | Ok () -> ()
     | Error (`Port_in_use port) ->
       Printf.eprintf "%s\n%!" (Dev_proto.port_busy_line port);

@@ -61,18 +61,18 @@ let () =
   let req = H.make_request ~meth:H.GET ~path:"/" () in
   print_endline "Server.run_handler (per-request deadline + cancellation):";
   (* a normal handler answers as usual *)
-  eq "normal handler -> 200" (status_of (S.run_handler ~clock ~timeout:1.0 (fun c -> Conn.text c "ok") req)) 200;
+  eq "normal handler -> 200" (status_of (S.run_handler ~clock ~on_error:S.default_on_error ~timeout:1.0 (fun c -> Conn.text c "ok") req)) 200;
   (* a handler that hangs is cancelled at the deadline -> 503 *)
   eq "hung handler -> 503"
-    (status_of (S.run_handler ~clock ~timeout:0.05 (fun _ -> Eio.Fiber.await_cancel ()) req)) 503;
+    (status_of (S.run_handler ~clock ~on_error:S.default_on_error ~timeout:0.05 (fun _ -> Eio.Fiber.await_cancel ()) req)) 503;
   (* a throwing handler -> 500 *)
   eq "throwing handler -> 500"
-    (status_of (S.run_handler ~clock ~timeout:1.0 (fun _ -> failwith "boom") req)) 500;
+    (status_of (S.run_handler ~clock ~on_error:S.default_on_error ~timeout:1.0 (fun _ -> failwith "boom") req)) 500;
   (* cancellation PROPAGATES to forked sub-fibers: a handler forking two 10s sleeps is
      cancelled in full and returns at the deadline, not 10s later *)
   let t0 = Eio.Time.now clock in
   let c =
-    S.run_handler ~clock ~timeout:0.05
+    S.run_handler ~clock ~on_error:S.default_on_error ~timeout:0.05
       (fun c -> Eio.Fiber.both (fun () -> Eio.Time.sleep clock 10.0) (fun () -> Eio.Time.sleep clock 10.0); c)
       req
   in

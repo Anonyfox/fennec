@@ -311,26 +311,40 @@ let write_stream w flow ~fs ~(resp : CH.response) ~keep_alive (stream : Conn.str
     Eio.Buf_write.string w "0\r\n\r\n";
     Eio.Buf_write.flush w
 
+(* ---- unified error funnel ----
+   ALL request-scoped errors flow through ONE function so the developer has a single place to
+   customize error rendering (JSON vs HTML, request IDs, branded pages). The default renders
+   plain text; the user overrides via [~on_error] on [Fennec.serve]. *)
+
+type request_error =
+  | Handler_exception of exn * CH.request
+  | Handler_timeout of CH.request
+  | No_route of CH.request
+
+let default_on_error : request_error -> CH.response = function
+  | Handler_exception (exn, _) ->
+    Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
+    CH.text ~status:500 "Internal Server Error"
+  | Handler_timeout _ -> CH.text ~status:503 "Service Unavailable"
+  | No_route _ -> CH.text ~status:404 "Not Found"
+
 (* Run a handler under a per-request deadline. On timeout, Eio CANCELS the whole handler
    fiber tree — including any sub-fibers it forked (parallel fetches) and their in-flight
-   IO — and we answer 503. A thrown exception becomes a clean 500. This is structured,
-   propagating cancellation that BEAM/Node/Go can't do for free. (It bounds the handler's
+   IO. A thrown exception is caught. Both flow to the error funnel. (It bounds the handler's
    logic; a streamed body — send_chunked/SSE — is produced afterwards, so SSE isn't cut.) *)
-let run_handler ~clock ~timeout (handler : Paw.t) (req : CH.request) : Conn.t =
+let run_handler ~clock ~timeout ~on_error (handler : Paw.t) (req : CH.request) : Conn.t =
   match
     Eio.Time.with_timeout clock timeout (fun () ->
         try Ok (Paw.run_conn handler req) with exn -> Error (`Exn exn))
   with
   | Ok conn -> conn
-  | Error `Timeout -> Conn.respond (Conn.make req) (CH.text ~status:503 "Service Unavailable")
-  | Error (`Exn exn) ->
-    Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
-    Conn.respond (Conn.make req) (CH.text ~status:500 "Internal Server Error")
+  | Error `Timeout -> Conn.respond (Conn.make req) (on_error (Handler_timeout req))
+  | Error (`Exn exn) -> Conn.respond (Conn.make req) (on_error (Handler_exception (exn, req)))
 
 (* Handle one connection. [resolve ~host] picks the endpoint for a request: in prod (and on the dev
    gateway) it routes by Host pattern; on a dev convenience port it always returns that one endpoint.
    A paw pipeline may answer with an HTTP response OR a websocket upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~(resolve : host:string -> Endpoint.t option) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : host:string -> Endpoint.t option) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -361,8 +375,8 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~(resolve : host:strin
          clean 500 (never a dropped connection / partial write). *)
       let conn =
         match endpoint with
-        | None -> Conn.respond (Conn.make req) (CH.text ~status:404 "no endpoint")
-        | Some e -> run_handler ~clock ~timeout:request_timeout (Endpoint.handler e) req
+        | None -> Conn.respond (Conn.make req) (on_error (No_route req))
+        | Some e -> run_handler ~clock ~timeout:request_timeout ~on_error (Endpoint.handler e) req
       in
       match Conn.upgrade_handler conn with
       | Some setup when is_ws_upgrade p ->
@@ -408,7 +422,7 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~(resolve : host:strin
    @param max_conns       concurrent-connection cap (default 10_000).
    @param parallelism     worker domains (per-core); auto by default, or FENNEC_PARALLELISM.
    @param on_listen       called post-bind with the (endpoint name, url) pairs for the banner. *)
-let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
+let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
   let dev = match dev with Some d -> d | None -> ( try Sys.getenv Fennec_core.Dev_proto.env_mode <> "production" with Not_found -> true) in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
@@ -451,7 +465,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
       in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
-        Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~resolve flow addr)
+        Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~resolve flow addr)
       in
       let on_error e =
         (* a client going away mid-request (reset / broken pipe / EOF) is normal (a reload abandons

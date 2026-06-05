@@ -124,6 +124,14 @@ val parallel : (unit -> 'a) list -> 'a list
 (** Run two thunks (of different types) concurrently. *)
 val both : (unit -> 'a) -> (unit -> 'b) -> 'a * 'b
 
+(** {1 Error handling} *)
+
+(** Request-scoped errors that flow through the unified error funnel. *)
+type request_error = Fennec_server.Server.request_error =
+  | Handler_exception of exn * Http.request  (** a handler or middleware raised *)
+  | Handler_timeout of Http.request  (** the per-request deadline expired *)
+  | No_route of Http.request  (** no endpoint matched the Host header (and no ["*"] default) *)
+
 (** {1 Entry point} *)
 
 (** Start the server with the given endpoints, blocking. In dev mode, livereload is
@@ -131,6 +139,15 @@ val both : (unit -> 'a) -> (unit -> 'b) -> 'a * 'b
     endpoints are selected by Host header. An invalid endpoint configuration (clashing
     domains, two catch-alls, a bad host pattern) fails loudly at boot with a clear message.
 
+    [~on_error] receives every request-scoped error and returns a response. The default
+    renders plain text (500 / 503 / 404). Override to render JSON, branded error pages, or
+    log to a structured sink — one function, one place.
+
     This is the single place that starts the server — a second call is a runtime error.
     The CLI's discovery ({!Discover}) finds this call site automatically. *)
-val serve : ?timeout:float -> ?max_conns:int -> Endpoint.t list -> unit
+val serve :
+  ?timeout:float ->
+  ?max_conns:int ->
+  ?on_error:(request_error -> Http.response) ->
+  Endpoint.t list ->
+  unit
