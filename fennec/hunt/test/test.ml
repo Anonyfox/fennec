@@ -1,13 +1,13 @@
-(* Unit tests for fennec-e2e's orchestration — DSL, runner, failure formatter, reporter —
+(* Unit tests for fennec-hunt's orchestration — DSL, runner, failure formatter, reporter —
    all against an in-memory fake backend (no real browser). Deterministic and millisecond-
    fast: the fake's [wait] returns immediately (Ok or a timeout Diag), so there is no real
    time except the runner's own test-timeout backstop. *)
 
-module D = Fennec_e2e.Driver.Make (Fake)
-module Failure = Fennec_e2e.Failure
-module Reporter = Fennec_e2e.Reporter
-module Diag = Fennec_e2e.Backend.Diag
-module Cond = Fennec_e2e.Backend.Cond
+module D = Fennec_hunt.Driver.Make (Fake)
+module Failure = Fennec_hunt.Failure
+module Reporter = Fennec_hunt.Reporter
+module Diag = Fennec_hunt.Backend.Diag
+module Cond = Fennec_hunt.Backend.Cond
 
 (* a local substring test (the lib's internal Cdp.contains is no longer public) *)
 let contains hay ndl =
@@ -396,14 +396,14 @@ let test_format () =
 (* ----------------------------------------------------- rerun-command derivation ---- *)
 let test_rerun () =
   print_endline "— rerun command derivation —";
-  Unix.putenv "FENNEC_E2E_RERUN" "sh examples/site/e2e/run.sh";
+  Unix.putenv "FENNEC_HUNT_RERUN" "sh examples/site/e2e/run.sh";
   let r = D.rerun_for "checkout works" in
-  check "uses FENNEC_E2E_RERUN as the prefix" (contains r "sh examples/site/e2e/run.sh");
+  check "uses FENNEC_HUNT_RERUN as the prefix" (contains r "sh examples/site/e2e/run.sh");
   check "passes the test name via --grep" (contains r "--grep");
   check "quotes a name with spaces" (contains r "'checkout works'");
   let r = D.rerun_for "it's broken" in
   check "single-quote in a name is shell-escaped" (contains r "'it'\\''s broken'");
-  Unix.putenv "FENNEC_E2E_RERUN" "";
+  Unix.putenv "FENNEC_HUNT_RERUN" "";
   let r = D.rerun_for "x" in
   check "falls back to the executable name when env is empty" (String.length r > 0 && contains r "--grep")
 
@@ -498,10 +498,10 @@ let test_reporter () =
   with_env [ ("NO_COLOR", ""); ("FORCE_COLOR", ""); ("CLICOLOR_FORCE", ""); ("TERM", "dumb") ] (fun () ->
       let c = Reporter.detect_caps () in
       check "caps: TERM=dumb disables colour and unicode and status" (not c.color && not c.unicode && not c.status));
-  with_env [ ("TERM", "xterm-256color"); ("FENNEC_E2E_ASCII", ""); ("LC_ALL", ""); ("LC_CTYPE", ""); ("LANG", "en_US.UTF-8") ]
+  with_env [ ("TERM", "xterm-256color"); ("FENNEC_HUNT_ASCII", ""); ("LC_ALL", ""); ("LC_CTYPE", ""); ("LANG", "en_US.UTF-8") ]
     (fun () -> check "caps: a UTF-8 locale enables unicode" (Reporter.detect_caps ()).Reporter.unicode);
-  with_env [ ("TERM", "xterm"); ("LANG", "en_US.UTF-8"); ("FENNEC_E2E_ASCII", "1") ] (fun () ->
-      check "caps: FENNEC_E2E_ASCII forces ASCII" (not (Reporter.detect_caps ()).Reporter.unicode));
+  with_env [ ("TERM", "xterm"); ("LANG", "en_US.UTF-8"); ("FENNEC_HUNT_ASCII", "1") ] (fun () ->
+      check "caps: FENNEC_HUNT_ASCII forces ASCII" (not (Reporter.detect_caps ()).Reporter.unicode));
   with_env [ ("COLUMNS", "120") ] (fun () -> check "caps: COLUMNS sets width" ((Reporter.detect_caps ()).Reporter.width = 120));
   with_env [ ("COLUMNS", "10") ] (fun () -> check "caps: absurdly small COLUMNS floored to 80" ((Reporter.detect_caps ()).Reporter.width = 80));
 

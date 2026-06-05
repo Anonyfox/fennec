@@ -5,7 +5,7 @@
 
    The harness sets base_url to the web app (http://localhost:4001); a leading-'/' path is
    resolved against it, an absolute URL (the admin app) is used as-is. *)
-open Fennec_e2e.Live
+open Fennec_hunt.Live
 
 (* referenced by run.ml so this module (and thus its test registrations below) is linked *)
 let load = ()

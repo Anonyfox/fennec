@@ -121,12 +121,12 @@ module Make (B : Backend.S) = struct
   let default_config =
     { jobs = 1; retries = 0; bail = false; grep = None; base_url = ""; step_timeout = 5.0; test_timeout = 30.0 }
 
-  (* how to re-run just this test, copy-pasteable. Prefix from FENNEC_E2E_RERUN (wrappers set
+  (* how to re-run just this test, copy-pasteable. Prefix from FENNEC_HUNT_RERUN (wrappers set
      it, e.g. "sh examples/site/e2e/run.sh") else the executable name; the test name is
      single-quote-escaped so spaces/specials survive a shell. *)
   let shell_quote s = "'" ^ String.concat "'\\''" (String.split_on_char '\'' s) ^ "'"
   let rerun_for name =
-    let prefix = match Sys.getenv_opt "FENNEC_E2E_RERUN" with Some p when p <> "" -> p | _ -> Filename.basename Sys.executable_name in
+    let prefix = match Sys.getenv_opt "FENNEC_HUNT_RERUN" with Some p when p <> "" -> p | _ -> Filename.basename Sys.executable_name in
     Printf.sprintf "%s --grep %s" prefix (shell_quote name)
 
   (* one attempt: returns (failure kind option, trace). [provision] only has to run the body

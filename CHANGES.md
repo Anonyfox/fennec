@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### fennec-e2e
+### fennec-hunt
 
 - Initial release: a self-contained real-browser end-to-end testing library — a hand-written
   WebSocket + Chrome DevTools Protocol client on Eio, an auto-waiting page DSL, a

@@ -1,21 +1,21 @@
 (* PROD-LEAN GUARANTEE (enforced).
 
    A production server links the runtime framework (Fennec) but must NEVER link the
-   real-browser e2e/CDP test machinery (the separate `fennec-e2e` package) or its yojson
+   real-browser e2e/CDP test machinery (the separate `fennec-hunt` package) or its yojson
    dependency. That weight belongs in dev/test only. The separation is already structural —
-   `server.exe` depends on `fennec`, which has no path to `fennec-e2e` — but "structural"
+   `server.exe` depends on `fennec`, which has no path to `fennec-hunt` — but "structural"
    silently regresses the day someone adds the wrong library to a server's deps, or a
    runtime module grows a dependency on it. This guard turns the invariant into a test.
 
    Mechanism: a native OCaml executable embeds each of its linked modules' names in the
-   binary (verified: the e2e-linked `run.exe` contains "Fennec_e2e"/"Yojson" ~18×; the
+   binary (verified: the e2e-linked `run.exe` contains "Fennec_hunt"/"Yojson" ~18×; the
    clean `server.exe` contains them 0×). So we read the built server binary and assert none
    of the forbidden module-name needles appear. Pure OCaml — no nm, no objdump, no shell,
    no platform-specific tooling — so it runs anywhere `dune runtest` does. *)
 
 (* the module-name prefixes that may ONLY appear in a dev/test binary, never in prod:
-   every e2e module is wrapped under [Fennec_e2e], and yojson is its (transitive) JSON dep *)
-let forbidden = [ "Fennec_e2e"; "Yojson" ]
+   every e2e module is wrapped under [Fennec_hunt], and yojson is its (transitive) JSON dep *)
+let forbidden = [ "Fennec_hunt"; "Yojson" ]
 
 (* allocation-free substring search (the haystack is a multi-MB binary) *)
 let contains hay ndl =
@@ -45,7 +45,7 @@ let () =
   | leaked ->
     Printf.eprintf
       "prod-lean FAIL: %s links forbidden dev/test machinery: %s\n\
-      \  the production server must not carry the fennec-e2e / CDP / yojson weight.\n\
-      \  check that no server depends on `fennec-e2e` (directly or transitively).\n"
+      \  the production server must not carry the fennec-hunt / CDP / yojson weight.\n\
+      \  check that no server depends on `fennec-hunt` (directly or transitively).\n"
       path (String.concat ", " leaked);
     exit 1

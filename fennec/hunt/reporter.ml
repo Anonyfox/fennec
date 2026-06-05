@@ -44,7 +44,7 @@ let detect_caps () : caps =
     else isatty && not dumb && term <> ""
   in
   let unicode =
-    if truthy (getenv "FENNEC_E2E_ASCII") then false
+    if truthy (getenv "FENNEC_HUNT_ASCII") then false
     else if dumb then false
     else
       let loc =

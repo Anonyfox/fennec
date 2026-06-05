@@ -1,4 +1,4 @@
-# fennec-e2e
+# fennec-hunt
 
 Real-browser end-to-end testing for OCaml, in pure OCaml. A hand-written WebSocket +
 Chrome DevTools Protocol client drives a headless Chromium directly — **no Node, no
@@ -6,7 +6,7 @@ chromedriver, no Selenium, no Lwt**. You install a Chromium-family browser; ever
 is one OCaml library.
 
 ```ocaml
-open Fennec_e2e.Live
+open Fennec_hunt.Live
 
 let () = test "adds an item to the cart" @@ fun page ->
   page
@@ -16,7 +16,7 @@ let () = test "adds an item to the cart" @@ fun page ->
   |> expect_visible ".cart .line-item"
   |> ignore
 
-let () = Fennec_e2e.Run.main_cli ~base_url:"http://localhost:8080" ()
+let () = Fennec_hunt.Run.main_cli ~base_url:"http://localhost:8080" ()
 ```
 
 A step blocks until its condition holds or it times out — you never write an explicit wait.
@@ -42,7 +42,7 @@ the page's real state, and tells you how to re-run just that test.
 ## Run
 
 ```sh
-fennec-e2e-suite --grep "cart" --jobs 4 --reporter pretty   # your runner exe
+fennec-hunt-suite --grep "cart" --jobs 4 --reporter pretty   # your runner exe
 ```
 
 Flags: `--grep`, `--bail`, `--jobs N`, `--retries N`, `--headed`, `--timeout S`,
@@ -57,5 +57,5 @@ any Chromium-family browser with `CHROME=/path/to/chrome`.
   web server. It is a separate package precisely so a production server never links the
   test/CDP machinery.
 
-See the [API docs](https://anonyfox.github.io/fennec) (`Fennec_e2e.Live`, `…Run`,
+See the [API docs](https://anonyfox.github.io/fennec) (`Fennec_hunt.Live`, `…Run`,
 `…Backend`, `…Driver`, `…Reporter`, `…Failure`). MIT licensed.

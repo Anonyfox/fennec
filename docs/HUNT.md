@@ -1,6 +1,6 @@
 # fennec_hunt — the testing package
 
-Rename `fennec_e2e` → `fennec_hunt`. The fennec hunts for bugs. Two layers:
+Rename `fennec_hunt` → `fennec_hunt`. The fennec hunts for bugs. Two layers:
 
 - **Http tests** — hit a running server as a black box. Process lifecycle + typed HTTP
   client + assertions. No browser. For: "does my API return 401?", "does the dev server
@@ -48,14 +48,14 @@ fennec_hunt/
 
 ## The rename
 
-| Before (`fennec_e2e`) | After (`fennec_hunt`) | Change |
+| Before (`fennec_hunt`) | After (`fennec_hunt`) | Change |
 |---|---|---|
-| `Fennec_e2e.Run` | `Fennec_hunt.Runner` | rename + split: server spawn moves to `Server` |
-| `Fennec_e2e.Live` | `Fennec_hunt.Page` (or `Browser`) | rename; the page DSL |
-| `Fennec_e2e.Reporter` | `Fennec_hunt.Runner` (merged) | or stays separate |
-| `Fennec_e2e.Failure` | `Fennec_hunt.Failure` | stays |
-| `Fennec_e2e.Backend` | `Fennec_hunt.Page_backend` (private or semi-public) | rename |
-| `Fennec_e2e.Driver` | absorbed into `Page` | the functor is applied, not exposed |
+| `Fennec_hunt.Run` | `Fennec_hunt.Runner` | rename + split: server spawn moves to `Server` |
+| `Fennec_hunt.Live` | `Fennec_hunt.Page` (or `Browser`) | rename; the page DSL |
+| `Fennec_hunt.Reporter` | `Fennec_hunt.Runner` (merged) | or stays separate |
+| `Fennec_hunt.Failure` | `Fennec_hunt.Failure` | stays |
+| `Fennec_hunt.Backend` | `Fennec_hunt.Page_backend` (private or semi-public) | rename |
+| `Fennec_hunt.Driver` | absorbed into `Page` | the functor is applied, not exposed |
 | chrome.ml | `Browser` (public, so users can configure headless/binary) | promote |
 | cdp.ml | stays private | — |
 | cdp_backend.ml | stays private | — |
@@ -121,7 +121,7 @@ Hunt.Assert.port_free_within ~timeout:10.0 port
 
 **Before (site.ml, Browser test — unchanged in spirit):**
 ```ocaml
-open Fennec_hunt.Page  (* was: Fennec_e2e.Live *)
+open Fennec_hunt.Page  (* was: Fennec_hunt.Live *)
 let () = test "counter hydrates" @@ fun page ->
   page |> goto "/" |> hydrated
   |> click "[data-testid=increment]"
@@ -143,10 +143,10 @@ once the OCaml versions are proven stable.
 
 ## opam / dune changes
 
-- Package: `fennec-e2e` → `fennec-hunt` (new opam file, deprecate the old)
-- Library: `fennec_e2e` → `fennec_hunt`
-- `check_lean.ml`: update the forbidden-module check from `Fennec_e2e` to `Fennec_hunt`
-- All consumer `open Fennec_e2e.Live` → `open Fennec_hunt.Page`
+- Package: `fennec-hunt` → `fennec-hunt` (new opam file, deprecate the old)
+- Library: `fennec_hunt` → `fennec_hunt`
+- `check_lean.ml`: update the forbidden-module check from `Fennec_hunt` to `Fennec_hunt`
+- All consumer `open Fennec_hunt.Live` → `open Fennec_hunt.Page`
 
 ## Dependencies
 

@@ -1,12 +1,12 @@
-(* In-memory fake implementing the new {!Fennec_e2e.Backend.S}. The model is a static
+(* In-memory fake implementing the new {!Fennec_hunt.Backend.S}. The model is a static
    world: [wait cond] checks the condition against the world RIGHT NOW and returns Ok or a
    timeout Diag — fully deterministic, no clock, no polling. (Real evented waiting over
    time is a real-browser concern, covered by the dogfood; here we prove the DSL→condition
    mapping, short-circuiting, diagnostics, and the runner.) An [on_action] hook lets a
    click/fill mutate the world, modelling "the app reacting". *)
 
-module Cond = Fennec_e2e.Backend.Cond
-module Diag = Fennec_e2e.Backend.Diag
+module Cond = Fennec_hunt.Backend.Cond
+module Diag = Fennec_hunt.Backend.Diag
 
 (* local substring test (the lib's internal Cdp.contains is not part of the public API) *)
 let contains hay ndl =
@@ -104,7 +104,7 @@ let current_url w = w.url
 let eval _ _ = ""
 
 (* compile-time proof the fake honours the exact same contract as the real backend *)
-module _ : Fennec_e2e.Backend.S = struct
+module _ : Fennec_hunt.Backend.S = struct
   type nonrec t = t
   let navigate = navigate and wait = wait and click = click and fill = fill and press = press
   and read_text = read_text and read_value = read_value and read_attr = read_attr

@@ -38,7 +38,7 @@ One root `dune-project`, several independently-publishable packages:
 | --- | --- | --- |
 | **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, and the `Fur` UI runtime | ✅ working |
 | **`fennec-cli`** | The `fennec` binary — native JS/CSS bundlers + the dev loop, one self-contained binary | ✅ working |
-| **`fennec-e2e`** | Real-browser end-to-end testing over the Chrome DevTools Protocol, pure OCaml | ✅ working |
+| **`fennec-hunt`** | Real-browser end-to-end testing over the Chrome DevTools Protocol, pure OCaml | ✅ working |
 | `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
 
 Concurrency is **Eio-only**, by design.
@@ -57,7 +57,7 @@ Concurrency is **Eio-only**, by design.
 - **`fennec build`** — bundles JS (esbuild) and compiles/optimizes CSS + SCSS (Lightning CSS + grass) from a single statically-linked binary. The native engines (Go + Rust) are linked in at release time, so end users download a prebuilt binary — no Node, no toolchain.
 - **`fennec dev`** — runs `dune build --watch` (dune is the sole source watcher) and supervises the server; a native fs-watcher reacts to build *outputs* to restart the backend or hot-swap CSS. A felt dev loop around **~0.1 s** (measured). Delete the CLI and a plain `dune build --watch` + `dune exec` still works — the decoupling is a contract, not an accident (see [`CLI-INTEROP.md`](./examples/CLI-INTEROP.md)).
 
-### `fennec-e2e` — testing
+### `fennec-hunt` — testing
 
 - A real-browser e2e driver: a hand-written WebSocket + Chrome DevTools Protocol client on Eio, an auto-waiting page DSL, a deterministic in-memory fake backend (so the DSL is unit-tested with no browser), self-explaining failure reports, and a reporter that adapts from a TTY to a CI log. No chromedriver, no Selenium. ([details](./fennec/e2e/README.md))
 

@@ -160,7 +160,7 @@ module Make (B : Backend.S) : sig
     test list ->
     report
 
-  (** The copy-pasteable command to re-run one test by name: the prefix is [FENNEC_E2E_RERUN]
+  (** The copy-pasteable command to re-run one test by name: the prefix is [FENNEC_HUNT_RERUN]
       if set (a wrapper script exports it), else the executable's basename, followed by
       [--grep <name>] with the name shell-quoted. *)
   val rerun_for : string -> string

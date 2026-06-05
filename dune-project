@@ -51,7 +51,7 @@
   js_of_ocaml
   js_of_ocaml-ppx))
 
-; The real-browser e2e testing driver (Fennec_e2e). A DEV/TEST tool, kept in its OWN
+; The real-browser e2e testing driver (Fennec_hunt). A DEV/TEST tool, kept in its OWN
 ; package so the runtime `fennec` — and therefore every production server that links it —
 ; never carries the e2e/CDP machinery or its yojson dependency. It is a standalone Eio
 ; library (no dependency on the framework): a hand-written WebSocket + Chrome DevTools
@@ -60,7 +60,7 @@
 ; browser at runtime. (The prod-lean guarantee is enforced by a runtest tripwire in the
 ; site example: examples/site/check_lean.ml.)
 (package
- (name fennec-e2e)
+ (name fennec-hunt)
  (synopsis "Real-browser end-to-end testing for Fennec — pure OCaml/Eio over the Chrome DevTools Protocol")
  (description
   "A self-contained headless-browser e2e driver for Fennec apps: a hand-written WebSocket\nand Chrome DevTools Protocol client on Eio, an auto-waiting page DSL with rich failure\ndiagnostics, a deterministic in-memory fake backend (so the DSL/runner are unit-tested\nwithout a browser), and a terminal reporter that adapts from a TTY to a CI log. No Node,\nno chromedriver, no Selenium, no Lwt — only a Chromium-family browser at runtime. Shipped\nas a separate package so production servers never link it.")
@@ -118,6 +118,6 @@
   fennec-cli
   ; the site example's real-browser e2e suite (examples/site/e2e) uses the standalone
   ; e2e driver; it brings yojson/base64 transitively. No npm, no Lwt, no chromedriver.
-  fennec-e2e
+  fennec-hunt
   (mlx
    (>= 0.11))))

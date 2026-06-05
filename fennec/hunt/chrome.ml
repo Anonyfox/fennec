@@ -84,7 +84,7 @@ let read_active_port dir =
 let launch ~sw ~net ~clock ~proc_mgr ~fs ?binary ?(headless = true) ?(call_timeout = 15.0)
     ?(extra_args = []) () : t =
   let binary = match binary with Some b -> b | None -> find_binary () in
-  let profile = Filename.temp_dir "fennec_e2e_chrome" "" in
+  let profile = Filename.temp_dir "fennec_hunt_chrome" "" in
   let devnull = Eio.Path.open_out ~sw ~create:(`If_missing 0o644) (Eio.Path.(/) fs "/dev/null") in
   let args =
     [ binary ]

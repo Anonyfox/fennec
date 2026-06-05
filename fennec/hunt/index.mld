@@ -1,4 +1,4 @@
-{0 fennec-e2e}
+{0 fennec-hunt}
 
 Real-browser end-to-end testing for OCaml, in pure OCaml. A hand-written WebSocket +
 Chrome DevTools Protocol client drives a headless Chromium directly — {b no Node, no
@@ -12,7 +12,7 @@ page looked like at that instant, why it matters, and how to re-run just that te
 {1 Quick start}
 
 {[
-open Fennec_e2e.Live
+open Fennec_hunt.Live
 
 let () = test "adds an item to the cart" @@ fun page ->
   page
@@ -24,7 +24,7 @@ let () = test "adds an item to the cart" @@ fun page ->
 
 (* boot a server, launch Chrome, run every registered test, exit non-zero on failure;
    flags: --grep, --bail, --jobs N, --headed, --timeout S, --reporter plain|pretty, … *)
-let () = Fennec_e2e.Run.main_cli ~base_url:"http://localhost:8080" ()
+let () = Fennec_hunt.Run.main_cli ~base_url:"http://localhost:8080" ()
 ]}
 
 A step like [expect_text ".cart .count" "1"] blocks until the element's text contains
@@ -42,23 +42,23 @@ failure. You never write an explicit wait.
 - {b A reporter that travels} — colour, unicode, and a live status line on a TTY; plain
   ASCII with no cursor control on a CI log or pipe. Detected automatically; airtight under
   parallelism.
-- {b A fake backend} — the DSL and runner are written against an abstract {!Fennec_e2e.Backend.S},
+- {b A fake backend} — the DSL and runner are written against an abstract {!Fennec_hunt.Backend.S},
   so they are unit-tested with no browser at all and behave identically live.
 
 {1 API}
 
 {!modules:
-  Fennec_e2e.Live
-  Fennec_e2e.Run
-  Fennec_e2e.Backend
-  Fennec_e2e.Driver
-  Fennec_e2e.Reporter
-  Fennec_e2e.Failure
+  Fennec_hunt.Live
+  Fennec_hunt.Run
+  Fennec_hunt.Backend
+  Fennec_hunt.Driver
+  Fennec_hunt.Reporter
+  Fennec_hunt.Failure
 }
 
-Most test files only need {!Fennec_e2e.Live} (the DSL, instantiated for a real browser) and
-{!Fennec_e2e.Run} (the harness). {!Fennec_e2e.Backend}, {!Fennec_e2e.Driver} (the functor),
-{!Fennec_e2e.Reporter}, and {!Fennec_e2e.Failure} are for custom backends and custom
+Most test files only need {!Fennec_hunt.Live} (the DSL, instantiated for a real browser) and
+{!Fennec_hunt.Run} (the harness). {!Fennec_hunt.Backend}, {!Fennec_hunt.Driver} (the functor),
+{!Fennec_hunt.Reporter}, and {!Fennec_hunt.Failure} are for custom backends and custom
 reporting.
 
 {1 Notes}
