@@ -14,10 +14,10 @@ happens to get the very best.
 
 ## Checklist
 
-- [ ] **E1. `Fennec.mli` — lock the public API**
-- [ ] **E2. Collapse `Endpoint.use` / `Endpoint.add`**
-- [ ] **E3. Report all `Host_router.build` errors at once**
-- [ ] **E4. `Server.run` returns a result, never calls `exit`**
+- [x] **E1. `Fennec.mli` — lock the public API** (`dc5a33c`)
+- [x] **E2. Collapse `Endpoint.use` / `Endpoint.add`** (`9fcfefa`)
+- [x] **E3. Report all `Host_router.build` errors at once** (`475b086`)
+- [x] **E4. `Server.run` returns a result, never calls `exit`** (`64f6aa7`)
 - [ ] **E5. Trie-based host router**
 - [ ] **E6. Unified error funnel**
 - [ ] **E7. Route-matched middleware phase**
