@@ -1,0 +1,136 @@
+(** Fennec — the userland facade.
+
+    Everything a server application needs in one module: request/response types ({!Http},
+    {!Cookie}), the connection carrier ({!Conn}), the paw primitive + batteries ({!Paw}),
+    named endpoints ({!Endpoint}), concurrency helpers ({!parallel}, {!both}), asset serving
+    ({!static}, {!web_source}), and the single entry point ({!serve}).
+
+    The framework's internals (dev-mode wiring, the CLI↔server protocol, livereload relay)
+    are NOT exported here — they are implementation details of {!serve}. *)
+
+(** {1 Core types} *)
+
+module Conn = Fennec_paw.Conn
+module Http = Fennec_core.Http
+module Cookie = Fennec_core.Cookie
+
+(** {1 Endpoints — named apps routed by host} *)
+
+module Endpoint = Fennec_server.Endpoint
+
+(** {1 Paw — the pipeline primitive + prebuilt batteries}
+
+    A paw is [Conn.t -> Conn.t]. Compose with {!Paw.seq}; the first to answer wins.
+    The batteries (logger, session, CSRF, …) are submodules, each a [make] returning a paw. *)
+module Paw : sig
+  type t = Conn.t -> Conn.t
+
+  val seq : t list -> t
+  val pass : t
+  val run_conn : t -> Http.request -> Conn.t
+  val run : t -> Http.request -> Http.response
+  val on : Http.meth -> string -> t -> t
+  val get : string -> t -> t
+  val post : string -> t -> t
+  val put : string -> t -> t
+  val delete : string -> t -> t
+  val patch : string -> t -> t
+  val fallthrough : (Http.request -> Http.response option) -> t
+
+  module Logger : sig
+    val make : ?sink:(string -> unit) -> unit -> t
+  end
+
+  module Security_headers : sig
+    val make : ?extra:(string * string) list -> unit -> t
+  end
+
+  module Request_id : sig
+    val make : ?header:string -> unit -> t
+  end
+
+  module Method_override : sig
+    val make : ?field:string -> ?header:string -> unit -> t
+  end
+
+  module Basic_auth : sig
+    val make : username:string -> password:string -> ?realm:string -> unit -> t
+  end
+
+  module Force_https : sig
+    val make : ?status:int -> ?hsts:int -> unit -> t
+  end
+
+  module Metrics : sig
+    val make : (meth:string -> path:string -> status:int -> duration_ms:float -> unit) -> t
+  end
+
+  module Websocket : sig
+    val make : string -> (Fennec_core.Ws_channel.t -> unit) -> t
+  end
+
+  module Static : sig
+    type source = Fennec_server.Static.source =
+      | Dir of string
+      | Embedded of string * (string -> string option)
+
+    val make : ?cache_control:string -> source -> t
+  end
+
+  module Session : sig
+    type store = Fennec_server.Session.store
+
+    val make :
+      secret:string ->
+      ?cookie:string ->
+      ?path:string ->
+      ?lifetime:float ->
+      ?same_site:Cookie.same_site ->
+      ?http_only:bool ->
+      ?secure:bool ->
+      ?store:store ->
+      unit ->
+      t
+  end
+
+  module Csrf : sig
+    val make :
+      secret:string ->
+      ?field:string ->
+      ?header:string ->
+      ?safe:string list ->
+      unit ->
+      t
+  end
+end
+
+(** {1 Helpers} *)
+
+(** [true] when [FENNEC_ENV] is absent or not ["production"]. *)
+val is_dev : bool
+
+(** A web root source: dev reads the assembled webroot dir next to the exe; prod serves the
+    embedded asset map. *)
+val web_source :
+  name:string -> assets:(string -> string option) -> Paw.Static.source
+
+(** A static-serving paw for an app's web root. In dev, assets are served [no-cache] (the
+    browser revalidates via ETag); in prod, content-aware caching applies. *)
+val static : name:string -> assets:(string -> string option) -> Paw.t
+
+(** Run thunks concurrently (Eio fibers), returning results in order. *)
+val parallel : (unit -> 'a) list -> 'a list
+
+(** Run two thunks (of different types) concurrently. *)
+val both : (unit -> 'a) -> (unit -> 'b) -> 'a * 'b
+
+(** {1 Entry point} *)
+
+(** Start the server with the given endpoints, blocking. In dev mode, livereload is
+    automatically wired (unless [FENNEC_DEV_LIVERELOAD=0]). In prod, one port is bound and
+    endpoints are selected by Host header. An invalid endpoint configuration (clashing
+    domains, two catch-alls, a bad host pattern) fails loudly at boot with a clear message.
+
+    This is the single place that starts the server — a second call is a runtime error.
+    The CLI's discovery ({!Discover}) finds this call site automatically. *)
+val serve : ?timeout:float -> ?max_conns:int -> Endpoint.t list -> unit
