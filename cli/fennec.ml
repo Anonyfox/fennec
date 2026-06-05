@@ -12,6 +12,8 @@
 
 let version = "0.0.1"
 
+module Discover = Fennec_dev.Discover (* server discovery now lives in the (tested) dev library *)
+
 (* ---- small IO helpers (stdlib only) ---- *)
 
 let read_file path =

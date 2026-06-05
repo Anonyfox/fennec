@@ -2,5 +2,5 @@
 ; classifier, bytecode-artifact readiness, the pidfile codec, asset change classification,
 ; and the restart limiter. Each is its own executable.
 (tests
- (names test_dune_watch test_artifact test_pidfile test_assets test_crash_limiter test_tty test_diagnostics test_ui test_dev_proto test_port test_server_proc)
+ (names test_dune_watch test_artifact test_pidfile test_assets test_crash_limiter test_tty test_diagnostics test_ui test_dev_proto test_port test_server_proc test_discover)
  (libraries fennec_dev fennec.core))

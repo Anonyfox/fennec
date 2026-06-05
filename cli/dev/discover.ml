@@ -204,9 +204,14 @@ let find () : (t, string) result =
         in
         match servers with
         | [] ->
+          (* this is a discovery HEURISTIC (a textual scan); a real server can be missed (e.g. it
+             calls serve through a module alias). So don't assert the user didn't call serve — say
+             what we looked for, and point at the explicit escape hatch that skips discovery. *)
           Error
             (Printf.sprintf
-               "no server entrypoint found%s — exactly one executable must call Fennec.serve"
+               "no executable that calls Fennec.serve was found%s.\n\
+                If yours does (e.g. via a module alias, or `open Fennec.App`), run it explicitly:\n\
+               \  fennec dev path/to/server.bc   (the built bytecode under _build/default/…)"
                (if scope = "" then "" else " under " ^ scope))
         | [ (name, src_dir) ] ->
           (* the BYTECODE exe: bytecode keeps dev cycles fast (no native codegen / C relinking
