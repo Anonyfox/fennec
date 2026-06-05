@@ -13,7 +13,7 @@ module P = Host_pattern
 type 'ep entry = { name : string; patterns : P.t list; ep : 'ep }
 
 type 'ep t = {
-  specific : (P.t * 'ep) list; (* non-Any patterns, sorted most-specific first *)
+  trie : 'ep Host_trie.t; (* O(1) exact / O(depth) suffix matching — replaces the linear scan *)
   default : 'ep option; (* the single "*" owner's payload, if any *)
   entries : 'ep entry list; (* as DECLARED (declaration order) — for dev port allocation + banner *)
 }
@@ -71,17 +71,13 @@ let build (inputs : (string * string list * 'ep) list) : ('ep t, error list) res
   match List.rev !errs with
   | _ :: _ as all_errs -> Error all_errs
   | [] ->
-    let owned = List.concat_map (fun e -> List.filter_map (fun p -> if p = P.Any then None else Some (p, e)) e.patterns) entries in
-    let specific =
-      owned
-      |> List.map (fun (p, e) -> (p, e.ep))
-      |> List.stable_sort (fun (a, _) (b, _) -> compare (P.specificity b) (P.specificity a))
-    in
+    let all_patterns = List.concat_map (fun e -> List.filter_map (fun p -> if p = P.Any then None else Some (p, e.ep)) e.patterns) entries in
+    let trie = Host_trie.build all_patterns in
     let default = List.find_map (fun e -> if List.mem P.Any e.patterns then Some e.ep else None) entries in
-    Ok { specific; default; entries }
+    Ok { trie; default; entries }
 
 let route (t : 'ep t) ~(host : string) : 'ep option =
-  match List.find_opt (fun (p, _) -> P.matches p ~host) t.specific with Some (_, ep) -> Some ep | None -> t.default
+  match Host_trie.lookup t.trie ~host with Some _ as hit -> hit | None -> t.default
 
 let entries (t : 'ep t) = t.entries
 
