@@ -96,6 +96,23 @@ Http test files need only {!Fennec_hunt.Http}. Browser test files need {!Fennec_
 {!Fennec_hunt.Driver} (the functor), {!Fennec_hunt.Reporter}, and {!Fennec_hunt.Failure}
 are for custom backends and custom reporting.
 
+{1 Operating the machinery}
+
+Both layers share one server-lifecycle model:
+
+- {b A target is a URL.} The host and port are parsed from [~url]; the client connects to
+  that host (DNS-resolved), so a target can be local or remote. The client is plain HTTP/1.1
+  — [https://] is rejected with a clear message.
+- {b Spawn or attach.} With a spawn command the harness starts it, waits for the URL to accept
+  connections (event-driven, up to [~timeout]), and kills it on exit (tied to the Eio switch —
+  structural teardown, no leak). Without one, it tests an already-running server and waits for it.
+- {b Readiness is the only wait.} After that, every request is one call → one response →
+  immediate verdict. No retry, no polling — deterministic runs.
+- {b Parallelism:} the URL is the only link to a server, so runs against different ports are
+  independent — give each worktree/CI shard its own port.
+- {b Running:} build the test executable and run the {b binary directly}; do not use
+  [dune exec] when the spawned command itself calls dune (the workspace lock would deadlock).
+
 {1 Notes}
 
 - {b Concurrency model:} Eio-only by design (direct-style, structured concurrency, leak-free

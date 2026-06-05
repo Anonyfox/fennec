@@ -74,6 +74,41 @@ Runner flags: `--grep`, `--bail`, `--jobs N`, `--retries N`, `--headed`, `--time
 `--browsers M`, `--reporter auto|plain|pretty`, `--color`/`--no-color`/`--ascii`. Point at
 any Chromium-family browser with `CHROME=/path/to/chrome`.
 
+## Operating the machinery
+
+Both layers share one server-lifecycle model (`Target`, internal):
+
+- **A target is a URL.** `~url:"http://localhost:4000"` is the identity — the host and port
+  are parsed from it. The Http client connects to that host (DNS-resolved), so a target can
+  be local *or remote* (`~url:"http://staging.internal:8080"`). The client is plain HTTP/1.1;
+  `https://` URLs are rejected with a clear message (put a plaintext port in front for tests).
+- **Spawn or attach.** With `~spawn:["./server"]` (Http) / a positional server path (Browser),
+  the harness starts that command, waits for the URL to accept connections (event-driven, up
+  to `~timeout`, default 30s), and **kills it on exit** — the process is tied to the Eio
+  switch, so teardown is structural (no leak even on failure or exception). Without a spawn
+  argument, the harness tests an already-running server (CI, staging) and just waits for it.
+- **Readiness is the only wait.** Once the server answers, every request is one TCP call →
+  one response → immediate verdict. No retry, no polling in the test path — runs are
+  deterministic.
+
+**Parallelism / isolation.** The target URL is the only thing tying a run to a server, so
+two runs against two URLs are fully independent. Give each worktree or CI shard a different
+port (`~url:"http://localhost:5000"`, `…:5001`, …) and they never collide. The Browser
+runner additionally fans out tests across N browsers with `--jobs`/`--browsers`.
+
+**Running the tests.** Build the test executable and run the **binary directly** — do *not*
+run it via `dune exec` if the spawned command itself calls dune (e.g. `fennec dev` runs
+`dune describe`): `dune exec` holds the workspace lock and the child deadlocks. Build once,
+run the artifact:
+
+```sh
+dune build examples/site/e2e/http_test.exe
+_build/default/examples/site/e2e/http_test.exe        # Http tests
+_build/default/examples/site/e2e/run.exe --jobs 4     # Browser tests
+```
+
+A plain HTTP target (one that doesn't shell out to dune) runs fine under `dune exec`.
+
 ## Notes
 
 - **Eio-only by design** (direct-style, structured concurrency, leak-free teardown under one
