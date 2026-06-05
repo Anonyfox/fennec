@@ -114,6 +114,7 @@ let run ~targets ~exe ~assets =
   let server_out = ref None in (* read-end of the server's merged stdout+stderr *)
   let server_carry = Buffer.create 256 in (* partial trailing line from the server *)
   let last_build_ms = ref None in (* duration of the build that (re)started the server *)
+  let busy_port = ref None in (* the dev port the server reported as already-in-use (EADDRINUSE) *)
   let last_exe = ref 0.0 in
   let assets = Assets.create ~dir:(Filename.concat (Filename.dirname exe) assets) in
   let limiter = Crash_limiter.create () in
@@ -131,13 +132,24 @@ let run ~targets ~exe ~assets =
 
   (* classify a line the server printed: its dev-URL report drives the UI banner, its own framework
      chatter is suppressed (the UI says it better), everything else is the user's app log. *)
+  (* leading run of digits in [s] *)
+  let leading_int s =
+    let n = String.length s and i = ref 0 in
+    while !i < n && s.[!i] >= '0' && s.[!i] <= '9' do incr i done;
+    if !i > 0 then int_of_string_opt (String.sub s 0 !i) else None
+  in
   let route_server_line raw =
     let line = String.trim raw in
     if line = "" then ()
-    else if starts_with line "[fennec:urls]" then
+    else if starts_with line "[fennec:urls]" then (
+      busy_port := None; (* it bound — any earlier "port busy" is stale *)
       Ui.ready ui ~ms:!last_build_ms
-        ~urls:(String.sub line 13 (String.length line - 13) |> String.split_on_char ' ' |> List.filter (fun s -> s <> ""))
-    else if starts_with line "[fennec]" || starts_with line "fennec: port " then () (* framework noise *)
+        ~urls:(String.sub line 13 (String.length line - 13) |> String.split_on_char ' ' |> List.filter (fun s -> s <> "")))
+    else if starts_with line "fennec: port " then
+      (* "fennec: port 8200 is already in use …": remember WHICH port so the crash handler can
+         reclaim it (if a leftover of ours holds it) or name the culprit (if it's foreign) *)
+      busy_port := leading_int (String.sub line 13 (String.length line - 13))
+    else if starts_with line "[fennec]" then () (* our own framework chatter — the UI says it better *)
     else Ui.app ui line
   in
   (* drain whatever the server has written (non-blocking), splitting it into lines *)
@@ -165,6 +177,35 @@ let run ~targets ~exe ~assets =
       in
       go ()
   in
+
+  (* who is LISTENING on [port] now, as (pid, full command) — via lsof + ps; [] if lsof is absent *)
+  let port_listeners port =
+    match (try Some (Unix.open_process_in (Printf.sprintf "lsof -nP -iTCP:%d -sTCP:LISTEN -t 2>/dev/null" port)) with _ -> None) with
+    | None -> []
+    | Some ic ->
+      let pids = ref [] in
+      (try while true do (match int_of_string_opt (String.trim (input_line ic)) with Some p when p > 1 -> pids := p :: !pids | _ -> ()) done with End_of_file -> ());
+      ignore (Unix.close_process_in ic);
+      List.map
+        (fun p ->
+          let cmd = match (try Some (input_line (Unix.open_process_in (Printf.sprintf "ps -p %d -o args= 2>/dev/null" p))) with _ -> None) with Some s -> String.trim s | None -> "" in
+          (p, cmd))
+        !pids
+  in
+  (* a holder is OURS iff its command runs our server binary. We match the build-relative tail
+     (e.g. "_build/default/examples/site/server.bc") rather than the absolute path, so a leftover
+     started either way (absolute by a prior supervisor, or relative) is recognised — yet it's
+     still our specific artifact, never an unrelated process that merely sits on the port. *)
+  let exe_tail = match Dune_watch.find_sub exe "_build/" with Some i -> String.sub exe i (String.length exe - i) | None -> exe in
+  let ours (_, cmd) = exe_tail <> "" && Dune_watch.find_sub cmd exe_tail <> None in
+  (* free [port] by SIGKILLing any leftover of OUR server holding it; true if we killed something *)
+  let reclaim_port port =
+    let mine = List.filter ours (port_listeners port) in
+    List.iter (fun (pid, _) -> try Unix.kill pid Sys.sigkill with _ -> ()) mine;
+    if mine <> [] then Unix.sleepf 0.2; (* let the port actually free before the retry binds *)
+    mine <> []
+  in
+  let foreign_holder port = List.find_opt (fun h -> not (ours h)) (port_listeners port) in
 
   let start_or_restart label =
     (* don't disturb the running server while the artifact is mid-write; the next settle restarts *)
@@ -252,11 +293,25 @@ let run ~targets ~exe ~assets =
     server_pid := None;
     match Crash_limiter.record limiter ~now:(now ()) ~flat:port_busy () with
     | Crash_limiter.Give_up ->
-      if port_busy then Ui.notice ui Ui.Error "port in use after several tries — another dev server running? free it and save to retry"
-      else Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry"
+      if not port_busy then Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry"
+      else (
+        (* couldn't take the port after retries → it's held by something that ISN'T ours. Name it
+           and hand the dev a one-command fix, rather than a vague "free it". *)
+        match Option.bind !busy_port foreign_holder with
+        | Some (pid, cmd) ->
+          let short = if String.length cmd > 60 then String.sub cmd 0 57 ^ "…" else cmd in
+          Ui.notice ui Ui.Error (Printf.sprintf "port %d is held by another process — pid %d: %s" (Option.value ~default:0 !busy_port) pid short);
+          Ui.notice ui Ui.Error (Printf.sprintf "free it with:  kill %d   (then save any file to retry)" pid)
+        | None -> Ui.notice ui Ui.Error "the dev port is in use — free it and save any file to retry")
     | Crash_limiter.Retry backoff ->
-      Unix.sleepf backoff;
-      start_or_restart (fun () -> Ui.notice ui Ui.Warn (if port_busy then "port freed — restarted" else "server exited — restarted"))
+      (* port held by a LEFTOVER of our own server? reclaim it transparently and retry at once.
+         Anything else: wait out the backoff and retry (the Give_up path names a foreign holder). *)
+      let reclaimed = port_busy && (match !busy_port with Some p -> reclaim_port p | None -> false) in
+      Unix.sleepf (if reclaimed then 0.1 else backoff);
+      start_or_restart (fun () ->
+          if reclaimed then Ui.notice ui Ui.Warn (Printf.sprintf "cleared a leftover dev server on :%d — restarted" (Option.value ~default:0 !busy_port))
+          else if not port_busy then Ui.notice ui Ui.Warn "server exited — restarted"
+          (* port still held by something that isn't ours: stay quiet here, the Give_up path names it *))
   in
 
   let handle = function
@@ -274,11 +329,13 @@ let run ~targets ~exe ~assets =
     | Some pid -> (match (try Unix.waitpid [ Unix.WNOHANG ] pid with _ -> (0, Unix.WEXITED 0)) with 0, _ -> () | _, status -> on_server_crash status)
   in
   let step () =
+    (* drain the server's output BEFORE checking for its exit, so an EADDRINUSE message ("port N
+       in use") is parsed into [busy_port] before [on_server_crash] runs and wants it. *)
+    drain_server (); (* fold in the server's port report + relay its app logs *)
     (* check the server EVERY iteration, not only when the dune poll times out — otherwise a
        server that crashed on boot during an edit burst (steady stream of settles) wouldn't be
        noticed until the burst quieted. *)
     check_server ();
-    drain_server (); (* fold in the server's port report + relay its app logs *)
     match Dune_watch.poll !dw ~timeout:0.2 with Some ev -> handle (newest ev) | None -> ()
   in
   let rec loop () =

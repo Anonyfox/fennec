@@ -414,7 +414,7 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs (endpoints : Endpoint.
    @param request_timeout per-request handler deadline; on expiry the handler tree is
                           cancelled and a 503 is returned (default 30).
    @param max_conns       concurrent-connection cap (default 10_000). *)
-let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domains ?dev ~env
+let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domains ?dev ?(on_listen = fun () -> ()) ~env
     (endpoints : Endpoint.t list) =
   let dev =
     match dev with
@@ -472,4 +472,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?domai
           if domains > 1 then
             Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, domains - 1) ~on_error
           else Eio.Net.run_server socket handle ~on_error))
-    ports
+    ports;
+  (* every port is now bound and serving — announce ONLY here, so a server that failed to bind
+     (exit 98 above) never prints a misleading "ready" before it dies *)
+  on_listen ()

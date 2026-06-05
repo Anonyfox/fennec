@@ -110,6 +110,10 @@ sh examples/site/e2e/errors.sh
 # `dune clean` first (the opt-in escape hatch for a corrupt local build). Leaves _build cleaned.
 sh examples/site/e2e/heal.sh
 
+# port-reclaim check: a stray dev server holding the port is auto-reclaimed on start (only if it's
+# OUR own server); a foreign process is left alone and named with a one-command fix. Needs python3.
+sh examples/site/e2e/reclaim.sh
+
 # prod: native server with the web root embedded in the binary
 dune build --profile release examples/site/server.exe
 ```
