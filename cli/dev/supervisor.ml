@@ -223,7 +223,9 @@ let run ~targets ~exe ~assets =
           match Assets.poll assets with
           | Assets.Reload -> ping control_path "reload"; Ui.reloaded ui ~trigger:triggers ~ms:dur
           | Assets.Css_only -> ping control_path "css"; Ui.restyled ui ~trigger:triggers ~ms:dur
-          | Assets.Nothing -> ())
+          (* nothing the server cares about changed — but if this green build FIXED a prior error
+             (a revert to identical bytes), clear the stuck panel; otherwise stay silent *)
+          | Assets.Nothing -> Ui.resolved ui ~ms:dur)
   in
 
   let on_build_failed _n triggers messages = Ui.failed ui ~raw:messages ~trigger:triggers ~serving:(!server_pid <> None) in

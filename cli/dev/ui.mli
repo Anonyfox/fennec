@@ -37,8 +37,14 @@ val restyled : t -> trigger:string list -> ms:float option -> unit
 
 (** A failed build: parse [raw] (dune's diagnostic text) into the persistent problem region.
     [serving] indicates a last-good server is still up. Any successful build ({!rebuilt} /
-    {!reloaded} / {!restyled} / {!ready}) clears the region. *)
+    {!reloaded} / {!restyled} / {!ready} / {!resolved}) clears the region. *)
 val failed : t -> raw:string -> trigger:string list -> serving:bool -> unit
+
+(** A green build that produced no server/asset change — e.g. reverting a typo to a byte-identical
+    artifact. If a problem region was showing it's now fixed: clear it and print a brief "resolved"
+    line. A no-op when there was nothing outstanding (so genuine no-op builds stay silent). This is
+    what keeps the panel from sticking after a fix that dune rebuilds to the same bytes. *)
+val resolved : t -> ms:float option -> unit
 
 (** A one-off notice (worker fallback, dune respawn, port-in-use, give-up). *)
 val notice : t -> level -> string -> unit

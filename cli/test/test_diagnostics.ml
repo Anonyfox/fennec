@@ -37,6 +37,25 @@ let () =
   (* a warning (warnings-as-errors in dev still come through as text) *)
   let warn = "File \"b.ml\", line 1, characters 0-1:\nWarning 26 [unused-var]: unused variable x\n" in
   check "warning severity" (match D.parse warn with [ p ] -> p.D.severity = D.Warning | _ -> false);
+  (* a SYNTAX error: a second File block ("might be unmatched") is a hint for the SAME error, so
+     it must fold into [related] and count as ONE, not two *)
+  let syntax =
+    "File \"layout.mlx\", line 13, characters 5-7:\n\
+     Error: Syntax error: ']' expected\n\
+     File \"layout.mlx\", line 7, characters 15-16:\n\
+    \  This '[' might be unmatched\n"
+  in
+  let sp = D.parse syntax in
+  check "a multi-location syntax error is ONE problem" (List.length sp = 1);
+  check "and counts as ONE error (not two)" (D.count sp = (1, 0));
+  (match sp with
+  | [ p ] ->
+    check "primary location is line 13" (p.D.line = 13);
+    check "the secondary location is folded into related" (List.exists (fun s -> contains s "might be unmatched") p.D.related)
+  | _ -> incr fails);
+  (* two genuinely-distinct errors → two problems *)
+  let two = "File \"a.ml\", line 1, characters 0-1:\nError: one\nFile \"b.ml\", line 2, characters 0-1:\nError: two\n" in
+  check "two real errors -> count (2,0)" (D.count (D.parse two) = (2, 0));
   (* unrecognised text → no structured problems *)
   check "unrecognised text -> []" (D.parse "ld: symbol not found\nmake: *** error" = []);
   check "empty -> []" (D.parse "" = []);

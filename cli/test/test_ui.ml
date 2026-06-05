@@ -42,6 +42,11 @@ let () =
   check "failed notes the last good server" (contains s "last good build still serving");
   check "failed shows the location" (contains s "index.mlx:11");
   check "failed shows the message" (contains s "Unbound value greeting");
+  (* THE regression: a green no-op build (revert to identical bytes) must clear the stuck panel *)
+  U.resolved ui ~ms:(Some 12.);
+  check "resolved clears the panel with a confirmation line" (contains (take ()) "resolved");
+  U.resolved ui ~ms:(Some 5.);
+  check "resolved is silent when nothing is outstanding" (take () = "");
 
   print_endline "Ui (interactive — live region):";
   let ibuf = Buffer.create 512 in

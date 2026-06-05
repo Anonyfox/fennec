@@ -57,6 +57,20 @@ let erase_region t =
   if t.caps.interactive && t.region > 0 then (t.out (Tty.cursor_up t.region); t.out Tty.erase_below);
   t.region <- 0
 
+(* when dune gives no code frame (mlx/ocaml SYNTAX errors usually don't), read the offending line
+   ourselves and point at the column — best-effort, empty if the file/line can't be read *)
+let source_frame file line col =
+  if line <= 0 then []
+  else
+    match (try Some (In_channel.with_open_text file In_channel.input_all) with _ -> None) with
+    | None -> []
+    | Some content -> (
+      match List.nth_opt (String.split_on_char '\n' content) (line - 1) with
+      | None -> []
+      | Some src ->
+        let gutter = Printf.sprintf "%d | " line in
+        [ gutter ^ src; String.make (String.length gutter + max 0 (col - 1)) ' ' ^ "^" ])
+
 let render_region t : string =
   if t.problems = [] && t.raw = "" then ""
   else begin
@@ -78,8 +92,10 @@ let render_region t : string =
           Buffer.add_char b '\n';
           let loc = if p.col > 0 then Printf.sprintf "%s:%d:%d" p.file p.line p.col else Printf.sprintf "%s:%d" p.file p.line in
           Buffer.add_string b (Printf.sprintf "     %s\n" (cyan t loc));
-          List.iter (fun l -> Buffer.add_string b (Printf.sprintf "     %s\n" (dim t l))) p.excerpt;
-          if p.message <> "" then Buffer.add_string b (Printf.sprintf "     %s\n" p.message))
+          let frame = if p.excerpt <> [] then p.excerpt else source_frame p.file p.line p.col in
+          List.iter (fun l -> Buffer.add_string b (Printf.sprintf "     %s\n" (dim t l))) frame;
+          if p.message <> "" then Buffer.add_string b (Printf.sprintf "     %s\n" p.message);
+          List.iter (fun l -> Buffer.add_string b (Printf.sprintf "     %s\n" (dim t l))) p.related)
         t.problems;
     Buffer.contents b
   end
@@ -114,6 +130,17 @@ let failed t ~raw ~trigger:_ ~serving =
   t.raw <- (if t.problems = [] then String.trim raw else "");
   t.serving <- serving;
   if t.caps.interactive then (erase_region t; draw_region t) else t.out (render_region t)
+
+(* a green build that changed nothing the server cares about (e.g. reverting a typo to a
+   byte-identical artifact): if a problem panel was up, it's now FIXED — drop it and confirm, so
+   the panel can never get stuck showing a stale error. Silent if there was nothing to clear. *)
+let resolved t ~ms =
+  if t.problems <> [] || t.raw <> "" then begin
+    t.problems <- [];
+    t.raw <- "";
+    let pad = String.make (max 0 (28 - 8)) ' ' (* "resolved" is 8 cols *) in
+    log t (Printf.sprintf "  %s  resolved%s  %s" (green t "●") pad (dim t (Printf.sprintf "%6s" (fmt_ms ms))))
+  end
 
 (* ---- one-off notices ---- *)
 let notice t level msg =

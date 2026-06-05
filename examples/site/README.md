@@ -102,6 +102,10 @@ sh examples/site/e2e/livereload.sh
 # first (single instance), and a clean shutdown leaves nothing behind.
 sh examples/site/e2e/no_leftovers.sh
 
+# error-panel check: a build error shows the right count + a message, and FIXING it clears the
+# panel — even a revert to byte-identical output (which dune rebuilds without bumping the mtime).
+sh examples/site/e2e/errors.sh
+
 # prod: native server with the web root embedded in the binary
 dune build --profile release examples/site/server.exe
 ```
