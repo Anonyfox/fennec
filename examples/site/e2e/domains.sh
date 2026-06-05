@@ -29,17 +29,20 @@ echo "1) host-routing fidelity on the gateway (:4000)…"
 ( cd examples/site && exec fennec dev ) >/tmp/fennec_dom_1.log 2>&1 & DEV=$!
 up /tmp/fennec_dom_1.log "ready"
 curl -s http://localhost:4000/ | grep -q "Welcome to the Fennec site" || fail "gateway plain visit (Host: localhost) did not route to the web '*' default"
-curl -s -H "Host: admin.localhost" http://localhost:4000/ | grep -q "Admin Dashboard" || fail "gateway did not route Host admin.localhost to the admin app (prod fidelity)"
+curl -s -u admin:admin -H "Host: admin.localhost" http://localhost:4000/ | grep -q "Admin Dashboard" || fail "gateway did not route Host admin.localhost to the admin app (prod fidelity)"
 curl -s -H "Host: random.example.com" http://localhost:4000/ | grep -q "Welcome to the Fennec site" || fail "an unknown host did not fall to the '*' default"
 curl -s http://localhost:4000/api/health | grep -q '"app":"web"' || fail "web's own route missing on the gateway"
-echo "   specific host -> admin; default + unknown -> web."
+# the matched-phase property: admin has basic auth in pipe_matched
+STATUS_NO_AUTH=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: admin.localhost" http://localhost:4000/)
+[ "$STATUS_NO_AUTH" = "401" ] || fail "admin without auth should be 401 (matched-phase auth), got $STATUS_NO_AUTH"
+echo "   specific host -> admin (401 without auth, 200 with); default + unknown -> web."
 stop
 
 echo "2) --port override — the whole block shifts to a custom base…"
 ( cd examples/site && exec fennec dev --port 9000 ) >/tmp/fennec_dom_2.log 2>&1 & DEV=$!
 up /tmp/fennec_dom_2.log "ready"
 curl -s http://localhost:9000/ | grep -q "Welcome to the Fennec site" || fail "--port 9000 instance did not serve on :9000"
-curl -s -H "Host: admin.localhost" http://localhost:9000/ | grep -q "Admin Dashboard" || fail "--port 9000 gateway did not route to admin"
+curl -s -u admin:admin -H "Host: admin.localhost" http://localhost:9000/ | grep -q "Admin Dashboard" || fail "--port 9000 gateway did not route to admin"
 echo "   --port 9000 serves + routes; the block moved off the default base."
 
 echo "PASS: the dev gateway routes by Host like prod; --port shifts the whole block for isolated instances."

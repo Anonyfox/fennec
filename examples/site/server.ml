@@ -1,8 +1,8 @@
 (* The site server — TWO endpoints, each its own app on its own domain (dev: its own
    localhost port). The whole operational surface: a shared paw pipeline (logger,
-   security headers, a custom paw, ONE shared static web root), an API route, and the
-   app's SSR render via [Endpoint.app]. Each endpoint mounts just its own app, whose
-   document shell references its predictable asset URLs (/_apps/<name>/main.{js,css}).
+   security headers, a custom paw, ONE shared static web root), API routes, the app's
+   SSR render via [Endpoint.app], and — on the admin endpoint — basic auth in the
+   MATCHED phase (so it only fires when a route matched, never on a 404).
    In prod endpoints are selected by Host pattern; in dev each gets its own port.
 
    The render is [Fur_ssr.handler] — synchronous (no Eio): exactly the (path -> html
@@ -64,6 +64,7 @@ let admin =
   Endpoint.make ~name:"admin" ~hosts:[ "admin.localhost" ] () (* scoped by host; more specific, so it wins *)
   |> Endpoint.pipe common
   |> Endpoint.app (Fur_ssr.handler ~styles:Site_styles.css ~mounts:[ Admin_app.Routes.mount ])
+  |> Endpoint.pipe_matched [ Paw.Basic_auth.make ~username:"admin" ~password:"admin" ~realm:"Admin" () ]
 
 (* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
    watches the served bundles and pings the server's dev control socket, which relays

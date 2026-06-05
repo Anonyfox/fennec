@@ -10,7 +10,7 @@ open Fennec_e2e.Live
 (* referenced by run.ml so this module (and thus its test registrations below) is linked *)
 let load = ()
 
-let admin = "http://localhost:4002"
+let admin = "http://admin:admin@localhost:4002"
 
 (* wait for the Fur client to finish hydrating — an app-agnostic signal set by Fur_csr,
    awaited evented (one round-trip) like every other condition *)
