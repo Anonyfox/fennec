@@ -50,12 +50,18 @@ let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun (
 ```
 
 - **Requests** — `get`/`post`/`put`/`patch`/`delete`/`head`/`options`, with `~headers`,
-  `~host` (virtual-host testing), `~query`, and `~body` / `~form` / `~json` bodies.
+  `~host` (virtual-host testing), `~query`, `~body` / `~form` / `~json` / `~multipart` (file
+  uploads), `~follow:true` (chase redirects), and `~timeout` (per-request deadline).
 - **Assertions** (`~expect` list) — status families; body (substring / exact / regex /
   emptiness); headers; JSON by dotted path (value, type, UUID, datetime, array length);
   cookies; `redirect_to`; `max_elapsed`; and `expect (fun r -> …)` for anything custom.
 - **Cookie jar** — automatic and per-`check`: a `Set-Cookie` is replayed on later requests
   in the same check. No retry, no polling.
+- **`eventually`** — for genuinely async expectations: `eventually (fun () -> get "/jobs/1"
+  ~expect:[json_path_is "state" "done"])` re-runs until it passes or a deadline. Opt-in;
+  the default request path stays one-shot. Not for masking flakiness.
+- **Robust by default** — every request is bounded by a timeout, so a hung server fails the
+  check (`request timed out after Ns`) instead of freezing the run.
 
 A failed check is self-explaining — expected, actual, the request, and how long it took:
 
@@ -90,7 +96,8 @@ state, and how to re-run just that test.
 - **Auto-waiting DSL** — `goto`, `click`, `fill`, `press`, `within`, `expect_*`, `read_*`,
   `eval`; each step waits for its own precondition (event-driven, no polling).
 - **Self-explaining failures** — a numbered trace, the captured `outerHTML` / selector probe
-  / URL / console, a hint, and a rerun command.
+  / URL / console, a hint, and a rerun command. With `--screenshots DIR`, a PNG of the page
+  at the moment of failure is written too.
 - **A reporter that travels** — colour + live status line on a TTY, plain ASCII on a CI log
   (auto-detected). Fans out across browsers with `--jobs` / `--browsers`.
 - **A fake backend** — the DSL is written against an abstract `Backend.S`, so it's
