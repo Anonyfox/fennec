@@ -40,6 +40,7 @@ type context = {
   mutable cookies : (string * string) list;
   mutable checks_passed : int;
   mutable checks_failed : int;
+  mutable checks_skipped : int; (* filtered out by --grep — reported, never silently dropped *)
 }
 
 let preview s = if String.length s <= 200 then s else String.sub s 0 197 ^ "..."
@@ -72,6 +73,20 @@ let install_exit_hook () =
     exit_hook_installed := true;
     at_exit (fun () -> if !any_failed && not !exiting then (exiting := true; exit 1))
   end
+
+(* the --grep filter, read once from argv (mirrors the Browser runner's flag) — set per-suite
+   by `fennec test --grep`. A check whose label doesn't contain it is skipped (substring match,
+   same semantics as the Browser cut and [body_contains]). *)
+let grep =
+  lazy
+    (let rec scan = function
+       | "--grep" :: v :: _ -> Some v
+       | _ :: r -> scan r
+       | [] -> None
+     in
+     match Array.to_list Sys.argv with _ :: rest -> scan rest | [] -> None)
+
+let selected label = match Lazy.force grep with None -> true | Some g -> Fennec_hunt_util.contains label g
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Timing                                                                    *)
@@ -538,6 +553,10 @@ let json_content_type = ("Content-Type", "application/json")
 
 let check label body =
   let c = current () in
+  if not (selected label) then (
+    c.checks_skipped <- c.checks_skipped + 1;
+    Printf.printf "  %s  %s\n%!" (color "2" (glyph "–" "-")) (color "2" (label ^ " (skipped by --grep)")))
+  else begin
   c.last <- None;
   c.cookies <- [];
   let t0 = Unix.gettimeofday () in
@@ -555,6 +574,7 @@ let check label body =
        line and wrap it in Failure("…"). Other exceptions fall back to their string form. *)
     let detail = match e with Failure m -> m | other -> Printexc.to_string other in
     String.split_on_char '\n' detail |> List.iter (fun line -> Printf.printf "     %s\n%!" line)
+  end
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  hunt                                                                      *)
@@ -578,7 +598,7 @@ let hunt label ?url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 1
   | Some argv ->
     Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
       ~net ~clock ~env ~host:target.host ~port:target.port ~tls ~timeout argv);
-  let c = { url = target; net; clock; request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0 } in
+  let c = { url = target; net; clock; request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0; checks_skipped = 0 } in
   install_exit_hook ();
   ctx := Some c;
   Printf.printf "\n%s %s\n%!" (color "1" (glyph "⟐ " "> " ^ label)) (color "2" (Printf.sprintf "(%s)" url));
@@ -586,10 +606,11 @@ let hunt label ?url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 1
   Printf.printf "\n";
   (* a hunt never exits here — it records failure and lets later suites in the same process
      run. The process exits non-zero once, at the end, via the at_exit hook. *)
+  let skipped = if c.checks_skipped > 0 then Printf.sprintf " (%d skipped)" c.checks_skipped else "" in
   if c.checks_failed > 0 then (
     any_failed := true;
-    Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))))
-  else Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed))
+    Printf.printf "  %s%s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))) (color "2" skipped))
+  else Printf.printf "  %s%s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed)) (color "2" skipped)
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  For_test — pure internals exposed for unit tests; NOT a stable API           *)

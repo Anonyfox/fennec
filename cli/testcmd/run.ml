@@ -50,19 +50,24 @@ let preview ?(max = 120) s =
    code. fennec is the only dune-aware process here (no nested watcher), so this is safe. *)
 let run_unit () = Sys.command "dune build @runtest"
 
-(* the argv we hand a suite executable, derived from the options + cut. Both hunt runners
-   ignore unknown argv, but we only pass what a given runner actually honours:
-   - browser ([Run.main_cli]) parses --grep/--headed/--screenshots/--jobs/--reporter;
-   - http ([hunt]) does not parse argv yet (grep passthrough lands in T8), so it gets none. *)
+(* the argv we hand a suite executable, derived from the options + cut. We pass only what a
+   given runner actually honours (both runners ignore unknown argv, but silent no-ops are poor
+   DX, so we stay precise):
+   - http ([hunt]) honours --grep (filters checks by label substring);
+   - browser ([Run.main_cli]) honours --grep + --headed/--screenshots/--jobs/--reporter;
+   - unit goes through dune (@runtest), so it takes no argv here. *)
+let grep_args (o : options) = match o.grep with Some g -> [ "--grep"; g ] | None -> []
+
 let suite_args ~(cut : suite) (o : options) : string list =
   match cut with
+  | Http -> grep_args o
   | Browser ->
-    (match o.grep with Some g -> [ "--grep"; g ] | None -> [])
+    grep_args o
     @ (if o.headed then [ "--headed" ] else [])
     @ (match o.screenshots with Some d -> [ "--screenshots"; d ] | None -> [])
     @ (match o.jobs with Some j -> [ "--jobs"; string_of_int j ] | None -> [])
     @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
-  | Unit | Http | All -> []
+  | Unit | All -> []
 
 (* run one suite exe against its isolated instance's env; inherit stdout/stderr so the suite's
    own ✓/✗ report reaches the user. [args] is argv beyond argv[0]. Returns the exit code. *)
@@ -125,12 +130,23 @@ let orchestrate ~(cut : suite) ~dir ~base ~(args : string list) : int =
       | n when n <> 0 -> Printf.eprintf "fennec test: `dune build` failed (exit %d) — see the errors above\n%!" n; 1
       | _ ->
         let instances = Instance.allocate ~base (List.map (fun (s : Suites.t) -> s.Suites.name) suites) in
-        let failed = ref 0 in
+        (* run each suite, accumulating its result in order (List.iter2 is left-to-right, so the
+           side effects and the accumulated list stay in suite order) *)
+        let results = ref [] in
         List.iter2
           (fun (suite : Suites.t) (inst : Instance.t) ->
-            if not (run_one_suite ~server_exe:d.Discover.exe ~args ~suite ~inst) then incr failed)
+            let ok = run_one_suite ~server_exe:d.Discover.exe ~args ~suite ~inst in
+            results := { Report.name = suite.Suites.name; port = inst.Instance.port; ok } :: !results)
           suites instances;
-        !failed
+        let results = List.rev !results in
+        let failed = Report.failures results in
+        (* cross-suite footer: one honest roll-up at suite granularity (green iff every suite
+           exited 0) — the per-suite check tallies are already printed above by each runner *)
+        Printf.printf "\n\027[%sm%s %s\027[0m\n%!"
+          (if failed = 0 then "1;32" else "1;31")
+          (if failed = 0 then "\u{2714}" else "\u{2717}")
+          (Report.summary results);
+        failed
     end
 
 let run_http (opts : options) : int = orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port ~args:(suite_args ~cut:Http opts)

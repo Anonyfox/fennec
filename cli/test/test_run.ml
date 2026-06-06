@@ -34,7 +34,8 @@ let () =
   check "browser: stable flag order"
     (R.suite_args ~cut:R.Browser { o with grep = Some "g"; headed = true; screenshots = Some "d"; jobs = Some 2; reporter = Some "pretty" }
      = [ "--grep"; "g"; "--headed"; "--screenshots"; "d"; "--jobs"; "2"; "--reporter"; "pretty" ]);
-  check "http: argv suppressed (runner ignores it for now)" (R.suite_args ~cut:R.Http { o with grep = Some "x"; headed = true } = []);
+  check "http: grep passes through, browser-only flags don't" (R.suite_args ~cut:R.Http { o with grep = Some "x"; headed = true; screenshots = Some "d" } = [ "--grep"; "x" ]);
+  check "http: no grep → no argv" (R.suite_args ~cut:R.Http o = []);
   check "unit: no argv" (R.suite_args ~cut:R.Unit { o with grep = Some "x" } = []);
   check "all: no argv (dispatches per-cut)" (R.suite_args ~cut:R.All { o with headed = true } = []);
 
