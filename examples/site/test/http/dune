@@ -1,0 +1,12 @@
+; Http suites for `fennec test http`. Each is a plain executable using fennec-hunt; the CLI
+; discovers them by convention, boots an isolated app instance per suite, and runs them.
+; On a custom alias (@http), NOT @runtest — so a bare `dune test` never runs the slow cut.
+(executable
+ (name smoke_test)
+ (modules smoke_test)
+ (libraries fennec-hunt))
+
+(rule
+ (alias http)
+ (deps smoke_test.exe)
+ (action (progn)))

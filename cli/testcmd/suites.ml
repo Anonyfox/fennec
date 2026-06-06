@@ -29,7 +29,10 @@ let exe_path ~root ~reldir ~dir ~name =
   let parts = List.filter (fun s -> s <> "") [ "_build/default"; reldir; dir; name ^ ".exe" ] in
   Filename.concat root (String.concat "/" parts)
 
-let build_target ~dir ~name = if dir = "" then name ^ ".exe" else dir ^ "/" ^ name ^ ".exe"
+(* the dune build target, ROOT-relative (fennec builds after chdir'ing to the workspace root,
+   so a target must be relative to root, not the invocation cwd) *)
+let build_target ~reldir ~dir ~name =
+  String.concat "/" (List.filter (fun s -> s <> "") [ reldir; dir; name ^ ".exe" ])
 
 (* discover the suites in [<cwd>/<dir>] (sorted, deterministic); [] if the dir is absent *)
 let discover ~root ~cwd ~dir : t list =
@@ -42,7 +45,7 @@ let discover ~root ~cwd ~dir : t list =
     |> List.sort compare
     |> List.map (fun f ->
            let name = Filename.chop_suffix f ".ml" in
-           { name; target = build_target ~dir ~name; exe = exe_path ~root ~reldir ~dir ~name })
+           { name; target = build_target ~reldir ~dir ~name; exe = exe_path ~root ~reldir ~dir ~name })
 
 (* build the suite artifacts in one dune invocation; dune's errors surface to the user *)
 let build (suites : t list) : (unit, string) result =

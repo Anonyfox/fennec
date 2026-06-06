@@ -16,4 +16,8 @@ let () =
   check "exe path at root" (S.exe_path ~root:"/r" ~reldir:"" ~dir:"test/http" ~name:"checkout" = "/r/_build/default/test/http/checkout.exe");
   check "exe path in a subdir" (S.exe_path ~root:"/r" ~reldir:"examples/site" ~dir:"test/browser" ~name:"cart" = "/r/_build/default/examples/site/test/browser/cart.exe");
 
+  (* build target is ROOT-relative (built after chdir to root) *)
+  check "build target at root" (S.build_target ~reldir:"" ~dir:"test/http" ~name:"checkout" = "test/http/checkout.exe");
+  check "build target in a subdir" (S.build_target ~reldir:"examples/site" ~dir:"test/http" ~name:"smoke" = "examples/site/test/http/smoke.exe");
+
   if !fails = 0 then print_endline "all Suites tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

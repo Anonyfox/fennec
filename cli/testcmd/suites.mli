@@ -3,7 +3,7 @@
 
 type t = {
   name : string;    (** suite name (source basename without [.ml]) *)
-  target : string;  (** dune build target, cwd-relative *)
+  target : string;  (** dune build target, ROOT-relative (built after chdir to the root) *)
   exe : string;     (** absolute path to the built artifact *)
 }
 
@@ -12,6 +12,9 @@ val relativize : root:string -> cwd:string -> string
 
 (** The built artifact path: [<root>/_build/default/<reldir>/<dir>/<name>.exe]. Pure. *)
 val exe_path : root:string -> reldir:string -> dir:string -> name:string -> string
+
+(** The dune build target, root-relative: [<reldir>/<dir>/<name>.exe]. Pure. *)
+val build_target : reldir:string -> dir:string -> name:string -> string
 
 (** Discover the suites in [<cwd>/<dir>], sorted (deterministic); [] if the directory is absent. *)
 val discover : root:string -> cwd:string -> dir:string -> t list
