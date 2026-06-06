@@ -82,11 +82,7 @@ let request ~net ~host ~port ?(tls = false) ~meth ~path ?(headers = []) ?body ()
       | None -> read_headers acc
   in
   let headers = read_headers [] in
-  let body_buf = Buffer.create 4096 in
-  (try
-     while true do
-       let chunk = Eio.Buf_read.any_char raw in
-       Buffer.add_char body_buf chunk
-     done
-   with End_of_file -> ());
-  { status; headers; body = Buffer.contents body_buf }
+  (* the body is everything until EOF (we send Connection: close). One bulk read, not a
+     char-at-a-time loop. *)
+  let body = Eio.Buf_read.take_all raw in
+  { status; headers; body }

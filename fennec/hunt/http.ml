@@ -34,6 +34,7 @@ type context = {
   url : Target.url;
   net : Target.net;
   mutable last : response option;
+  mutable last_request : string; (* "GET /api/health" — the request behind [last], for diagnostics *)
   mutable cookies : (string * string) list;
   mutable checks_passed : int;
   mutable checks_failed : int;
@@ -49,6 +50,26 @@ let current () =
   match !ctx with
   | Some c -> c
   | None -> failwith "fennec_hunt: a request/assertion was used outside a `hunt` block — wrap it in `hunt \"…\" ~url:\"…\" @@ fun () -> …`"
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Output styling — reuse the Browser layer's capability detection so colour    *)
+(*  degrades on a non-TTY / NO_COLOR / dumb terminal exactly the same way        *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+let caps = lazy (Reporter.detect_caps ())
+let color code s = if (Lazy.force caps).Reporter.color then "\027[" ^ code ^ "m" ^ s ^ "\027[0m" else s
+let glyph uni ascii = if (Lazy.force caps).Reporter.unicode then uni else ascii
+
+(* Any failed check across ALL hunt blocks in the process. A hunt never exits mid-run, so
+   every suite reports; the process exits non-zero once at the end if anything failed. *)
+let any_failed = ref false
+let exit_hook_installed = ref false
+let exiting = ref false
+let install_exit_hook () =
+  if not !exit_hook_installed then begin
+    exit_hook_installed := true;
+    at_exit (fun () -> if !any_failed && not !exiting then (exiting := true; exit 1))
+  end
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Timing                                                                    *)
@@ -308,8 +329,7 @@ let run_expect r = function
   | Some checks ->
     try List.iter (fun (a : assertion) -> a r) checks
     with Failure msg ->
-      let path = match (current ()).url.base_path with "" -> "" | p -> p in
-      failwith (Printf.sprintf "%s\n  elapsed: %.0fms\n  url: %s" msg !last_elapsed path)
+      failwith (Printf.sprintf "%s\n  request: %s\n  elapsed: %.0fms" msg (current ()).last_request !last_elapsed)
 
 let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : assertion list option) path =
   let c = current () in
@@ -339,6 +359,7 @@ let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : asser
   let r = Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~tls:(c.url.scheme = "https") ~meth ~path:full_path ~headers ?body () in
   last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
   c.last <- Some r;
+  c.last_request <- Printf.sprintf "%s %s" meth full_path;
   c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
   run_expect r expect
 
@@ -431,11 +452,11 @@ let check label body =
   | () ->
     let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
     c.checks_passed <- c.checks_passed + 1;
-    Printf.printf "  \027[32m✓\027[0m  %s \027[2m(%.0fms)\027[0m\n%!" label ms
+    Printf.printf "  %s  %s %s\n%!" (color "32" (glyph "✓" "ok")) label (color "2" (Printf.sprintf "(%.0fms)" ms))
   | exception e ->
     let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
     c.checks_failed <- c.checks_failed + 1;
-    Printf.printf "  \027[31m✗\027[0m  %s \027[2m(%.0fms)\027[0m\n%!" label ms;
+    Printf.printf "  %s  %s %s\n%!" (color "31" (glyph "✗" "FAIL")) label (color "2" (Printf.sprintf "(%.0fms)" ms));
     Printf.printf "     %s\n%!" (Printexc.to_string e)
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
@@ -456,12 +477,15 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
   | Some argv ->
     Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
       ~net ~clock ~env ~host:target.host ~port:target.port ~tls ~timeout argv);
-  let c = { url = target; net; last = None; cookies = []; checks_passed = 0; checks_failed = 0 } in
+  let c = { url = target; net; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0 } in
+  install_exit_hook ();
   ctx := Some c;
-  Printf.printf "\n\027[1m⟐ %s\027[0m \027[2m(%s)\027[0m\n%!" label url;
+  Printf.printf "\n%s %s\n%!" (color "1" (glyph "⟐ " "> " ^ label)) (color "2" (Printf.sprintf "(%s)" url));
   Fun.protect body ~finally:(fun () -> ctx := None);
   Printf.printf "\n";
+  (* a hunt never exits here — it records failure and lets later suites in the same process
+     run. The process exits non-zero once, at the end, via the at_exit hook. *)
   if c.checks_failed > 0 then (
-    Printf.printf "  \027[31m%d/%d checks failed\027[0m\n%!" c.checks_failed (c.checks_passed + c.checks_failed);
-    exit 1)
-  else Printf.printf "  \027[32m%d checks passed\027[0m\n%!" c.checks_passed
+    any_failed := true;
+    Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))))
+  else Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed))
