@@ -1,0 +1,8 @@
+; The `fennec test` orchestration, as a library of focused modules (instance allocation,
+; suite discovery, the run loop) so the testable logic is unit-tested in isolation. The CLI
+; `test` subcommand is a thin call into it. Depends on fennec.core (the Dev_proto env wire)
+; and fennec_dev (server spawn / port / discovery, reused from the dev supervisor) — NOT on
+; fennec-hunt, so the `fennec` binary stays a lean install.
+(library
+ (name fennec_testcmd)
+ (libraries unix fennec.core fennec_dev))
