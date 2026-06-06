@@ -412,6 +412,52 @@ let worker_cmd =
   let doc = "(internal) persistent esbuild build worker used by fennec dev" in
   Cmd.v (Cmd.info "__esbuild-worker" ~doc) Term.(const go $ socket_arg)
 
+(* Run the app's tests in one of three cuts. The default (no SUITE) is the fast unit gate;
+   $(b,http) and $(b,browser) each boot a dedicated, isolated app instance per suite (its own
+   port — and, later, its own database) so stateful suites run in parallel deterministically. *)
+let test_cmd =
+  let module R = Fennec_testcmd.Run in
+  let suite_arg =
+    Arg.(value & pos 0 string "unit" & info [] ~docv:"SUITE" ~doc:"Which tests: unit (default), http, browser, or all.")
+  in
+  let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only suites/cases matching $(docv).") in
+  let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) failures.") in
+  let no_fail_fast_arg = Arg.(value & flag & info [ "no-fail-fast" ] ~doc:"Run every suite even after a failure.") in
+  let watch_arg = Arg.(value & flag & info [ "watch" ] ~doc:"Re-run on change (dev loop).") in
+  let reporter_arg = Arg.(value & opt (some string) None & info [ "reporter" ] ~docv:"R" ~doc:"Reporter(s), comma-list, e.g. $(b,list,junit).") in
+  let jobs_arg = Arg.(value & opt (some int) None & info [ "jobs"; "j" ] ~docv:"N" ~doc:"Parallel suites (default: CPUs).") in
+  let headed_arg = Arg.(value & flag & info [ "headed" ] ~doc:"Browser cut: show the browser window.") in
+  let screenshots_arg = Arg.(value & opt (some string) None & info [ "screenshots" ] ~docv:"DIR" ~doc:"Browser cut: write a PNG on failure into $(docv).") in
+  let port_arg = Arg.(value & opt int R.default_options.base_port & info [ "port" ] ~docv:"BASE" ~doc:"Base port for per-suite instance blocks.") in
+  let go suite grep max_failures no_fail_fast watch reporter jobs headed screenshots base_port =
+    match R.suite_of_string suite with
+    | Error msg -> Printf.eprintf "fennec test: %s\n" msg; 1
+    | Ok suite ->
+      R.run { R.suite; grep; max_failures; fail_fast = not no_fail_fast; watch; reporter; jobs; headed; screenshots; base_port }
+  in
+  let doc = "Run the app's tests (unit, http, browser)" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Run the app's tests in one of three cuts. $(b,fennec test) with no argument runs the \
+         fast $(b,unit) gate (delegates to $(b,dune runtest)). $(b,http) and $(b,browser) boot a \
+         DEDICATED, isolated app instance per suite — its own port (and, in future, its own \
+         database) — so stateful suites run in parallel, deterministically, without sharing \
+         state. $(b,all) runs unit, then http, then browser.";
+      `P
+        "Suites live by convention in $(b,test/http/) and $(b,test/browser/) (each an \
+         executable using the $(b,fennec-hunt) library). fennec owns the lifecycle — build, boot \
+         per-suite instance, run, tear down — so a suite never spawns a server itself and the \
+         dune build-directory lock is never nested.";
+      `S Manpage.s_examples;
+      `Pre "  fennec test                # the fast unit gate";
+      `Pre "  fennec test http           # the Http suites, each isolated";
+      `Pre "  fennec test browser -j1    # the Browser suites, serially";
+      `Pre "  fennec test all            # everything, fast-to-slow" ]
+  in
+  Cmd.v (Cmd.info "test" ~doc ~man)
+    Term.(const go $ suite_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ watch_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
+
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
   let man =
@@ -423,6 +469,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd; worker_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; test_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)
