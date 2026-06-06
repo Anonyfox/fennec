@@ -5,4 +5,4 @@
 ; fennec-hunt, so the `fennec` binary stays a lean install.
 (library
  (name fennec_testcmd)
- (libraries unix fennec.core fennec_dev))
+ (libraries unix threads.posix fennec.core fennec_dev))

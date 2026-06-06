@@ -69,46 +69,87 @@ let suite_args ~(cut : suite) (o : options) : string list =
     @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
   | Unit | All -> []
 
-(* run one suite exe against its isolated instance's env; inherit stdout/stderr so the suite's
-   own ✓/✗ report reaches the user. [args] is argv beyond argv[0]. Returns the exit code. *)
-let run_suite_exe ~exe ~(args : string list) ~(env : (string * string) list) : int =
-  let pid = Unix.create_process_env exe (Array.of_list (exe :: args)) (Boot.env_array env) Unix.stdin Unix.stdout Unix.stderr in
-  match Unix.waitpid [] pid with
-  | _, Unix.WEXITED c -> c
-  | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> 128
+(* run one suite exe against its isolated instance's env. [args] is argv beyond argv[0].
+   [out = None] inherits stdout/stderr (live, colour-capable — the serial path). [out = Some fd]
+   sends BOTH stdout and stderr there, with stdin from /dev/null, so a parallel run captures the
+   suite's whole output to a file (a file, not a pipe, so there's no buffer-fill deadlock while
+   we waitpid). Returns the exit code. *)
+let run_suite_exe ~exe ~(args : string list) ~(env : (string * string) list) ~out : int =
+  let argv = Array.of_list (exe :: args) and penv = Boot.env_array env in
+  let pid, close =
+    match out with
+    | None -> (Unix.create_process_env exe argv penv Unix.stdin Unix.stdout Unix.stderr, fun () -> ())
+    | Some fd ->
+      let null = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+      (Unix.create_process_env exe argv penv null fd fd, fun () -> try Unix.close null with _ -> ())
+  in
+  Fun.protect ~finally:close (fun () ->
+      match Unix.waitpid [] pid with
+      | _, Unix.WEXITED c -> c
+      | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> 128)
 
-(* one suite end-to-end against a DEDICATED isolated instance; returns [true] iff it passed.
+let read_file path =
+  try
+    let ic = open_in_bin path in
+    Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () -> really_input_string ic (in_channel_length ic))
+  with _ -> ""
+
+(* one suite end-to-end against a DEDICATED isolated instance; returns [(passed, block)].
+   With [~stream:true] the output streams LIVE to stdout/stderr (colour-capable) and [block] is
+   ""; with [~stream:false] nothing is printed and [block] is the suite's full self-labelled
+   output as one string, for the caller to flush atomically (so parallel suites never tear).
    Before booting we make the port usable, distinguishing the two cases the AirPlay incident
-   exposed: a leftover of OURS (reclaim it — SIGKILL, the existing dev self-heal) vs. a FOREIGN
-   holder (name it, never touch it — fail this suite with a clear message). Teardown of the
-   instance is structural (Fun.protect), so an assertion failure or exception never orphans it. *)
-let run_one_suite ~server_exe ~(args : string list) ~(suite : Suites.t) ~(inst : Instance.t) : bool =
-  Printf.printf "\n\027[1m\u{25b6} %s\027[0m \027[2m(:%d)\027[0m\n%!" suite.Suites.name inst.Instance.port;
-  match Port.foreign_holder ~exe:server_exe inst.Instance.port with
-  | Some (pid, cmd) ->
-    Printf.eprintf
-      "  \027[31m\u{2717} port %d is held by another process (pid %d) \u{2014} not ours, leaving it alone.\027[0m\n     %s\n     free that port, or move the test range with --port.\n%!"
-      inst.Instance.port pid (preview cmd);
-    false
-  | None ->
-    ignore (Port.reclaim ~exe:server_exe inst.Instance.port (* clear a leftover of OURS, if any *));
-    let boot = Boot.spawn ~exe:server_exe ~env:inst.Instance.server_env in
-    Fun.protect
-      ~finally:(fun () -> Boot.stop boot; Boot.cleanup boot)
-      (fun () ->
-        match Boot.wait_ready boot ~port:inst.Instance.port ~timeout:30.0 with
-        | Error msg ->
-          Printf.eprintf "  \027[31m\u{2717} instance for %s never came up: %s\027[0m\n%!" suite.Suites.name msg;
-          let log = Boot.read_log boot in
-          if log <> "" then Printf.eprintf "     server log:\n%s\n%!" log;
-          false
-        | Ok () -> run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env = 0)
+   exposed: a leftover of OURS (reclaim it — SIGKILL, the dev self-heal) vs. a FOREIGN holder
+   (name it, never touch it — fail this suite clearly). Teardown is structural (Fun.protect),
+   so a failure or exception never orphans the instance. *)
+let run_one_suite ~server_exe ~(args : string list) ~stream ~(suite : Suites.t) ~(inst : Instance.t) : bool * string =
+  let buf = Buffer.create 256 in
+  let emit s = if stream then (print_string s; flush stdout) else Buffer.add_string buf s in
+  emit (Printf.sprintf "\n\027[1m\u{25b6} %s\027[0m \027[2m(:%d)\027[0m\n" suite.Suites.name inst.Instance.port);
+  let ok =
+    match Port.foreign_holder ~exe:server_exe inst.Instance.port with
+    | Some (pid, cmd) ->
+      emit
+        (Printf.sprintf
+           "  \027[31m\u{2717} port %d is held by another process (pid %d) \u{2014} not ours, leaving it alone.\027[0m\n     %s\n     free that port, or move the test range with --port.\n"
+           inst.Instance.port pid (preview cmd));
+      false
+    | None ->
+      ignore (Port.reclaim ~exe:server_exe inst.Instance.port (* clear a leftover of OURS, if any *));
+      let boot = Boot.spawn ~exe:server_exe ~env:inst.Instance.server_env in
+      Fun.protect
+        ~finally:(fun () -> Boot.stop boot; Boot.cleanup boot)
+        (fun () ->
+          match Boot.wait_ready boot ~port:inst.Instance.port ~timeout:30.0 with
+          | Error msg ->
+            emit (Printf.sprintf "  \027[31m\u{2717} instance for %s never came up: %s\027[0m\n" suite.Suites.name msg);
+            let log = Boot.read_log boot in
+            if log <> "" then emit (Printf.sprintf "     server log:\n%s\n" log);
+            false
+          | Ok () ->
+            if stream then run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:None = 0
+            else begin
+              let tmp = Filename.temp_file "fennec-suite-" ".log" in
+              let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+              let code =
+                Fun.protect
+                  ~finally:(fun () -> try Unix.close fd with _ -> ())
+                  (fun () -> run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
+              in
+              emit (read_file tmp);
+              (try Sys.remove tmp with _ -> ());
+              code = 0
+            end)
+  in
+  (ok, Buffer.contents buf)
 
-(* orchestrate one cut: discover the server + suites, build everything once, then for each
-   suite boot a DEDICATED isolated instance, run the suite against it, tear it down. Returns
-   the number of failed suites (0 = all passed). Sequential for now — the per-suite isolation
-   (distinct ports) makes parallel execution safe to add next. *)
-let orchestrate ~(cut : suite) ~dir ~base ~(args : string list) : int =
+(* orchestrate one cut: discover the server + suites, build everything once, then run each
+   suite against its OWN dedicated isolated instance (boot → wait → run → tear down). With
+   [jobs > 1] and more than one suite, suites run concurrently (≤ [jobs] at a time) — safe
+   precisely because each has its own port + server — and each suite's output is captured and
+   flushed as one atomic block, so nothing interleaves. Serial runs stream live, in order.
+   Returns the number of failed suites (0 = all passed). *)
+let orchestrate ~(cut : suite) ~dir ~base ~jobs ~(args : string list) : int =
   ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned dev watcher → no lock clash *)
   match Discover.find () with
   | Error msg -> Printf.eprintf "fennec test: %s\n%!" msg; 1
@@ -130,15 +171,21 @@ let orchestrate ~(cut : suite) ~dir ~base ~(args : string list) : int =
       | n when n <> 0 -> Printf.eprintf "fennec test: `dune build` failed (exit %d) — see the errors above\n%!" n; 1
       | _ ->
         let instances = Instance.allocate ~base (List.map (fun (s : Suites.t) -> s.Suites.name) suites) in
-        (* run each suite, accumulating its result in order (List.iter2 is left-to-right, so the
-           side effects and the accumulated list stay in suite order) *)
-        let results = ref [] in
-        List.iter2
-          (fun (suite : Suites.t) (inst : Instance.t) ->
-            let ok = run_one_suite ~server_exe:d.Discover.exe ~args ~suite ~inst in
-            results := { Report.name = suite.Suites.name; port = inst.Instance.port; ok } :: !results)
-          suites instances;
-        let results = List.rev !results in
+        let pairs = List.combine suites instances in
+        let n = List.length pairs in
+        let jobs = max 1 (min jobs n) in (* never spawn more workers than there are suites *)
+        let stream = jobs <= 1 in (* serial → live, colour-capable; parallel → atomic blocks *)
+        if not stream then Printf.printf "running %d suites, up to %d at a time\n%!" n jobs;
+        let pm = Mutex.create () in
+        (* Pool.map preserves input order, so [results] stay in suite order for the footer *)
+        let results =
+          Pool.map ~jobs
+            (fun ((suite : Suites.t), (inst : Instance.t)) ->
+              let ok, block = run_one_suite ~server_exe:d.Discover.exe ~args ~stream ~suite ~inst in
+              if not stream then (Mutex.lock pm; print_string block; flush stdout; Mutex.unlock pm);
+              { Report.name = suite.Suites.name; port = inst.Instance.port; ok })
+            pairs
+        in
         let failed = Report.failures results in
         (* cross-suite footer: one honest roll-up at suite granularity (green iff every suite
            exited 0) — the per-suite check tallies are already printed above by each runner *)
@@ -149,8 +196,16 @@ let orchestrate ~(cut : suite) ~dir ~base ~(args : string list) : int =
         failed
     end
 
-let run_http (opts : options) : int = orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port ~args:(suite_args ~cut:Http opts)
-let run_browser (opts : options) : int = orchestrate ~cut:Browser ~dir:"test/browser" ~base:opts.base_port ~args:(suite_args ~cut:Browser opts)
+(* parallel suites: explicit -j wins, else default to the machine's CPU count (suites are
+   isolated, so this is safe); the orchestrator clamps it to the suite count *)
+let effective_jobs (o : options) =
+  match o.jobs with Some j -> max 1 j | None -> max 1 (Domain.recommended_domain_count ())
+
+let run_http (opts : options) : int =
+  orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port ~jobs:(effective_jobs opts) ~args:(suite_args ~cut:Http opts)
+
+let run_browser (opts : options) : int =
+  orchestrate ~cut:Browser ~dir:"test/browser" ~base:opts.base_port ~jobs:(effective_jobs opts) ~args:(suite_args ~cut:Browser opts)
 
 let run (opts : options) : int =
   match opts.suite with
