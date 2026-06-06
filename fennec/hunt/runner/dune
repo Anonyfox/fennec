@@ -14,5 +14,5 @@
  (public_name fennec-hunt.runner)
  (modules ())
  (inline_tests.backend
-  (runner_libraries fennec-hunt)
-  (generate_runner (echo "let () = exit (Fennec_hunt.Unit.run ())"))))
+  (runner_libraries fennec-hunt.unit)
+  (generate_runner (echo "let () = exit (Fennec_hunt_unit.run ())"))))

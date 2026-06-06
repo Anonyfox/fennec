@@ -629,3 +629,120 @@ module For_test = struct
   let parse_set_cookies = parse_set_cookies
   let update_jar = update_jar
 end
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Inline tests (For_test pure cores + assertion surface)                     *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+(* --- poll (deterministic fake clock) --- *)
+let%test_unit "poll: passes on first try" =
+  let t = ref 0.0 in let now () = !t in let sleep dt = t := !t +. dt in
+  let calls = ref 0 in
+  For_test.poll ~now ~sleep ~within:5.0 ~interval:0.2 (fun () -> incr calls);
+  Fennec_hunt_unit.check "1 call" (!calls = 1)
+
+let%test_unit "poll: passes on 3rd try" =
+  let t = ref 0.0 in let now () = !t in let sleep dt = t := !t +. dt in
+  let calls = ref 0 in
+  For_test.poll ~now ~sleep ~within:5.0 ~interval:0.2 (fun () -> incr calls; if !calls < 3 then failwith "not yet");
+  Fennec_hunt_unit.check "3 calls" (!calls = 3)
+
+let%test "poll: always-failing raises after deadline" =
+  let t = ref 0.0 in let now () = !t in let sleep dt = t := !t +. dt in
+  try For_test.poll ~now ~sleep ~within:1.0 ~interval:0.2 (fun () -> failwith "still"); false
+  with Failure m -> Fennec_hunt_util.contains m "still" && Fennec_hunt_util.contains m "within 1.0s"
+
+(* --- decode_chunked --- *)
+let%test "chunked: two chunks joined"   = For_test.decode_chunked "2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n" = "abcd"
+let%test "chunked: single chunk"        = For_test.decode_chunked "5\r\nhello\r\n0\r\n\r\n" = "hello"
+let%test "chunked: hex size 0x10"       = For_test.decode_chunked "10\r\n0123456789abcdef\r\n0\r\n\r\n" = "0123456789abcdef"
+let%test "chunked: extension ignored"   = For_test.decode_chunked "2;foo=bar\r\nok\r\n0\r\n\r\n" = "ok"
+let%test "chunked: empty"               = For_test.decode_chunked "0\r\n\r\n" = ""
+let%test "chunked: malformed best-effort" = For_test.decode_chunked "2\r\nab\r\nGARBAGE" = "ab"
+
+(* --- encode_multipart --- *)
+let%test "multipart: field part" =
+  let mp = For_test.encode_multipart ~boundary:"B" [ field "t" "hi" ] in
+  Fennec_hunt_util.contains mp "name=\"t\"\r\n\r\nhi\r\n"
+let%test "multipart: file part" =
+  let mp = For_test.encode_multipart ~boundary:"B" [ file ~name:"f" ~filename:"a.txt" ~content_type:"text/plain" "D" ] in
+  Fennec_hunt_util.contains mp "filename=\"a.txt\"" && Fennec_hunt_util.contains mp "Content-Type: text/plain"
+let%test "multipart: closing boundary" =
+  Fennec_hunt_util.contains (For_test.encode_multipart ~boundary:"B" [ field "x" "y" ]) "--B--\r\n"
+
+(* --- follow_redirects --- *)
+let%test "redirects: follows chain to 200" =
+  let chain = [ "/b", (302, Some "/c"); "/c", (200, None) ] in
+  let location (s, l) = if s >= 300 && s < 400 then l else None in
+  let fetch l = try List.assoc l chain with Not_found -> (599, None) in
+  For_test.follow_redirects ~max:10 ~location ~fetch (302, Some "/b") = (200, None)
+let%test "redirects: no redirect passes through" =
+  For_test.follow_redirects ~max:10 ~location:(fun _ -> None) ~fetch:(fun _ -> (200, None)) (200, None) = (200, None)
+let%test "redirects: cycle bounded by max" =
+  let cyclic _ = (302, Some "/loop") in
+  For_test.follow_redirects ~max:3 ~location:(fun (s,l) -> if s=302 then l else None) ~fetch:cyclic (302, Some "/loop") = (302, Some "/loop")
+
+(* --- redirect_path --- *)
+let%test "redirect_path: absolute path"   = For_test.redirect_path "/dash?x=1" = "/dash?x=1"
+let%test "redirect_path: absolute URL"    = For_test.redirect_path "http://h:8080/dash?x=1" = "/dash?x=1"
+let%test "redirect_path: URL no path"     = For_test.redirect_path "http://host" = "/"
+let%test "redirect_path: relative"        = For_test.redirect_path "dash" = "/dash"
+
+(* --- parse_url --- *)
+let%test "parse_url: full"           = For_test.parse_url "http://localhost:4000/api/x" = ("http", "localhost", 4000, "/api/x")
+let%test "parse_url: no scheme"      = For_test.parse_url "example.com:8080" = ("http", "example.com", 8080, "")
+let%test "parse_url: https default"  = For_test.parse_url "https://acme.com" = ("https", "acme.com", 443, "")
+let%test "parse_url: bare host"      = For_test.parse_url "localhost" = ("http", "localhost", 80, "")
+
+(* --- encoders --- *)
+let%test "encode_query escapes"      = For_test.encode_query [("q", "a b&c"); ("n", "1")] = "q=a%20b%26c&n=1"
+let%test "encode_form content-type"  = snd (For_test.encode_form [("a", "1")]) = "application/x-www-form-urlencoded"
+let%test "encode_form body"          = fst (For_test.encode_form [("a", "x y")]) = "a=x%20y"
+
+(* --- cookie jar --- *)
+let%test "parse_set_cookies strips attrs" = For_test.parse_set_cookies [("Set-Cookie", "sid=abc; Path=/; HttpOnly")] = [("sid", "abc")]
+let%test "parse_set_cookies ci header"    = For_test.parse_set_cookies [("set-cookie", "a=1")] = [("a", "1")]
+let%test "update_jar adds"                = List.sort compare (For_test.update_jar [("a","1")] [("b","2")]) = [("a","1"); ("b","2")]
+let%test "update_jar overwrites"          = For_test.update_jar [("a","1")] [("a","2")] = [("a","2")]
+
+(* --- helpers --- *)
+let%test "basic_auth header"        = basic_auth "user" "pass" = ("Authorization", "Basic dXNlcjpwYXNz")
+let%test "bearer header"            = bearer "tok" = ("Authorization", "Bearer tok")
+let%test "json_content_type"        = json_content_type = ("Content-Type", "application/json")
+
+(* --- assertion surface (against constructed responses) --- *)
+let%test_unit "assertions: status" =
+  let r ok = { status = ok; headers = []; body = "" } in
+  status 200 (r 200); status_2xx (r 201); status_3xx (r 302); status_4xx (r 404); status_5xx (r 503);
+  (match (try status 200 (r 404); false with _ -> true) with true -> () | false -> failwith "status 200 on 404 should fail")
+
+let%test_unit "assertions: body" =
+  let r b = { status = 200; headers = []; body = b } in
+  body_contains "ell" (r "hello"); body_is "hi" (r "hi"); body_not_contains "z" (r "hi");
+  body_empty (r ""); body_not_empty (r "x"); body_length 5 (r "hello"); min_body_length 3 (r "hello");
+  body_matches "^[0-9]+$" (r "42")
+
+let%test_unit "assertions: headers" =
+  let r h = { status = 200; headers = h; body = "" } in
+  header_is "X-A" "1" (r [("X-A","1")]); header_contains "content-type" "json" (r [("Content-Type","application/json")]);
+  has_header "X-A" (r [("X-A","1")]); no_header "X-Z" (r []); is_json (r [("Content-Type","application/json")]);
+  is_html (r [("Content-Type","text/html; charset=utf-8")]); content_type "json" (r [("Content-Type","application/json")])
+
+let%test_unit "assertions: JSON paths" =
+  let jbody = {|{"name":"alice","id":"550e8400-e29b-41d4-a716-446655440000","age":30,"tags":["a","b"],"when":"2026-01-02T03:04:05Z","ok":true,"maybe":null}|} in
+  let r = { status = 200; headers = []; body = jbody } in
+  json_path_is "name" "alice" r; json_path_is "age" "30" r; json_path_is "ok" "true" r;
+  json_has "id" r; json_length "tags" 2 r; json_is_uuid "id" r; json_is_datetime "when" r;
+  json_is_number "age" r; json_is_array "tags" r; json_is_string "name" r; json_is_bool "ok" r;
+  json_is_null "maybe" r; json_path_contains "name" "lic" r; json_path_matches "id" "^[0-9a-f-]+$" r
+
+let%test_unit "assertions: redirect + cookie" =
+  redirect_to "/home" { status = 302; headers = [("Location","/home")]; body = "" };
+  has_cookie "sid" { status = 200; headers = [("Set-Cookie","sid=abc; Path=/")]; body = "" };
+  no_cookie "sid" { status = 200; headers = []; body = "" }
+
+(* --- Test_proto.resolve (pure) --- *)
+let%test "resolve: explicit wins"    = Test_proto.resolve ~explicit:(Some "http://a") ~from_env:(Some "http://b") = Ok "http://a"
+let%test "resolve: env fallback"     = Test_proto.resolve ~explicit:None ~from_env:(Some "http://b") = Ok "http://b"
+let%test "resolve: neither → error"  = match Test_proto.resolve ~explicit:None ~from_env:None with Error _ -> true | Ok _ -> false
+let%test "url_for builds url"        = Test_proto.url_for ~port:7001 = "http://localhost:7001"

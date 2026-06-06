@@ -1,0 +1,10 @@
+; The Unit test runtime — extracted as its own sub-library (fennec-hunt.unit) so:
+; 1. The ppx can generate `Fennec_hunt_unit.test_loc` without creating a cycle when
+;    fennec-hunt self-hosts its own inline tests.
+; 2. It stays reusable independently (the runtime has no ppx / browser / http deps).
+; 3. The main fennec-hunt library re-exports it as Fennec_hunt.Unit.
+(library
+ (name fennec_hunt_unit)
+ (public_name fennec-hunt.unit)
+ (libraries unix)
+ (modules fennec_hunt_unit))

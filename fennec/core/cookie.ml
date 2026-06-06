@@ -59,13 +59,13 @@ let%test "set-cookie basic" =
   String.length s > 0 && String.sub s 0 7 = "sid=abc"
 let%test "set-cookie default path /" =
   let s = to_set_cookie ~name:"k" ~value:"v" () in
-  Fennec_hunt.Unit.str_contains s "Path=/"
+  Fennec_hunt_unit.str_contains s "Path=/"
 let%test "set-cookie default SameSite=Lax" =
   let s = to_set_cookie ~name:"k" ~value:"v" () in
-  Fennec_hunt.Unit.str_contains s "SameSite=Lax"
+  Fennec_hunt_unit.str_contains s "SameSite=Lax"
 let%test "set-cookie default HttpOnly" =
   let s = to_set_cookie ~name:"k" ~value:"v" () in
-  Fennec_hunt.Unit.str_contains s "HttpOnly"
+  Fennec_hunt_unit.str_contains s "HttpOnly"
 let%test "set-cookie None implies Secure" =
   let s = to_set_cookie ~name:"k" ~value:"v" ~same_site:None_ () in
-  Fennec_hunt.Unit.str_contains s "Secure" && Fennec_hunt.Unit.str_contains s "SameSite=None"
+  Fennec_hunt_unit.str_contains s "Secure" && Fennec_hunt_unit.str_contains s "SameSite=None"

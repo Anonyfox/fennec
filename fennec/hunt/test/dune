@@ -10,5 +10,5 @@
 ; let%test / let%test_unit, registers tests, runs them. Proves the full pipeline.
 (test
  (name test_unit)
- (libraries fennec-hunt)
+ (libraries fennec-hunt fennec-hunt.unit)
  (preprocess (pps fennec-hunt.ppx)))

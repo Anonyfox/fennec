@@ -4,13 +4,13 @@
 
 (* ──── explicit API (no ppx) ──── *)
 
-let () = Fennec_hunt.Unit.test "explicit bool test" (fun () -> 1 + 1 = 2)
+let () = Fennec_hunt_unit.test "explicit bool test" (fun () -> 1 + 1 = 2)
 
-let () = Fennec_hunt.Unit.test_unit "explicit unit test" (fun () ->
-  Fennec_hunt.Unit.check "inner check" (List.length [1;2;3] = 3))
+let () = Fennec_hunt_unit.test_unit "explicit unit test" (fun () ->
+  Fennec_hunt_unit.check "inner check" (List.length [1;2;3] = 3))
 
-let () = Fennec_hunt.Unit.test_unit "check_eq passes on equal" (fun () ->
-  Fennec_hunt.Unit.check_eq "values" ~expected:"abc" ~got:"abc")
+let () = Fennec_hunt_unit.test_unit "check_eq passes on equal" (fun () ->
+  Fennec_hunt_unit.check_eq "values" ~expected:"abc" ~got:"abc")
 
 (* ──── ppx sugar (let%test / let%test_unit) ──── *)
 
@@ -19,11 +19,11 @@ let%test "ppx bool test" = 2 * 3 = 6
 let%test "ppx bool with function call" = String.length "hello" = 5
 
 let%test_unit "ppx unit test" =
-  Fennec_hunt.Unit.check "inner" (42 > 0)
+  Fennec_hunt_unit.check "inner" (42 > 0)
 
 let%test_unit "ppx unit with check_eq" =
-  Fennec_hunt.Unit.check_eq "string" ~expected:"abc" ~got:(String.lowercase_ascii "ABC")
+  Fennec_hunt_unit.check_eq "string" ~expected:"abc" ~got:(String.lowercase_ascii "ABC")
 
 (* ──── the runner ──── *)
 
-let () = exit (Fennec_hunt.Unit.run ())
+let () = exit (Fennec_hunt_unit.run ())

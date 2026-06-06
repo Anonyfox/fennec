@@ -7,7 +7,7 @@
      let%test "name" = <bool expr>          — fails if false
      let%test_unit "name" = <unit expr>     — fails if raises
 
-   The bodies expand to [Fennec_hunt.Unit.test_loc] / [test_unit_loc] calls (registration
+   The bodies expand to [Fennec_hunt.Fennec_hunt_unit.test_loc] / [test_unit_loc] calls (registration
    as a module-init side effect, exactly like Http's [hunt] or Live's [test]).
 
    PRODUCTION STRIP: when the ppx argument [-fennec-drop-tests] is present (passed by the
@@ -56,8 +56,12 @@ let expand_test ~ctxt payload =
          let file = Ast_builder.Default.estring ~loc (loc_file loc) in
          let line = Ast_builder.Default.eint ~loc (loc_line loc) in
          let ename = Ast_builder.Default.estring ~loc name in
+         (* emit the SHORT path (Fennec_hunt_unit.test_loc) so the expansion works both INSIDE the
+            fennec-hunt library (where Unit is a sibling module) AND outside (where the
+            user has `open Fennec_hunt` or the library is unwrapped). The fully-qualified
+            Fennec_hunt.Fennec_hunt_unit.test_loc would create a cycle inside the library. *)
          [%stri let () =
-           Fennec_hunt.Unit.test_loc ~name:[%e ename] ~file:[%e file] ~line:[%e line]
+           Fennec_hunt_unit.test_loc ~name:[%e ename] ~file:[%e file] ~line:[%e line]
              (fun () -> [%e expr])]
        | None ->
          Location.raise_errorf ~loc "let%%test requires a string literal name: let%%test \"name\" = ...")
@@ -87,7 +91,7 @@ let expand_test_unit ~ctxt payload =
          let line = Ast_builder.Default.eint ~loc (loc_line loc) in
          let ename = Ast_builder.Default.estring ~loc name in
          [%stri let () =
-           Fennec_hunt.Unit.test_unit_loc ~name:[%e ename] ~file:[%e file] ~line:[%e line]
+           Fennec_hunt_unit.test_unit_loc ~name:[%e ename] ~file:[%e file] ~line:[%e line]
              (fun () -> [%e expr])]
        | None ->
          Location.raise_errorf ~loc "let%%test_unit requires a string literal name: let%%test_unit \"name\" = ...")
