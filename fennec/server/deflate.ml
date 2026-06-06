@@ -51,3 +51,13 @@ let compress (payload : string) : string =
 let decompress (payload : string) : string =
   let t = Zlib.create_inflate ~window_bits:(-15) () in
   run t (payload ^ tail) Zlib.No_flush
+
+(* -- inline tests --------------------------------------------------------- *)
+
+let%test "rt empty"       = decompress (compress "") = ""
+let%test "rt 1 byte"      = decompress (compress "x") = "x"
+let%test "rt hello"        = decompress (compress "hello world") = "hello world"
+let%test "rt 5000 bytes"   = decompress (compress (String.make 5000 'z')) = String.make 5000 'z'
+let%test "rt utf-8"        = decompress (compress {js|café ✨ 🦊|js}) = {js|café ✨ 🦊|js}
+let%test "rt binary-ish"   = decompress (compress "\x00\x01\x02\xff binary-ish") = "\x00\x01\x02\xff binary-ish"
+let%test "compresses repetitive" = String.length (compress (String.make 5000 'a')) < 5000

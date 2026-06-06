@@ -90,3 +90,59 @@ let describe_error = function
   | Conflicting_pattern (pat, a, b) -> Printf.sprintf "endpoints %S and %S both claim the host %S" a b pat
 
 let describe_errors errs = String.concat "\n" (List.map describe_error errs)
+
+(* -- inline tests --------------------------------------------------------- *)
+
+let build' pairs = build (List.map (fun (n, ps) -> (n, ps, n)) pairs)
+let has_err k = function Error es -> List.exists k es | Ok _ -> false
+
+(* build validation *)
+let%test "valid table"                  = Result.is_ok (build' [ ("web", [ "*" ]); ("admin", [ "admin.acme.com" ]) ])
+let%test "empty list is ok"             = Result.is_ok (build' [])
+let%test "two catch-alls"               = has_err (function Multiple_catch_all _ -> true | _ -> false) (build' [ ("web", [ "*" ]); ("other", [ "*" ]) ])
+let%test "same exact conflicts"         = has_err (function Conflicting_pattern _ -> true | _ -> false) (build' [ ("a", [ "x.com" ]); ("b", [ "x.com" ]) ])
+let%test "duplicate name"               = has_err (function Duplicate_name _ -> true | _ -> false) (build' [ ("web", [ "a.com" ]); ("web", [ "b.com" ]) ])
+let%test "empty name"                   = has_err (function Bad_name _ -> true | _ -> false) (build' [ ("", [ "*" ]) ])
+let%test "name with space"              = has_err (function Bad_name _ -> true | _ -> false) (build' [ ("we b", [ "*" ]) ])
+let%test "no patterns"                  = has_err (function No_patterns _ -> true | _ -> false) (build' [ ("web", []) ])
+let%test "bad pattern"                  = has_err (function Bad_pattern _ -> true | _ -> false) (build' [ ("web", [ "a*b" ]) ])
+let%test "exact + wildcard no conflict" = Result.is_ok (build' [ ("api", [ "api.acme.com" ]); ("rest", [ "*.acme.com" ]) ])
+
+let%test_unit "multi-error: both reported" =
+  match build' [ ("", [ "*" ]); ("a", [ "x.com" ]); ("b", [ "x.com" ]) ] with
+  | Error es ->
+    Fennec_hunt_unit.check "bad name present" (List.exists (function Bad_name _ -> true | _ -> false) es);
+    Fennec_hunt_unit.check "conflict present" (List.exists (function Conflicting_pattern _ -> true | _ -> false) es);
+    Fennec_hunt_unit.check "at least 2 errors" (List.length es >= 2)
+  | Ok _ -> Fennec_hunt_unit.check "should have failed" false
+
+(* route precedence *)
+let%test "exact beats wildcard + default" =
+  let t = Result.get_ok (build' [ ("web", [ "*" ]); ("admin", [ "admin.acme.com" ]); ("api", [ "*.acme.com" ]) ]) in
+  route t ~host:"admin.acme.com" = Some "admin"
+let%test "wildcard beats default" =
+  let t = Result.get_ok (build' [ ("web", [ "*" ]); ("admin", [ "admin.acme.com" ]); ("api", [ "*.acme.com" ]) ]) in
+  route t ~host:"x.acme.com" = Some "api"
+let%test "unknown falls to '*'" =
+  let t = Result.get_ok (build' [ ("web", [ "*" ]); ("admin", [ "admin.acme.com" ]); ("api", [ "*.acme.com" ]) ]) in
+  route t ~host:"totally.else.com" = Some "web"
+let%test "specificity not decl order" =
+  let t2 = Result.get_ok (build' [ ("api", [ "*.acme.com" ]); ("admin", [ "admin.acme.com" ]); ("web", [ "*" ]) ]) in
+  route t2 ~host:"admin.acme.com" = Some "admin" && route t2 ~host:"x.acme.com" = Some "api"
+let%test "longer suffix wins" =
+  let tn = Result.get_ok (build' [ ("broad", [ "*.acme.com" ]); ("narrow", [ "*.api.acme.com" ]) ]) in
+  route tn ~host:"x.api.acme.com" = Some "narrow"
+let%test "shorter suffix at its level" =
+  let tn = Result.get_ok (build' [ ("broad", [ "*.acme.com" ]); ("narrow", [ "*.api.acme.com" ]) ]) in
+  route tn ~host:"x.acme.com" = Some "broad"
+let%test "no '*' -> unknown is None" =
+  let t3 = Result.get_ok (build' [ ("admin", [ "admin.acme.com" ]) ]) in
+  route t3 ~host:"nope.com" = None
+let%test "no '*' -> match still routes" =
+  let t3 = Result.get_ok (build' [ ("admin", [ "admin.acme.com" ]) ]) in
+  route t3 ~host:"admin.acme.com" = Some "admin"
+
+(* entries preserve declaration order *)
+let%test "entries keep decl order" =
+  let te = Result.get_ok (build' [ ("web", [ "*" ]); ("admin", [ "admin.acme.com" ]) ]) in
+  List.map (fun e -> e.name) (entries te) = [ "web"; "admin" ]

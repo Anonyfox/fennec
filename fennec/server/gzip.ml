@@ -39,3 +39,18 @@ let gzip ?(level = 6) (s : string) : string =
 let deflate ?(level = 6) (s : string) : string =
   let t = Zlib.create_deflate ~level ~window_bits:15 () in
   run t s
+
+(* -- inline tests --------------------------------------------------------- *)
+
+let%test "gzip magic 1f 8b" =
+  let g = gzip (String.make 2000 'a') in
+  String.length g >= 2 && g.[0] = '\x1f' && g.[1] = '\x8b'
+let%test "gzip shrinks repetitive" =
+  String.length (gzip (String.make 2000 'a')) < 2000
+let%test "gzip empty input ok" =
+  String.length (gzip "") >= 0
+let%test "deflate zlib header 0x78" =
+  let d = deflate (String.make 2000 'b') in
+  String.length d >= 1 && Char.code d.[0] = 0x78
+let%test "deflate shrinks" =
+  String.length (deflate (String.make 2000 'b')) < 2000

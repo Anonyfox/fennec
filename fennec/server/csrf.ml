@@ -116,3 +116,172 @@ let make ~(secret : string) ?(field = "_csrf_token") ?(header = "x-csrf-token")
     match submitted with
     | Some tok when verify ~secret c tok = Ok -> c
     | _ -> Conn.text ~status:403 c "CSRF token invalid or missing"
+
+(* -- inline tests --------------------------------------------------------- *)
+
+let _req ?(meth = H.GET) ?(headers = []) ?(body = "") path =
+  H.make_request ~meth ~path ~headers ~body ()
+
+let _app_secret = "app-signing-secret"
+let _sess_secret = "session-signing-secret"
+let _with_session () = Session.make ~secret:_sess_secret () (Conn.make (_req "/"))
+
+(* token + verify outcomes *)
+let%test "tokens non-empty" =
+  let c = _with_session () in
+  let t1 = token ~secret:_app_secret c in
+  t1 <> ""
+
+let%test "each render masks differently" =
+  let c = _with_session () in
+  let t1 = token ~secret:_app_secret c in
+  let t2 = token ~secret:_app_secret c in
+  t1 <> t2
+
+let%test "fresh token is Ok" =
+  let c = _with_session () in
+  let t1 = token ~secret:_app_secret c in
+  verify ~secret:_app_secret c t1 = Ok
+
+let%test "other masked token also Ok" =
+  let c = _with_session () in
+  let _t1 = token ~secret:_app_secret c in
+  let t2 = token ~secret:_app_secret c in
+  verify ~secret:_app_secret c t2 = Ok
+
+let%test "wrong app secret -> Invalid" =
+  let c = _with_session () in
+  let t1 = token ~secret:_app_secret c in
+  verify ~secret:"other" c t1 = Invalid
+
+let%test "tampered token -> Invalid" =
+  let c = _with_session () in
+  let t1 = token ~secret:_app_secret c in
+  verify ~secret:_app_secret c (t1 ^ "AA") = Invalid
+
+let%test "garbage -> Invalid" =
+  let c = _with_session () in
+  verify ~secret:_app_secret c "no-dot" = Invalid
+
+let%test "other session -> Wrong_session" =
+  let c = _with_session () in
+  let t1 = token ~secret:_app_secret c in
+  let other = _with_session () in
+  verify ~secret:_app_secret other t1 = Wrong_session
+
+let%test "past-expiry -> Expired" =
+  let c = _with_session () in
+  let expired = token ~secret:_app_secret ~valid_for:(-1.0) c in
+  verify ~secret:_app_secret c expired = Expired
+
+(* paw behavior *)
+let%test_unit "GET is not gated" =
+  let g = _with_session () in
+  let _tok = token ~secret:_app_secret g in
+  let g = Conn.text g "form" in
+  let cookie =
+    match
+      Fennec_core.Headers.get_all
+        (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
+        "set-cookie"
+    with
+    | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
+    | [] -> ""
+  in
+  let mk ?(meth = H.GET) ?(headers = []) ?(body = "") () =
+    Session.make ~secret:_sess_secret () (Conn.make (_req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+  in
+  let csrf = make ~secret:_app_secret () in
+  Fennec_hunt_unit.check "GET not gated" (not (Conn.answered (csrf (mk ~meth:H.GET ()))))
+
+let%test_unit "POST with valid header passes" =
+  let g = _with_session () in
+  let tok = token ~secret:_app_secret g in
+  let g = Conn.text g "form" in
+  let cookie =
+    match
+      Fennec_core.Headers.get_all
+        (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
+        "set-cookie"
+    with
+    | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
+    | [] -> ""
+  in
+  let mk ?(meth = H.POST) ?(headers = []) ?(body = "") () =
+    Session.make ~secret:_sess_secret () (Conn.make (_req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+  in
+  let csrf = make ~secret:_app_secret () in
+  Fennec_hunt_unit.check "POST header passes" (not (Conn.answered (csrf (mk ~headers:[ ("x-csrf-token", tok) ] ()))))
+
+let%test_unit "POST with valid body token passes" =
+  let g = _with_session () in
+  let tok = token ~secret:_app_secret g in
+  let g = Conn.text g "form" in
+  let cookie =
+    match
+      Fennec_core.Headers.get_all
+        (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
+        "set-cookie"
+    with
+    | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
+    | [] -> ""
+  in
+  let mk ?(meth = H.POST) ?(headers = []) ?(body = "") () =
+    Session.make ~secret:_sess_secret () (Conn.make (_req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+  in
+  let csrf = make ~secret:_app_secret () in
+  let body = "_csrf_token=" ^ tok in
+  Fennec_hunt_unit.check "POST body passes"
+    (not (Conn.answered (csrf (mk ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body ()))))
+
+let%test_unit "POST with no token -> 403" =
+  let g = _with_session () in
+  let _tok = token ~secret:_app_secret g in
+  let g = Conn.text g "form" in
+  let cookie =
+    match
+      Fennec_core.Headers.get_all
+        (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
+        "set-cookie"
+    with
+    | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
+    | [] -> ""
+  in
+  let mk ?(meth = H.POST) ?(headers = []) ?(body = "") () =
+    Session.make ~secret:_sess_secret () (Conn.make (_req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+  in
+  let csrf = make ~secret:_app_secret () in
+  Fennec_hunt_unit.check "no token -> 403"
+    ((match Conn.resp (csrf (mk ())) with Some r -> r.H.status | None -> 0) = 403)
+
+let%test_unit "POST with bad token -> 403" =
+  let g = _with_session () in
+  let _tok = token ~secret:_app_secret g in
+  let g = Conn.text g "form" in
+  let cookie =
+    match
+      Fennec_core.Headers.get_all
+        (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
+        "set-cookie"
+    with
+    | s :: _ -> ( match String.index_opt s ';' with Some i -> String.sub s 0 i | None -> s)
+    | [] -> ""
+  in
+  let mk ?(meth = H.POST) ?(headers = []) ?(body = "") () =
+    Session.make ~secret:_sess_secret () (Conn.make (_req ~meth ~headers:(("Cookie", cookie) :: headers) ~body "/"))
+  in
+  let csrf = make ~secret:_app_secret () in
+  Fennec_hunt_unit.check "bad token -> 403"
+    ((match Conn.resp (csrf (mk ~headers:[ ("x-csrf-token", "wrong") ] ())) with Some r -> r.H.status | None -> 0) = 403)
+
+(* session requirement *)
+let%test "make raises without session" =
+  let no_sess () = Conn.make (_req "/") in
+  (try ignore (make ~secret:_app_secret () (no_sess ())); false with Failure _ -> true)
+
+let%test "token raises without session" =
+  let no_sess () = Conn.make (_req "/") in
+  (try ignore (token ~secret:_app_secret (no_sess ())); false with Failure _ -> true)
+
+let%test "weak secret rejected" =
+  (match (try Some (make ~secret:"short" ()) with Invalid_argument _ -> None) with Some _ -> false | None -> true)

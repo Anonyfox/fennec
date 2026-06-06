@@ -15,3 +15,22 @@ let of_base ~base ~count : (t, string) result =
 let gateway t = t.base
 let endpoint_port t ~index = t.base + 1 + index
 let count t = t.count
+
+(* -- inline tests --------------------------------------------------------- *)
+
+let%test "gateway = base" =
+  let p = Result.get_ok (of_base ~base:8020 ~count:2) in gateway p = 8020
+let%test "endpoint 0 = base+1" =
+  let p = Result.get_ok (of_base ~base:8020 ~count:2) in endpoint_port p ~index:0 = 8021
+let%test "endpoint 1 = base+2" =
+  let p = Result.get_ok (of_base ~base:8020 ~count:2) in endpoint_port p ~index:1 = 8022
+let%test "count is preserved" =
+  let p = Result.get_ok (of_base ~base:8020 ~count:2) in count p = 2
+let%test "isolation: different base" =
+  let q = Result.get_ok (of_base ~base:9000 ~count:2) in
+  gateway q = 9000 && endpoint_port q ~index:1 = 9002
+let%test "base 0 -> error"             = Result.is_error (of_base ~base:0 ~count:1)
+let%test "base > 65535 -> error"        = Result.is_error (of_base ~base:70000 ~count:1)
+let%test "overflow -> error"            = Result.is_error (of_base ~base:65530 ~count:10)
+let%test "edge: base+count == 65535"    = Result.is_ok (of_base ~base:65000 ~count:535)
+let%test "prod base 80, 0 endpoints"   = Result.is_ok (of_base ~base:80 ~count:0)

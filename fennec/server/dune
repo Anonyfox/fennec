@@ -5,4 +5,6 @@
 (library
  (name fennec_server)
  (public_name fennec.server)
- (libraries fennec.core fennec.paw eio eio.unix digestif base64 zlib bigstringaf))
+ (libraries fennec.core fennec.paw eio eio.unix digestif base64 zlib bigstringaf fennec-hunt.unit)
+ (inline_tests (backend fennec-hunt.runner))
+ (preprocess (pps fennec-hunt.ppx)))

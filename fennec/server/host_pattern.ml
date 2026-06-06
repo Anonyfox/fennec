@@ -54,3 +54,35 @@ let matches (t : t) ~(host : string) : bool =
 (* higher = more specific: any Exact outranks every Suffix; among suffixes the longer (more
    labels) wins; Any is the floor. A host name caps well under the Exact constant. *)
 let specificity = function Exact _ -> 1_000_000 | Suffix suf -> String.length suf | Any -> 0
+
+(* -- inline tests --------------------------------------------------------- *)
+
+let%test "exact"                        = of_string "acme.com" = Ok (Exact "acme.com")
+let%test "exact lowercases"             = of_string "ACME.com" = Ok (Exact "acme.com")
+let%test "exact strips trailing dot"    = of_string "acme.com." = Ok (Exact "acme.com")
+let%test "suffix"                       = of_string "*.acme.com" = Ok (Suffix ".acme.com")
+let%test "catch-all"                    = of_string "*" = Ok Any
+let%test "empty -> error"               = Result.is_error (of_string "")
+let%test "whitespace-only -> error"     = Result.is_error (of_string "   ")
+let%test "internal space -> error"      = Result.is_error (of_string "ac me.com")
+let%test "'*.' alone -> error"          = Result.is_error (of_string "*.")
+let%test "mid '*' -> error"             = Result.is_error (of_string "a*b")
+let%test "'*foo' (not '*.') -> error"   = Result.is_error (of_string "*foo")
+let%test "double wildcard -> error"     = Result.is_error (of_string "*.*.com")
+
+let%test "exact matches"                = matches (Result.get_ok (of_string "acme.com")) ~host:"acme.com"
+let%test "exact matches w/ :port"       = matches (Result.get_ok (of_string "acme.com")) ~host:"acme.com:8020"
+let%test "exact case-insensitive"       = matches (Result.get_ok (of_string "acme.com")) ~host:"ACME.COM"
+let%test "exact rejects other"          = not (matches (Result.get_ok (of_string "acme.com")) ~host:"other.com")
+let%test "suffix matches subdomain"     = matches (Result.get_ok (of_string "*.acme.com")) ~host:"api.acme.com"
+let%test "suffix matches deep"          = matches (Result.get_ok (of_string "*.acme.com")) ~host:"a.b.acme.com"
+let%test "suffix needs >=1 label"       = not (matches (Result.get_ok (of_string "*.acme.com")) ~host:"acme.com")
+let%test "suffix rejects other base"    = not (matches (Result.get_ok (of_string "*.acme.com")) ~host:"api.other.com")
+let%test "any matches anything"         = matches Any ~host:"whatever.com"
+let%test "any matches empty host"       = matches Any ~host:""
+let%test "exact rejects empty host"     = not (matches (Result.get_ok (of_string "acme.com")) ~host:"")
+
+let%test "exact > suffix"               = specificity (Result.get_ok (of_string "acme.com")) > specificity (Result.get_ok (of_string "*.acme.com"))
+let%test "longer suffix > shorter"      = specificity (Result.get_ok (of_string "*.api.acme.com")) > specificity (Result.get_ok (of_string "*.acme.com"))
+let%test "suffix > any"                 = specificity (Result.get_ok (of_string "*.acme.com")) > specificity (Result.get_ok (of_string "*"))
+let%test "exact > any"                  = specificity (Result.get_ok (of_string "acme.com")) > specificity (Result.get_ok (of_string "*"))
