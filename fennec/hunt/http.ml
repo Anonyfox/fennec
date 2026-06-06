@@ -597,4 +597,10 @@ module For_test = struct
   let encode_multipart = encode_multipart
   let follow_redirects = follow_redirects
   let redirect_path = redirect_path
+  (* parse_url as a tuple so the test needn't see Target.url *)
+  let parse_url s = let u = Target.parse_url s in (u.Target.scheme, u.host, u.port, u.base_path)
+  let encode_query = encode_query
+  let encode_form = encode_form
+  let parse_set_cookies = parse_set_cookies
+  let update_jar = update_jar
 end

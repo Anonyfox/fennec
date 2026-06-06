@@ -135,8 +135,55 @@ let () =
   ok "redirect_to passes" (H.redirect_to "/home") (resp ~status:302 ~headers:[("Location", "/home")] ());
   bad "redirect_to fails on 200" (H.redirect_to "/home") (resp ());
 
+  print_endline "Http assertions (coverage completion):";
+  ok "status_3xx passes on 302" H.status_3xx (resp ~status:302 ());
+  bad "status_3xx fails on 200" H.status_3xx (resp ());
+  ok "status_4xx passes on 404" H.status_4xx (resp ~status:404 ());
+  ok "status_5xx passes on 503" H.status_5xx (resp ~status:503 ());
+  ok "body_not_empty passes" H.body_not_empty (resp ~body:"x" ());
+  bad "body_not_empty fails on empty" H.body_not_empty (resp ~body:"" ());
+  ok "body_length exact" (H.body_length 5) (resp ~body:"hello" ());
+  bad "body_length wrong" (H.body_length 4) (resp ~body:"hello" ());
+  ok "min_body_length passes" (H.min_body_length 3) (resp ~body:"hello" ());
+  bad "min_body_length fails when short" (H.min_body_length 10) (resp ~body:"hi" ());
+  ok "content_type passes" (H.content_type "json") (resp ~headers:[("Content-Type", "application/json")] ());
+  ok "is_html passes" H.is_html (resp ~headers:[("Content-Type", "text/html; charset=utf-8")] ());
+  bad "is_html fails on json" H.is_html (resp ~headers:[("Content-Type", "application/json")] ());
+  ok "no_header passes when absent" (H.no_header "X-Z") (resp ());
+  bad "has_header fails when absent" (H.has_header "X-Z") (resp ());
+  ok "json_is_string" (H.json_is_string "name") (resp ~body:jbody ());
+  ok "json_is_bool" (H.json_is_bool "ok") (resp ~body:jbody ());
+  bad "json_is_bool fails on string" (H.json_is_bool "name") (resp ~body:jbody ());
+  ok "json_is_null passes" (H.json_is_null "maybe") (resp ~body:{|{"maybe":null}|} ());
+  ok "json_path_contains substring" (H.json_path_contains "name" "lic") (resp ~body:jbody ());
+  bad "json_path_contains fails" (H.json_path_contains "name" "zzz") (resp ~body:jbody ());
+  ok "expect custom passes" (H.expect (fun r -> if r.H.status <> 200 then failwith "no")) (resp ());
+  bad "expect custom fails" (H.expect (fun r -> if r.H.status <> 999 then failwith "no")) (resp ());
+  ok "has_cookie passes" (H.has_cookie "sid") (resp ~headers:[("Set-Cookie", "sid=abc; Path=/")] ());
+  bad "has_cookie fails when absent" (H.has_cookie "sid") (resp ());
+  ok "no_cookie passes when absent" (H.no_cookie "sid") (resp ());
+
+  print_endline "Http.For_test.parse_url:";
+  check "scheme+host+port+path" (FT.parse_url "http://localhost:4000/api/x" = ("http", "localhost", 4000, "/api/x"));
+  check "no scheme defaults http" (FT.parse_url "example.com:8080" = ("http", "example.com", 8080, ""));
+  check "https default port 443" (FT.parse_url "https://acme.com" = ("https", "acme.com", 443, ""));
+  check "http default port 80" (FT.parse_url "http://acme.com/p" = ("http", "acme.com", 80, "/p"));
+  check "bare host" (FT.parse_url "localhost" = ("http", "localhost", 80, ""));
+
+  print_endline "Http.For_test encoders:";
+  check "encode_query escapes" (FT.encode_query [("q", "a b&c"); ("n", "1")] = "q=a%20b%26c&n=1");
+  check "encode_form sets content-type" (snd (FT.encode_form [("a", "1")]) = "application/x-www-form-urlencoded");
+  check "encode_form body" (fst (FT.encode_form [("a", "x y")]) = "a=x%20y");
+
+  print_endline "Http.For_test cookie jar:";
+  check "parse one Set-Cookie (strips attributes)" (FT.parse_set_cookies [("Set-Cookie", "sid=abc; Path=/; HttpOnly")] = [("sid", "abc")]);
+  check "parse ignores non-Set-Cookie" (FT.parse_set_cookies [("X", "y"); ("set-cookie", "a=1")] = [("a", "1")]);
+  check "update_jar adds" (List.sort compare (FT.update_jar [("a", "1")] [("b", "2")]) = [("a", "1"); ("b", "2")]);
+  check "update_jar overwrites by name" (FT.update_jar [("a", "1")] [("a", "2")] = [("a", "2")]);
+
   print_endline "Http helpers:";
   check "basic_auth header" (H.basic_auth "user" "pass" = ("Authorization", "Basic dXNlcjpwYXNz"));
   check "bearer header" (H.bearer "tok" = ("Authorization", "Bearer tok"));
+  check "json_content_type" (H.json_content_type = ("Content-Type", "application/json"));
 
   if !fails = 0 then print_endline "all Http tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

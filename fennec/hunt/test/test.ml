@@ -391,7 +391,16 @@ let test_format () =
   let s = Failure.render { Failure.test = "t"; trace = []; kind = Failure.Errored "early";
                            rerun = "fennec --grep 't'"; screenshot = None } in
   has "empty trace: still has a header" s "ERROR";
-  has "empty trace: still has a rerun" s "rerun"
+  has "empty trace: still has a rerun" s "rerun";
+
+  (* a captured screenshot path is rendered; absent → no screenshot section *)
+  let s = Failure.render { Failure.test = "t"; trace = []; kind = Failure.Assertion;
+                           rerun = "x"; screenshot = Some "/tmp/shots/t.png" } in
+  has "screenshot: shows the section" s "screenshot";
+  has "screenshot: shows the path" s "/tmp/shots/t.png";
+  let s = Failure.render { Failure.test = "t"; trace = []; kind = Failure.Assertion;
+                           rerun = "x"; screenshot = None } in
+  hasnt "no screenshot → no section" s "screenshot"
 
 (* ----------------------------------------------------- rerun-command derivation ---- *)
 let test_rerun () =

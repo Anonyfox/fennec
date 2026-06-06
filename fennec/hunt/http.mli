@@ -231,4 +231,17 @@ module For_test : sig
 
   (** Resolve a Location header to a path on the current target. *)
   val redirect_path : string -> string
+
+  (** Parse a URL into [(scheme, host, port, base_path)]. Total. *)
+  val parse_url : string -> string * string * int * string
+
+  (** URL-encode query/form pairs. *)
+  val encode_query : (string * string) list -> string
+  val encode_form : (string * string) list -> string * string
+
+  (** Parse [Set-Cookie] response headers into [(name, value)] pairs. *)
+  val parse_set_cookies : (string * string) list -> (string * string) list
+
+  (** Merge new cookies into a jar (new values overwrite by name). *)
+  val update_jar : (string * string) list -> (string * string) list -> (string * string) list
 end
