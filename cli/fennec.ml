@@ -421,19 +421,18 @@ let test_cmd =
     Arg.(value & pos 0 string "unit" & info [] ~docv:"SUITE" ~doc:"Which tests: unit (default), http, browser, or all.")
   in
   let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only suites/cases matching $(docv).") in
-  let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) failures.") in
-  let no_fail_fast_arg = Arg.(value & flag & info [ "no-fail-fast" ] ~doc:"Run every suite even after a failure.") in
-  let watch_arg = Arg.(value & flag & info [ "watch" ] ~doc:"Re-run on change (dev loop).") in
-  let reporter_arg = Arg.(value & opt (some string) None & info [ "reporter" ] ~docv:"R" ~doc:"Reporter(s), comma-list, e.g. $(b,list,junit).") in
-  let jobs_arg = Arg.(value & opt (some int) None & info [ "jobs"; "j" ] ~docv:"N" ~doc:"Parallel suites (default: CPUs).") in
+  let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) suites fail.") in
+  let no_fail_fast_arg = Arg.(value & flag & info [ "no-fail-fast" ] ~doc:"Run every suite even after a failure (default stops at the first).") in
+  let reporter_arg = Arg.(value & opt (some string) None & info [ "reporter" ] ~docv:"R" ~doc:"Browser cut: reporter style ($(b,auto), $(b,plain), $(b,pretty)).") in
+  let jobs_arg = Arg.(value & opt (some int) None & info [ "jobs"; "j" ] ~docv:"N" ~doc:"Parallel suites (default: CPUs; $(b,-j1) forces serial).") in
   let headed_arg = Arg.(value & flag & info [ "headed" ] ~doc:"Browser cut: show the browser window.") in
   let screenshots_arg = Arg.(value & opt (some string) None & info [ "screenshots" ] ~docv:"DIR" ~doc:"Browser cut: write a PNG on failure into $(docv).") in
   let port_arg = Arg.(value & opt int R.default_options.base_port & info [ "port" ] ~docv:"BASE" ~doc:"Base port for per-suite instance blocks.") in
-  let go suite grep max_failures no_fail_fast watch reporter jobs headed screenshots base_port =
+  let go suite grep max_failures no_fail_fast reporter jobs headed screenshots base_port =
     match R.suite_of_string suite with
     | Error msg -> Printf.eprintf "fennec test: %s\n" msg; 1
     | Ok suite ->
-      R.run { R.suite; grep; max_failures; fail_fast = not no_fail_fast; watch; reporter; jobs; headed; screenshots; base_port }
+      R.run { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed; screenshots; base_port }
   in
   let doc = "Run the app's tests (unit, http, browser)" in
   let man =
@@ -456,7 +455,7 @@ let test_cmd =
       `Pre "  fennec test all            # everything, fast-to-slow" ]
   in
   Cmd.v (Cmd.info "test" ~doc ~man)
-    Term.(const go $ suite_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ watch_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
+    Term.(const go $ suite_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
 
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in

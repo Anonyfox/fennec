@@ -39,4 +39,11 @@ let () =
   check "unit: no argv" (R.suite_args ~cut:R.Unit { o with grep = Some "x" } = []);
   check "all: no argv (dispatches per-cut)" (R.suite_args ~cut:R.All { o with headed = true } = []);
 
+  (* fail_fast_limit: default fail-fast stops at the first; --no-fail-fast runs all; -x wins *)
+  check "default fail-fast → limit 1" (R.fail_fast_limit ~fail_fast:true ~max_failures:None = 1);
+  check "no-fail-fast → unbounded" (R.fail_fast_limit ~fail_fast:false ~max_failures:None = max_int);
+  check "explicit -x wins over fail-fast" (R.fail_fast_limit ~fail_fast:true ~max_failures:(Some 3) = 3);
+  check "explicit -x wins over no-fail-fast" (R.fail_fast_limit ~fail_fast:false ~max_failures:(Some 2) = 2);
+  check "-x 0 floored to 1 (always run at least until one fails)" (R.fail_fast_limit ~fail_fast:true ~max_failures:(Some 0) = 1);
+
   if !fails = 0 then print_endline "all Run tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

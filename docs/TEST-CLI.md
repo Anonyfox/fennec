@@ -82,33 +82,42 @@ runs the built artifacts itself — so nothing nests dune at runtime.
 The dune workspace-lock deadlock (a test that shells out to dune while another dune watches)
 is dissolved by making **fennec the only dune-aware orchestrator**:
 
-1. Discover the app server (`discover.ml`).
-2. **One-shot `dune build`** the server + the cut's suites.
-3. Per suite, in parallel (≤ `-j`): allocate a port, **spawn the server artifact directly**
+1. Discover the app server (`discover.ml`), then **`dune shutdown`** any orphaned dev watcher.
+2. **One-shot `dune build`** the server + its webroot + the cut's suites, from the workspace
+   root (then restore the cwd — `test all` runs this once per cut).
+3. Per suite, in parallel (≤ `-j`): make the port usable (**reclaim a leftover of *ours*,
+   refuse to touch a *foreign* holder** — `port.ml`), **spawn the server artifact directly**
    (`_build/default/.../server.bc`, never `dune exec`) with the `Test_proto` env, wait for
-   readiness (poll the port), run the **suite artifact** with `FENNEC_TEST_URL` set, then kill
-   the instance.
-4. Aggregate exit code (non-zero if any suite failed).
+   readiness (poll the port), run the **suite artifact** with `FENNEC_TEST_URL` set, then tear
+   the instance down (structural `Fun.protect`). In parallel, each suite's output is buffered
+   and flushed as one atomic block so nothing interleaves; serial runs stream live.
+4. Aggregate exit code (non-zero if any suite failed); a cross-suite roll-up footer.
 
-Reuses `cli/dev/`: `discover`, `server_proc`, `port`, `pidfile`. A dev's already-running
-`fennec dev` can be reused for the matching port (reuse-existing detection) instead of
-re-booting.
+Every spawned pid (server + suite) is registered so Ctrl-C / SIGTERM tears the whole fleet
+down — no orphans, no held ports. Reuses `cli/dev/`'s `discover`, `port`, and the `Dev_proto`
+env names; the instance lifecycle (`boot.ml`) is the test command's own. Each suite gets its
+**own** instance — a running `fennec dev` is never reused, since isolation is the whole point.
 
-## Flags (the minimal sharp six — nothing more)
+## Flags (minimal and sharp — nothing more)
 
 ```
 fennec test [SUITE]
-  --grep RE            run only suites/cases matching (passed through to the suite)
-  -x, --max-failures N stop after N failures (default fail-fast; --no-fail-fast disables)
-  --watch              re-run on change (dev loop)
-  --reporter list,junit  human default; comma-list for CI (junit/json)
-  -j, --workers N      parallel suites (default = CPUs; -j1 forces serial)
-  --headed             browser cut only: show the browser
-  --screenshots DIR    browser cut only: PNG on failure
+  -g, --grep RE        run only cases whose label contains RE (substring; both cuts)
+  -x, --max-failures N stop after N suites fail (default fail-fast = stop at the first)
+      --no-fail-fast   run every suite even after a failure
+  -j, --jobs N         parallel suites (default = CPUs; -j1 forces serial)
+      --port BASE      base port for the per-suite instance blocks (default 8200)
+      --headed         browser cut only: show the browser window
+      --screenshots DIR  browser cut only: write a PNG on failure into DIR
+      --reporter R     browser cut only: reporter style (auto | plain | pretty)
 ```
 
-Strict exit code. Explicitly rejected: cargo's `-- ` two-namespace split, jest's
-watch-flag zoo, a reporter/coverage flag farm.
+Strict exit code (non-zero if any suite fails). Fail-fast is at the **suite** level (the
+orchestrator's unit; it can't count another process's cases). A wedged suite is killed by a
+per-suite wall-clock backstop — `FENNEC_TEST_TIMEOUT=<seconds>`, default 600 — and reported as
+a failure while the others continue. Explicitly rejected: cargo's `-- ` two-namespace split,
+jest's watch-flag zoo, a reporter/coverage flag farm. (`--watch` is deferred — the live loop is
+`fennec dev`; re-run `fennec test` between edits.)
 
 ## Graceful edge cases (every one a clear message, never a crash or hang)
 
@@ -135,5 +144,8 @@ tests (the probe/tls fixtures) live in its package, not under `fennec test`.
 
 - **Downstream app**: write `test/http/*.ml` + `test/browser/*.ml`, run `fennec test`. No
   `run.sh`, no manual executable+spawn wiring, no lock dance.
-- **Example app**: `run.exe` + `http_test.exe` + `run.sh` collapse into the convention dirs.
-- **lib (`fennec-hunt`)**: pure unit tests via `dune runtest`; untouched by `fennec test`.
+- **Example app** (done): `run.exe` + `http_test.exe` + `run.sh` collapsed into
+  `examples/site/test/http/` (smoke + api) and `examples/site/test/browser/` (the full web
+  suite). CI runs `fennec test http` + `fennec test browser`.
+- **lib (`fennec-hunt`)**: pure unit tests via `dune runtest`; untouched by `fennec test`. Its
+  own TLS/probe fixtures stay manual exes under `examples/site/e2e/`.
