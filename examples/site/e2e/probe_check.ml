@@ -30,6 +30,11 @@ let () = hunt "probe server" ~url:"http://localhost:4555" ~spawn:[ probe ] @@ fu
     (* /chunked sends "ab"+"cd"+"ef" as three chunks; we assert the dechunked body *)
     get "/chunked" ~expect:[status 200; body_is "abcdef"]);
 
+  check "redirect is followed to the final response" (fun () ->
+    (* /redirect → 302 Location: /ok; without ~follow we see the 302, with it we see /ok *)
+    get "/redirect" ~expect:[status 302];
+    get "/redirect" ~follow:true ~expect:[status 200; body_is "ok"]);
+
   check "multipart upload is sent intact (server echoes the body)" (fun () ->
     post "/echo"
       ~multipart:[ field "title" "hello"; file ~name:"doc" ~filename:"note.txt" ~content_type:"text/plain" "FILE-BYTES" ]

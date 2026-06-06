@@ -60,16 +60,17 @@ val file : name:string -> filename:string -> ?content_type:string -> string -> p
     [~json] (serializes + sets Content-Type), [~multipart] (file uploads + sets Content-Type),
     [~form] (URL-encodes + sets Content-Type), [~body] (raw string). [~query] appends query
     parameters to the path. [~host] sets the Host header. [~timeout] overrides the per-request
-    deadline (default from [hunt ~request_timeout]). Cookies from prior responses in the same
-    [check] are sent automatically. *)
+    deadline (default from [hunt ~request_timeout]). [~follow:true] chases 3xx redirects to the
+    final response (re-GETting each Location with refreshed cookies; bounded to 10 hops). Cookies
+    from prior responses in the same [check] are sent automatically. *)
 
-val get : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val get : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
 
 (** {1 Async — explicit, bounded polling} *)
 
@@ -223,4 +224,11 @@ module For_test : sig
 
   (** Encode a multipart/form-data body with the given boundary (the request uses a fixed one). *)
   val encode_multipart : boundary:string -> part list -> string
+
+  (** The pure redirect-following policy: from [first], while [location] yields a hop, [fetch]
+      it, up to [max] hops. Generic over the response type. *)
+  val follow_redirects : max:int -> location:('r -> string option) -> fetch:(string -> 'r) -> 'r -> 'r
+
+  (** Resolve a Location header to a path on the current target. *)
+  val redirect_path : string -> string
 end

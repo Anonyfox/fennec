@@ -362,59 +362,84 @@ let run_expect r = function
     with Failure msg ->
       failwith (Printf.sprintf "%s\n  request: %s\n  elapsed: %.0fms" msg (current ()).last_request !last_elapsed)
 
-let request meth ?(headers = []) ?host ?body ?query ?form ?json ?multipart ?timeout ?(expect : assertion list option) path =
+(* pure redirect-following policy: from [first], while [location] yields a hop, [fetch] it,
+   up to [max] hops. Generic over the response type so it's unit-testable with a fake fetch. *)
+let follow_redirects ~max ~location ~fetch first =
+  let rec go hops resp =
+    if hops >= max then resp
+    else match location resp with Some loc -> go (hops + 1) (fetch loc) | None -> resp
+  in
+  go 0 first
+
+(* resolve a Location header to a path on the current target. Absolute URLs keep only their
+   path (a testing client follows same-target; cross-host hops aren't chased to other hosts). *)
+let redirect_path loc =
+  if loc = "" then "/"
+  else if loc.[0] = '/' then loc
+  else if Fennec_hunt_util.contains loc "://" then (match (Target.parse_url loc).base_path with "" -> "/" | p -> p)
+  else "/" ^ loc
+
+let request meth ?(headers = []) ?host ?body ?query ?form ?json ?multipart ?(follow = false) ?timeout ?(expect : assertion list option) path =
   let c = current () in
   let timeout = Option.value timeout ~default:c.request_timeout in
-  (* query parameters *)
   let full_path =
     let base = c.url.base_path ^ path in
     match query with None -> base | Some pairs -> base ^ "?" ^ encode_query pairs
   in
   (* body: ~json > ~multipart > ~form > ~body (first one wins); Content-Type set automatically *)
-  let body, headers =
+  let body, ct_header =
     match json with
-    | Some j -> (Some (Yojson.Safe.to_string j), ("Content-Type", "application/json") :: headers)
+    | Some j -> (Some (Yojson.Safe.to_string j), [ ("Content-Type", "application/json") ])
     | None -> (
       match multipart with
-      | Some parts ->
-        let encoded = encode_multipart ~boundary:multipart_boundary parts in
-        (Some encoded, ("Content-Type", "multipart/form-data; boundary=" ^ multipart_boundary) :: headers)
+      | Some parts -> (Some (encode_multipart ~boundary:multipart_boundary parts), [ ("Content-Type", "multipart/form-data; boundary=" ^ multipart_boundary) ])
       | None -> (
         match form with
-        | Some pairs ->
-          let encoded, ct = encode_form pairs in
-          (Some encoded, ("Content-Type", ct) :: headers)
-        | None -> (body, headers)))
+        | Some pairs -> let encoded, ct = encode_form pairs in (Some encoded, [ ("Content-Type", ct) ])
+        | None -> (body, [])))
   in
-  (* [~host] overrides the Host HEADER (virtual-host testing) — the CONNECTION still goes to
-     the target's real host:port (so `~host:"admin.localhost"` hits the gateway, routed by Host) *)
-  let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
-  let headers = match cookie_header c.cookies with Some ch -> ch :: headers | None -> headers in
+  (* [~host] overrides the Host HEADER (virtual-host testing); the CONNECTION still goes to the
+     target's real host:port. User headers + host persist across redirect hops; the Content-Type
+     applies only to the body-bearing initial request. *)
+  let host_header = match host with Some h -> [ ("Host", h) ] | None -> [] in
+  (* one round-trip, timeout-bounded, refreshing the cookie jar from the response *)
+  let send meth path body extra =
+    let hdrs = (match cookie_header c.cookies with Some ch -> [ ch ] | None -> []) @ host_header @ extra in
+    let r =
+      match Eio.Time.with_timeout c.clock timeout (fun () ->
+          Ok (Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~tls:(c.url.scheme = "https") ~meth ~path ~headers:hdrs ?body ()))
+      with
+      | Ok r -> r
+      | Error `Timeout -> failwith (Printf.sprintf "request timed out after %.1fs: %s %s" timeout meth path)
+    in
+    c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
+    r
+  in
   c.last_request <- Printf.sprintf "%s %s" meth full_path;
   let t0 = Unix.gettimeofday () in
-  (* bound the whole request: a server that accepts but never answers must become a clean
-     failed check, not a frozen suite. Eio cancels the connection fiber on timeout (the flow's
-     switch tears it down — no leak). *)
-  let r =
-    match
-      Eio.Time.with_timeout c.clock timeout (fun () ->
-          Ok (Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~tls:(c.url.scheme = "https") ~meth ~path:full_path ~headers ?body ()))
-    with
-    | Ok r -> r
-    | Error `Timeout -> failwith (Printf.sprintf "request timed out after %.1fs: %s %s" timeout meth full_path)
+  (* the initial request; then, if [~follow], chase 3xx Location hops (re-GET with refreshed
+     cookies — so a post-login redirect carries its session). Bounded to 10 hops. *)
+  let r0 = send meth full_path body (ct_header @ headers) in
+  let final =
+    if not follow then r0
+    else
+      let location resp =
+        if resp.Http_client.status >= 300 && resp.status < 400 then Option.map redirect_path (Http_client.header_value "location" resp)
+        else None
+      in
+      follow_redirects ~max:10 ~location ~fetch:(fun loc -> send "GET" loc None headers) r0
   in
   last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
-  c.last <- Some r;
-  c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
-  run_expect r expect
+  c.last <- Some final;
+  run_expect final expect
 
-let get ?headers ?host ?query ?timeout ?expect path = request "GET" ?headers ?host ?query ?timeout ?expect path
-let post ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path
-let put ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path
-let patch ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path
-let delete ?headers ?host ?query ?timeout ?expect path = request "DELETE" ?headers ?host ?query ?timeout ?expect path
-let head ?headers ?host ?query ?timeout ?expect path = request "HEAD" ?headers ?host ?query ?timeout ?expect path
-let options ?headers ?host ?query ?timeout ?expect path = request "OPTIONS" ?headers ?host ?query ?timeout ?expect path
+let get ?headers ?host ?query ?follow ?timeout ?expect path = request "GET" ?headers ?host ?query ?follow ?timeout ?expect path
+let post ?headers ?host ?body ?query ?form ?json ?multipart ?follow ?timeout ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?multipart ?follow ?timeout ?expect path
+let put ?headers ?host ?body ?query ?form ?json ?multipart ?follow ?timeout ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?multipart ?follow ?timeout ?expect path
+let patch ?headers ?host ?body ?query ?form ?json ?multipart ?follow ?timeout ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?multipart ?follow ?timeout ?expect path
+let delete ?headers ?host ?query ?follow ?timeout ?expect path = request "DELETE" ?headers ?host ?query ?follow ?timeout ?expect path
+let head ?headers ?host ?query ?follow ?timeout ?expect path = request "HEAD" ?headers ?host ?query ?follow ?timeout ?expect path
+let options ?headers ?host ?query ?follow ?timeout ?expect path = request "OPTIONS" ?headers ?host ?query ?follow ?timeout ?expect path
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  eventually — explicit, bounded polling for async expectations              *)
@@ -570,4 +595,6 @@ module For_test = struct
   let poll = poll
   let decode_chunked = Http_client.decode_chunked
   let encode_multipart = encode_multipart
+  let follow_redirects = follow_redirects
+  let redirect_path = redirect_path
 end

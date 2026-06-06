@@ -72,6 +72,23 @@ let () =
   (let mp = FT.encode_multipart ~boundary:"B" [ H.file ~name:"f" ~filename:"x" "y" ] in
    check "file without content-type omits the Content-Type line" (not (contains mp "Content-Type:")));
 
+  print_endline "Http.For_test.follow_redirects (pure policy, fake fetch):";
+  (* a fake response is just a (status, location-target option); fetch returns a scripted chain *)
+  let chain = [ "/b", (302, Some "/c"); "/c", (302, Some "/d"); "/d", (200, None) ] in
+  let location (st, loc) = if st >= 300 && st < 400 then loc else None in
+  let fetch loc = (try List.assoc loc chain with Not_found -> (599, None)) in
+  check "follows the chain to the final 200" (FT.follow_redirects ~max:10 ~location ~fetch (302, Some "/b") = (200, None));
+  check "no redirect → returns first unchanged" (FT.follow_redirects ~max:10 ~location ~fetch (200, None) = (200, None));
+  (* a cycle is bounded by max (does not loop forever) *)
+  let cyclic _ = (302, Some "/loop") in
+  check "cyclic redirects are bounded by max hops" (FT.follow_redirects ~max:3 ~location ~fetch:cyclic (302, Some "/loop") = (302, Some "/loop"));
+
+  print_endline "Http.For_test.redirect_path:";
+  check "absolute path kept" (FT.redirect_path "/dash?x=1" = "/dash?x=1");
+  check "absolute URL → its path" (FT.redirect_path "http://host:8080/dash?x=1" = "/dash?x=1");
+  check "absolute URL no path → /" (FT.redirect_path "http://host" = "/");
+  check "relative → prefixed with /" (FT.redirect_path "dash" = "/dash");
+
   print_endline "Http assertions (against constructed responses):";
   let resp ?(status = 200) ?(headers = []) ?(body = "") () : H.response = { status; headers; body } in
   let ok name a r = check name (not (raises (fun () -> a r))) in
