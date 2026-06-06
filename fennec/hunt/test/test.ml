@@ -37,7 +37,7 @@ let failed_step trace =
 (* render a body's failure the way the runner would *)
 let report_of ?(test = "demo") w body =
   let trace = trace_of w body in
-  Failure.render { Failure.test; trace; kind = Failure.Assertion; rerun = "fennec --grep 'demo'" }
+  Failure.render { Failure.test; trace; kind = Failure.Assertion; rerun = "fennec --grep 'demo'"; screenshot = None }
 
 let test_dsl () =
   print_endline "— dsl (fake backend, condition mapping) —";
@@ -241,7 +241,7 @@ let render1 ?(label = "expect_x \".x\"") ?(cond = None) ?(prefix = []) diag =
   let n = List.length prefix in
   let step = { Failure.index = n + 1; label; status = Failure.Failed (cond, diag); ms = 12.0 } in
   Failure.render { Failure.test = "checkout flow"; trace = prefix @ [ step ]; kind = Failure.Assertion;
-                   rerun = "fennec --grep 'checkout flow'" }
+                   rerun = "fennec --grep 'checkout flow'"; screenshot = None }
 
 let has name s sub = check name (contains s sub)
 let hasnt name s sub = check name (not (contains s sub))
@@ -377,19 +377,19 @@ let test_format () =
   let running = [ { Failure.index = 1; label = "goto \"/x\""; status = Failure.Ok; ms = 5.0 };
                   { Failure.index = 2; label = "eval \"boom()\""; status = Failure.Running; ms = 0.0 } ] in
   let s = Failure.render { Failure.test = "t"; trace = running; kind = Failure.Errored "Failure(\"boom\")";
-                           rerun = "fennec --grep 't'" } in
+                           rerun = "fennec --grep 't'"; screenshot = None } in
   has "errored: ERROR header" s "ERROR";
   has "errored: shows the exception" s "boom";
   has "errored: marks the in-flight step" s "..";
   hasnt "errored: no what-happened (no assertion diag)" s "what happened";
   let s = Failure.render { Failure.test = "t"; trace = running; kind = Failure.Timed_out 30.0;
-                           rerun = "fennec --grep 't'" } in
+                           rerun = "fennec --grep 't'"; screenshot = None } in
   has "timeout: TIMEOUT header" s "TIMEOUT";
   has "timeout: shows the budget" s "30.0";
 
   (* empty trace (failed before any step) still renders cleanly *)
   let s = Failure.render { Failure.test = "t"; trace = []; kind = Failure.Errored "early";
-                           rerun = "fennec --grep 't'" } in
+                           rerun = "fennec --grep 't'"; screenshot = None } in
   has "empty trace: still has a header" s "ERROR";
   has "empty trace: still has a rerun" s "rerun"
 
@@ -412,7 +412,7 @@ let has_ansi s = contains s "\027["
 let mkfail name reason =
   let d = Diag.make ~selector:(Some ".x") ~matched:0 reason in
   let step = { Failure.index = 1; label = "click \".x\""; status = Failure.Failed (None, d); ms = 5000.0 } in
-  { Failure.test = name; trace = [ step ]; kind = Failure.Assertion; rerun = "run --grep '" ^ name ^ "'" }
+  { Failure.test = name; trace = [ step ]; kind = Failure.Assertion; rerun = "run --grep '" ^ name ^ "'"; screenshot = None }
 let res ?failure name outcome ms : Reporter.result = { Reporter.name; outcome; ms; failure }
 
 (* drive a scripted run through a reporter with the given caps; return (full output, chunks) *)

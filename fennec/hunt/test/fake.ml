@@ -102,11 +102,12 @@ let read_attr w ~selector ~name = List.find_map (fun (s, n, v) -> if s = selecto
 let read_count w ~selector = n_match w selector
 let current_url w = w.url
 let eval _ _ = ""
+let screenshot _ = None  (* no rendering surface in the in-memory fake *)
 
 (* compile-time proof the fake honours the exact same contract as the real backend *)
 module _ : Fennec_hunt.Backend.S = struct
   type nonrec t = t
   let navigate = navigate and wait = wait and click = click and fill = fill and press = press
   and read_text = read_text and read_value = read_value and read_attr = read_attr
-  and read_count = read_count and current_url = current_url and eval = eval
+  and read_count = read_count and current_url = current_url and eval = eval and screenshot = screenshot
 end

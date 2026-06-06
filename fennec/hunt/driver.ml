@@ -117,9 +117,11 @@ module Make (B : Backend.S) = struct
   type config = {
     jobs : int; retries : int; bail : bool; grep : string option;
     base_url : string; step_timeout : float; test_timeout : float;
+    screenshot_dir : string option;  (* Some dir → write <dir>/<test>.png on failure; None → off *)
   }
   let default_config =
-    { jobs = 1; retries = 0; bail = false; grep = None; base_url = ""; step_timeout = 5.0; test_timeout = 30.0 }
+    { jobs = 1; retries = 0; bail = false; grep = None; base_url = ""; step_timeout = 5.0; test_timeout = 30.0;
+      screenshot_dir = None }
 
   (* how to re-run just this test, copy-pasteable. Prefix from FENNEC_HUNT_RERUN (wrappers set
      it, e.g. "sh examples/site/e2e/run.sh") else the executable name; the test name is
@@ -132,41 +134,59 @@ module Make (B : Backend.S) = struct
   (* one attempt: returns (failure kind option, trace). [provision] only has to run the body
      with a fresh backend and clean up — the outcome is captured in a ref, so [provision]
      stays the natural [(backend -> unit) -> unit] rather than threading our result type. *)
-  let run_once ~clock ~config ~provision t : Failure.kind option * Failure.step list =
-    let trace = ref [] and kind = ref None in
-    (try
-       provision (fun backend ->
-           let page =
-             { backend; now = (fun () -> Eio.Time.now clock); base_url = config.base_url;
-               scope = ""; timeout = config.step_timeout; trace }
-           in
+  let run_once ~clock ~config ~provision t : Failure.kind option * Failure.step list * string option =
+    let trace = ref [] and kind = ref None and shot = ref None in
+    provision (fun backend ->
+        let page =
+          { backend; now = (fun () -> Eio.Time.now clock); base_url = config.base_url;
+            scope = ""; timeout = config.step_timeout; trace }
+        in
+        (try
            match Eio.Time.with_timeout clock config.test_timeout (fun () -> t.body page; Ok ()) with
            | Ok () -> ()
-           | Error `Timeout -> kind := Some (Failure.Timed_out config.test_timeout))
-     with
-     | Step_failed -> kind := Some Failure.Assertion
-     | e -> kind := Some (Failure.Errored (Printexc.to_string e)));
-    (!kind, List.rev !trace)
+           | Error `Timeout -> kind := Some (Failure.Timed_out config.test_timeout)
+         with
+         | Step_failed -> kind := Some Failure.Assertion
+         | e -> kind := Some (Failure.Errored (Printexc.to_string e)));
+        (* capture the screenshot HERE — inside the provision callback, while the backend is
+           still alive (the switch tears it down on return). Only on failure + when enabled. *)
+        if !kind <> None && config.screenshot_dir <> None then shot := B.screenshot backend);
+    (!kind, List.rev !trace, !shot)
 
   let outcome_of_kind = function
     | Failure.Assertion -> Failed_assert
     | Failure.Errored _ -> Errored
     | Failure.Timed_out _ -> Timed_out
 
+  (* write a captured PNG to <dir>/<sanitized test name>.png; return the path (best-effort). *)
+  let write_screenshot dir name png =
+    try
+      (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+      let safe = String.map (fun ch -> match ch with 'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '_' -> ch | _ -> '_') name in
+      let path = Filename.concat dir (safe ^ ".png") in
+      Out_channel.with_open_bin path (fun oc -> Out_channel.output_string oc png);
+      Some path
+    with _ -> None
+
   let run_test ?reporter ~clock ~config ~provision (t : test) : result =
     (match reporter with Some rep -> Reporter.test_started rep t.name | None -> ());
     let t0 = Eio.Time.now clock in
     let rec attempt n =
       match run_once ~clock ~config ~provision t with
-      | None, _ -> (None, [])
-      | (Some _ as k), trace -> if n < config.retries then attempt (n + 1) else (k, trace)
+      | None, _, _ -> (None, [], None)
+      | (Some _ as k), trace, shot -> if n < config.retries then attempt (n + 1) else (k, trace, shot)
     in
-    let kind, trace = attempt 0 in
+    let kind, trace, shot = attempt 0 in
     let ms = (Eio.Time.now clock -. t0) *. 1000.0 in
     let outcome, failure =
       match kind with
       | None -> (Passed, None)
-      | Some k -> (outcome_of_kind k, Some { Failure.test = t.name; trace; kind = k; rerun = rerun_for t.name })
+      | Some k ->
+        let screenshot = match config.screenshot_dir, shot with
+          | Some dir, Some png -> write_screenshot dir t.name png
+          | _ -> None
+        in
+        (outcome_of_kind k, Some { Failure.test = t.name; trace; kind = k; rerun = rerun_for t.name; screenshot })
     in
     let r = { name = t.name; outcome; ms; failure } in
     (match reporter with Some rep -> Reporter.test_finished rep r | None -> ());

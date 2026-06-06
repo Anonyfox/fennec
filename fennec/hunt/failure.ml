@@ -28,6 +28,7 @@ type t = {
   trace : step list;         (* executed steps, in order *)
   kind : kind;
   rerun : string;            (* a copy-pasteable command to re-run just this test *)
+  screenshot : string option;(* path to a PNG captured at the moment of failure, if enabled *)
 }
 
 (* ---------------------------------------------------------------- small helpers ---- *)
@@ -229,6 +230,9 @@ let render_hint b ~c (d : Diag.t) =
   | Diag.Backend_error _ | Diag.Unknown _ -> ()
 
 let render_rerun b ~c rerun = line b ("  " ^ c.sect "rerun"); line b ("      " ^ c.strong rerun)
+let render_screenshot b ~c = function
+  | None -> ()
+  | Some path -> line b ("  " ^ c.sect "screenshot"); line b ("      " ^ path)
 
 (* the full report for a failed test. [color] adds ANSI styling to a few key tokens; with
    it off (the default) the output is byte-for-byte the plain report. *)
@@ -247,5 +251,6 @@ let render ?(color = false) (f : t) : string =
    | { status = Failed (cond, d); _ } :: _ -> render_what b ~c cond d; render_page b ~c d; render_hint b ~c d
    | _ -> ());
   render_rerun b ~c f.rerun;
+  render_screenshot b ~c f.screenshot;
   Buffer.contents b
 

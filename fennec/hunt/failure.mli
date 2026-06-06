@@ -33,6 +33,7 @@ type t = {
   trace : step list;    (** executed steps, in order *)
   kind : kind;
   rerun : string;       (** a copy-pasteable command to re-run just this test *)
+  screenshot : string option;  (** path to a PNG captured at the moment of failure, if enabled *)
 }
 
 (** Render the full report. [color] (default [false]) adds ANSI styling to a few key tokens;

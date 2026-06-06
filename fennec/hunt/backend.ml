@@ -104,4 +104,7 @@ module type S = sig
 
   (* escape hatch: evaluate JS (awaiting promises), return its value as a string *)
   val eval : t -> string -> string
+
+  (* a PNG of the page, or None if unavailable; best-effort, never raises *)
+  val screenshot : t -> string option
 end

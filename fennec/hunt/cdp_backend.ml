@@ -168,6 +168,16 @@ let read_attr t ~selector ~name = opt (eval_json t (on_first selector (Printf.sp
 let read_count t ~selector = Cdp.as_int (Some (eval_json t (Printf.sprintf "document.querySelectorAll(%s).length" (lit selector))))
 let eval t expr = match eval_json t expr with `String s -> s | `Null -> "" | v -> J.to_string v
 
+(* a PNG of the current page (CDP Page.captureScreenshot returns base64). Best-effort: any
+   protocol/decode failure yields None rather than raising — a screenshot must never turn a
+   real failure into a crash. *)
+let screenshot t =
+  try
+    match Cdp.field "data" (Cdp.call t.page "Page.captureScreenshot" (`Assoc [])) with
+    | Some (`String b64) -> ( match Base64.decode b64 with Ok png -> Some png | Error _ -> None)
+    | _ -> None
+  with _ -> None
+
 (* ---- actions (one-shot; the DSL has already waited for the precondition; pinned eval) ---- *)
 let act t expr = try ignore (eval_json t expr) with _ -> ()
 let click t ~selector = act t (on_first selector "(e&&(e.scrollIntoView({block:'center'}),e.click(),true))")

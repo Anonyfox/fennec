@@ -118,4 +118,8 @@ module type S = sig
 
   (** Escape hatch: evaluate JS (awaiting promises) and return its value as a string. *)
   val eval : t -> string -> string
+
+  (** Capture a screenshot of the page as PNG bytes, or [None] if unavailable (the page is
+      gone, or the backend has no rendering). Best-effort — never raises. *)
+  val screenshot : t -> string option
 end

@@ -141,9 +141,11 @@ module Make (B : Backend.S) : sig
     base_url : string;     (** {!page.base_url} for every test *)
     step_timeout : float;  (** per-step wait budget, seconds *)
     test_timeout : float;  (** per-test wall-clock budget, seconds *)
+    screenshot_dir : string option;  (** [Some dir] → write [<dir>/<test>.png] on failure; [None] → off *)
   }
 
-  (** [jobs=1, retries=0, bail=false, grep=None, base_url="", step_timeout=5, test_timeout=30]. *)
+  (** [jobs=1, retries=0, bail=false, grep=None, base_url="", step_timeout=5, test_timeout=30,
+      screenshot_dir=None]. *)
   val default_config : config
 
   (** Filter tests by [config.grep] (identity when [grep] is [None]). *)
