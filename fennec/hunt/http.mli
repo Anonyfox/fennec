@@ -42,18 +42,31 @@ val hunt :
 (** [check label body] — one test case. Fresh cookie jar. Reports pass/fail. *)
 val check : string -> (unit -> unit) -> unit
 
+(** {1 Multipart parts (file uploads)} *)
+
+(** One part of a [multipart/form-data] body — a text field or a file. Construct with
+    {!field} / {!file}; pass a list as [~multipart]. *)
+type part
+
+(** A plain text field: [field name value]. *)
+val field : string -> string -> part
+
+(** A file part: [file ~name ~filename ?content_type content]. *)
+val file : name:string -> filename:string -> ?content_type:string -> string -> part
+
 (** {1 Requests}
 
     All methods send ONE request and store the response. Body sources (highest priority first):
-    [~json] (serializes + sets Content-Type), [~form] (URL-encodes + sets Content-Type),
-    [~body] (raw string). [~query] appends query parameters to the path. [~host] sets the Host
-    header. [~timeout] overrides the per-request deadline (default from [hunt ~request_timeout]).
-    Cookies from prior responses in the same [check] are sent automatically. *)
+    [~json] (serializes + sets Content-Type), [~multipart] (file uploads + sets Content-Type),
+    [~form] (URL-encodes + sets Content-Type), [~body] (raw string). [~query] appends query
+    parameters to the path. [~host] sets the Host header. [~timeout] overrides the per-request
+    deadline (default from [hunt ~request_timeout]). Cookies from prior responses in the same
+    [check] are sent automatically. *)
 
 val get : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?timeout:float -> ?expect:assertion list -> string -> unit
-val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?timeout:float -> ?expect:assertion list -> string -> unit
 val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
 val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
 val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
@@ -207,4 +220,7 @@ module For_test : sig
 
   (** Decode a chunked transfer-encoding body to its content. Total — best-effort on malformed input. *)
   val decode_chunked : string -> string
+
+  (** Encode a multipart/form-data body with the given boundary (the request uses a fixed one). *)
+  val encode_multipart : boundary:string -> part list -> string
 end

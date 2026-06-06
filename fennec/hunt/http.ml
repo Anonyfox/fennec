@@ -322,6 +322,35 @@ let encode_query pairs =
 let encode_form pairs =
   (encode_query pairs, "application/x-www-form-urlencoded")
 
+(* ---- multipart/form-data (file uploads) ---- *)
+
+(* a single part: a plain text field, or a file (with a filename + content-type) *)
+type part = { p_name : string; p_filename : string option; p_ctype : string option; p_content : string }
+
+let field name value = { p_name = name; p_filename = None; p_ctype = None; p_content = value }
+let file ~name ~filename ?content_type content =
+  { p_name = name; p_filename = Some filename; p_ctype = content_type; p_content = content }
+
+(* a fixed boundary: a testing client controls both ends, and a collision with content is
+   astronomically unlikely. Keeping it fixed makes the encoding deterministic (and testable). *)
+let multipart_boundary = "----FennecHuntBoundaryZ9xK3mQ7vP1nT0"
+
+let encode_multipart ~boundary (parts : part list) : string =
+  let b = Buffer.create 256 in
+  List.iter
+    (fun p ->
+      Buffer.add_string b ("--" ^ boundary ^ "\r\n");
+      Buffer.add_string b (Printf.sprintf "Content-Disposition: form-data; name=\"%s\"" p.p_name);
+      (match p.p_filename with Some fn -> Buffer.add_string b (Printf.sprintf "; filename=\"%s\"" fn) | None -> ());
+      Buffer.add_string b "\r\n";
+      (match p.p_ctype with Some ct -> Buffer.add_string b ("Content-Type: " ^ ct ^ "\r\n") | None -> ());
+      Buffer.add_string b "\r\n";
+      Buffer.add_string b p.p_content;
+      Buffer.add_string b "\r\n")
+    parts;
+  Buffer.add_string b ("--" ^ boundary ^ "--\r\n");
+  Buffer.contents b
+
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Request functions                                                         *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
@@ -333,7 +362,7 @@ let run_expect r = function
     with Failure msg ->
       failwith (Printf.sprintf "%s\n  request: %s\n  elapsed: %.0fms" msg (current ()).last_request !last_elapsed)
 
-let request meth ?(headers = []) ?host ?body ?query ?form ?json ?timeout ?(expect : assertion list option) path =
+let request meth ?(headers = []) ?host ?body ?query ?form ?json ?multipart ?timeout ?(expect : assertion list option) path =
   let c = current () in
   let timeout = Option.value timeout ~default:c.request_timeout in
   (* query parameters *)
@@ -341,18 +370,21 @@ let request meth ?(headers = []) ?host ?body ?query ?form ?json ?timeout ?(expec
     let base = c.url.base_path ^ path in
     match query with None -> base | Some pairs -> base ^ "?" ^ encode_query pairs
   in
-  (* body: ~json > ~form > ~body (first one wins), and set Content-Type automatically *)
+  (* body: ~json > ~multipart > ~form > ~body (first one wins); Content-Type set automatically *)
   let body, headers =
     match json with
-    | Some j ->
-      let json_str = Yojson.Safe.to_string j in
-      (Some json_str, ("Content-Type", "application/json") :: headers)
+    | Some j -> (Some (Yojson.Safe.to_string j), ("Content-Type", "application/json") :: headers)
     | None -> (
-      match form with
-      | Some pairs ->
-        let encoded, ct = encode_form pairs in
-        (Some encoded, ("Content-Type", ct) :: headers)
-      | None -> (body, headers))
+      match multipart with
+      | Some parts ->
+        let encoded = encode_multipart ~boundary:multipart_boundary parts in
+        (Some encoded, ("Content-Type", "multipart/form-data; boundary=" ^ multipart_boundary) :: headers)
+      | None -> (
+        match form with
+        | Some pairs ->
+          let encoded, ct = encode_form pairs in
+          (Some encoded, ("Content-Type", ct) :: headers)
+        | None -> (body, headers)))
   in
   (* [~host] overrides the Host HEADER (virtual-host testing) — the CONNECTION still goes to
      the target's real host:port (so `~host:"admin.localhost"` hits the gateway, routed by Host) *)
@@ -377,9 +409,9 @@ let request meth ?(headers = []) ?host ?body ?query ?form ?json ?timeout ?(expec
   run_expect r expect
 
 let get ?headers ?host ?query ?timeout ?expect path = request "GET" ?headers ?host ?query ?timeout ?expect path
-let post ?headers ?host ?body ?query ?form ?json ?timeout ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?timeout ?expect path
-let put ?headers ?host ?body ?query ?form ?json ?timeout ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?timeout ?expect path
-let patch ?headers ?host ?body ?query ?form ?json ?timeout ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?timeout ?expect path
+let post ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path
+let put ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path
+let patch ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?multipart ?timeout ?expect path
 let delete ?headers ?host ?query ?timeout ?expect path = request "DELETE" ?headers ?host ?query ?timeout ?expect path
 let head ?headers ?host ?query ?timeout ?expect path = request "HEAD" ?headers ?host ?query ?timeout ?expect path
 let options ?headers ?host ?query ?timeout ?expect path = request "OPTIONS" ?headers ?host ?query ?timeout ?expect path
@@ -537,4 +569,5 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 1
 module For_test = struct
   let poll = poll
   let decode_chunked = Http_client.decode_chunked
+  let encode_multipart = encode_multipart
 end

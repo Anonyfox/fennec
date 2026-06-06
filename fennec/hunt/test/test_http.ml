@@ -63,6 +63,15 @@ let () =
   check "empty (immediate 0 chunk)" (FT.decode_chunked "0\r\n\r\n" = "");
   check "malformed → best-effort, no raise" (FT.decode_chunked "2\r\nab\r\nGARBAGE" = "ab");
 
+  print_endline "Http.For_test.encode_multipart:";
+  (let mp = FT.encode_multipart ~boundary:"BND"
+       [ H.field "title" "hi"; H.file ~name:"f" ~filename:"a.txt" ~content_type:"text/plain" "DATA" ] in
+   check "field part" (contains mp "--BND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhi\r\n");
+   check "file part w/ filename + content-type" (contains mp "Content-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nDATA\r\n");
+   check "closing boundary" (contains mp "--BND--\r\n"));
+  (let mp = FT.encode_multipart ~boundary:"B" [ H.file ~name:"f" ~filename:"x" "y" ] in
+   check "file without content-type omits the Content-Type line" (not (contains mp "Content-Type:")));
+
   print_endline "Http assertions (against constructed responses):";
   let resp ?(status = 200) ?(headers = []) ?(body = "") () : H.response = { status; headers; body } in
   let ok name a r = check name (not (raises (fun () -> a r))) in

@@ -28,4 +28,14 @@ let () = hunt "probe server" ~url:"http://localhost:4555" ~spawn:[ probe ] @@ fu
 
   check "chunked response is decoded to its content" (fun () ->
     (* /chunked sends "ab"+"cd"+"ef" as three chunks; we assert the dechunked body *)
-    get "/chunked" ~expect:[status 200; body_is "abcdef"])
+    get "/chunked" ~expect:[status 200; body_is "abcdef"]);
+
+  check "multipart upload is sent intact (server echoes the body)" (fun () ->
+    post "/echo"
+      ~multipart:[ field "title" "hello"; file ~name:"doc" ~filename:"note.txt" ~content_type:"text/plain" "FILE-BYTES" ]
+      ~expect:[
+        status 200;
+        body_contains {|name="title"|};
+        body_contains "hello";
+        body_contains {|name="doc"; filename="note.txt"|};
+        body_contains "FILE-BYTES"])
