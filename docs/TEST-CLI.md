@@ -26,7 +26,7 @@ Tests are **stateful** — they mutate the server's data, and (soon) their own d
 each suite gets its **own exclusive instance**, never a shared one:
 
 - Suite *i* → a **deterministic** port `base + i` (reproducible; `base` from `--port`, default
-  a test range clear of dev's 4000, e.g. 7000).
+  a test range clear of dev's 4000 and macOS AirPlay's 7000 — default 8200).
 - Its **own server process** — the app artifact spawned with `FENNEC_PORT=<port>`,
   `FENNEC_DEV_LIVERELOAD=0` (determinism), and (future) `FENNEC_DATABASE_URL=<isolated>`.
 - Its **own state**. No shared port, no shared DB.
