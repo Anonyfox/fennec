@@ -63,6 +63,10 @@ val of_fd : Unix.file_descr -> t
 (** The dune process id (for supervision / cleanup). *)
 val pid : t -> int
 
+(** Stop the watcher: SIGTERM → SIGKILL → reap. Closes the read pipe. Safe to call
+    multiple times. *)
+val stop : t -> unit
+
 (** Block up to [timeout] seconds for the next event; [None] on timeout (so the caller
     can also poll the server's health). Never raises. *)
 val poll : t -> timeout:float -> event option

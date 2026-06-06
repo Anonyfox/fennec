@@ -87,6 +87,12 @@ let run ?port ~targets ~exe ~assets =
   if Sys.file_exists worker_socket then Unix.putenv Dev_proto.env_esbuild_worker worker_socket
   else Ui.notice ui Ui.Info "esbuild worker did not start — falling back to cold builds";
 
+  (* inline test runners in the dev loop. Lazy: runners are discovered after the first settle
+     (when _build/default exists), then their exe paths are added to the watch so dune builds
+     them alongside the server. The supervisor runs them itself after each green settle. *)
+  let dev_tests = Dev_tests.create ~root:(Sys.getcwd ()) in
+  let tests_wired = ref false in
+
   let dw = ref (Dune_watch.start targets) in
   let control_path = tmp_socket "fennec-lr" in
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
@@ -201,7 +207,30 @@ let run ?port ~targets ~exe ~assets =
           | Assets.Css_only -> ping control_path "css"; Ui.restyled ui ~trigger:triggers ~ms:dur
           (* nothing the server cares about changed — but if this green build FIXED a prior error
              (a revert to identical bytes), clear the stuck panel; otherwise stay silent *)
-          | Assets.Nothing -> Ui.resolved ui ~ms:dur)
+          | Assets.Nothing -> Ui.resolved ui ~ms:dur);
+      (* after the first successful settle, wire inline test runner targets into the watch so
+         dune rebuilds them on every change. Only restart the watcher once (idempotent). *)
+      if not !tests_wired then begin
+        let test_targets = Dev_tests.targets dev_tests in
+        if test_targets <> [] then begin
+          tests_wired := true;
+          (* restart the watcher with the expanded target list — dune now builds the runner
+             exes alongside the server, without running them *)
+          Dune_watch.stop !dw;
+          dw := Dune_watch.start (targets @ test_targets);
+          record_pids ()
+        end
+      end;
+      (* run inline test runners whose exe mtime advanced since the last settle *)
+      (match Dev_tests.run_changed dev_tests with
+       | None -> ()
+       | Some s ->
+         Ui.tested ui ~passed:s.Dev_tests.total_passed ~failed:s.Dev_tests.total_failed
+           ~libs:(List.length s.Dev_tests.results) ~ms:s.Dev_tests.ms;
+         List.iter (fun (r : Dev_tests.result) ->
+           if r.Dev_tests.failed > 0 then
+             Ui.notice ui Ui.Warn (Printf.sprintf "test failures in %s:\n%s" r.Dev_tests.lib (String.trim r.Dev_tests.output)))
+           s.Dev_tests.results)
   in
 
   let on_build_failed _n triggers messages = Ui.failed ui ~raw:messages ~trigger:triggers ~serving:(serving ()) in
@@ -216,7 +245,7 @@ let run ?port ~targets ~exe ~assets =
     else (
       Ui.notice ui Ui.Warn "dune watcher exited — restarting";
       Unix.sleepf 0.5;
-      dw := Dune_watch.start targets;
+      dw := Dune_watch.start (targets @ (if !tests_wired then Dev_tests.targets dev_tests else []));
       record_pids ())
   in
 

@@ -46,6 +46,10 @@ val failed : t -> raw:string -> trigger:string list -> serving:bool -> unit
     what keeps the panel from sticking after a fix that dune rebuilds to the same bytes. *)
 val resolved : t -> ms:float option -> unit
 
+(** Inline test results after a green settle. [passed] and [failed] are assertion counts;
+    [libs] is how many libraries' runners re-ran; [ms] is the wall-clock for all runners. *)
+val tested : t -> passed:int -> failed:int -> libs:int -> ms:float -> unit
+
 (** A one-off notice (worker fallback, dune respawn, port-in-use, give-up). *)
 val notice : t -> level -> string -> unit
 

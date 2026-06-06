@@ -80,6 +80,21 @@ type t = {
 let pid t = t.pid
 let is_building t = t.building
 
+let stop t =
+  if t.pid > 0 then begin
+    (try Unix.kill t.pid Sys.sigterm with _ -> ());
+    let dead = ref false and i = ref 0 in
+    while (not !dead) && !i < 20 do
+      (match Unix.waitpid [ Unix.WNOHANG ] t.pid with
+       | 0, _ -> Unix.sleepf 0.05
+       | _ -> dead := true
+       | exception _ -> dead := true);
+      incr i
+    done;
+    if not !dead then ((try Unix.kill t.pid Sys.sigkill with _ -> ()); (try ignore (Unix.waitpid [] t.pid) with _ -> ()));
+    (try Unix.close t.fd with _ -> ())
+  end
+
 let start (targets : string list) : t =
   let rd, wr = Unix.pipe ~cloexec:false () in
   let args = Array.of_list ("dune" :: "build" :: "--watch" :: targets) in

@@ -158,6 +158,22 @@ let rebuilt t ~trigger ~ms = healthy t; event t "●" green trigger ms "reload"
 let reloaded t ~trigger ~ms = healthy t; event t "↻" cyan trigger ms "reload"
 let restyled t ~trigger ~ms = healthy t; event t "↻" cyan trigger ms "css"
 
+(* inline test results after a green settle — a quiet line, never gates the build *)
+let tested t ~passed ~failed ~libs ~ms =
+  let ms_opt = if ms > 0.0 then Some ms else None in
+  if failed = 0 then
+    log t (Printf.sprintf "  %s  tests %s  %s  %s"
+      (green t "✓")
+      (green t (string_of_int passed))
+      (dim t (Printf.sprintf "%6s" (fmt_ms ms_opt)))
+      (dim t (Printf.sprintf "%d lib%s" libs (if libs = 1 then "" else "s"))))
+  else
+    log t (Printf.sprintf "  %s  tests %s  %s  %s"
+      (red t "✗")
+      (red t (Printf.sprintf "%d passed, %d failed" passed failed))
+      (dim t (Printf.sprintf "%6s" (fmt_ms ms_opt)))
+      (dim t (Printf.sprintf "%d lib%s" libs (if libs = 1 then "" else "s"))))
+
 let failed t ~raw ~trigger:_ ~serving =
   t.problems <- D.parse raw;
   t.raw <- (if t.problems = [] then String.trim raw else "");
