@@ -1,0 +1,18 @@
+; The inline_tests backend for fennec-hunt.Unit. Downstream wires it in ONE stanza:
+;
+;   (library
+;    (name my_lib)
+;    (libraries fennec-hunt)
+;    (inline_tests (backend fennec-hunt.runner))
+;    (preprocess (pps fennec-hunt.ppx)))     ; or fennec.fur.ppx for MLX users
+;
+; Then `dune test` auto-generates a runner exe per library, links the instrumented lib
+; (with all let%test registrations live), calls Unit.run, and wires it to @runtest.
+; No manual runner file needed.
+(library
+ (name fennec_hunt_runner)
+ (public_name fennec-hunt.runner)
+ (modules ())
+ (inline_tests.backend
+  (runner_libraries fennec-hunt)
+  (generate_runner (echo "let () = exit (Fennec_hunt.Unit.run ())"))))

@@ -57,6 +57,15 @@ let of_path (path : string) : string =
   | Some ct -> ct
   | None -> "application/octet-stream"
 
+let%test "html" = of_path "index.html" = "text/html; charset=utf-8"
+let%test "js"   = of_path "main.js" = "text/javascript; charset=utf-8"
+let%test "css"  = of_path "style.css" = "text/css; charset=utf-8"
+let%test "png"  = of_path "logo.png" = "image/png"
+let%test "woff2" = of_path "font.woff2" = "font/woff2"
+let%test "unknown ext → octet-stream" = of_path "data.xyz" = "application/octet-stream"
+let%test "no ext → octet-stream" = of_path "Makefile" = "application/octet-stream"
+let%test "case insensitive" = of_path "FILE.HTML" = "text/html; charset=utf-8"
+
 (* Is this content-type worth compressing? text/*, application/json|xml|wasm|
    manifest, image/svg+xml, application/javascript — but NOT already-compressed
    media, fonts (woff2 is brotli'd), or octet-stream. *)
@@ -77,3 +86,9 @@ let compressible (content_type : string) : bool =
          "application/wasm";
          "image/svg+xml";
          "application/x-javascript" ]
+
+let%test "text/html is compressible" = compressible "text/html; charset=utf-8"
+let%test "application/json is compressible" = compressible "application/json"
+let%test "image/png is NOT compressible" = not (compressible "image/png")
+let%test "font/woff2 is NOT compressible" = not (compressible "font/woff2")
+let%test "image/svg+xml IS compressible" = compressible "image/svg+xml"
