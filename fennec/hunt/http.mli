@@ -22,9 +22,20 @@ type assertion = response -> unit
 
 (** {1 The hunt block} *)
 
-(** [hunt label ~url ?spawn ?env ?timeout body] — test suite against [url].
-    Optionally spawns a command and waits for the URL to respond. *)
-val hunt : string -> url:string -> ?spawn:string list -> ?env:string array -> ?timeout:float -> (unit -> unit) -> unit
+(** [hunt label ~url ?spawn ?env ?timeout ?request_timeout body] — test suite against [url].
+    Optionally spawns a command and waits for the URL to respond. [~timeout] is the readiness
+    deadline (default 30s); [~request_timeout] is the default per-request deadline (default 10s,
+    overridable per request) — a server that accepts but never answers fails the check instead
+    of freezing the suite. *)
+val hunt :
+  string ->
+  url:string ->
+  ?spawn:string list ->
+  ?env:string array ->
+  ?timeout:float ->
+  ?request_timeout:float ->
+  (unit -> unit) ->
+  unit
 
 (** {1 Test cases} *)
 
@@ -36,15 +47,16 @@ val check : string -> (unit -> unit) -> unit
     All methods send ONE request and store the response. Body sources (highest priority first):
     [~json] (serializes + sets Content-Type), [~form] (URL-encodes + sets Content-Type),
     [~body] (raw string). [~query] appends query parameters to the path. [~host] sets the Host
-    header. Cookies from prior responses in the same [check] are sent automatically. *)
+    header. [~timeout] overrides the per-request deadline (default from [hunt ~request_timeout]).
+    Cookies from prior responses in the same [check] are sent automatically. *)
 
-val get : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?expect:assertion list -> string -> unit
-val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?expect:assertion list -> string -> unit
-val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?expect:assertion list -> string -> unit
-val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?expect:assertion list -> string -> unit
-val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?expect:assertion list -> string -> unit
-val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?expect:assertion list -> string -> unit
-val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?expect:assertion list -> string -> unit
+val get : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
+val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
 
 (** {1 Status assertions} *)
 

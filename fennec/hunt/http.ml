@@ -33,6 +33,8 @@ type assertion = response -> unit
 type context = {
   url : Target.url;
   net : Target.net;
+  clock : Target.clock; (* for per-request timeouts + the eventually poll *)
+  request_timeout : float; (* default per-request deadline, seconds; overridable per call *)
   mutable last : response option;
   mutable last_request : string; (* "GET /api/health" — the request behind [last], for diagnostics *)
   mutable cookies : (string * string) list;
@@ -331,8 +333,9 @@ let run_expect r = function
     with Failure msg ->
       failwith (Printf.sprintf "%s\n  request: %s\n  elapsed: %.0fms" msg (current ()).last_request !last_elapsed)
 
-let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : assertion list option) path =
+let request meth ?(headers = []) ?host ?body ?query ?form ?json ?timeout ?(expect : assertion list option) path =
   let c = current () in
+  let timeout = Option.value timeout ~default:c.request_timeout in
   (* query parameters *)
   let full_path =
     let base = c.url.base_path ^ path in
@@ -355,21 +358,31 @@ let request meth ?(headers = []) ?host ?body ?query ?form ?json ?(expect : asser
      the target's real host:port (so `~host:"admin.localhost"` hits the gateway, routed by Host) *)
   let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
   let headers = match cookie_header c.cookies with Some ch -> ch :: headers | None -> headers in
+  c.last_request <- Printf.sprintf "%s %s" meth full_path;
   let t0 = Unix.gettimeofday () in
-  let r = Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~tls:(c.url.scheme = "https") ~meth ~path:full_path ~headers ?body () in
+  (* bound the whole request: a server that accepts but never answers must become a clean
+     failed check, not a frozen suite. Eio cancels the connection fiber on timeout (the flow's
+     switch tears it down — no leak). *)
+  let r =
+    match
+      Eio.Time.with_timeout c.clock timeout (fun () ->
+          Ok (Http_client.request ~net:c.net ~host:c.url.host ~port:c.url.port ~tls:(c.url.scheme = "https") ~meth ~path:full_path ~headers ?body ()))
+    with
+    | Ok r -> r
+    | Error `Timeout -> failwith (Printf.sprintf "request timed out after %.1fs: %s %s" timeout meth full_path)
+  in
   last_elapsed := (Unix.gettimeofday () -. t0) *. 1000.0;
   c.last <- Some r;
-  c.last_request <- Printf.sprintf "%s %s" meth full_path;
   c.cookies <- update_jar c.cookies (parse_set_cookies r.headers);
   run_expect r expect
 
-let get ?headers ?host ?query ?expect path = request "GET" ?headers ?host ?query ?expect path
-let post ?headers ?host ?body ?query ?form ?json ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?expect path
-let put ?headers ?host ?body ?query ?form ?json ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?expect path
-let patch ?headers ?host ?body ?query ?form ?json ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?expect path
-let delete ?headers ?host ?query ?expect path = request "DELETE" ?headers ?host ?query ?expect path
-let head ?headers ?host ?query ?expect path = request "HEAD" ?headers ?host ?query ?expect path
-let options ?headers ?host ?query ?expect path = request "OPTIONS" ?headers ?host ?query ?expect path
+let get ?headers ?host ?query ?timeout ?expect path = request "GET" ?headers ?host ?query ?timeout ?expect path
+let post ?headers ?host ?body ?query ?form ?json ?timeout ?expect path = request "POST" ?headers ?host ?body ?query ?form ?json ?timeout ?expect path
+let put ?headers ?host ?body ?query ?form ?json ?timeout ?expect path = request "PUT" ?headers ?host ?body ?query ?form ?json ?timeout ?expect path
+let patch ?headers ?host ?body ?query ?form ?json ?timeout ?expect path = request "PATCH" ?headers ?host ?body ?query ?form ?json ?timeout ?expect path
+let delete ?headers ?host ?query ?timeout ?expect path = request "DELETE" ?headers ?host ?query ?timeout ?expect path
+let head ?headers ?host ?query ?timeout ?expect path = request "HEAD" ?headers ?host ?query ?timeout ?expect path
+let options ?headers ?host ?query ?timeout ?expect path = request "OPTIONS" ?headers ?host ?query ?timeout ?expect path
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Extractors (from last response)                                           *)
@@ -467,13 +480,13 @@ let check label body =
 (*  hunt                                                                      *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
-let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
+let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 10.0) body =
   let target = Target.parse_url url in
   let tls = target.scheme = "https" in
   Eio_main.run @@ fun eio_env ->
   Eio.Switch.run @@ fun sw ->
   let net = (Eio.Stdenv.net eio_env :> Target.net) in
-  let clock = Eio.Stdenv.clock eio_env in
+  let clock = (Eio.Stdenv.clock eio_env :> Target.clock) in
   (match spawn with
   | None ->
     (* no spawn: an already-running server. Still wait for it (it may be coming up). *)
@@ -481,7 +494,7 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) body =
   | Some argv ->
     Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
       ~net ~clock ~env ~host:target.host ~port:target.port ~tls ~timeout argv);
-  let c = { url = target; net; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0 } in
+  let c = { url = target; net; clock; request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0 } in
   install_exit_hook ();
   ctx := Some c;
   Printf.printf "\n%s %s\n%!" (color "1" (glyph "⟐ " "> " ^ label)) (color "2" (Printf.sprintf "(%s)" url));

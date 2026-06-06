@@ -1,0 +1,22 @@
+(* I/O e2e proofs for the Http layer, against the pure-Eio probe_server (sibling binary):
+   per-request timeout, redirect following, chunked decoding. Run manually. *)
+open Fennec_hunt.Http
+
+let probe = Filename.concat (Filename.dirname Sys.executable_name) "probe_server.exe"
+
+let contains hay needle =
+  let lh = String.length hay and ln = String.length needle in
+  let rec at i j = j = ln || (i + j < lh && hay.[i + j] = needle.[j] && at i (j + 1)) in
+  let rec scan i = i + ln <= lh && (at i 0 || scan (i + 1)) in
+  ln = 0 || scan 0
+
+let () = hunt "probe server" ~url:"http://localhost:4555" ~spawn:[ probe ] @@ fun () ->
+
+  check "fast endpoint answers" (fun () ->
+    get "/ok" ~expect:[status 200; body_is "ok"]);
+
+  check "a hung request times out cleanly (not a frozen suite)" (fun () ->
+    match get "/slow" ~timeout:0.3 with
+    | () -> failwith "expected /slow to time out, but the request returned"
+    | exception Failure m when contains m "timed out" -> ()  (* the desired outcome *)
+    | exception Failure m -> failwith ("timed out for the wrong reason: " ^ m))

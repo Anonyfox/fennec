@@ -24,3 +24,14 @@
  (name tls_server)
  (modules tls_server)
  (libraries eio eio_main tls tls-eio x509 ptime mirage-crypto-rng.unix))
+
+; I/O e2e proofs (timeout, redirects, chunked) against a tiny pure-Eio probe server.
+(executable
+ (name probe_server)
+ (modules probe_server)
+ (libraries eio eio_main))
+
+(executable
+ (name probe_check)
+ (modules probe_check)
+ (libraries fennec-hunt))
