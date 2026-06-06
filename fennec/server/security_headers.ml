@@ -36,3 +36,15 @@ let%test_unit "default nosniff + extra CSP + extra X-Frame-Options" =
   Fennec_hunt_unit.check "nosniff present" (Headers_.get r.H.headers "x-content-type-options" = Some "nosniff");
   Fennec_hunt_unit.check "extra CSP added" (Headers_.get r.H.headers "content-security-policy" = Some "default-src 'self'");
   Fennec_hunt_unit.check "extra overrides X-Frame-Options" (Headers_.get r.H.headers "x-frame-options" = Some "DENY")
+
+(* ──── promoted standalone assertions ──── *)
+
+let%test "default nosniff present" =
+  let sh = make () in
+  let r = finalize_ (Conn.text (sh (Conn.make (req_ "/"))) "x") in
+  Headers_.get r.H.headers "x-content-type-options" = Some "nosniff"
+
+let%test "extra CSP added" =
+  let sh = make ~extra:[ ("Content-Security-Policy", "default-src 'self'") ] () in
+  let r = finalize_ (Conn.text (sh (Conn.make (req_ "/"))) "x") in
+  Headers_.get r.H.headers "content-security-policy" = Some "default-src 'self'"

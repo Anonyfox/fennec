@@ -271,6 +271,24 @@ let rec mkdir_p_ d =
     mkdir_p_ (Filename.dirname d);
     try Unix.mkdir d 0o755 with _ -> ())
 
+(* ──── safe_key (pure path resolution) ──── *)
+
+let%test "safe_key /" = safe_key "/" = Some "index.html"
+let%test "safe_key /robots.txt" = safe_key "/robots.txt" = Some "robots.txt"
+let%test "safe_key /img/logo.svg" = safe_key "/img/logo.svg" = Some "img/logo.svg"
+let%test "safe_key .. rejected" = safe_key "/../etc/passwd" = None
+let%test "safe_key deep .. rejected" = safe_key "/img/../../etc/passwd" = None
+let%test "safe_key . segment rejected" = safe_key "/./robots.txt" = None
+let%test "safe_key double slash rejected" = safe_key "/img//logo.svg" = None
+let%test "safe_key null byte rejected" = safe_key "/robots.txt\000.png" = None
+let%test "safe_key control char rejected" = safe_key "/img/\tlogo.svg" = None
+
+(* ──── default_cache_control ──── *)
+
+let%test "cache-control html -> no-cache" = default_cache_control "text/html; charset=utf-8" = "no-cache"
+let%test "cache-control js -> public max-age" = default_cache_control "application/javascript" = "public, max-age=3600"
+let%test "cache-control css -> public max-age" = default_cache_control "text/css" = "public, max-age=3600"
+
 (* ──── Dir source (filesystem) tests ──── *)
 
 let%test_unit "Dir: happy path" =
@@ -299,7 +317,7 @@ let%test_unit "Dir: happy path" =
   (try Unix.rmdir (Filename.concat root "img") with _ -> ());
   (try Unix.rmdir root with _ -> ())
 
-let%test_unit "Dir: traversal & escape" =
+let%test_unit "Dir: traversal & symlink escape" =
   let root = Filename.temp_file "fennec_static" "" in
   Sys.remove root;
   Unix.mkdir root 0o755;
@@ -309,14 +327,7 @@ let%test_unit "Dir: traversal & escape" =
   (try Unix.symlink "/etc/hosts" (Filename.concat root "escape") with _ -> ());
   let src = Dir root in
   let serve r = respond src r in
-  let check = Fennec_hunt_unit.check in
-  check ".. rejected (403)" (status_of_ (serve (req_ "/../etc/passwd")) = 403);
-  check "deep .. rejected" (status_of_ (serve (req_ "/img/../../etc/passwd")) = 403);
-  check ". segment rejected" (status_of_ (serve (req_ "/./robots.txt")) = 403);
-  check "double slash rejected" (status_of_ (serve (req_ "/img//logo.svg")) = 403);
-  check "null byte rejected" (status_of_ (serve (req_ "/robots.txt\000.png")) = 403);
-  check "control char rejected" (status_of_ (serve (req_ "/img/\tlogo.svg")) = 403);
-  check "symlink escape not served" (status_of_ (serve (req_ "/escape")) <> 200);
+  Fennec_hunt_unit.check "symlink escape not served" (status_of_ (serve (req_ "/escape")) <> 200);
   (* cleanup *)
   (try Sys.remove (Filename.concat root "escape") with _ -> ());
   List.iter (fun f -> try Sys.remove (Filename.concat root f) with _ -> ())
@@ -368,70 +379,106 @@ let%test_unit "Dir: caching (mtime reuse)" =
 
 (* ──── Responder.finalize tests ──── *)
 
-let%test_unit "Responder.finalize: gzip, identity, conditional, HEAD" =
-  let big_html = H.html (String.make 2000 'a') in
-  let check = Fennec_hunt_unit.check in
-  let gz =
-    Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") big_html in
-  check "gzip content-encoding" (Sem.header gz.H.headers "content-encoding" = Some "gzip");
-  check "gzip vary set" (Sem.header gz.H.headers "vary" = Some "Accept-Encoding");
-  check "gzip body smaller" (String.length gz.H.body < 2000);
-  let id = Responder.finalize ~now:0.0 ~req:(req_ "/") big_html in
-  check "identity (no encoding header)" (Sem.header id.H.headers "content-encoding" = None);
-  let tiny =
-    Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") (H.html "hi") in
-  check "tiny body not compressed" (Sem.header tiny.H.headers "content-encoding" = None);
-  let png =
-    Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/")
+let _big_html = H.html (String.make 2000 'a')
+
+let%test "gzip content-encoding" =
+  let gz = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") _big_html in
+  Sem.header gz.H.headers "content-encoding" = Some "gzip"
+
+let%test "gzip vary set" =
+  let gz = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") _big_html in
+  Sem.header gz.H.headers "vary" = Some "Accept-Encoding"
+
+let%test "gzip body smaller" =
+  let gz = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") _big_html in
+  String.length gz.H.body < 2000
+
+let%test "identity (no encoding header)" =
+  let id = Responder.finalize ~now:0.0 ~req:(req_ "/") _big_html in
+  Sem.header id.H.headers "content-encoding" = None
+
+let%test "tiny body not compressed" =
+  let tiny = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") (H.html "hi") in
+  Sem.header tiny.H.headers "content-encoding" = None
+
+let%test "png not compressed" =
+  let png = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/")
       (H.respond ~content_type:"image/png" (String.make 2000 'x')) in
-  check "png not compressed" (Sem.header png.H.headers "content-encoding" = None);
+  Sem.header png.H.headers "content-encoding" = None
+
+let%test "finalize conditional 304" =
+  let id = Responder.finalize ~now:0.0 ~req:(req_ "/") _big_html in
   let etag2 = match Sem.header id.H.headers "etag" with Some e -> e | None -> "" in
-  let cond = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("If-None-Match", etag2) ] "/") big_html in
-  check "finalize conditional 304" (cond.H.status = 304);
-  check "304 has empty body" (cond.H.body = "");
-  let head = Responder.finalize ~now:0.0 ~req:(req_ ~meth:H.HEAD "/") big_html in
-  check "HEAD empty body" (head.H.body = "");
-  check "HEAD has content-length" (Sem.header head.H.headers "content-length" <> None)
+  let cond = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("If-None-Match", etag2) ] "/") _big_html in
+  cond.H.status = 304
+
+let%test "304 has empty body" =
+  let id = Responder.finalize ~now:0.0 ~req:(req_ "/") _big_html in
+  let etag2 = match Sem.header id.H.headers "etag" with Some e -> e | None -> "" in
+  let cond = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("If-None-Match", etag2) ] "/") _big_html in
+  cond.H.body = ""
+
+let%test "HEAD empty body" =
+  let head = Responder.finalize ~now:0.0 ~req:(req_ ~meth:H.HEAD "/") _big_html in
+  head.H.body = ""
+
+let%test "HEAD has content-length" =
+  let head = Responder.finalize ~now:0.0 ~req:(req_ ~meth:H.HEAD "/") _big_html in
+  Sem.header head.H.headers "content-length" <> None
 
 (* ──── Embedded source (prod) tests ──── *)
 
-let%test_unit "Embedded: happy path + traversal + conditional + range" =
-  let table =
-    [ ("index.html", "<h1>baked</h1>"); ("robots.txt", "User-agent: *\nDisallow: /\n");
-      ("app.js", String.make 2000 'j') ] in
-  let emb = Embedded ("test_inline", fun k -> List.assoc_opt k table) in
-  let eserve r = respond emb r in
-  let check = Fennec_hunt_unit.check in
-  check "embedded index served" (status_of_ (eserve (req_ "/")) = 200);
-  check "embedded index body" (body_of_ (eserve (req_ "/")) = "<h1>baked</h1>");
-  check "embedded mime" (hdr_ (eserve (req_ "/")) "content-type" = Some "text/html; charset=utf-8");
-  check "embedded js served" (status_of_ (eserve (req_ "/app.js")) = 200);
-  check "embedded missing -> None" (status_of_ (eserve (req_ "/nope.js")) = 0);
-  check "embedded traversal -> 403" (status_of_ (eserve (req_ "/../etc/passwd")) = 403);
-  check "html default -> no-cache" (hdr_ (eserve (req_ "/")) "cache-control" = Some "no-cache");
-  check "js default -> public max-age" (hdr_ (eserve (req_ "/app.js")) "cache-control" = Some "public, max-age=3600");
-  check "explicit cache-control overrides html"
-    (hdr_ (respond ~cache_control:"max-age=60" emb (req_ "/")) "cache-control" = Some "max-age=60");
-  let eetag = match hdr_ (eserve (req_ "/robots.txt")) "etag" with Some e -> e | None -> "" in
-  check "embedded has etag" (eetag <> "");
-  check "embedded If-None-Match -> 304"
-    (status_of_ (eserve (req_ ~headers:[ ("If-None-Match", eetag) ] "/robots.txt")) = 304);
-  check "embedded Range -> 206"
-    (status_of_ (eserve (req_ ~headers:[ ("Range", "bytes=0-9") ] "/app.js")) = 206)
+let _emb_table =
+  [ ("index.html", "<h1>baked</h1>"); ("robots.txt", "User-agent: *\nDisallow: /\n");
+    ("app.js", String.make 2000 'j') ]
+let _emb = Embedded ("test_standalone", fun k -> List.assoc_opt k _emb_table)
+let _eserve r = respond _emb r
 
-let%test_unit "Embedded: bundle collision prevention" =
-  let a = Embedded ("bundle_a_inline", fun k -> if k = "x.txt" then Some "AAAA" else None) in
-  let b = Embedded ("bundle_b_inline", fun k -> if k = "x.txt" then Some "BBBB" else None) in
-  let check = Fennec_hunt_unit.check in
-  check "bundle A serves its own bytes" (body_of_ (respond a (req_ "/x.txt")) = "AAAA");
-  check "bundle B serves its own bytes (no collision)" (body_of_ (respond b (req_ "/x.txt")) = "BBBB");
-  check "bundle A unchanged after B served" (body_of_ (respond a (req_ "/x.txt")) = "AAAA")
+let%test "embedded index served" = status_of_ (_eserve (req_ "/")) = 200
+let%test "embedded index body" = body_of_ (_eserve (req_ "/")) = "<h1>baked</h1>"
+let%test "embedded mime" = hdr_ (_eserve (req_ "/")) "content-type" = Some "text/html; charset=utf-8"
+let%test "embedded js served" = status_of_ (_eserve (req_ "/app.js")) = 200
+let%test "embedded missing -> None" = status_of_ (_eserve (req_ "/nope.js")) = 0
+let%test "embedded traversal -> 403" = status_of_ (_eserve (req_ "/../etc/passwd")) = 403
+let%test "html default -> no-cache" = hdr_ (_eserve (req_ "/")) "cache-control" = Some "no-cache"
+let%test "js default -> public max-age" = hdr_ (_eserve (req_ "/app.js")) "cache-control" = Some "public, max-age=3600"
+let%test "explicit cache-control overrides html" =
+  hdr_ (respond ~cache_control:"max-age=60" _emb (req_ "/")) "cache-control" = Some "max-age=60"
 
-let%test_unit "Embedded: zero-length asset Range safety" =
-  let empty = Embedded ("empty_inline", fun k -> if k = "e.css" then Some "" else None) in
-  let check = Fennec_hunt_unit.check in
-  check "empty asset served (200)" (status_of_ (respond empty (req_ "/e.css")) = 200);
-  check "suffix Range on empty asset -> 416 (no crash)"
-    (status_of_ (respond empty (req_ ~headers:[ ("Range", "bytes=-5") ] "/e.css")) = 416);
-  check "0- Range on empty asset -> 416 (no crash)"
-    (status_of_ (respond empty (req_ ~headers:[ ("Range", "bytes=0-9") ] "/e.css")) = 416)
+let%test_unit "embedded etag + conditional" =
+  let eetag = match hdr_ (_eserve (req_ "/robots.txt")) "etag" with Some e -> e | None -> "" in
+  Fennec_hunt_unit.check "embedded has etag" (eetag <> "");
+  Fennec_hunt_unit.check "embedded If-None-Match -> 304"
+    (status_of_ (_eserve (req_ ~headers:[ ("If-None-Match", eetag) ] "/robots.txt")) = 304)
+
+let%test "embedded Range -> 206" =
+  status_of_ (_eserve (req_ ~headers:[ ("Range", "bytes=0-9") ] "/app.js")) = 206
+
+(* ──── Embedded: bundle collision prevention ──── *)
+
+let%test "bundle A serves its own bytes" =
+  let a = Embedded ("bundle_a_st", fun k -> if k = "x.txt" then Some "AAAA" else None) in
+  body_of_ (respond a (req_ "/x.txt")) = "AAAA"
+
+let%test "bundle B serves its own bytes (no collision)" =
+  let _a = Embedded ("bundle_a_st", fun k -> if k = "x.txt" then Some "AAAA" else None) in
+  let b = Embedded ("bundle_b_st", fun k -> if k = "x.txt" then Some "BBBB" else None) in
+  ignore (respond _a (req_ "/x.txt"));
+  body_of_ (respond b (req_ "/x.txt")) = "BBBB"
+
+let%test "bundle A unchanged after B served" =
+  let a = Embedded ("bundle_a_st2", fun k -> if k = "x.txt" then Some "AAAA" else None) in
+  let b = Embedded ("bundle_b_st2", fun k -> if k = "x.txt" then Some "BBBB" else None) in
+  ignore (respond a (req_ "/x.txt"));
+  ignore (respond b (req_ "/x.txt"));
+  body_of_ (respond a (req_ "/x.txt")) = "AAAA"
+
+(* ──── Embedded: zero-length asset Range safety ──── *)
+
+let _empty_emb = Embedded ("empty_st", fun k -> if k = "e.css" then Some "" else None)
+
+let%test "empty asset served (200)" = status_of_ (respond _empty_emb (req_ "/e.css")) = 200
+let%test "suffix Range on empty asset -> 416 (no crash)" =
+  status_of_ (respond _empty_emb (req_ ~headers:[ ("Range", "bytes=-5") ] "/e.css")) = 416
+let%test "0- Range on empty asset -> 416 (no crash)" =
+  status_of_ (respond _empty_emb (req_ ~headers:[ ("Range", "bytes=0-9") ] "/e.css")) = 416

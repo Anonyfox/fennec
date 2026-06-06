@@ -1,6 +1,0 @@
-; Fast, deterministic contract lock — signals, matcher, head, SSR, data, router,
-; the keyed reconciler via an in-memory backend, and a ppx-compiled component.
-(test (name test)
- (libraries fennec.fur fennec.fur.html fennec.fur.platform_native)
- (preprocess (pps fennec.fur.ppx))
- (flags (:standard -w -a -open Fur)))

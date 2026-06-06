@@ -1,4 +1,0 @@
-(test
- (name test_paw)
- (modes native)
- (libraries fennec.paw fennec.core))

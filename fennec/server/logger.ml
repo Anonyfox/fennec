@@ -65,3 +65,15 @@ let%test_unit "logs the request id when present" =
   let c = Request_id.make () (Conn.make (req_ ~headers:[ ("X-Request-Id", "abc123") ] "/")) in
   let _ = finalize_ (Conn.text (make ~sink:(Buffer.add_string buf2) () c) "ok") in
   Fennec_hunt_unit.check "request id logged" (Fennec_hunt_unit.str_contains (Buffer.contents buf2) "abc123")
+
+(* ──── promoted standalone assertions ──── *)
+
+let _log_line () =
+  let buf = Buffer.create 64 in
+  let lg = make ~sink:(Buffer.add_string buf) () in
+  let _ = finalize_ (Conn.text ~status:201 (lg (Conn.make (req_ ~meth:H.POST "/x"))) "ok") in
+  Buffer.contents buf
+
+let%test "logs method" = Fennec_hunt_unit.str_contains (_log_line ()) "POST"
+let%test "logs path" = Fennec_hunt_unit.str_contains (_log_line ()) "/x"
+let%test "logs status" = Fennec_hunt_unit.str_contains (_log_line ()) "201"

@@ -73,3 +73,15 @@ let%test "put replaces"        = put [("X","old")] "X" "new" = [("X","new")]
 let add (h : t) (name : string) (value : string) : t = h @ [ (name, value) ]
 
 let%test "add appends"         = add [("X","1")] "X" "2" = [("X","1");("X","2")]
+
+(* ──── multi-binding integration ──── *)
+
+(* the old test_headers exercised a shared multi-valued header list; these cover the same
+   combined-path scenarios to confirm the operations compose correctly *)
+let _mh = [ ("Content-Type", "text/html"); ("X-A", "1"); ("X-A", "2") ]
+let%test "get_all on shared multi list" = get_all _mh "X-A" = [ "1"; "2" ]
+let%test "put replaces all multi"       = get_all (put _mh "X-A" "9") "x-a" = [ "9" ]
+let%test "add appends to multi"         = get_all (add _mh "X-A" "3") "x-a" = [ "1"; "2"; "3" ]
+let%test "delete multi clears all"      = get_all (delete _mh "x-a") "X-A" = []
+let%test "ci_equal mixed case"          = ci_equal "Content-Type" "content-TYPE"
+let%test "mem on multi-valued"          = mem _mh "CONTENT-TYPE"

@@ -340,3 +340,30 @@ let%test "short secret rejected" =
   not (constructs_ (fun () -> make ~secret:"tooshort" ()))
 let%test "16+ byte secret accepted" =
   constructs_ (fun () -> make ~secret:(String.make 16 'x') ())
+
+(* ──── promoted sub-checks (standalone) ──── *)
+
+(* these match old test_session assertions that were grouped in test_unit blocks above *)
+let%test "cookie is HttpOnly (has attributes after ;)" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let r1 = finalize_ c1 in
+  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  cookie_kv_ set1 <> set1  (* has attributes after ';' *)
+
+let%test "store: data is in the server store" =
+  let store = memory_store () in
+  let c1 = make ~secret:secret_ ~store () (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let kv = cookie_kv_ (set_cookie_ c1) in
+  let value = match String.index_opt kv '=' with Some i -> String.sub kv (i + 1) (String.length kv - i - 1) | None -> "" in
+  let sid = Option.get (verify ~secret:secret_ value) in
+  store.load sid = Some [ ("user", "ada") ]
+
+let%test "plain http -> cookie not Secure" =
+  let c = make ~secret:secret_ () (Conn.make (req_ "/")) in
+  let sc = set_cookie_ (Conn.text (set c "user" "ada") "ok") in
+  not (Fennec_hunt_unit.str_contains sc "Secure")

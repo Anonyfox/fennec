@@ -139,3 +139,12 @@ let%test_unit "parse file part" =
   | _ -> Fennec_hunt_unit.check "expected two parts" false
 
 let%test "parse empty body"     = parse ~boundary:"X" "" = []
+
+(* ──── individual field / file assertions ──── *)
+
+(* promote sub-checks to standalone tests for fine-grained failure reporting *)
+let%test "field name is title"       = (match parse ~boundary:"X" _test_body with f :: _ -> f.name = "title" | _ -> false)
+let%test "field has no filename"     = (match parse ~boundary:"X" _test_body with f :: _ -> f.filename = None | _ -> false)
+let%test "field default content-type" = (match parse ~boundary:"X" _test_body with f :: _ -> f.content_type = "text/plain" | _ -> false)
+let%test "file filename is a.txt"    = (match parse ~boundary:"X" _test_body with _ :: f :: _ -> f.filename = Some "a.txt" | _ -> false)
+let%test "file data preserves CRLF"  = (match parse ~boundary:"X" _test_body with _ :: f :: _ -> f.data = "file\r\ncontents" | _ -> false)
