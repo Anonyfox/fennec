@@ -321,6 +321,27 @@ type request_error =
   | Handler_timeout of CH.request
   | No_route of CH.request
 
+(* ──── read_request ──── *)
+
+let parse_ ?(continue = fun () -> ()) s = read_request ~continue (Eio.Buf_read.of_string s)
+let body_of_ = function Req p -> Some p.body | _ -> None
+let is_bad_ = function Bad_request _ -> true | _ -> false
+
+let%test "GET no body"               = body_of_ (parse_ "GET / HTTP/1.1\r\nHost: a\r\n\r\n") = Some ""
+let%test "content-length body"       = body_of_ (parse_ "POST /x HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\n\r\nHello") = Some "Hello"
+let%test "chunked body decoded"      = body_of_ (parse_ "POST /x HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n") = Some "Hello World"
+let%test "chunk extension tolerated" = body_of_ (parse_ "POST /x HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3;x=1\r\nabc\r\n0\r\n\r\n") = Some "abc"
+let%test "CL + TE rejected as smuggling" = is_bad_ (parse_ "POST /x HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\nHello")
+let%test_unit "100-continue triggers callback" =
+  let called = ref false in
+  let _ = parse_ ~continue:(fun () -> called := true) "POST /x HTTP/1.1\r\nHost: a\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\nhi" in
+  Fennec_hunt_unit.check "called" !called
+let%test_unit "no Expect: callback not called" =
+  let called = ref false in
+  let _ = parse_ ~continue:(fun () -> called := true) "GET / HTTP/1.1\r\nHost: a\r\n\r\n" in
+  Fennec_hunt_unit.check "not called" (not !called)
+let%test "malformed request line"    = is_bad_ (parse_ "GARBAGE\r\n\r\n")
+
 let default_on_error : request_error -> CH.response = function
   | Handler_exception (exn, _) ->
     Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn);
@@ -340,6 +361,32 @@ let run_handler ~clock ~timeout ~on_error (handler : Paw.t) (req : CH.request) :
   | Ok conn -> conn
   | Error `Timeout -> Conn.respond (Conn.make req) (on_error (Handler_timeout req))
   | Error (`Exn exn) -> Conn.respond (Conn.make req) (on_error (Handler_exception (exn, req)))
+
+(* ──── run_handler ──── *)
+
+let status_of_ c = match Conn.resp c with Some r -> r.CH.status | None -> 0
+let req_ = CH.make_request ~meth:CH.GET ~path:"/" ()
+
+let%test "normal handler → 200" =
+  Eio_main.run @@ fun env ->
+  status_of_ (run_handler ~clock:(Eio.Stdenv.clock env) ~on_error:default_on_error ~timeout:1.0 (fun c -> Conn.text c "ok") req_) = 200
+
+let%test "hung handler → 503" =
+  Eio_main.run @@ fun env ->
+  status_of_ (run_handler ~clock:(Eio.Stdenv.clock env) ~on_error:default_on_error ~timeout:0.05 (fun _ -> Eio.Fiber.await_cancel ()) req_) = 503
+
+let%test "throwing handler → 500" =
+  Eio_main.run @@ fun env ->
+  status_of_ (run_handler ~clock:(Eio.Stdenv.clock env) ~on_error:default_on_error ~timeout:1.0 (fun _ -> failwith "boom") req_) = 500
+
+let%test_unit "sub-fibers cancelled at deadline" =
+  Eio_main.run @@ fun env ->
+  let clock = Eio.Stdenv.clock env in
+  let t0 = Eio.Time.now clock in
+  let c = run_handler ~clock ~on_error:default_on_error ~timeout:0.05
+    (fun c -> Eio.Fiber.both (fun () -> Eio.Time.sleep clock 10.0) (fun () -> Eio.Time.sleep clock 10.0); c) req_ in
+  Fennec_hunt_unit.check "returns at deadline, not after 10s" (Eio.Time.now clock -. t0 < 1.0);
+  Fennec_hunt_unit.check "503" (status_of_ c = 503)
 
 (* Handle one connection. [resolve ~host] picks the endpoint for a request: in prod (and on the dev
    gateway) it routes by Host pattern; on a dev convenience port it always returns that one endpoint.

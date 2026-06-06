@@ -1,5 +1,0 @@
-; Remaining server test executables (Eio-dependent). Pure-function tests moved inline.
-(tests
- (names test_server test_ws)
- (modes native)
- (libraries fennec.core fennec.paw fennec.server eio eio_main base64 fennec))

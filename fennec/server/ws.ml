@@ -153,3 +153,69 @@ let write_masked_frame ?(mask = "\x12\x34\x56\x78") (w : Eio.Buf_write.t) (f : f
   String.iteri
     (fun i c -> Eio.Buf_write.uint8 w (Char.code c lxor Char.code mask.[i land 3]))
     f.payload
+
+(* ══════════════════════════════════════════════════════════════════════════ *)
+(*  Inline tests — Eio_main.run wraps each test (Buf_write needs an effect     *)
+(*  handler). Each test gets its own fresh event loop; no nesting.             *)
+(* ══════════════════════════════════════════════════════════════════════════ *)
+
+let roundtrip_ f = Eio_main.run @@ fun _env ->
+  let buf = Buffer.create 256 in
+  Eio.Buf_write.with_flow (Eio.Flow.buffer_sink buf) (fun w -> write_masked_frame w f);
+  let s = Buffer.contents buf in
+  let r = Eio.Buf_read.of_flow (Eio.Flow.string_source s) ~max_size:(64 * 1024 * 1024) in
+  read_frame r
+
+let read_bytes_ s = Eio_main.run @@ fun _env ->
+  let r = Eio.Buf_read.of_flow (Eio.Flow.string_source s) ~max_size:(64 * 1024 * 1024) in
+  read_frame r
+
+let mk_ ?(fin = true) ?(rsv1 = false) opcode payload = { fin; rsv1; opcode; payload }
+
+(* ──── accept_key ──── *)
+
+let%test "RFC accept-key" = accept_key "dGhlIHNhbXBsZSBub25jZQ==" = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+
+(* ──── frame round-trip ──── *)
+
+let%test_unit "round-trip: empty text" =
+  match roundtrip_ (mk_ Text "") with Frame g -> Fennec_hunt_unit.check "opcode" (g.opcode = Text); Fennec_hunt_unit.check "payload" (g.payload = "") | _ -> failwith "decode"
+let%test_unit "round-trip: short" =
+  match roundtrip_ (mk_ Text "reload") with Frame g -> Fennec_hunt_unit.check "payload" (g.payload = "reload") | _ -> failwith "decode"
+let%test_unit "round-trip: 125 (7-bit max)" =
+  let s = String.make 125 'a' in match roundtrip_ (mk_ Text s) with Frame g -> Fennec_hunt_unit.check "len" (g.payload = s) | _ -> failwith "decode"
+let%test_unit "round-trip: 126 (16-bit len)" =
+  let s = String.make 126 'b' in match roundtrip_ (mk_ Text s) with Frame g -> Fennec_hunt_unit.check "len" (g.payload = s) | _ -> failwith "decode"
+let%test_unit "round-trip: 70000 (64-bit len)" =
+  let s = String.make 70000 'd' in match roundtrip_ (mk_ Text s) with Frame g -> Fennec_hunt_unit.check "len" (g.payload = s) | _ -> failwith "decode"
+let%test_unit "round-trip: binary" =
+  match roundtrip_ (mk_ Binary "\x00\x01\x02\xff") with Frame g -> Fennec_hunt_unit.check "payload" (g.payload = "\x00\x01\x02\xff") | _ -> failwith "decode"
+let%test_unit "round-trip: rsv1 set" =
+  match roundtrip_ (mk_ ~rsv1:true Text "compressed") with Frame g -> Fennec_hunt_unit.check "rsv1" g.rsv1 | _ -> failwith "decode"
+
+(* ──── hardening ──── *)
+
+let%test "unmasked frame → protocol error" =
+  Eio_main.run @@ fun _env ->
+  let buf = Buffer.create 16 in
+  Eio.Buf_write.with_flow (Eio.Flow.buffer_sink buf) (fun w -> write_frame w (mk_ Text "hi"));
+  match read_bytes_ (Buffer.contents buf) with Protocol_error _ -> true | _ -> false
+
+let%test "huge 64-bit length → protocol error" =
+  match read_bytes_ "\x81\xff\x80\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00" with Protocol_error _ -> true | _ -> false
+
+let%test "oversized control frame → protocol error" =
+  match read_bytes_ ("\x88\xfe\x00\x80\x00\x00\x00\x00" ^ String.make 128 'x') with Protocol_error _ -> true | _ -> false
+
+let%test "fragmented control → protocol error" =
+  match read_bytes_ "\x09\x81\x00\x00\x00\x00\x00" with Protocol_error _ -> true | _ -> false
+
+let%test "reserved bits → protocol error" =
+  match read_bytes_ "\x91\x81\x00\x00\x00\x00\x00" with Protocol_error _ -> true | _ -> false
+
+let%test "empty → Eof" = match read_bytes_ "" with Eof -> true | _ -> false
+
+(* ──── close_frame ──── *)
+
+let%test "close_frame opcode" = (close_frame ~code:1002 ()).opcode = Close
+let%test "close_frame code bytes" = (close_frame ~code:1002 ()).payload = "\x03\xea"
