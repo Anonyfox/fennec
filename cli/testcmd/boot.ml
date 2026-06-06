@@ -13,6 +13,7 @@ let spawn ~exe ~(env : (string * string) list) : t =
   let log_path = Filename.temp_file "fennec_test_" ".log" in
   let fd = Unix.openfile log_path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
   let pid = Unix.create_process_env exe [| exe |] (env_array env) Unix.stdin fd fd in
+  Reaper.track pid; (* so Ctrl-C tears this server down even though we're mid-run *)
   Unix.close fd;
   { pid; log_path }
 
@@ -46,7 +47,8 @@ let stop t =
      | exception _ -> dead := true);
     incr i
   done;
-  if not !dead then ((try Unix.kill t.pid Sys.sigkill with _ -> ()); (try ignore (Unix.waitpid [] t.pid) with _ -> ()))
+  if not !dead then ((try Unix.kill t.pid Sys.sigkill with _ -> ()); (try ignore (Unix.waitpid [] t.pid) with _ -> ()));
+  Reaper.untrack t.pid (* reaped — drop it from the interrupt registry *)
 
 let read_log t = try In_channel.with_open_bin t.log_path In_channel.input_all with _ -> ""
 let cleanup t = try Sys.remove t.log_path with _ -> ()

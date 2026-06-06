@@ -69,11 +69,21 @@ let suite_args ~(cut : suite) (o : options) : string list =
     @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
   | Unit | All -> []
 
+(* per-suite wall-clock backstop. Real suites finish well under this — the hunt runners have
+   their own per-request / per-step / per-test timeouts — but a wedged suite (e.g. an infinite
+   loop in a check body, which no I/O timeout would catch) is killed so the others still run.
+   Override with FENNEC_TEST_TIMEOUT=<seconds>. *)
+let suite_timeout =
+  match Sys.getenv_opt "FENNEC_TEST_TIMEOUT" with
+  | Some s -> (match float_of_string_opt s with Some f when f > 0.0 -> f | _ -> 600.0)
+  | None -> 600.0
+
 (* run one suite exe against its isolated instance's env. [args] is argv beyond argv[0].
    [out = None] inherits stdout/stderr (live, colour-capable — the serial path). [out = Some fd]
    sends BOTH stdout and stderr there, with stdin from /dev/null, so a parallel run captures the
-   suite's whole output to a file (a file, not a pipe, so there's no buffer-fill deadlock while
-   we waitpid). Returns the exit code. *)
+   suite's whole output to a file (a file, not a pipe, so there's no buffer-fill deadlock).
+   Returns the exit code, or [124] if it overran [suite_timeout] and had to be killed. The pid
+   is tracked so Ctrl-C tears it down too. *)
 let run_suite_exe ~exe ~(args : string list) ~(env : (string * string) list) ~out : int =
   let argv = Array.of_list (exe :: args) and penv = Boot.env_array env in
   let pid, close =
@@ -83,10 +93,29 @@ let run_suite_exe ~exe ~(args : string list) ~(env : (string * string) list) ~ou
       let null = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
       (Unix.create_process_env exe argv penv null fd fd, fun () -> try Unix.close null with _ -> ())
   in
-  Fun.protect ~finally:close (fun () ->
-      match Unix.waitpid [] pid with
-      | _, Unix.WEXITED c -> c
-      | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> 128)
+  Reaper.track pid;
+  Fun.protect
+    ~finally:(fun () -> close (); Reaper.untrack pid)
+    (fun () ->
+      let deadline = Unix.gettimeofday () +. suite_timeout in
+      let rec wait () =
+        match Unix.waitpid [ Unix.WNOHANG ] pid with
+        | 0, _ ->
+          if Unix.gettimeofday () > deadline then begin
+            (* overran: SIGTERM, give it a moment, then SIGKILL, and reap *)
+            (try Unix.kill pid Sys.sigterm with _ -> ());
+            Unix.sleepf 0.2;
+            (match Unix.waitpid [ Unix.WNOHANG ] pid with
+             | 0, _ -> (try Unix.kill pid Sys.sigkill with _ -> ()); (try ignore (Unix.waitpid [] pid) with _ -> ())
+             | _ -> ());
+            124
+          end
+          else (Unix.sleepf 0.05; wait ())
+        | _, Unix.WEXITED c -> c
+        | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> 128
+        | exception _ -> 128
+      in
+      wait ())
 
 let read_file path =
   try
@@ -127,19 +156,24 @@ let run_one_suite ~server_exe ~(args : string list) ~stream ~(suite : Suites.t) 
             if log <> "" then emit (Printf.sprintf "     server log:\n%s\n" log);
             false
           | Ok () ->
-            if stream then run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:None = 0
-            else begin
-              let tmp = Filename.temp_file "fennec-suite-" ".log" in
-              let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-              let code =
-                Fun.protect
-                  ~finally:(fun () -> try Unix.close fd with _ -> ())
-                  (fun () -> run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
-              in
-              emit (read_file tmp);
-              (try Sys.remove tmp with _ -> ());
-              code = 0
-            end)
+            let code =
+              if stream then run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:None
+              else begin
+                let tmp = Filename.temp_file "fennec-suite-" ".log" in
+                let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+                let code =
+                  Fun.protect
+                    ~finally:(fun () -> try Unix.close fd with _ -> ())
+                    (fun () -> run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
+                in
+                emit (read_file tmp);
+                (try Sys.remove tmp with _ -> ());
+                code
+              end
+            in
+            if code = 124 then
+              emit (Printf.sprintf "  \027[31m\u{2717} suite timed out after %.0fs — killed; other suites still run.\027[0m\n" suite_timeout);
+            code = 0)
   in
   (ok, Buffer.contents buf)
 
@@ -208,6 +242,7 @@ let run_browser (opts : options) : int =
   orchestrate ~cut:Browser ~dir:"test/browser" ~base:opts.base_port ~jobs:(effective_jobs opts) ~args:(suite_args ~cut:Browser opts)
 
 let run (opts : options) : int =
+  Reaper.install_signal_handlers (); (* Ctrl-C / SIGTERM → tear down every spawned instance, no orphans *)
   match opts.suite with
   | Unit -> run_unit ()
   | Http -> if run_http opts = 0 then 0 else 1
