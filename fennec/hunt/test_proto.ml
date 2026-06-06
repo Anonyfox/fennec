@@ -22,3 +22,11 @@ let resolve ~explicit ~from_env =
   | None, None -> Error "no target URL: pass ~url (or ~base_url), or run via `fennec test` (it sets FENNEC_TEST_URL per suite)"
 
 let resolve_url ~explicit = resolve ~explicit ~from_env:(target_url ())
+
+(* ──── env constants ──── *)
+let%test "env_url name"  = env_url = "FENNEC_TEST_URL"
+let%test "env_port name" = env_port = "FENNEC_PORT"
+
+(* ──── url_for ──── *)
+let%test "url_for: default port" = url_for ~port:8200 = "http://localhost:8200"
+let%test "url_for: port 80"      = url_for ~port:80 = "http://localhost:80"

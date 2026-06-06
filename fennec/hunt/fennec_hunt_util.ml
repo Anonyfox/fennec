@@ -10,3 +10,13 @@ let contains hay needle =
     let rec scan i = i + ln <= lh && (matches_at i 0 || scan (i + 1)) in
     scan 0
   end
+
+(* ──── contains ──── *)
+let%test "contains: empty needle"      = contains "anything" ""
+let%test "contains: empty haystack"    = not (contains "" "x")
+let%test "contains: exact match"       = contains "hello" "hello"
+let%test "contains: substring"         = contains "hello world" "lo wo"
+let%test "contains: no match"          = not (contains "hello" "xyz")
+let%test "contains: at end"            = contains "foobar" "bar"
+let%test "contains: needle longer"     = not (contains "ab" "abc")
+let%test "contains: both empty"        = contains "" ""

@@ -23,6 +23,31 @@ let classify_line raw =
     | Some p -> Port_busy p
     | None -> if line = "" || Dev_proto.starts_with line Dev_proto.chatter_prefix then Chatter else App_log line)
 
+(* ──── tests: classify_line ──── *)
+
+let%test "a urls report -> Urls" =
+  classify_line "[fennec:urls] web=http://localhost:8200 admin=http://localhost:8201"
+  = Urls [ ("web", "http://localhost:8200"); ("admin", "http://localhost:8201") ]
+
+let%test "a port-busy line -> Port_busy" =
+  classify_line "fennec: port 8200 is already in use — another server is holding it."
+  = Port_busy 8200
+
+let%test "framework chatter -> Chatter" =
+  classify_line "[fennec] serving 2 endpoint(s)" = Chatter
+
+let%test "a blank line -> Chatter" =
+  classify_line "" = Chatter
+
+let%test "whitespace-only -> Chatter" =
+  classify_line "   " = Chatter
+
+let%test "an app log -> App_log (trimmed)" =
+  classify_line "  hello from the app  " = App_log "hello from the app"
+
+let%test "leading/trailing space on a urls line still parses" =
+  classify_line "  [fennec:urls] web=http://x  " = Urls [ ("web", "http://x") ]
+
 let start ~exe ~env =
   try
     let rd, wr = Unix.pipe () in

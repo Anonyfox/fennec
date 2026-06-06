@@ -118,3 +118,35 @@ let inject_html (body : string) : string =
   match rfind_ci body "</body>" with
   | Some i -> String.sub body 0 i ^ script_tag ^ String.sub body i (String.length body - i)
   | None -> body ^ script_tag
+
+(* ──── rfind_ci ──── *)
+let%test "rfind_ci: finds </body>"        = rfind_ci "<html><body>hi</body></html>" "</body>" = Some 14
+let%test "rfind_ci: case-insensitive"     = rfind_ci "<BODY>hi</BODY>" "</body>" <> None
+let%test "rfind_ci: mixed case"           = rfind_ci "<Body>hi</Body>" "</body>" <> None
+let%test "rfind_ci: not found"            = rfind_ci "<html><p>hi</p></html>" "</body>" = None
+let%test "rfind_ci: empty needle"         = rfind_ci "abc" "" = None
+let%test "rfind_ci: needle longer"        = rfind_ci "ab" "abcdef" = None
+let%test "rfind_ci: finds LAST occurrence" =
+  rfind_ci "<body></body><body></body>" "</body>" = Some 19
+
+(* ──── inject_html ──── *)
+let%test "inject: before </body>" =
+  let r = inject_html "<html><body>hi</body></html>" in
+  Fennec_hunt_unit.str_contains r "<script>" && Fennec_hunt_unit.str_contains r "</body>"
+
+let%test "inject: no </body> appends" =
+  let r = inject_html "<html><body>hi" in
+  let len = String.length r in
+  len > String.length "<html><body>hi" && String.sub r (len - String.length "</script>") (String.length "</script>") = "</script>"
+
+let%test "inject: preserves original content" =
+  let r = inject_html "<html><body>content</body></html>" in
+  Fennec_hunt_unit.str_contains r "content"
+
+let%test "inject: endpoint in output" =
+  let r = inject_html "<html><body></body></html>" in
+  Fennec_hunt_unit.str_contains r endpoint
+
+let%test "inject: empty body" =
+  let r = inject_html "" in
+  Fennec_hunt_unit.str_contains r "<script>"

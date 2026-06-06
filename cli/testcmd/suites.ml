@@ -34,6 +34,36 @@ let exe_path ~root ~reldir ~dir ~name =
 let build_target ~reldir ~dir ~name =
   String.concat "/" (List.filter (fun s -> s <> "") [ reldir; dir; name ^ ".exe" ])
 
+(* ──── tests ──── *)
+
+let%test "cwd = root -> empty reldir" =
+  relativize ~root:"/r" ~cwd:"/r" = ""
+
+let%test "cwd under root -> subpath" =
+  relativize ~root:"/r" ~cwd:"/r/examples/site" = "examples/site"
+
+let%test "cwd not under root -> treated as root" =
+  relativize ~root:"/r" ~cwd:"/other" = ""
+
+let%test "no false prefix match (/right vs /r)" =
+  relativize ~root:"/r" ~cwd:"/right" = ""
+
+let%test "exe path at root" =
+  exe_path ~root:"/r" ~reldir:"" ~dir:"test/http" ~name:"checkout"
+  = "/r/_build/default/test/http/checkout.exe"
+
+let%test "exe path in a subdir" =
+  exe_path ~root:"/r" ~reldir:"examples/site" ~dir:"test/browser" ~name:"cart"
+  = "/r/_build/default/examples/site/test/browser/cart.exe"
+
+let%test "build target at root" =
+  build_target ~reldir:"" ~dir:"test/http" ~name:"checkout"
+  = "test/http/checkout.exe"
+
+let%test "build target in a subdir" =
+  build_target ~reldir:"examples/site" ~dir:"test/http" ~name:"smoke"
+  = "examples/site/test/http/smoke.exe"
+
 (* discover the suites in [<cwd>/<dir>] (sorted, deterministic); [] if the dir is absent *)
 let discover ~root ~cwd ~dir : t list =
   let src_dir = Filename.concat cwd dir in

@@ -35,6 +35,49 @@ let is_ours ~exe ~cmd =
        what separates us from "vim _build/…/server.bc" / "sh -c …", where the path is merely an arg. *)
     is_artifact ~tail argv0 || (starts_with (basename argv0) "ocamlrun" && List.exists (is_artifact ~tail) rest)
 
+(* ──── tests: is_ours ──── *)
+
+let exe_ = "_build/default/examples/site/server.bc"
+
+let%test "ocamlrun running our .bc is ours (abs runtime)" =
+  is_ours ~exe:exe_ ~cmd:"/Users/x/.opam/5.4.1/bin/ocamlrun _build/default/examples/site/server.bc"
+
+let%test "ocamlrun running our .bc is ours (bare runtime)" =
+  is_ours ~exe:exe_ ~cmd:("ocamlrun " ^ exe_)
+
+let%test "our relative path as argv0 is ours" =
+  is_ours ~exe:exe_ ~cmd:exe_
+
+let%test "our absolute path as argv0 is ours" =
+  is_ours ~exe:exe_ ~cmd:"/Users/x/proj/_build/default/examples/site/server.bc"
+
+let%test "our server with args after argv0 is ours" =
+  is_ours ~exe:exe_ ~cmd:(exe_ ^ " --some-flag")
+
+let%test "abs exe param matches a relatively-started holder" =
+  is_ours ~exe:"/abs/proj/_build/default/examples/site/server.bc" ~cmd:exe_
+
+let%test "exe without _build matches its full path as argv0" =
+  is_ours ~exe:"/opt/app/server.bc" ~cmd:"/opt/app/server.bc"
+
+let%test "vim editing the path is NOT ours (path is argv[1])" =
+  not (is_ours ~exe:exe_ ~cmd:("vim " ^ exe_))
+
+let%test "a different app's server is NOT ours" =
+  not (is_ours ~exe:exe_ ~cmd:"_build/default/examples/admin/server.bc")
+
+let%test "a foreign listener (python) is NOT ours" =
+  not (is_ours ~exe:exe_ ~cmd:"python3 -m http.server 8200 --bind 127.0.0.1")
+
+let%test "a non-'/'-boundary near-miss path is NOT ours" =
+  not (is_ours ~exe:exe_ ~cmd:"/foo/myfake_build/default/examples/site/server.bc")
+
+let%test "the bare path as argv[1] of a wrapper is NOT ours" =
+  not (is_ours ~exe:exe_ ~cmd:("/bin/sh -c " ^ exe_))
+
+let%test "empty command is NOT ours" =
+  not (is_ours ~exe:exe_ ~cmd:"")
+
 let listeners port =
   match (try Some (Unix.open_process_in (Printf.sprintf "lsof -nP -iTCP:%d -sTCP:LISTEN -t 2>/dev/null" port)) with _ -> None) with
   | None -> []

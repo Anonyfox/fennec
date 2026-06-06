@@ -20,6 +20,7 @@ let env_dev_livereload = "FENNEC_DEV_LIVERELOAD" (* "0" → serve the dev root b
 let env_esbuild_worker = "FENNEC_ESBUILD_WORKER" (* path of the warm esbuild worker socket *)
 let env_port = "FENNEC_PORT" (* the base port: dev allocates the block from here; prod listens on it *)
 let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) override; auto by default *)
+
 (* the per-suite target URL `fennec test` sets so each suite hits its own isolated instance.
    MIRROR of Fennec_hunt.Test_proto.env_url (the suite side) — the two live in independent
    packages (hunt has no framework dep; the CLI doesn't link hunt), and their equality is
@@ -69,3 +70,54 @@ let parse_port_busy (line : string) : int option =
       incr i
     done;
     if !i > 0 then int_of_string_opt (String.sub s 0 !i) else None
+
+(* ──── env constants ──── *)
+let%test "env_mode name"        = env_mode = "FENNEC_ENV"
+let%test "env_livereload name"  = env_livereload = "FENNEC_LIVERELOAD"
+let%test "env_port name"        = env_port = "FENNEC_PORT"
+let%test "env_parallelism name" = env_parallelism = "FENNEC_PARALLELISM"
+let%test "env_test_url name"    = env_test_url = "FENNEC_TEST_URL"
+
+(* ──── port_in_use_exit ──── *)
+let%test "port_in_use_exit value" = port_in_use_exit = 98
+
+(* ──── starts_with ──── *)
+let%test "starts_with: matching prefix"  = starts_with "[fennec:urls] foo" "[fennec:urls]"
+let%test "starts_with: no match"         = not (starts_with "hello" "[fennec")
+let%test "starts_with: exact match"      = starts_with "abc" "abc"
+let%test "starts_with: empty prefix"     = starts_with "anything" ""
+let%test "starts_with: empty string"     = not (starts_with "" "x")
+
+(* ──── urls_line / parse_urls_line ──── *)
+let%test "urls_line carries the prefix"  = starts_with (urls_line [("web", "x")]) urls_prefix
+
+let%test "urls round-trips" =
+  parse_urls_line (urls_line [("web", "http://localhost:8200"); ("admin", "http://localhost:8201")])
+  = Some [("web", "http://localhost:8200"); ("admin", "http://localhost:8201")]
+
+let%test "urls round-trips (single)" =
+  parse_urls_line (urls_line [("web", "http://localhost:8200")])
+  = Some [("web", "http://localhost:8200")]
+
+let%test "urls round-trips (empty)" =
+  parse_urls_line (urls_line []) = Some []
+
+let%test "urls: '=' in value splits on FIRST '='" =
+  parse_urls_line (urls_line [("web", "http://x/?a=1")])
+  = Some [("web", "http://x/?a=1")]
+
+let%test "parse_urls rejects a port line"  = parse_urls_line (port_busy_line 8200) = None
+let%test "parse_urls rejects chatter"      = parse_urls_line "[fennec] serving 2 endpoint(s)" = None
+let%test "parse_urls rejects an app log"   = parse_urls_line "hello from the app" = None
+
+(* ──── port_busy_line / parse_port_busy ──── *)
+let%test "port round-trips (8200)"  = parse_port_busy (port_busy_line 8200) = Some 8200
+let%test "port round-trips (1)"     = parse_port_busy (port_busy_line 1) = Some 1
+let%test "port round-trips (65535)" = parse_port_busy (port_busy_line 65535) = Some 65535
+
+let%test "parse_port rejects a urls line"  = parse_port_busy (urls_line [("web", "http://x")]) = None
+let%test "parse_port rejects an app log"   = parse_port_busy "listening on something" = None
+
+(* ──── chatter_prefix ──── *)
+let%test "urls line is NOT chatter"   = not (starts_with (urls_line [("web", "x")]) chatter_prefix)
+let%test "chatter IS chatter"         = starts_with "[fennec] serving" chatter_prefix

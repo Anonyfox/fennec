@@ -222,3 +222,80 @@ let stopped t =
   let avg = if t.builds > 0 then t.total_ms /. float_of_int t.builds else 0. in
   let tail = if t.builds > 0 then Printf.sprintf " — %d build%s, %.0fms avg" t.builds (if t.builds = 1 then "" else "s") avg else "" in
   t.out (Printf.sprintf "\n  %s%s\n" (dim t "stopped") (dim t tail))
+
+(* ──── tests ──── *)
+
+let contains_ hay needle =
+  let lh = String.length hay and ln = String.length needle in
+  let rec go i = i + ln <= lh && (String.sub hay i ln = needle || go (i + 1)) in
+  ln = 0 || go 0
+
+let sample_ =
+  "File \"index.mlx\", line 11, characters 8-16:\n11 |     <h1>{greeting}</h1>\n         ^^^^^^^^\nError: Unbound value greeting\n"
+
+let%test_unit "plain mode — content" =
+  let chk = Fennec_hunt_unit.check in
+  let buf = Buffer.create 512 in
+  let out s = Buffer.add_string buf s in
+  let take () = let s = Buffer.contents buf in Buffer.clear buf; s in
+  let ui = create ~out ~caps:Tty.plain () in
+  start ui ~dir:"examples/site";
+  chk "banner shows the fox + name" (contains_ (take ()) "fennec dev");
+  ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~ms:(Some 412.);
+  let s = take () in
+  chk "ready shows the endpoint URL" (contains_ s "http://localhost:4001");
+  chk "ready shows the endpoint name" (contains_ s "web");
+  chk "ready shows the gateway URL" (contains_ s "http://localhost:4000");
+  chk "ready shows the host-routing label" (contains_ s "host routing");
+  chk "ready shows the time" (contains_ s "ready in 412ms");
+  chk "ready shows the watched dir" (contains_ s "watching examples/site");
+  ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~ms:(Some 99.);
+  chk "ready is idempotent (a second report prints nothing)" (take () = "");
+  rebuilt ui ~trigger:[ "index.mlx changed" ] ~ms:(Some 38.);
+  let s = take () in
+  chk "rebuilt shows file, ms, effect" (contains_ s "index.mlx" && contains_ s "38ms" && contains_ s "reload");
+  restyled ui ~trigger:[ "main.scss changed" ] ~ms:(Some 9.);
+  chk "restyled is labelled css" (contains_ (take ()) "css");
+  failed ui ~raw:sample_ ~trigger:[] ~serving:true;
+  let s = take () in
+  chk "failed shows the error count" (contains_ s "1 error");
+  chk "failed notes the last good server" (contains_ s "last good build still serving");
+  chk "failed shows the location" (contains_ s "index.mlx:11");
+  chk "failed shows the message" (contains_ s "Unbound value greeting");
+  resolved ui ~ms:(Some 12.);
+  chk "resolved clears the panel with a confirmation line" (contains_ (take ()) "resolved");
+  resolved ui ~ms:(Some 5.);
+  chk "resolved is silent when nothing is outstanding" (take () = "")
+
+let%test_unit "plain mode — code frame" =
+  let chk = Fennec_hunt_unit.check in
+  let buf = Buffer.create 512 in
+  let out s = Buffer.add_string buf s in
+  let take () = let s = Buffer.contents buf in Buffer.clear buf; s in
+  let ui = create ~out ~caps:Tty.plain () in
+  let tmp = Filename.temp_file "fennec_cf" ".ml" in
+  (let oc = open_out tmp in output_string oc "let a = 1\nlet b = (\nlet c = 3\nlet d = 4\n"; close_out oc);
+  failed ui ~raw:(Printf.sprintf "File %S, line 2, characters 8-9:\nError: Syntax error\n" tmp) ~trigger:[] ~serving:false;
+  let s = take () in
+  chk "code frame shows the error line read from source" (contains_ s "let b = (");
+  chk "code frame includes a line of context" (contains_ s "let a = 1");
+  chk "code frame draws a caret" (contains_ s "^");
+  resolved ui ~ms:None;
+  (try Sys.remove tmp with _ -> ());
+  failed ui ~raw:sample_ ~trigger:[] ~serving:false;
+  chk "with no server the panel says 'server not running'" (contains_ (take ()) "server not running");
+  resolved ui ~ms:None
+
+let%test_unit "interactive — live region" =
+  let chk = Fennec_hunt_unit.check in
+  let ibuf = Buffer.create 512 in
+  let iout s = Buffer.add_string ibuf s in
+  let itake () = let s = Buffer.contents ibuf in Buffer.clear ibuf; s in
+  let icaps = { Tty.color = false; hyperlinks = false; interactive = true; width = 80 } in
+  let iui = create ~out:iout ~caps:icaps () in
+  failed iui ~raw:sample_ ~trigger:[] ~serving:false;
+  ignore (itake ());
+  rebuilt iui ~trigger:[ "index.mlx changed" ] ~ms:(Some 40.);
+  let s = itake () in
+  chk "fixing erases the region (cursor-up + erase-below)" (contains_ s "\027[" && contains_ s "\027[J");
+  chk "fixing then shows the success line" (contains_ s "reload")

@@ -134,6 +134,38 @@ let calls_serve (src : string) : bool =
   let code = strip_noise src in
   contains code "Fennec.serve" || (contains code "open Fennec" && calls_word code "serve")
 
+(* ──── tests: calls_serve ──── *)
+
+let%test "qualified Fennec.serve" =
+  calls_serve "let () = Fennec.serve [ ep ]"
+
+let%test "open Fennec then bare serve" =
+  calls_serve "open Fennec\nlet () = serve ~port:8200 [ ep ]"
+
+let%test "open Fennec.App then serve" =
+  calls_serve "open Fennec.App\nlet () = serve [ ep ]"
+
+let%test "preserve is not serve" =
+  not (calls_serve "let xs = preserve_order items")
+
+let%test "self_serve is not serve" =
+  not (calls_serve "open Fennec\nlet self_serve = 1")
+
+let%test "serve in a comment is not a call" =
+  not (calls_serve "open Fennec\n(* remember to serve *)\nlet () = ()")
+
+let%test "serve in a string is not a call" =
+  not (calls_serve "open Fennec\nlet s = \"please serve\"")
+
+let%test "serve in a {|raw string|} is not a call" =
+  not (calls_serve "open Fennec\nlet s = {|serve|}")
+
+let%test "merely linking Fennec is not starting it" =
+  not (calls_serve "open Fennec\nlet app = Endpoint.get \"/\" h")
+
+let%test "no mention of serve at all" =
+  not (calls_serve "let () = print_endline \"hi\"")
+
 let strip_build p =
   let pfx = "_build/default/" in
   if contains p pfx && String.length p >= String.length pfx && String.sub p 0 (String.length pfx) = pfx then

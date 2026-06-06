@@ -95,3 +95,62 @@ let finalize ?(now = 0.0) ~(req : H.request) (resp : H.response) : H.response =
     let headers = set_header headers "Content-Length" (string_of_int (String.length body)) in
     { H.status = resp.H.status; headers; body = (if is_head then "" else body) }
   end
+
+(* ──── content_type_of ──── *)
+let%test "content_type_of: explicit ct" =
+  content_type_of { H.status = 200; headers = [("content-type", "text/html")]; body = "" } = "text/html"
+
+let%test "content_type_of: missing ct" =
+  content_type_of { H.status = 200; headers = []; body = "" } = "application/octet-stream"
+
+(* ──── body_etag ──── *)
+let%test "body_etag: quoted" =
+  let e = body_etag "hello" in
+  String.length e > 2 && e.[0] = '"' && e.[String.length e - 1] = '"'
+
+let%test "body_etag: deterministic" =
+  body_etag "hello" = body_etag "hello"
+
+let%test "body_etag: different bodies differ" =
+  body_etag "hello" <> body_etag "world"
+
+(* ──── set_header / has_header ──── *)
+let%test "set_header: adds header"   = has_header (set_header [] "X-Foo" "bar") "X-Foo"
+let%test "has_header: missing"       = not (has_header [] "X-Foo")
+let%test "set_header: replaces ci"   =
+  let h = set_header [("content-type", "text/plain")] "Content-Type" "text/html" in
+  Sem.header h "content-type" = Some "text/html"
+
+(* ──── finalize ──── *)
+let%test_unit "finalize: adds ETag and Content-Length" =
+  let req = H.make_request ~meth:H.GET ~path:"/" () in
+  let resp = { H.status = 200; headers = [("content-type", "text/plain")]; body = "hi" } in
+  let r = finalize ~now:0.0 ~req resp in
+  Fennec_hunt_unit.check "has ETag" (has_header r.H.headers "etag");
+  Fennec_hunt_unit.check "has Content-Length" (has_header r.H.headers "content-length");
+  Fennec_hunt_unit.check_eq "Content-Length" ~expected:"2" ~got:(Option.get (Sem.header r.H.headers "content-length"))
+
+let%test_unit "finalize: HEAD returns empty body with headers" =
+  let req = H.make_request ~meth:H.HEAD ~path:"/" () in
+  let resp = { H.status = 200; headers = [("content-type", "text/plain")]; body = "hi" } in
+  let r = finalize ~now:0.0 ~req resp in
+  Fennec_hunt_unit.check "body is empty" (r.H.body = "");
+  Fennec_hunt_unit.check "has Content-Length" (has_header r.H.headers "content-length")
+
+let%test "finalize: preserves existing ETag" =
+  let req = H.make_request ~meth:H.GET ~path:"/" () in
+  let resp = { H.status = 200; headers = [("ETag", "\"custom\"")]; body = "x" } in
+  let r = finalize ~now:0.0 ~req resp in
+  Sem.header r.H.headers "etag" = Some "\"custom\""
+
+let%test "finalize: small body not compressed" =
+  let req = H.make_request ~meth:H.GET ~path:"/" ~headers:[("accept-encoding", "gzip")] () in
+  let resp = { H.status = 200; headers = [("content-type", "text/html")]; body = "tiny" } in
+  let r = finalize ~now:0.0 ~req resp in
+  Sem.header r.H.headers "content-encoding" = None
+
+let%test "finalize: Date header present" =
+  let req = H.make_request ~meth:H.GET ~path:"/" () in
+  let resp = { H.status = 200; headers = []; body = "" } in
+  let r = finalize ~now:0.0 ~req resp in
+  has_header r.H.headers "date"
