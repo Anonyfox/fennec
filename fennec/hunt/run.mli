@@ -23,6 +23,8 @@ val main :
 
 (** A ready-made CLI entry point: parse argv — [--grep], [--bail], [--jobs N], [--retries N],
     [--headed], [--timeout S], [--browsers M], [--reporter auto|plain|pretty], [--color],
-    [--no-color], [--ascii], and a positional server-exe path — run the suite, and [exit 1]
-    if anything failed. Drop this in an executable's [let () = ...]. *)
-val main_cli : ?binary:string -> base_url:string -> unit -> unit
+    [--no-color], [--ascii], [--screenshots DIR], and a positional server-exe path — run the
+    suite, and [exit 1] if anything failed. Drop this in an executable's [let () = ...].
+    [~base_url] is the target; if omitted it comes from the harness env ([FENNEC_TEST_URL],
+    set per-suite by [fennec test]). *)
+val main_cli : ?binary:string -> ?base_url:string -> unit -> unit

@@ -46,8 +46,11 @@ let main ?binary ?reporter ?(browsers = 1) ?(headless = true) ?server_exe ~base_
   Reporter.run_finished reporter report;
   report
 
-(* simple argv flag parser → run → exit status; for a runner executable *)
-let main_cli ?binary ~base_url () =
+(* simple argv flag parser → run → exit status; for a runner executable. [~base_url] is the
+   target; if omitted it comes from the harness env (FENNEC_TEST_URL, set per-suite by
+   `fennec test`), else a clear error. *)
+let main_cli ?binary ?base_url () =
+  let base_url = match Test_proto.resolve_url ~explicit:base_url with Ok u -> u | Error m -> failwith ("fennec_hunt: " ^ m) in
   let grep = ref None and bail = ref false and jobs = ref 1 and headed = ref false in
   let timeout = ref 5.0 and browsers = ref 1 and server = ref None and retries = ref 0 in
   let style = ref Reporter.Auto and color = ref None and ascii = ref false in

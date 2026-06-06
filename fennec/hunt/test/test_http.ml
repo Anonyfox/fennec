@@ -181,6 +181,14 @@ let () =
   check "update_jar adds" (List.sort compare (FT.update_jar [("a", "1")] [("b", "2")]) = [("a", "1"); ("b", "2")]);
   check "update_jar overwrites by name" (FT.update_jar [("a", "1")] [("a", "2")] = [("a", "2")]);
 
+  print_endline "Test_proto.resolve (target resolution):";
+  let module TP = Fennec_hunt.Test_proto in
+  check "explicit wins over env" (TP.resolve ~explicit:(Some "http://a") ~from_env:(Some "http://b") = Ok "http://a");
+  check "env used when no explicit" (TP.resolve ~explicit:None ~from_env:(Some "http://b") = Ok "http://b");
+  check "explicit used when no env" (TP.resolve ~explicit:(Some "http://a") ~from_env:None = Ok "http://a");
+  check "neither → clear error" (match TP.resolve ~explicit:None ~from_env:None with Error m -> contains m "fennec test" | Ok _ -> false);
+  check "url_for builds localhost url" (TP.url_for ~port:7001 = "http://localhost:7001");
+
   print_endline "Http helpers:";
   check "basic_auth header" (H.basic_auth "user" "pass" = ("Authorization", "Basic dXNlcjpwYXNz"));
   check "bearer header" (H.bearer "tok" = ("Authorization", "Bearer tok"));

@@ -560,7 +560,11 @@ let check label body =
 (*  hunt                                                                      *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
-let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 10.0) body =
+let hunt label ?url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 10.0) body =
+  (* the target instance: explicit ~url, else the harness-assigned FENNEC_TEST_URL (so a suite
+     run by `fennec test` can't hardcode a colliding port — it gets its isolated instance),
+     else a clear error. *)
+  let url = match Test_proto.resolve_url ~explicit:url with Ok u -> u | Error m -> failwith ("fennec_hunt: " ^ m) in
   let target = Target.parse_url url in
   let tls = target.scheme = "https" in
   Eio_main.run @@ fun eio_env ->
