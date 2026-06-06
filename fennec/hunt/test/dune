@@ -5,3 +5,10 @@
 (tests
  (names test test_http)
  (libraries fennec-hunt fennec.core eio eio_main yojson))
+
+; Dogfood: the inline Unit runtime + ppx, tested end-to-end. Uses the ppx to expand
+; let%test / let%test_unit, registers tests, runs them. Proves the full pipeline.
+(test
+ (name test_unit)
+ (libraries fennec-hunt)
+ (preprocess (pps fennec-hunt.ppx)))

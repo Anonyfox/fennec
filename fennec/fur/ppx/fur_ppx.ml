@@ -184,4 +184,7 @@ let impl str =
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
   componentize (inject_params (mapper#structure (desugar_blocks str)))
+(* register the MLX transform (whole-structure) + the inline test rules (context-free) in
+   ONE driver, so a library using (pps fennec.fur.ppx) pays ONE ppx process for both *)
 let () = Driver.register_transformation "iso_jsx" ~impl
+    ~rules:Fennec_hunt_ppx_rules.rules

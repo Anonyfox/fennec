@@ -1,0 +1,8 @@
+; The standalone test ppx — for libraries that DON'T use the fur/MLX ppx. Registers the
+; shared rules from fennec-hunt.ppx.rules. Libraries that use (pps fennec.fur.ppx) get
+; the same rules for free (the fur ppx also registers them), so they don't list this.
+(library
+ (name fennec_hunt_ppx)
+ (public_name fennec-hunt.ppx)
+ (kind ppx_rewriter)
+ (libraries fennec_hunt_ppx_rules ppxlib))

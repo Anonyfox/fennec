@@ -1,0 +1,8 @@
+; The test ppx RULES as a plain library — NOT a ppx_rewriter. This is the reusable core:
+; both the standalone fennec-hunt.ppx AND the fur ppx import it and register the same rules
+; in their own driver, so downstream pays ONE ppx process regardless of which they use.
+(library
+ (name fennec_hunt_ppx_rules)
+ (public_name fennec-hunt.ppx.rules)
+ (libraries ppxlib)
+ (preprocess (pps ppxlib.metaquot)))
