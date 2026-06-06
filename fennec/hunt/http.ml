@@ -536,4 +536,5 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 1
 
 module For_test = struct
   let poll = poll
+  let decode_chunked = Http_client.decode_chunked
 end

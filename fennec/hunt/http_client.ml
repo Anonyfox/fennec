@@ -45,6 +45,33 @@ let with_connection ~net ~host ~port ~tls (f : flow -> 'a) : 'a =
         f (tls_flow :> flow)
       end)
 
+(* Decode a chunked transfer-encoding body to its content. Each chunk is
+   "<hex-size>[;ext]\r\n<data>\r\n", terminated by a 0-size chunk. Best-effort and total: a
+   malformed stream stops decoding and returns what was read so far (never raises). Chunk
+   extensions are ignored. *)
+let decode_chunked (s : string) : string =
+  let n = String.length s in
+  let buf = Buffer.create n in
+  let pos = ref 0 and continue = ref true in
+  while !continue do
+    match String.index_from_opt s !pos '\n' with
+    | None -> continue := false
+    | Some nl ->
+      let raw_size = String.sub s !pos (nl - !pos) in
+      let hex = match String.index_opt raw_size ';' with Some i -> String.sub raw_size 0 i | None -> raw_size in
+      (match int_of_string_opt ("0x" ^ String.trim hex) with
+       | None | Some 0 -> continue := false
+       | Some size ->
+         let data_start = nl + 1 in
+         if data_start + size <= n then begin
+           Buffer.add_substring buf s data_start size;
+           pos := data_start + size;
+           if !pos < n && s.[!pos] = '\r' then incr pos;
+           if !pos < n && s.[!pos] = '\n' then incr pos
+         end else continue := false)
+  done;
+  Buffer.contents buf
+
 let request ~net ~host ~port ?(tls = false) ~meth ~path ?(headers = []) ?body () : response =
   let body = Option.value body ~default:"" in
   with_connection ~net ~host ~port ~tls @@ fun flow ->
@@ -84,5 +111,11 @@ let request ~net ~host ~port ?(tls = false) ~meth ~path ?(headers = []) ?body ()
   let headers = read_headers [] in
   (* the body is everything until EOF (we send Connection: close). One bulk read, not a
      char-at-a-time loop. *)
-  let body = Eio.Buf_read.take_all raw in
+  let raw_body = Eio.Buf_read.take_all raw in
+  (* decode chunked transfer-encoding so streaming/SSE endpoints assert on the real content,
+     not the wire framing *)
+  let is_chunked =
+    List.exists (fun (k, v) -> String.lowercase_ascii k = "transfer-encoding" && Fennec_hunt_util.contains (String.lowercase_ascii v) "chunked") headers
+  in
+  let body = if is_chunked then decode_chunked raw_body else raw_body in
   { status; headers; body }

@@ -204,4 +204,7 @@ module For_test : sig
   (** The pure poll policy behind {!eventually}: re-run [body] until it stops raising or
       [now ()] passes the [within] deadline, sleeping [interval] between tries. *)
   val poll : now:(unit -> float) -> sleep:(float -> unit) -> within:float -> interval:float -> (unit -> unit) -> unit
+
+  (** Decode a chunked transfer-encoding body to its content. Total — best-effort on malformed input. *)
+  val decode_chunked : string -> string
 end

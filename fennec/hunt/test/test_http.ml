@@ -54,6 +54,15 @@ let () =
    (try FT.poll ~now ~sleep ~within:1.0 ~interval:0.2 (fun () -> incr calls; failwith "no") with Failure _ -> ());
    check "bounded by the deadline (~6 tries for within/interval = 1.0/0.2)" (!calls >= 5 && !calls <= 7));
 
+  print_endline "Http.For_test.decode_chunked:";
+  check "two chunks → joined" (FT.decode_chunked "2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n" = "abcd");
+  check "three chunks" (FT.decode_chunked "2\r\nab\r\n2\r\ncd\r\n2\r\nef\r\n0\r\n\r\n" = "abcdef");
+  check "single chunk" (FT.decode_chunked "5\r\nhello\r\n0\r\n\r\n" = "hello");
+  check "hex size > 9 (0x10 = 16 bytes)" (FT.decode_chunked "10\r\n0123456789abcdef\r\n0\r\n\r\n" = "0123456789abcdef");
+  check "chunk extension ignored" (FT.decode_chunked "2;foo=bar\r\nok\r\n0\r\n\r\n" = "ok");
+  check "empty (immediate 0 chunk)" (FT.decode_chunked "0\r\n\r\n" = "");
+  check "malformed → best-effort, no raise" (FT.decode_chunked "2\r\nab\r\nGARBAGE" = "ab");
+
   print_endline "Http assertions (against constructed responses):";
   let resp ?(status = 200) ?(headers = []) ?(body = "") () : H.response = { status; headers; body } in
   let ok name a r = check name (not (raises (fun () -> a r))) in

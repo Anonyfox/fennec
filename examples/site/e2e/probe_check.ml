@@ -24,4 +24,8 @@ let () = hunt "probe server" ~url:"http://localhost:4555" ~spawn:[ probe ] @@ fu
   check "eventually polls an async endpoint until it's done" (fun () ->
     (* /flaky is 503 for the first two hits, then 200 {"state":"done"} *)
     eventually ~within:5.0 ~interval:0.1 (fun () ->
-        get "/flaky" ~expect:[status 200; json_path_is "state" "done"]))
+        get "/flaky" ~expect:[status 200; json_path_is "state" "done"]));
+
+  check "chunked response is decoded to its content" (fun () ->
+    (* /chunked sends "ab"+"cd"+"ef" as three chunks; we assert the dechunked body *)
+    get "/chunked" ~expect:[status 200; body_is "abcdef"])
