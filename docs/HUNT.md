@@ -55,7 +55,7 @@ let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun (
 The cookie jar is automatic and per-`check`: a `Set-Cookie` in one response is sent on the
 next request in the same check, and reset between checks. Deterministic — same requests,
 same cookies. No retry, no polling: a failing assertion fails immediately with a structured
-message (expected, actual, elapsed time, URL).
+message (expected, actual, the request, elapsed time).
 
 ## Browser tests
 

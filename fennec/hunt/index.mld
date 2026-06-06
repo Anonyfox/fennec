@@ -70,7 +70,7 @@ evaluations are pinned to the live execution context.
   redirects, timing; request bodies as raw / form / JSON; an automatic per-check cookie jar.
 - {b Browser: an auto-waiting DSL} — [goto], [click], [fill], [press], [within], [expect_*],
   [read_*], [eval]; each step waits for its own precondition.
-- {b Self-explaining failures} — Http assertions report expected/actual/elapsed/URL; Browser
+- {b Self-explaining failures} — Http assertions report expected/actual/request/elapsed; Browser
   failures render a numbered pipeline trace, the captured [outerHTML] / selector probe / URL /
   console, a hint, and a copy-pasteable rerun command.
 - {b A reporter that travels} — colour, unicode, and a live status line on a TTY; plain ASCII
