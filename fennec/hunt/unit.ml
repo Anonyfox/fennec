@@ -54,6 +54,12 @@ let check_eq name ~expected ~got =
     raise (Check_failed (Printf.sprintf "%s\n     expected: %s\n     got:      %s" name expected got))
 
 (* ═══════════════════════════════════════════════════════════════════════════════════════ *)
+(*  Test helpers                                                                          *)
+(* ═══════════════════════════════════════════════════════════════════════════════════════ *)
+
+let str_contains = Fennec_hunt_util.contains
+
+(* ═══════════════════════════════════════════════════════════════════════════════════════ *)
 (*  --grep filter (same semantics as Http and Browser: substring on the test name)         *)
 (* ═══════════════════════════════════════════════════════════════════════════════════════ *)
 

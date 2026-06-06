@@ -39,3 +39,16 @@ let put (h : t) (name : string) (value : string) : t = (name, value) :: delete h
 
 (* append a binding, keeping any existing one (for repeatable fields) *)
 let add (h : t) (name : string) (value : string) : t = h @ [ (name, value) ]
+
+(* ──── inline tests ──── *)
+let%test "ci_equal same case"  = ci_equal "Content-Type" "Content-Type"
+let%test "ci_equal diff case"  = ci_equal "content-type" "Content-Type"
+let%test "ci_equal diff len"   = not (ci_equal "host" "hosts")
+let%test "get ci"              = get [("Content-Type","text/html")] "content-type" = Some "text/html"
+let%test "get absent"          = get [("X-Foo","1")] "X-Bar" = None
+let%test "get_all multi"       = get_all [("Set-Cookie","a"); ("set-cookie","b")] "Set-Cookie" = ["a";"b"]
+let%test "mem ci"              = mem [("Host","x")] "host"
+let%test "not mem"             = not (mem [("Host","x")] "other")
+let%test "delete removes all"  = delete [("X","1");("x","2");("Y","3")] "X" = [("Y","3")]
+let%test "put replaces"        = put [("X","old")] "X" "new" = [("X","new")]
+let%test "add appends"         = add [("X","1")] "X" "2" = [("X","1");("X","2")]

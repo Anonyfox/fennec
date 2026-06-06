@@ -18,6 +18,13 @@ let string_of_meth = function
   | GET -> "GET" | POST -> "POST" | PUT -> "PUT" | DELETE -> "DELETE"
   | PATCH -> "PATCH" | HEAD -> "HEAD" | OPTIONS -> "OPTIONS" | Other s -> s
 
+let%test "meth GET"           = meth_of_string "GET" = GET
+let%test "meth POST"          = meth_of_string "POST" = POST
+let%test "meth PATCH"         = meth_of_string "PATCH" = PATCH
+let%test "meth unknown"       = meth_of_string "BREW" = Other "BREW"
+let%test "meth case-sensitive" = meth_of_string "get" = Other "get"
+let%test "meth round-trips"   = string_of_meth (meth_of_string "DELETE") = "DELETE"
+
 (* The standard reason phrase for a status code. An unknown code yields "" — which
    is a legal (empty) reason phrase — rather than a wrong one. *)
 let reason_phrase = function
@@ -41,6 +48,11 @@ let reason_phrase = function
   | 503 -> "Service Unavailable" | 504 -> "Gateway Timeout"
   | 505 -> "HTTP Version Not Supported"
   | _ -> ""
+
+let%test "reason 200" = reason_phrase 200 = "OK"
+let%test "reason 404" = reason_phrase 404 = "Not Found"
+let%test "reason 422" = reason_phrase 422 = "Unprocessable Entity"
+let%test "reason unknown" = reason_phrase 999 = ""
 
 type request = {
   meth : meth;
@@ -97,6 +109,13 @@ let percent_decode (s : string) : string =
     Buffer.contents b
   end
 
+let%test "decode %20"         = percent_decode "a%20b" = "a b"
+let%test "decode +"           = percent_decode "a+b" = "a b"
+let%test "decode utf-8"       = percent_decode "%C3%A9" = "\xc3\xa9"
+let%test "decode no-op"       = percent_decode "plain" = "plain"
+let%test "decode lone %"      = percent_decode "100%" = "100%"
+let%test "decode bad hex"     = percent_decode "%ZZ" = "%ZZ"
+
 (* Percent-encode a string, escaping everything but the RFC 3986 unreserved set
    ([A-Za-z0-9-_.~]). The inverse of {!percent_decode} (which also accepts '+'). *)
 let percent_encode (s : string) : string =
@@ -124,8 +143,22 @@ let parse_query (q : string) : (string * string) list =
                    percent_decode (String.sub kv (i + 1) (String.length kv - i - 1)) )
              | None -> Some (percent_decode kv, ""))
 
+let%test "query empty"        = parse_query "" = []
+let%test "query single"       = parse_query "a=1" = [("a", "1")]
+let%test "query multi"        = parse_query "a=1&b=2" = [("a", "1"); ("b", "2")]
+let%test "query flag"         = parse_query "debug" = [("debug", "")]
+let%test "query decode +"     = parse_query "q=hello+world" = [("q", "hello world")]
+let%test "query decode %"     = parse_query "q=%C3%A9" = [("q", "\xc3\xa9")]
+let%test "query empty val"    = parse_query "k=" = [("k", "")]
+let%test "query skip &&"      = parse_query "a=1&&b=2" = [("a", "1"); ("b", "2")]
+
 (* split "/path?a=1" into (path, raw query string) *)
 let split_target (target : string) : string * string =
   match String.index_opt target '?' with
   | Some i -> (String.sub target 0 i, String.sub target (i + 1) (String.length target - i - 1))
   | None -> (target, "")
+
+let%test "split no query"     = split_target "/path" = ("/path", "")
+let%test "split with query"   = split_target "/p?a=1" = ("/p", "a=1")
+let%test "split empty query"  = split_target "/p?" = ("/p", "")
+let%test "split double ?"     = split_target "/p?a?b" = ("/p", "a?b")

@@ -40,6 +40,12 @@ val check : string -> bool -> unit
     [Printexc.to_string] for polymorphic values). *)
 val check_eq : string -> expected:string -> got:string -> unit
 
+(** {2 Test helpers} *)
+
+(** [str_contains hay needle] — substring search. Useful in [let%test] for checking a
+    string contains a fragment without pulling in a regex library. *)
+val str_contains : string -> string -> bool
+
 (** {2 Execution} *)
 
 (** Run every registered test. Returns [0] if all passed, [1] otherwise. Filters by

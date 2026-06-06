@@ -27,6 +27,15 @@ let parse_header (h : string) : (string * string) list =
              if k = "" then None else Some (k, v)
            | None -> Some (part, ""))
 
+let%test "parse single"       = parse_header "sid=abc" = [("sid", "abc")]
+let%test "parse multi"        = parse_header "a=1; b=2" = [("a", "1"); ("b", "2")]
+let%test "parse no space"     = parse_header "a=1;b=2" = [("a", "1"); ("b", "2")]
+let%test "parse quoted"       = parse_header {|k="val"|} = [("k", "val")]
+let%test "parse empty val"    = parse_header "k=" = [("k", "")]
+let%test "parse val with ="   = parse_header "k=a=b" = [("k", "a=b")]
+let%test "parse empty header" = parse_header "" = []
+let%test "parse blank segs"   = parse_header ";; a=1;; " = [("a", "1")]
+
 (* serialize one [Set-Cookie] header value. [path] defaults to "/", [http_only] to
    true and [same_site] to [Lax] (modern-safe defaults); [SameSite=None] implies
    [Secure] per the spec. *)
@@ -44,3 +53,19 @@ let to_set_cookie ~name ~value ?(path = "/") ?domain ?max_age ?expires ?(secure 
   if secure || same_site = None_ then Buffer.add_string b "; Secure";
   if http_only then Buffer.add_string b "; HttpOnly";
   Buffer.contents b
+
+let%test "set-cookie basic" =
+  let s = to_set_cookie ~name:"sid" ~value:"abc" () in
+  String.length s > 0 && String.sub s 0 7 = "sid=abc"
+let%test "set-cookie default path /" =
+  let s = to_set_cookie ~name:"k" ~value:"v" () in
+  Fennec_hunt.Unit.str_contains s "Path=/"
+let%test "set-cookie default SameSite=Lax" =
+  let s = to_set_cookie ~name:"k" ~value:"v" () in
+  Fennec_hunt.Unit.str_contains s "SameSite=Lax"
+let%test "set-cookie default HttpOnly" =
+  let s = to_set_cookie ~name:"k" ~value:"v" () in
+  Fennec_hunt.Unit.str_contains s "HttpOnly"
+let%test "set-cookie None implies Secure" =
+  let s = to_set_cookie ~name:"k" ~value:"v" ~same_site:None_ () in
+  Fennec_hunt.Unit.str_contains s "Secure" && Fennec_hunt.Unit.str_contains s "SameSite=None"
