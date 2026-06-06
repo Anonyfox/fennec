@@ -29,6 +29,11 @@ val env_port : string
 (** [FENNEC_PARALLELISM] — optional worker-domain (per-core) count; auto by default. *)
 val env_parallelism : string
 
+(** [FENNEC_TEST_URL] — the per-suite target URL [fennec test] sets so each suite hits its own
+    isolated instance. Mirror of [Fennec_hunt.Test_proto.env_url] (the suite side, in an
+    independent package); the equality is guarded by a test so it cannot drift. *)
+val env_test_url : string
+
 (** {1 Exit code} *)
 
 (** Distinct exit code the server uses on [EADDRINUSE], so the supervisor self-heals a port

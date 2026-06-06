@@ -20,6 +20,11 @@ let env_dev_livereload = "FENNEC_DEV_LIVERELOAD" (* "0" → serve the dev root b
 let env_esbuild_worker = "FENNEC_ESBUILD_WORKER" (* path of the warm esbuild worker socket *)
 let env_port = "FENNEC_PORT" (* the base port: dev allocates the block from here; prod listens on it *)
 let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) override; auto by default *)
+(* the per-suite target URL `fennec test` sets so each suite hits its own isolated instance.
+   MIRROR of Fennec_hunt.Test_proto.env_url (the suite side) — the two live in independent
+   packages (hunt has no framework dep; the CLI doesn't link hunt), and their equality is
+   guarded by a test in fennec/hunt/test so drift can never ship. *)
+let env_test_url = "FENNEC_TEST_URL"
 
 (* ── exit code (server → CLI, out of band) ────────────────────────────────────────────── *)
 

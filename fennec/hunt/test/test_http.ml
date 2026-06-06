@@ -188,6 +188,8 @@ let () =
   check "explicit used when no env" (TP.resolve ~explicit:(Some "http://a") ~from_env:None = Ok "http://a");
   check "neither → clear error" (match TP.resolve ~explicit:None ~from_env:None with Error m -> contains m "fennec test" | Ok _ -> false);
   check "url_for builds localhost url" (TP.url_for ~port:7001 = "http://localhost:7001");
+  (* the drift guard: the suite-side name (hunt) and the CLI-side mirror (framework) must agree *)
+  check "env contract mirror agrees (Test_proto = Dev_proto)" (TP.env_url = Fennec_core.Dev_proto.env_test_url);
 
   print_endline "Http helpers:";
   check "basic_auth header" (H.basic_auth "user" "pass" = ("Authorization", "Basic dXNlcjpwYXNz"));

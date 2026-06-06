@@ -1,5 +1,7 @@
-; Unit tests for the e2e driver's orchestration — pool, DSL, runner, and the failure
-; formatter — all against an in-memory fake backend (no real browser), deterministic.
+; Unit tests for the orchestration — DSL, runner, failure formatter, Http layer — against an
+; in-memory fake backend (no real browser), deterministic. test_http also links fennec.core,
+; SOLELY to assert the env-contract mirror (Test_proto vs Dev_proto) agrees — a drift guard;
+; the hunt LIBRARY itself never depends on the framework.
 (tests
  (names test test_http)
- (libraries fennec-hunt eio eio_main yojson))
+ (libraries fennec-hunt fennec.core eio eio_main yojson))
