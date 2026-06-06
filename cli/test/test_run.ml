@@ -22,4 +22,20 @@ let () =
   check "default is the fast unit cut" (R.default_options.suite = R.Unit);
   check "default fail-fast on" (R.default_options.fail_fast = true);
   check "default base port clears dev's 4000" (R.default_options.base_port >= 7000);
+
+  (* suite_args: the passthrough contract — only the browser runner honours these flags, and
+     the order is stable (grep, headed, screenshots, jobs, reporter). *)
+  let o = R.default_options in
+  check "browser: --headed only when set" (R.suite_args ~cut:R.Browser { o with headed = true } = [ "--headed" ]);
+  check "browser: no flags by default" (R.suite_args ~cut:R.Browser o = []);
+  check "browser: grep passes through" (R.suite_args ~cut:R.Browser { o with grep = Some "checkout" } = [ "--grep"; "checkout" ]);
+  check "browser: screenshots dir passes through" (R.suite_args ~cut:R.Browser { o with screenshots = Some "shots" } = [ "--screenshots"; "shots" ]);
+  check "browser: jobs + reporter pass through" (R.suite_args ~cut:R.Browser { o with jobs = Some 3; reporter = Some "plain" } = [ "--jobs"; "3"; "--reporter"; "plain" ]);
+  check "browser: stable flag order"
+    (R.suite_args ~cut:R.Browser { o with grep = Some "g"; headed = true; screenshots = Some "d"; jobs = Some 2; reporter = Some "pretty" }
+     = [ "--grep"; "g"; "--headed"; "--screenshots"; "d"; "--jobs"; "2"; "--reporter"; "pretty" ]);
+  check "http: argv suppressed (runner ignores it for now)" (R.suite_args ~cut:R.Http { o with grep = Some "x"; headed = true } = []);
+  check "unit: no argv" (R.suite_args ~cut:R.Unit { o with grep = Some "x" } = []);
+  check "all: no argv (dispatches per-cut)" (R.suite_args ~cut:R.All { o with headed = true } = []);
+
   if !fails = 0 then print_endline "all Run tests passed." else (Printf.printf "%d FAILED\n" !fails; exit 1)

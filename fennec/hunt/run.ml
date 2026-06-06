@@ -88,5 +88,12 @@ let main_cli ?binary ?base_url () =
     { Live.default_config with jobs = (if !bail then 1 else !jobs); retries = !retries; bail = !bail;
       grep = !grep; step_timeout = !timeout; screenshot_dir = !screenshots }
   in
-  let r = main ?binary ~reporter ~browsers:!browsers ~headless:(not !headed) ?server_exe:!server ~base_url ~config () in
+  let r =
+    try main ?binary ~reporter ~browsers:!browsers ~headless:(not !headed) ?server_exe:!server ~base_url ~config ()
+    with Chrome.No_browser msg ->
+      (* a missing/unreachable browser is an environment problem, not a test failure: report it
+         cleanly (no backtrace) and exit non-zero so the cut fails clearly but gracefully *)
+      prerr_endline ("fennec_hunt: " ^ msg);
+      exit 1
+  in
   if r.Live.failed > 0 then exit 1

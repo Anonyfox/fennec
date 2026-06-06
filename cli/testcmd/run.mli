@@ -22,8 +22,13 @@ type options = {
   base_port : int;
 }
 
-(** [suite = Unit; fail_fast = true; base_port = 7000;] everything else off/none. *)
+(** [suite = Unit; fail_fast = true; base_port = 8200;] everything else off/none. *)
 val default_options : options
+
+(** The argv handed to a suite executable for [cut], derived from the options. Browser suites
+    ([Run.main_cli]) honour --grep/--headed/--screenshots/--jobs/--reporter; unit and http get
+    none (the http [hunt] runner doesn't parse argv yet — grep passthrough lands in T8). Pure. *)
+val suite_args : cut:suite -> options -> string list
 
 (** Run the selected cut; returns the process exit code (0 = all passed). *)
 val run : options -> int

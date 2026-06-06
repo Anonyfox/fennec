@@ -39,24 +39,71 @@ let default_options =
     reporter = None; jobs = None; headed = false; screenshots = None; base_port = 8200 }
 
 module Discover = Fennec_dev.Discover
+module Port = Fennec_dev.Port
+
+(* one-line preview of a (possibly long, possibly multi-line) command for diagnostics *)
+let preview ?(max = 120) s =
+  let s = String.map (fun c -> if c = '\n' || c = '\t' then ' ' else c) s in
+  if String.length s <= max then s else String.sub s 0 (max - 1) ^ "\u{2026}"
 
 (* the fast gate: dune already builds + runs every @runtest test and returns the right exit
    code. fennec is the only dune-aware process here (no nested watcher), so this is safe. *)
 let run_unit () = Sys.command "dune build @runtest"
 
+(* the argv we hand a suite executable, derived from the options + cut. Both hunt runners
+   ignore unknown argv, but we only pass what a given runner actually honours:
+   - browser ([Run.main_cli]) parses --grep/--headed/--screenshots/--jobs/--reporter;
+   - http ([hunt]) does not parse argv yet (grep passthrough lands in T8), so it gets none. *)
+let suite_args ~(cut : suite) (o : options) : string list =
+  match cut with
+  | Browser ->
+    (match o.grep with Some g -> [ "--grep"; g ] | None -> [])
+    @ (if o.headed then [ "--headed" ] else [])
+    @ (match o.screenshots with Some d -> [ "--screenshots"; d ] | None -> [])
+    @ (match o.jobs with Some j -> [ "--jobs"; string_of_int j ] | None -> [])
+    @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
+  | Unit | Http | All -> []
+
 (* run one suite exe against its isolated instance's env; inherit stdout/stderr so the suite's
-   own ✓/✗ report reaches the user. Returns the suite's exit code. *)
-let run_suite_exe ~exe ~(env : (string * string) list) : int =
-  let pid = Unix.create_process_env exe [| exe |] (Boot.env_array env) Unix.stdin Unix.stdout Unix.stderr in
+   own ✓/✗ report reaches the user. [args] is argv beyond argv[0]. Returns the exit code. *)
+let run_suite_exe ~exe ~(args : string list) ~(env : (string * string) list) : int =
+  let pid = Unix.create_process_env exe (Array.of_list (exe :: args)) (Boot.env_array env) Unix.stdin Unix.stdout Unix.stderr in
   match Unix.waitpid [] pid with
   | _, Unix.WEXITED c -> c
   | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> 128
+
+(* one suite end-to-end against a DEDICATED isolated instance; returns [true] iff it passed.
+   Before booting we make the port usable, distinguishing the two cases the AirPlay incident
+   exposed: a leftover of OURS (reclaim it — SIGKILL, the existing dev self-heal) vs. a FOREIGN
+   holder (name it, never touch it — fail this suite with a clear message). Teardown of the
+   instance is structural (Fun.protect), so an assertion failure or exception never orphans it. *)
+let run_one_suite ~server_exe ~(args : string list) ~(suite : Suites.t) ~(inst : Instance.t) : bool =
+  Printf.printf "\n\027[1m\u{25b6} %s\027[0m \027[2m(:%d)\027[0m\n%!" suite.Suites.name inst.Instance.port;
+  match Port.foreign_holder ~exe:server_exe inst.Instance.port with
+  | Some (pid, cmd) ->
+    Printf.eprintf
+      "  \027[31m\u{2717} port %d is held by another process (pid %d) \u{2014} not ours, leaving it alone.\027[0m\n     %s\n     free that port, or move the test range with --port.\n%!"
+      inst.Instance.port pid (preview cmd);
+    false
+  | None ->
+    ignore (Port.reclaim ~exe:server_exe inst.Instance.port (* clear a leftover of OURS, if any *));
+    let boot = Boot.spawn ~exe:server_exe ~env:inst.Instance.server_env in
+    Fun.protect
+      ~finally:(fun () -> Boot.stop boot; Boot.cleanup boot)
+      (fun () ->
+        match Boot.wait_ready boot ~port:inst.Instance.port ~timeout:30.0 with
+        | Error msg ->
+          Printf.eprintf "  \027[31m\u{2717} instance for %s never came up: %s\027[0m\n%!" suite.Suites.name msg;
+          let log = Boot.read_log boot in
+          if log <> "" then Printf.eprintf "     server log:\n%s\n%!" log;
+          false
+        | Ok () -> run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env = 0)
 
 (* orchestrate one cut: discover the server + suites, build everything once, then for each
    suite boot a DEDICATED isolated instance, run the suite against it, tear it down. Returns
    the number of failed suites (0 = all passed). Sequential for now — the per-suite isolation
    (distinct ports) makes parallel execution safe to add next. *)
-let orchestrate ~(cut : suite) ~dir ~base : int =
+let orchestrate ~(cut : suite) ~dir ~base ~(args : string list) : int =
   ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned dev watcher → no lock clash *)
   match Discover.find () with
   | Error msg -> Printf.eprintf "fennec test: %s\n%!" msg; 1
@@ -81,30 +128,23 @@ let orchestrate ~(cut : suite) ~dir ~base : int =
         let failed = ref 0 in
         List.iter2
           (fun (suite : Suites.t) (inst : Instance.t) ->
-            Printf.printf "\n\027[1m▶ %s\027[0m \027[2m(:%d)\027[0m\n%!" suite.Suites.name inst.Instance.port;
-            let boot = Boot.spawn ~exe:d.Discover.exe ~env:inst.Instance.server_env in
-            Fun.protect ~finally:(fun () -> Boot.stop boot; Boot.cleanup boot) (fun () ->
-                match Boot.wait_ready boot ~port:inst.Instance.port ~timeout:30.0 with
-                | Error msg ->
-                  incr failed;
-                  Printf.eprintf "  \027[31m✗ instance for %s never came up: %s\027[0m\n%!" suite.Suites.name msg;
-                  let log = Boot.read_log boot in
-                  if log <> "" then Printf.eprintf "     server log:\n%s\n%!" log
-                | Ok () ->
-                  let code = run_suite_exe ~exe:suite.Suites.exe ~env:inst.Instance.suite_env in
-                  if code <> 0 then incr failed))
+            if not (run_one_suite ~server_exe:d.Discover.exe ~args ~suite ~inst) then incr failed)
           suites instances;
         !failed
     end
 
+let run_http (opts : options) : int = orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port ~args:(suite_args ~cut:Http opts)
+let run_browser (opts : options) : int = orchestrate ~cut:Browser ~dir:"test/browser" ~base:opts.base_port ~args:(suite_args ~cut:Browser opts)
+
 let run (opts : options) : int =
   match opts.suite with
   | Unit -> run_unit ()
-  | Http -> if orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port = 0 then 0 else 1
-  | Browser ->
-    Printf.eprintf "fennec test: the browser cut arrives next (T7)\n%!";
-    2
+  | Http -> if run_http opts = 0 then 0 else 1
+  | Browser -> if run_browser opts = 0 then 0 else 1
   | All ->
+    (* fast-to-slow; run every cut and aggregate so one report shows the whole picture (the
+       cuts are isolated — a unit failure never poisons http, http never poisons browser) *)
     let u = run_unit () in
-    let h = if orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port = 0 then 0 else 1 in
-    if u = 0 && h = 0 then 0 else 1
+    let h = run_http opts in
+    let b = run_browser opts in
+    if u = 0 && h = 0 && b = 0 then 0 else 1

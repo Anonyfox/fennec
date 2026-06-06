@@ -1,0 +1,14 @@
+; Browser suites for `fennec test browser` (needs a system Chrome). Each is a self-contained
+; executable: it registers its tests and runs them via Run.main_cli (base_url from
+; FENNEC_TEST_URL, set per-suite by the CLI). The CLI discovers them by convention, boots an
+; isolated app instance per suite, and runs them.
+; On a custom alias (@browser), NOT @runtest — so a bare `dune test` never needs Chrome.
+(executable
+ (name smoke_test)
+ (modules smoke_test)
+ (libraries fennec-hunt))
+
+(rule
+ (alias browser)
+ (deps smoke_test.exe)
+ (action (progn)))
