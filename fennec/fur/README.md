@@ -86,5 +86,6 @@ dune exec fennec/fur/test/test.exe   # 63 checks: signals, matcher, head merge, 
 ```
 
 Real-browser behaviour (hydration, events, data fetch/refetch, localStorage, SPA nav,
-bundle isolation) is covered end-to-end by `examples/site/e2e` — a headless Chrome driven
-over the DevTools Protocol from Eio (`sh examples/site/e2e/run.sh`).
+bundle isolation) is covered end-to-end by the example's Browser suite in
+`examples/site/test/browser/` — a headless Chrome driven over the DevTools Protocol from Eio,
+run with `fennec test browser` (from `examples/site`).

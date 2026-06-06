@@ -193,10 +193,13 @@ let orchestrate ~(cut : suite) ~dir ~base ~jobs ~(args : string list) : int =
     if suites = [] then (
       Printf.printf "fennec test: no %s suites found (looked in %s)\n%!" (suite_to_string cut) (Filename.concat cwd dir);
       0 (* nothing to run is not a failure *))
-    else begin
+    else
       (* build the server, its webroot, and the suites in one dune invocation — fennec is the
          sole dune-aware process, so no nested-build lock deadlock. Targets are root-relative,
-         so build from the workspace root (like the dev command does). *)
+         so build from the workspace root, then RESTORE the cwd: `fennec test all` runs
+         orchestrate once per cut, and a lingering chdir would make the next cut look for its
+         suites under the wrong directory. *)
+      Fun.protect ~finally:(fun () -> try Sys.chdir cwd with _ -> ()) @@ fun () ->
       Sys.chdir d.Discover.root;
       let webroot = Filename.concat d.Discover.src_dir "webroot" in
       let app_targets = d.Discover.targets @ [ webroot ] in
@@ -228,7 +231,6 @@ let orchestrate ~(cut : suite) ~dir ~base ~jobs ~(args : string list) : int =
           (if failed = 0 then "\u{2714}" else "\u{2717}")
           (Report.summary results);
         failed
-    end
 
 (* parallel suites: explicit -j wins, else default to the machine's CPU count (suites are
    isolated, so this is safe); the orchestrator clamps it to the suite count *)

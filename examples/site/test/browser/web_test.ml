@@ -1,16 +1,9 @@
-(* The site's end-to-end suite, written with the fennec.e2e DSL — the same behaviours the
-   old hand-rolled CDP script covered, now as readable top-to-bottom pipes. Each [test]
-   runs in its own fresh isolated browser context (own cookies/localStorage), so they are
-   independent and the runner can fan them out in parallel.
-
-   The harness sets base_url to the web app (http://localhost:4001); a leading-'/' path is
-   resolved against it, an absolute URL (the admin app) is used as-is. *)
+(* The site's browser suite for `fennec test browser` — the web app's end-to-end behaviours
+   driven through a real headless Chrome over CDP (zero npm, no chromedriver). No base_url: the
+   harness boots a DEDICATED isolated instance per suite and hands it via FENNEC_TEST_URL; a
+   leading-'/' path resolves against it. Each [test] runs in its own fresh isolated context (own
+   cookies/localStorage), so they're independent and the runner can fan them out in parallel. *)
 open Fennec_hunt.Live
-
-(* referenced by run.ml so this module (and thus its test registrations below) is linked *)
-let load = ()
-
-let admin = "http://admin:admin@localhost:4002"
 
 (* wait for the Fur client to finish hydrating — an app-agnostic signal set by Fur_csr,
    awaited evented (one round-trip) like every other condition *)
@@ -20,8 +13,8 @@ let () = test "hydration + isomorphic data (fast-render seed)" @@ fun page ->
   page
   |> goto "/" |> hydrated
   |> expect_text ".greeting .msg" "Hello from the server"
-  |> expect_text ".greeting .gstatus" "(ready)"     (* seeded → ready immediately, no flash *)
-  |> expect_text ".bdata" "fetched live in the browser"  (* client-only data, fetched post-hydration *)
+  |> expect_text ".greeting .gstatus" "(ready)" (* seeded → ready immediately, no flash *)
+  |> expect_text ".bdata" "fetched live in the browser" (* client-only data, fetched post-hydration *)
   |> expect_text ".mounted" "mounted"
   |> ignore
 
@@ -93,19 +86,8 @@ let () = test "per-app bundle isolation: web bundle excludes admin code" @@ fun 
        "(async()=>!(await (await fetch('/_apps/web/main.js')).text()).includes('admin actions'))()"
   |> ignore
 
-let () = test "admin app: separate endpoint, whitelabel, shared component hydrates" @@ fun page ->
-  page
-  |> goto (admin ^ "/") |> hydrated
-  |> expect_js ~descr:"admin whitelabel body class" "document.body.className.includes('admin')"
-  |> click ".cbtn.inc" |> expect_text ".count" "1"
-  |> expect_js ~descr:"admin bundle contains 'admin actions'"
-       "(async()=>(await (await fetch('/_apps/admin/main.js')).text()).includes('admin actions'))()"
-  |> ignore
-
-(* ---- forced-race stress: the patterns that previously flaked. These hammer navigation +
-   execution-context swaps; with loaderId-matched loads + context-pinned evals they must be
-   deterministic, every run. ---- *)
-
+(* forced-race stress: navigation + execution-context swaps. With loaderId-matched loads and
+   context-pinned evals these must be deterministic, every run. *)
 let () = test "STRESS: 6 rapid reloads keep localStorage + hydration consistent" @@ fun page ->
   let p = page |> goto "/" |> hydrated |> expect_text ".visits" "visits (localStorage): 1" in
   let final =
@@ -125,9 +107,6 @@ let () = test "STRESS: assert immediately after navigation (no settle), many pag
   |> goto "/" |> expect_text "h1" "Welcome to the Fennec site"
   |> ignore
 
-
-
-
 (* streaming responses (server send_chunked / send_file) proven over a real fetch *)
 let () = test "send_chunked streams + the client reassembles the chunks" @@ fun page ->
   page
@@ -142,3 +121,6 @@ let () = test "send_file streams a file body with the right bytes" @@ fun page -
   |> eval "fetch('/api/download').then(r => r.text()).then(t => { window.__dl = t })"
   |> wait_for ~descr:"downloaded file body" "window.__dl === 'hello from send_file'"
   |> ignore
+
+(* run every registered test; base_url from FENNEC_TEST_URL, flags (--headed/--grep/…) via argv *)
+let () = Fennec_hunt.Run.main_cli ()

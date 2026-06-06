@@ -1,17 +1,6 @@
-; Browser tests (needs Chrome): site.ml registers tests; run.ml boots server + browser.
-; NOT part of `dune test` (needs a system Chrome); run via ./run.sh.
-(executable
- (name run)
- (modules run site)
- (libraries fennec-hunt)
- (link_flags (-linkall)))
-
-; Http tests: spawns `fennec dev`, hits it with typed HTTP requests, asserts responses.
-; Dogfoods fennec_hunt.Http — the framework tests itself with its own testing package.
-(executable
- (name http_test)
- (modules http_test)
- (libraries fennec-hunt))
+; Manual fixtures for the fennec-hunt package itself — NOT app tests, and NOT part of
+; `fennec test`. The app's own Http and Browser suites now live under test/http/ and
+; test/browser/ and run via `fennec test http` / `fennec test browser`.
 
 ; TLS proof: a pure-OCaml self-signed HTTPS server (tls_server) + a hunt against it over
 ; https:// (tls_check). Proves fennec_hunt.Http speaks TLS. Run manually, not in `dune test`.

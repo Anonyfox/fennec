@@ -46,8 +46,14 @@ jobs:
         id: chrome
         uses: browser-actions/setup-chrome@v1
 
-      # Boots the built server, launches headless Chrome, and drives the real bundles
-      # to prove SSR + hydration + interactivity + data + store + localStorage +
-      # SPA-nav + bundle isolation.
-      - name: Real-browser e2e
-        run: CHROME='${{ steps.chrome.outputs.chrome-path }}' sh examples/site/e2e/run.sh
+      # The example's Http and Browser suites via `fennec test`: it boots a dedicated isolated
+      # app instance per suite, runs the Http suites, then drives the real bundles in headless
+      # Chrome (SSR + hydration + interactivity + data + store + localStorage + SPA-nav + bundle
+      # isolation + streaming). Run the built binary directly under the opam env (NOT `dune exec`,
+      # which would nest dune inside fennec's own build and deadlock on the workspace lock).
+      - name: Example suites (fennec test http + browser)
+        working-directory: examples/site
+        run: |
+          FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
+          opam exec -- "$FENNEC" test http
+          CHROME='${{ steps.chrome.outputs.chrome-path }}' opam exec -- "$FENNEC" test browser

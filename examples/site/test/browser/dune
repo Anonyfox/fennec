@@ -4,11 +4,11 @@
 ; isolated app instance per suite, and runs them.
 ; On a custom alias (@browser), NOT @runtest — so a bare `dune test` never needs Chrome.
 (executable
- (name smoke_test)
- (modules smoke_test)
+ (name web_test)
+ (modules web_test)
  (libraries fennec-hunt))
 
 (rule
  (alias browser)
- (deps smoke_test.exe)
+ (deps web_test.exe)
  (action (progn)))
