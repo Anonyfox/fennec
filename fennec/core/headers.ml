@@ -22,6 +22,7 @@ let ci_equal (a : string) (b : string) : bool =
 let%test "ci_equal same case"  = ci_equal "Content-Type" "Content-Type"
 let%test "ci_equal diff case"  = ci_equal "content-type" "Content-Type"
 let%test "ci_equal diff len"   = not (ci_equal "host" "hosts")
+let%test "ci_equal diff content" = not (ci_equal "X-A" "X-B")
 
 (* ──── get ──── *)
 
@@ -34,6 +35,7 @@ let get (h : t) (name : string) : string option =
   go h
 
 let%test "get ci"              = get [("Content-Type","text/html")] "content-type" = Some "text/html"
+let%test "get first of multi"  = get [("X-A","1");("X-A","2")] "x-a" = Some "1"
 let%test "get absent"          = get [("X-Foo","1")] "X-Bar" = None
 
 (* ──── get_all ──── *)

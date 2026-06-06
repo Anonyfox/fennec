@@ -36,3 +36,36 @@ let make ?(status = 308) ?hsts () : Paw.t =
     let qs = (Conn.req c).H.query_string in
     let target = "https://" ^ Conn.host c ^ Conn.path c ^ (if qs = "" then "" else "?" ^ qs) in
     Conn.redirect ~status c target
+
+(* ──── force_https tests ──── *)
+
+module Headers_ = Fennec_core.Headers
+let req_ ?(host = "") ?(headers = []) path = H.make_request ~meth:H.GET ~path ~headers ~host ()
+let resp_of_ c = Option.value (Conn.resp c) ~default:(H.text ~status:404 "")
+let finalize_ c = Conn.apply_before_send c (resp_of_ c)
+
+let%test "http -> 308 (method/body preserving)" =
+  let fh = make () in
+  let c = fh (Conn.make (req_ ~host:"example.com" "/a/b")) in
+  (resp_of_ c).H.status = 308
+
+let%test "redirects to https target" =
+  let fh = make () in
+  let c = fh (Conn.make (req_ ~host:"example.com" "/a/b")) in
+  Headers_.get (resp_of_ c).H.headers "location" = Some "https://example.com/a/b"
+
+let%test "already https declines" =
+  let fh = make () in
+  let c2 = fh (Conn.make (req_ ~host:"example.com" ~headers:[ ("x-forwarded-proto", "https") ] "/")) in
+  not (Conn.answered c2)
+
+let%test "X-Forwarded-Proto list 'https, http' declines (no loop)" =
+  let fh = make () in
+  let c3 = fh (Conn.make (req_ ~host:"example.com" ~headers:[ ("x-forwarded-proto", "https, http") ] "/")) in
+  not (Conn.answered c3)
+
+let%test_unit "hsts emitted on https response" =
+  let fh2 = make ~hsts:31536000 () in
+  let cs = fh2 (Conn.make (req_ ~host:"example.com" ~headers:[ ("x-forwarded-proto", "https") ] "/")) in
+  let rs = finalize_ (Conn.text cs "x") in
+  Fennec_hunt_unit.check "hsts present" (Headers_.get rs.H.headers "strict-transport-security" <> None)

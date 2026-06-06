@@ -23,3 +23,16 @@ let make ?(extra = []) () : Paw.t =
       let h = add "X-Frame-Options" "SAMEORIGIN" h in
       let h = add "Referrer-Policy" "strict-origin-when-cross-origin" h in
       { r with H.headers = h })
+
+(* ──── security_headers tests ──── *)
+
+module Headers_ = Fennec_core.Headers
+let req_ path = H.make_request ~meth:H.GET ~path ()
+let finalize_ c = Conn.apply_before_send c (Option.value (Conn.resp c) ~default:(H.text ~status:404 ""))
+
+let%test_unit "default nosniff + extra CSP + extra X-Frame-Options" =
+  let sh = make ~extra:[ ("Content-Security-Policy", "default-src 'self'"); ("X-Frame-Options", "DENY") ] () in
+  let r = finalize_ (Conn.text (sh (Conn.make (req_ "/"))) "x") in
+  Fennec_hunt_unit.check "nosniff present" (Headers_.get r.H.headers "x-content-type-options" = Some "nosniff");
+  Fennec_hunt_unit.check "extra CSP added" (Headers_.get r.H.headers "content-security-policy" = Some "default-src 'self'");
+  Fennec_hunt_unit.check "extra overrides X-Frame-Options" (Headers_.get r.H.headers "x-frame-options" = Some "DENY")

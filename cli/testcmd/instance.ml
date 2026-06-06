@@ -40,3 +40,37 @@ let allocate ~base (suites : string list) : t list =
         suite_env = [ (D.env_test_url, url) ];
       })
     suites
+
+(* ──── tests ──── *)
+
+let%test_unit "allocate: basic layout" =
+  let open Fennec_hunt_unit in
+  let inst = allocate ~base:7000 [ "a"; "b"; "c" ] in
+  check "one instance per suite" (List.length inst = 3);
+  let ports = List.map (fun i -> i.port) inst in
+  check "suite 0 at base" (List.nth ports 0 = 7000);
+  check "suite 1 at base+stride" (List.nth ports 1 = 7000 + stride);
+  check "suite 2 at base+2*stride" (List.nth ports 2 = 7000 + (2 * stride));
+  check "ports are distinct" (List.sort_uniq compare ports = List.sort compare ports);
+  check "blocks don't overlap (stride > 1)" (stride > 1)
+
+let%test_unit "allocate: env and fields" =
+  let open Fennec_hunt_unit in
+  let inst = allocate ~base:7000 [ "a"; "b"; "c" ] in
+  let a = List.hd inst in
+  check "url matches the port" (a.url = "http://localhost:7000");
+  check "server_env sets the port" (List.assoc D.env_port a.server_env = "7000");
+  check "server_env disables livereload (determinism)" (List.assoc D.env_dev_livereload a.server_env = "0");
+  check "suite_env targets the instance via FENNEC_TEST_URL" (List.assoc D.env_test_url a.suite_env = "http://localhost:7000");
+  check "suite name carried" (a.suite = "a")
+
+let%test "deterministic (re-run gives identical ports)" =
+  let ports1 = List.map (fun i -> i.port) (allocate ~base:7000 [ "a"; "b"; "c" ]) in
+  let ports2 = List.map (fun i -> i.port) (allocate ~base:7000 [ "a"; "b"; "c" ]) in
+  ports1 = ports2
+
+let%test "a different base shifts the block" =
+  (List.hd (allocate ~base:9000 [ "a" ])).port = 9000
+
+let%test "empty suite list -> no instances" =
+  allocate ~base:7000 [] = []

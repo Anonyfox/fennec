@@ -58,12 +58,22 @@ let of_path (path : string) : string =
   | None -> "application/octet-stream"
 
 let%test "html" = of_path "index.html" = "text/html; charset=utf-8"
+let%test "css path" = of_path "/a/b/app.css" = "text/css; charset=utf-8"
 let%test "js"   = of_path "main.js" = "text/javascript; charset=utf-8"
+let%test "mjs"  = of_path "m.mjs" = "text/javascript; charset=utf-8"
 let%test "css"  = of_path "style.css" = "text/css; charset=utf-8"
+let%test "json" = of_path "data.json" = "application/json; charset=utf-8"
+let%test "svg"  = of_path "logo.svg" = "image/svg+xml"
 let%test "png"  = of_path "logo.png" = "image/png"
 let%test "woff2" = of_path "font.woff2" = "font/woff2"
-let%test "unknown ext → octet-stream" = of_path "data.xyz" = "application/octet-stream"
-let%test "no ext → octet-stream" = of_path "Makefile" = "application/octet-stream"
+let%test "wasm" = of_path "m.wasm" = "application/wasm"
+let%test "uppercase ext" = of_path "IMG.PNG" = "image/png"
+let%test "mixed case" = of_path "Style.Css" = "text/css; charset=utf-8"
+let%test "multi-dot uses last" = of_path "app.min.js" = "text/javascript; charset=utf-8"
+let%test "unknown ext" = of_path "data.xyz" = "application/octet-stream"
+let%test "no ext" = of_path "Makefile" = "application/octet-stream"
+let%test "dotfile no ext" = of_path ".gitignore" = "application/octet-stream"
+let%test "trailing dot" = of_path "x." = "application/octet-stream"
 let%test "case insensitive" = of_path "FILE.HTML" = "text/html; charset=utf-8"
 
 (* Is this content-type worth compressing? text/*, application/json|xml|wasm|
@@ -87,8 +97,17 @@ let compressible (content_type : string) : bool =
          "image/svg+xml";
          "application/x-javascript" ]
 
-let%test "text/html is compressible" = compressible "text/html; charset=utf-8"
-let%test "application/json is compressible" = compressible "application/json"
-let%test "image/png is NOT compressible" = not (compressible "image/png")
-let%test "font/woff2 is NOT compressible" = not (compressible "font/woff2")
-let%test "image/svg+xml IS compressible" = compressible "image/svg+xml"
+let%test "text/html compressible" = compressible "text/html; charset=utf-8"
+let%test "text/plain compressible" = compressible "text/plain"
+let%test "application/json compressible" = compressible "application/json"
+let%test "json w/ charset compressible" = compressible "application/json; charset=utf-8"
+let%test "image/svg+xml compressible" = compressible "image/svg+xml"
+let%test "wasm compressible" = compressible "application/wasm"
+let%test "javascript compressible" = compressible "application/javascript"
+let%test "NOT image/png" = not (compressible "image/png")
+let%test "NOT image/jpeg" = not (compressible "image/jpeg")
+let%test "NOT font/woff2" = not (compressible "font/woff2")
+let%test "NOT video/mp4" = not (compressible "video/mp4")
+let%test "NOT octet-stream" = not (compressible "application/octet-stream")
+let%test "compressible case-insensitive" = compressible "TEXT/HTML"
+let%test "compressible ws tolerant" = compressible "  application/json ; charset=utf-8"

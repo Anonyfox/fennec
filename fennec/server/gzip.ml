@@ -57,3 +57,8 @@ let%test "deflate zlib header 0x78" =
   String.length d >= 1 && Char.code d.[0] = 0x78
 let%test "deflate shrinks" =
   String.length (deflate (String.make 2000 'b')) < 2000
+let%test "deflate empty input ok" =
+  String.length (deflate "") >= 0
+let%test "gzip level produces valid output" =
+  let g1 = gzip ~level:1 (String.make 2000 'c') in
+  String.length g1 >= 2 && g1.[0] = '\x1f' && g1.[1] = '\x8b'

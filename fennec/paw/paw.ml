@@ -87,3 +87,113 @@ let patch path h = on H.PATCH path h
    it yields Some, else declines *)
 let fallthrough (f : H.request -> H.response option) : t =
  fun c -> match f (Conn.req c) with Some r -> Conn.respond c r | None -> c
+
+(* ──── helpers ──── *)
+
+let req_ ?(meth = H.GET) path = H.make_request ~meth ~path ()
+
+(* ──── pipeline short-circuit ──── *)
+
+let%test_unit "answered body" =
+  let hits = ref [] in
+  let tap name : t = fun c -> hits := name :: !hits; c in
+  let answer : t = fun c -> Conn.text c "answered" in
+  let p = seq [ tap "a"; answer; tap "b" ] in
+  let r = run p (req_ "/") in
+  Fennec_hunt_unit.check_eq "answered body" ~expected:"answered" ~got:r.H.body
+
+let%test "downstream skipped after answer" =
+  let hits = ref [] in
+  let tap name : t = fun c -> hits := name :: !hits; c in
+  let answer : t = fun c -> Conn.text c "answered" in
+  let _ = run (seq [ tap "a"; answer; tap "b" ]) (req_ "/") in
+  List.rev !hits = [ "a" ]
+
+let%test "empty pipeline 404" =
+  (run (seq []) (req_ "/")).H.status = 404
+
+let%test "all-decline 404" =
+  let tap _name : t = fun c -> c in
+  (run (seq [ tap "x"; tap "y" ]) (req_ "/")).H.status = 404
+
+(* ──── route matching ──── *)
+
+let%test_unit "GET route" =
+  let app = seq
+    [ get "/api/ping" (fun c -> Conn.json c {|{"pong":true}|});
+      post "/api/ping" (fun c -> Conn.text c "posted");
+      get "/" (fun c -> Conn.html c "<h1>home</h1>") ] in
+  Fennec_hunt_unit.check_eq "GET route"
+    ~expected:{|{"pong":true}|} ~got:(run app (req_ "/api/ping")).H.body
+
+let%test_unit "POST route (same path, diff method)" =
+  let app = seq
+    [ get "/api/ping" (fun c -> Conn.json c {|{"pong":true}|});
+      post "/api/ping" (fun c -> Conn.text c "posted");
+      get "/" (fun c -> Conn.html c "<h1>home</h1>") ] in
+  Fennec_hunt_unit.check_eq "POST route"
+    ~expected:"posted" ~got:(run app (req_ ~meth:H.POST "/api/ping")).H.body
+
+let%test_unit "HEAD matches GET" =
+  let app = seq
+    [ get "/" (fun c -> Conn.html c "<h1>home</h1>") ] in
+  Fennec_hunt_unit.check_eq "HEAD matches GET"
+    ~expected:"<h1>home</h1>" ~got:(run app (req_ ~meth:H.HEAD "/")).H.body
+
+let%test "no match -> 404" =
+  let app = seq
+    [ get "/api/ping" (fun c -> Conn.json c {|{"pong":true}|}) ] in
+  (run app (req_ "/nope")).H.status = 404
+
+let%test "wrong method -> 404" =
+  let app = seq
+    [ get "/api/ping" (fun c -> Conn.json c {|{"pong":true}|}) ] in
+  (run app (req_ ~meth:H.DELETE "/api/ping")).H.status = 404
+
+let%test_unit "fallthrough hit" =
+  let ft = fallthrough (fun r -> if r.H.path = "/f" then Some (H.text "F") else None) in
+  Fennec_hunt_unit.check_eq "fallthrough hit"
+    ~expected:"F" ~got:(run (seq [ ft ]) (req_ "/f")).H.body
+
+let%test "fallthrough miss -> 404" =
+  let ft = fallthrough (fun r -> if r.H.path = "/f" then Some (H.text "F") else None) in
+  (run (seq [ ft ]) (req_ "/g")).H.status = 404
+
+(* ──── path params ──── *)
+
+let%test_unit "captures :id" =
+  let app = seq
+    [ get "/users/:id" (fun c -> Conn.text c (Option.value (Conn.path_param c "id") ~default:"?")) ] in
+  Fennec_hunt_unit.check_eq "captures :id"
+    ~expected:"42" ~got:(run app (req_ "/users/42")).H.body
+
+let%test_unit "splat captures the rest" =
+  let app = seq
+    [ get "/files/*rest" (fun c -> Conn.text c (Option.value (Conn.path_param c "rest") ~default:"?")) ] in
+  Fennec_hunt_unit.check_eq "splat captures the rest"
+    ~expected:"a/b/c.txt" ~got:(run app (req_ "/files/a/b/c.txt")).H.body
+
+let%test_unit "two params" =
+  let app = seq
+    [ get "/a/:x/b/:y" (fun c ->
+        Conn.text c (Option.value (Conn.param c "x") ~default:"?" ^ "-"
+                    ^ Option.value (Conn.param c "y") ~default:"?")) ] in
+  Fennec_hunt_unit.check_eq "two params"
+    ~expected:"1-2" ~got:(run app (req_ "/a/1/b/2")).H.body
+
+let%test "param count mismatch -> 404" =
+  let app = seq
+    [ get "/users/:id" (fun c -> Conn.text c (Option.value (Conn.path_param c "id") ~default:"?")) ] in
+  (run app (req_ "/users/42/extra")).H.status = 404
+
+let%test "path param no match -> 404" =
+  let app = seq
+    [ get "/users/:id" (fun c -> Conn.text c (Option.value (Conn.path_param c "id") ~default:"?")) ] in
+  (run app (req_ "/nope")).H.status = 404
+
+let%test_unit "path param beats query in param" =
+  let app = seq
+    [ get "/p/:id" (fun c -> Conn.text c (Option.value (Conn.param c "id") ~default:"?")) ] in
+  Fennec_hunt_unit.check_eq "path param beats query in param"
+    ~expected:"path"
+    ~got:(run app (H.make_request ~meth:H.GET ~path:"/p/path" ~query_string:"id=query" ())).H.body

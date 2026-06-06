@@ -22,6 +22,7 @@ let%test "meth GET"           = meth_of_string "GET" = GET
 let%test "meth POST"          = meth_of_string "POST" = POST
 let%test "meth PATCH"         = meth_of_string "PATCH" = PATCH
 let%test "meth unknown"       = meth_of_string "BREW" = Other "BREW"
+let%test "meth empty"         = meth_of_string "" = Other ""
 let%test "meth case-sensitive" = meth_of_string "get" = Other "get"
 let%test "meth round-trips"   = string_of_meth (meth_of_string "DELETE") = "DELETE"
 
@@ -50,8 +51,10 @@ let reason_phrase = function
   | _ -> ""
 
 let%test "reason 200" = reason_phrase 200 = "OK"
+let%test "reason 201" = reason_phrase 201 = "Created"
 let%test "reason 404" = reason_phrase 404 = "Not Found"
 let%test "reason 422" = reason_phrase 422 = "Unprocessable Entity"
+let%test "reason 429" = reason_phrase 429 = "Too Many Requests"
 let%test "reason unknown" = reason_phrase 999 = ""
 
 type request = {
@@ -80,6 +83,13 @@ let respond ?(status = 200) ?(headers = []) ?(content_type = "text/plain; charse
 let text ?status ?headers s = respond ?status ?headers ~content_type:"text/plain; charset=utf-8" s
 let html ?status ?headers s = respond ?status ?headers ~content_type:"text/html; charset=utf-8" s
 let json ?status ?headers s = respond ?status ?headers ~content_type:"application/json" s
+
+(* ──── respond / text / html / json ──── *)
+let%test "json status"        = (json ~status:201 ~headers:[("x","y")] "{}").status = 201
+let%test "json ct"            = List.assoc "content-type" (json ~status:201 ~headers:[("x","y")] "{}").headers = "application/json"
+let%test "json extra header"  = List.mem ("x","y") (json ~status:201 ~headers:[("x","y")] "{}").headers
+let%test "text default 200"   = (text "hi").status = 200
+let%test "html ct"            = List.assoc "content-type" (html "x").headers = "text/html; charset=utf-8"
 
 (* Percent-decode a query/form component: %XX hex escapes, and '+' as a space (the
    application/x-www-form-urlencoded convention). Allocation-free fast path when there
@@ -150,7 +160,13 @@ let%test "query flag"         = parse_query "debug" = [("debug", "")]
 let%test "query decode +"     = parse_query "q=hello+world" = [("q", "hello world")]
 let%test "query decode %"     = parse_query "q=%C3%A9" = [("q", "\xc3\xa9")]
 let%test "query empty val"    = parse_query "k=" = [("k", "")]
+let%test "query trailing &"   = parse_query "a=1&" = [("a", "1")]
+let%test "query leading &"    = parse_query "&a=1" = [("a", "1")]
 let%test "query skip &&"      = parse_query "a=1&&b=2" = [("a", "1"); ("b", "2")]
+let%test "query value with =" = parse_query "a=1=2" = [("a", "1=2")]
+let%test "query only &"       = parse_query "&&&" = []
+let%test "query %20 in value" = parse_query "q=John%20Doe" = [("q", "John Doe")]
+let%test "query decoded key"  = parse_query "a%2Bb=1" = [("a+b", "1")]
 
 (* split "/path?a=1" into (path, raw query string) *)
 let split_target (target : string) : string * string =
@@ -161,4 +177,7 @@ let split_target (target : string) : string * string =
 let%test "split no query"     = split_target "/path" = ("/path", "")
 let%test "split with query"   = split_target "/p?a=1" = ("/p", "a=1")
 let%test "split empty query"  = split_target "/p?" = ("/p", "")
+let%test "split root"         = split_target "/" = ("/", "")
+let%test "split empty"        = split_target "" = ("", "")
 let%test "split double ?"     = split_target "/p?a?b" = ("/p", "a?b")
+let%test "split query only"   = split_target "?x=1" = ("", "x=1")

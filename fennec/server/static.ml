@@ -253,3 +253,185 @@ let handler ?cache_control (src : source) : H.request -> H.response option =
    follow). This is the form you drop into an endpoint pipeline. *)
 let make ?cache_control (src : source) : Fennec_paw.Paw.t =
   Fennec_paw.Paw.fallthrough (handler ?cache_control src)
+
+(* ──── static tests ──── *)
+
+let req_ ?(meth = H.GET) ?(headers = []) path = H.make_request ~meth ~path ~headers ()
+let status_of_ = function Some (r : H.response) -> r.H.status | None -> 0
+let body_of_ = function Some (r : H.response) -> r.H.body | None -> ""
+let hdr_ r k = match r with Some (resp : H.response) -> Sem.header resp.H.headers k | None -> None
+
+let write_ path contents =
+  let oc = open_out_bin path in
+  output_string oc contents;
+  close_out oc
+
+let rec mkdir_p_ d =
+  if not (Sys.file_exists d) then (
+    mkdir_p_ (Filename.dirname d);
+    try Unix.mkdir d 0o755 with _ -> ())
+
+(* ──── Dir source (filesystem) tests ──── *)
+
+let%test_unit "Dir: happy path" =
+  let root = Filename.temp_file "fennec_static" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  write_ (Filename.concat root "index.html") "<h1>home</h1>";
+  write_ (Filename.concat root "robots.txt") "User-agent: *\n";
+  mkdir_p_ (Filename.concat root "img");
+  write_ (Filename.concat root "img/logo.svg") "<svg/>";
+  write_ (Filename.concat root "big.bin") (String.make 1000 'X');
+  (try Unix.symlink "/etc/hosts" (Filename.concat root "escape") with _ -> ());
+  let src = Dir root in
+  let serve r = respond src r in
+  let check = Fennec_hunt_unit.check in
+  check "index served" (status_of_ (serve (req_ "/")) = 200);
+  check "index body" (body_of_ (serve (req_ "/")) = "<h1>home</h1>");
+  check "robots served" (status_of_ (serve (req_ "/robots.txt")) = 200);
+  check "nested svg" (status_of_ (serve (req_ "/img/logo.svg")) = 200);
+  check "svg mime" (hdr_ (serve (req_ "/img/logo.svg")) "content-type" = Some "image/svg+xml");
+  check "missing -> None (404 fallthrough)" (status_of_ (serve (req_ "/nope.txt")) = 0);
+  (* cleanup *)
+  (try Sys.remove (Filename.concat root "escape") with _ -> ());
+  List.iter (fun f -> try Sys.remove (Filename.concat root f) with _ -> ())
+    [ "index.html"; "robots.txt"; "img/logo.svg"; "big.bin" ];
+  (try Unix.rmdir (Filename.concat root "img") with _ -> ());
+  (try Unix.rmdir root with _ -> ())
+
+let%test_unit "Dir: traversal & escape" =
+  let root = Filename.temp_file "fennec_static" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  write_ (Filename.concat root "robots.txt") "User-agent: *\n";
+  mkdir_p_ (Filename.concat root "img");
+  write_ (Filename.concat root "img/logo.svg") "<svg/>";
+  (try Unix.symlink "/etc/hosts" (Filename.concat root "escape") with _ -> ());
+  let src = Dir root in
+  let serve r = respond src r in
+  let check = Fennec_hunt_unit.check in
+  check ".. rejected (403)" (status_of_ (serve (req_ "/../etc/passwd")) = 403);
+  check "deep .. rejected" (status_of_ (serve (req_ "/img/../../etc/passwd")) = 403);
+  check ". segment rejected" (status_of_ (serve (req_ "/./robots.txt")) = 403);
+  check "double slash rejected" (status_of_ (serve (req_ "/img//logo.svg")) = 403);
+  check "null byte rejected" (status_of_ (serve (req_ "/robots.txt\000.png")) = 403);
+  check "control char rejected" (status_of_ (serve (req_ "/img/\tlogo.svg")) = 403);
+  check "symlink escape not served" (status_of_ (serve (req_ "/escape")) <> 200);
+  (* cleanup *)
+  (try Sys.remove (Filename.concat root "escape") with _ -> ());
+  List.iter (fun f -> try Sys.remove (Filename.concat root f) with _ -> ())
+    [ "robots.txt"; "img/logo.svg" ];
+  (try Unix.rmdir (Filename.concat root "img") with _ -> ());
+  (try Unix.rmdir root with _ -> ())
+
+let%test_unit "Dir: conditional & range" =
+  let root = Filename.temp_file "fennec_static" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  write_ (Filename.concat root "robots.txt") "User-agent: *\n";
+  write_ (Filename.concat root "big.bin") (String.make 1000 'X');
+  let src = Dir root in
+  let serve r = respond src r in
+  let check = Fennec_hunt_unit.check in
+  let etag = match hdr_ (serve (req_ "/robots.txt")) "etag" with Some e -> e | None -> "" in
+  check "has etag" (etag <> "");
+  check "If-None-Match -> 304"
+    (status_of_ (serve (req_ ~headers:[ ("If-None-Match", etag) ] "/robots.txt")) = 304);
+  check "Range -> 206"
+    (status_of_ (serve (req_ ~headers:[ ("Range", "bytes=0-9") ] "/big.bin")) = 206);
+  check "Range body length"
+    (String.length (body_of_ (serve (req_ ~headers:[ ("Range", "bytes=0-9") ] "/big.bin"))) = 10);
+  check "Range content-range"
+    (hdr_ (serve (req_ ~headers:[ ("Range", "bytes=0-9") ] "/big.bin")) "content-range"
+     = Some "bytes 0-9/1000");
+  check "unsatisfiable Range -> 416"
+    (status_of_ (serve (req_ ~headers:[ ("Range", "bytes=5000-6000") ] "/big.bin")) = 416);
+  check "HEAD range empty body"
+    (String.length (body_of_ (serve (req_ ~meth:H.HEAD ~headers:[ ("Range", "bytes=0-9") ] "/big.bin"))) = 0);
+  (* cleanup *)
+  List.iter (fun f -> try Sys.remove (Filename.concat root f) with _ -> ())
+    [ "robots.txt"; "big.bin" ];
+  (try Unix.rmdir root with _ -> ())
+
+let%test_unit "Dir: caching (mtime reuse)" =
+  let root = Filename.temp_file "fennec_static" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  write_ (Filename.concat root "big.bin") (String.make 1000 'X');
+  let src = Dir root in
+  let serve r = respond src r in
+  let e1 = hdr_ (serve (req_ "/big.bin")) "etag" in
+  let e2 = hdr_ (serve (req_ "/big.bin")) "etag" in
+  Fennec_hunt_unit.check "stable etag across reads" (e1 = e2);
+  (try Sys.remove (Filename.concat root "big.bin") with _ -> ());
+  (try Unix.rmdir root with _ -> ())
+
+(* ──── Responder.finalize tests ──── *)
+
+let%test_unit "Responder.finalize: gzip, identity, conditional, HEAD" =
+  let big_html = H.html (String.make 2000 'a') in
+  let check = Fennec_hunt_unit.check in
+  let gz =
+    Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") big_html in
+  check "gzip content-encoding" (Sem.header gz.H.headers "content-encoding" = Some "gzip");
+  check "gzip vary set" (Sem.header gz.H.headers "vary" = Some "Accept-Encoding");
+  check "gzip body smaller" (String.length gz.H.body < 2000);
+  let id = Responder.finalize ~now:0.0 ~req:(req_ "/") big_html in
+  check "identity (no encoding header)" (Sem.header id.H.headers "content-encoding" = None);
+  let tiny =
+    Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/") (H.html "hi") in
+  check "tiny body not compressed" (Sem.header tiny.H.headers "content-encoding" = None);
+  let png =
+    Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("Accept-Encoding", "gzip") ] "/")
+      (H.respond ~content_type:"image/png" (String.make 2000 'x')) in
+  check "png not compressed" (Sem.header png.H.headers "content-encoding" = None);
+  let etag2 = match Sem.header id.H.headers "etag" with Some e -> e | None -> "" in
+  let cond = Responder.finalize ~now:0.0 ~req:(req_ ~headers:[ ("If-None-Match", etag2) ] "/") big_html in
+  check "finalize conditional 304" (cond.H.status = 304);
+  check "304 has empty body" (cond.H.body = "");
+  let head = Responder.finalize ~now:0.0 ~req:(req_ ~meth:H.HEAD "/") big_html in
+  check "HEAD empty body" (head.H.body = "");
+  check "HEAD has content-length" (Sem.header head.H.headers "content-length" <> None)
+
+(* ──── Embedded source (prod) tests ──── *)
+
+let%test_unit "Embedded: happy path + traversal + conditional + range" =
+  let table =
+    [ ("index.html", "<h1>baked</h1>"); ("robots.txt", "User-agent: *\nDisallow: /\n");
+      ("app.js", String.make 2000 'j') ] in
+  let emb = Embedded ("test_inline", fun k -> List.assoc_opt k table) in
+  let eserve r = respond emb r in
+  let check = Fennec_hunt_unit.check in
+  check "embedded index served" (status_of_ (eserve (req_ "/")) = 200);
+  check "embedded index body" (body_of_ (eserve (req_ "/")) = "<h1>baked</h1>");
+  check "embedded mime" (hdr_ (eserve (req_ "/")) "content-type" = Some "text/html; charset=utf-8");
+  check "embedded js served" (status_of_ (eserve (req_ "/app.js")) = 200);
+  check "embedded missing -> None" (status_of_ (eserve (req_ "/nope.js")) = 0);
+  check "embedded traversal -> 403" (status_of_ (eserve (req_ "/../etc/passwd")) = 403);
+  check "html default -> no-cache" (hdr_ (eserve (req_ "/")) "cache-control" = Some "no-cache");
+  check "js default -> public max-age" (hdr_ (eserve (req_ "/app.js")) "cache-control" = Some "public, max-age=3600");
+  check "explicit cache-control overrides html"
+    (hdr_ (respond ~cache_control:"max-age=60" emb (req_ "/")) "cache-control" = Some "max-age=60");
+  let eetag = match hdr_ (eserve (req_ "/robots.txt")) "etag" with Some e -> e | None -> "" in
+  check "embedded has etag" (eetag <> "");
+  check "embedded If-None-Match -> 304"
+    (status_of_ (eserve (req_ ~headers:[ ("If-None-Match", eetag) ] "/robots.txt")) = 304);
+  check "embedded Range -> 206"
+    (status_of_ (eserve (req_ ~headers:[ ("Range", "bytes=0-9") ] "/app.js")) = 206)
+
+let%test_unit "Embedded: bundle collision prevention" =
+  let a = Embedded ("bundle_a_inline", fun k -> if k = "x.txt" then Some "AAAA" else None) in
+  let b = Embedded ("bundle_b_inline", fun k -> if k = "x.txt" then Some "BBBB" else None) in
+  let check = Fennec_hunt_unit.check in
+  check "bundle A serves its own bytes" (body_of_ (respond a (req_ "/x.txt")) = "AAAA");
+  check "bundle B serves its own bytes (no collision)" (body_of_ (respond b (req_ "/x.txt")) = "BBBB");
+  check "bundle A unchanged after B served" (body_of_ (respond a (req_ "/x.txt")) = "AAAA")
+
+let%test_unit "Embedded: zero-length asset Range safety" =
+  let empty = Embedded ("empty_inline", fun k -> if k = "e.css" then Some "" else None) in
+  let check = Fennec_hunt_unit.check in
+  check "empty asset served (200)" (status_of_ (respond empty (req_ "/e.css")) = 200);
+  check "suffix Range on empty asset -> 416 (no crash)"
+    (status_of_ (respond empty (req_ ~headers:[ ("Range", "bytes=-5") ] "/e.css")) = 416);
+  check "0- Range on empty asset -> 416 (no crash)"
+    (status_of_ (respond empty (req_ ~headers:[ ("Range", "bytes=0-9") ] "/e.css")) = 416)

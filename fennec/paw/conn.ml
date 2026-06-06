@@ -294,3 +294,303 @@ let upgrade (c : t) (setup : Fennec_core.Ws_channel.t -> unit) : t =
 let halt (c : t) : t =
   if c.state = Unset then c.state <- Halted;
   c
+
+(* ──── helpers ──── *)
+
+let contains_ hay sub =
+  let n = String.length hay and m = String.length sub in
+  let rec go i = i + m <= n && (String.sub hay i m = sub || go (i + 1)) in
+  m = 0 || go 0
+
+let req_ ?(meth = H.GET) path = H.make_request ~meth ~path ()
+
+(* ──── conn basics ──── *)
+
+let%test "fresh not answered" =
+  not (answered (make (req_ "/x")))
+
+let%test "text answers" =
+  answered (text (make (req_ "/x")) "hi")
+
+let%test_unit "text body" =
+  let c = text (make (req_ "/x")) "hi" in
+  Fennec_hunt_unit.check_eq "text body"
+    ~expected:"hi" ~got:(match resp c with Some r -> r.H.body | None -> "")
+
+let%test "json status" =
+  let c = json ~status:201 (make (req_ "/y")) "{}" in
+  (match resp c with Some r -> r.H.status | None -> 0) = 201
+
+let%test "explicit halt answers" =
+  answered (halt (make (req_ "/z")))
+
+let%test "conn assign/get" =
+  let k : int Assigns.key = Assigns.key "k" in
+  let c = assign (make (req_ "/")) k 5 in
+  get c k = Some 5
+
+let%test "req_header ci" =
+  let c = make { (req_ "/") with H.headers = [ ("X-Foo", "bar") ] } in
+  req_header c "x-foo" = Some "bar"
+
+(* ──── query params ──── *)
+
+let%test "conn query decoded" =
+  let c = make (H.make_request ~meth:H.GET ~path:"/s" ~query_string:"q=a+b&n=2" ()) in
+  query c "q" = Some "a b"
+
+let%test "conn query other" =
+  let c = make (H.make_request ~meth:H.GET ~path:"/s" ~query_string:"q=a+b&n=2" ()) in
+  query c "n" = Some "2"
+
+let%test "conn query missing" =
+  let c = make (H.make_request ~meth:H.GET ~path:"/s" ~query_string:"q=a+b&n=2" ()) in
+  query c "z" = None
+
+(* ──── request metadata ──── *)
+
+let%test_unit "conn host" =
+  let c = make (H.make_request ~meth:H.GET ~path:"/" ~host:"example.com" ~scheme:"https"
+                  ~remote_ip:(Some "1.2.3.4") ()) in
+  Fennec_hunt_unit.check_eq "conn host" ~expected:"example.com" ~got:(host c)
+
+let%test_unit "conn scheme" =
+  let c = make (H.make_request ~meth:H.GET ~path:"/" ~host:"example.com" ~scheme:"https"
+                  ~remote_ip:(Some "1.2.3.4") ()) in
+  Fennec_hunt_unit.check_eq "conn scheme" ~expected:"https" ~got:(scheme c)
+
+let%test "conn remote_ip" =
+  let c = make (H.make_request ~meth:H.GET ~path:"/" ~host:"example.com" ~scheme:"https"
+                  ~remote_ip:(Some "1.2.3.4") ()) in
+  remote_ip c = Some "1.2.3.4"
+
+(* ──── cookies ──── *)
+
+let%test "conn cookie read" =
+  let c = make { (req_ "/") with H.headers = [ ("Cookie", "sid=abc; theme=dark") ] } in
+  cookie c "sid" = Some "abc"
+
+let%test "conn cookie other" =
+  let c = make { (req_ "/") with H.headers = [ ("Cookie", "sid=abc; theme=dark") ] } in
+  cookie c "theme" = Some "dark"
+
+let%test "conn cookie missing" =
+  let c = make { (req_ "/") with H.headers = [ ("Cookie", "sid=abc; theme=dark") ] } in
+  cookie c "nope" = None
+
+(* ──── response cookies ──── *)
+
+let%test "set_cookie does not answer" =
+  not (answered (set_cookie (make (req_ "/")) "sid" "xyz"))
+
+let%test "one Set-Cookie emitted" =
+  let c = json (set_cookie (make (req_ "/")) "sid" "xyz") "{}" in
+  let setcs = match resp c with
+    | Some r -> Fennec_core.Headers.get_all r.H.headers "set-cookie"
+    | None -> []
+  in
+  List.length setcs = 1
+
+let%test "Set-Cookie carries the value" =
+  let c = json (set_cookie (make (req_ "/")) "sid" "xyz") "{}" in
+  let setcs = match resp c with
+    | Some r -> Fennec_core.Headers.get_all r.H.headers "set-cookie"
+    | None -> []
+  in
+  match setcs with [ s ] -> contains_ s "sid=xyz" | _ -> false
+
+(* ──── form body params ──── *)
+
+let%test "body_param decoded" =
+  let c = make (H.make_request ~meth:H.POST ~path:"/"
+                  ~headers:[ ("content-type", "application/x-www-form-urlencoded") ]
+                  ~body:"a=1&b=hello+world" ()) in
+  body_param c "b" = Some "hello world"
+
+let%test "param falls back to the body" =
+  let c = make (H.make_request ~meth:H.POST ~path:"/"
+                  ~headers:[ ("content-type", "application/x-www-form-urlencoded") ]
+                  ~body:"a=1&b=hello+world" ()) in
+  param c "a" = Some "1"
+
+let%test "param prefers the query string" =
+  let c = make (H.make_request ~meth:H.POST ~path:"/" ~query_string:"a=q"
+                  ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body:"a=b" ()) in
+  param c "a" = Some "q"
+
+(* ──── multipart file upload ──── *)
+
+let%test_unit "uploaded file" =
+  let mp =
+    "--B\r\nContent-Disposition: form-data; name=\"f\"; filename=\"x.txt\"\r\n\
+     Content-Type: text/plain\r\n\r\nDATA\r\n--B--\r\n"
+  in
+  let c = make (H.make_request ~meth:H.POST ~path:"/"
+                  ~headers:[ ("content-type", "multipart/form-data; boundary=B") ] ~body:mp ()) in
+  match file c "f" with
+  | Some p ->
+    Fennec_hunt_unit.check "uploaded filename" (p.Fennec_core.Multipart.filename = Some "x.txt");
+    Fennec_hunt_unit.check_eq "uploaded data" ~expected:"DATA" ~got:p.Fennec_core.Multipart.data
+  | None -> Fennec_hunt_unit.check "uploaded file present" false
+
+(* ──── build-vs-answer + state ──── *)
+
+let%test "set_header does not answer" =
+  not (answered (set_header (make (req_ "/")) "X-A" "1"))
+
+let%test "answered after json" =
+  answered (json (set_header (make (req_ "/")) "X-A" "1") "{}")
+
+let%test "pre-set header preserved through the answer" =
+  let c = json (set_header (make (req_ "/")) "X-A" "1") "{}" in
+  let hdrs = match resp c with Some r -> r.H.headers | None -> [] in
+  List.mem ("X-A", "1") hdrs
+
+let%test "answer's content-type merged in too" =
+  let c = json (set_header (make (req_ "/")) "X-A" "1") "{}" in
+  let hdrs = match resp c with Some r -> r.H.headers | None -> [] in
+  List.exists (fun (k, _) -> String.lowercase_ascii k = "content-type") hdrs
+
+let%test "before_send FIFO order" =
+  let order = ref [] in
+  let c = make (req_ "/") in
+  let c = before_send c (fun r -> order := "a" :: !order; r) in
+  let c = before_send c (fun r -> order := "b" :: !order; r) in
+  let c = text c "x" in
+  let _ = apply_before_send c (Option.value (resp c) ~default:(H.text "")) in
+  List.rev !order = [ "a"; "b" ]
+
+let%test "status answers" =
+  answered (set_status 204 (make (req_ "/")))
+
+let%test "status code" =
+  let c = set_status 204 (make (req_ "/")) in
+  (match resp c with Some r -> r.H.status | None -> 0) = 204
+
+let%test "halt answers" =
+  answered (halt (make (req_ "/")))
+
+let%test "halt has no response" =
+  resp (halt (make (req_ "/"))) = None
+
+let%test "header added post-answer is present" =
+  let c = set_header (text (make (req_ "/")) "body") "X-Late" "y" in
+  match resp c with Some r -> List.mem ("X-Late", "y") r.H.headers | None -> false
+
+let%test "exactly one content-type after answer" =
+  let c = json (set_header (make (req_ "/")) "content-type" "text/plain") "{}" in
+  let cts = match resp c with
+    | Some r -> List.filter (fun (k, _) -> String.lowercase_ascii k = "content-type") r.H.headers
+    | None -> []
+  in
+  List.length cts = 1
+
+let%test "the answerer's content-type wins" =
+  let c = json (set_header (make (req_ "/")) "content-type" "text/plain") "{}" in
+  let cts = match resp c with
+    | Some r -> List.filter (fun (k, _) -> String.lowercase_ascii k = "content-type") r.H.headers
+    | None -> []
+  in
+  List.assoc_opt "content-type" cts = Some "application/json"
+
+(* ──── full surface ──── *)
+
+let%test_unit "req returns the request" =
+  let base = H.make_request ~meth:H.GET ~path:"/p" ~query_string:"a=1" ~host:"h" ~scheme:"https"
+               ~remote_ip:(Some "1.2.3.4") ~version:"HTTP/1.1"
+               ~headers:[ ("X-M", "a"); ("X-M", "b"); ("Cookie", "c=1") ] () in
+  Fennec_hunt_unit.check_eq "req returns the request" ~expected:"/p" ~got:(req (make base)).H.path
+
+let%test_unit "path" =
+  let base = H.make_request ~meth:H.GET ~path:"/p" () in
+  Fennec_hunt_unit.check_eq "path" ~expected:"/p" ~got:(path (make base))
+
+let%test_unit "version" =
+  let base = H.make_request ~meth:H.GET ~path:"/p" ~version:"HTTP/1.1" () in
+  Fennec_hunt_unit.check_eq "version" ~expected:"HTTP/1.1" ~got:(version (make base))
+
+let%test "req_headers (all values)" =
+  let base = H.make_request ~meth:H.GET ~path:"/p"
+               ~headers:[ ("X-M", "a"); ("X-M", "b") ] () in
+  req_headers (make base) "x-m" = [ "a"; "b" ]
+
+let%test "query_params (list)" =
+  let base = H.make_request ~meth:H.GET ~path:"/p" ~query_string:"a=1" () in
+  query_params (make base) = [ ("a", "1") ]
+
+let%test "cookies (list)" =
+  let base = H.make_request ~meth:H.GET ~path:"/p"
+               ~headers:[ ("Cookie", "c=1") ] () in
+  cookies (make base) = [ ("c", "1") ]
+
+let%test "body_params (list)" =
+  let c = make (H.make_request ~meth:H.POST ~path:"/"
+                  ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body:"k=v" ()) in
+  body_params c = [ ("k", "v") ]
+
+let%test "files (list, none)" =
+  let c = make (H.make_request ~meth:H.POST ~path:"/"
+                  ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body:"k=v" ()) in
+  files c = []
+
+let%test "set_path_params + path_params" =
+  let c = set_path_params (make (req_ "/")) [ ("id", "7") ] in
+  path_params c = [ ("id", "7") ]
+
+let%test "get_exn returns the value" =
+  let k : int Assigns.key = Assigns.key "n" in
+  get_exn (assign (make (req_ "/")) k 9) k = 9
+
+let%test "get_exn raises on a missing key" =
+  let k : int Assigns.key = Assigns.key "n" in
+  try ignore (get_exn (make (req_ "/")) k); false with Invalid_argument _ -> true
+
+let%test "override_method changes the effective method" =
+  let c = override_method (make (req_ "/")) H.DELETE in
+  meth c = H.DELETE
+
+let%test "respond sets status + body" =
+  let c = respond (make (req_ "/")) (H.text ~status:418 "teapot") in
+  (match resp c with Some r -> (r.H.status, r.H.body) | None -> (0, "")) = (418, "teapot")
+
+let%test "resp_skeleton keeps headers, empties the body" =
+  let c = set_header (make (req_ "/")) "X-S" "1" in
+  let sk = resp_skeleton c in
+  sk.H.body = "" && List.mem ("X-S", "1") sk.H.headers
+
+let%test "redirect: 301 + Location + answered" =
+  let c = redirect ~status:301 (make (req_ "/")) "/new" in
+  answered c
+  && (match resp c with Some r -> r.H.status = 301 && List.mem ("location", "/new") r.H.headers | None -> false)
+
+let%test "delete_cookie expires the cookie (Max-Age=0)" =
+  let c = text (delete_cookie (make (req_ "/")) "sid") "x" in
+  match resp c with
+  | Some r ->
+    (match Fennec_core.Headers.get_all r.H.headers "set-cookie" with
+     | [ s ] -> contains_ s "Max-Age=0"
+     | _ -> false)
+  | None -> false
+
+let%test "upgrade: handler set, answered, no buffered resp" =
+  let c = upgrade (make (req_ "/")) (fun _ -> ()) in
+  upgrade_handler c <> None && answered c && resp c = None
+
+let%test "send_file sets a File stream + answers" =
+  let c = send_file (make (req_ "/")) ~path:"/tmp/x.txt" () in
+  answered c && (match stream c with Some (File (p, _)) -> p = "/tmp/x.txt" | _ -> false)
+
+let%test_unit "send_chunked content-type" =
+  let c = send_chunked (make (req_ "/")) ~content_type:"text/event-stream" (fun emit -> emit "a"; emit "b") in
+  match stream c with
+  | Some (Chunked (ct, _produce)) ->
+    Fennec_hunt_unit.check_eq "send_chunked content-type" ~expected:"text/event-stream" ~got:ct
+  | _ -> Fennec_hunt_unit.check "send_chunked sets a Chunked stream" false
+
+let%test "send_chunked producer emits in order" =
+  let c = send_chunked (make (req_ "/")) ~content_type:"text/event-stream" (fun emit -> emit "a"; emit "b") in
+  let got = ref [] in
+  (match stream c with
+   | Some (Chunked (_ct, produce)) -> produce (fun s -> got := s :: !got)
+   | _ -> ());
+  List.rev !got = [ "a"; "b" ]

@@ -95,3 +95,89 @@ let parse (raw : string) : problem list =
 
 let count problems =
   List.fold_left (fun (e, w) p -> match p.severity with Error -> (e + 1, w) | Warning -> (e, w + 1)) (0, 0) problems
+
+(* ──── tests ──── *)
+
+let%test_unit "parse: single error diagnostic" =
+  let chk = Fennec_hunt_unit.check in
+  let sample =
+    "File \"frontend/apps/web/index.mlx\", line 11, characters 8-16:\n\
+    \  11 |     <h1>{greeting}</h1>\n\
+    \             ^^^^^^^^\n\
+     Error: Unbound value greeting\n"
+  in
+  let ps = parse sample in
+  chk "one problem parsed" (List.length ps = 1);
+  match ps with
+  | [ p ] ->
+    chk "file" (p.file = "frontend/apps/web/index.mlx");
+    chk "line" (p.line = 11);
+    chk "col is 1-based (characters 8 -> col 9)" (p.col = 9);
+    chk "severity Error" (p.severity = Error);
+    chk "message captured" (Fennec_hunt_unit.str_contains p.message "Unbound value greeting");
+    chk "excerpt kept" (List.length p.excerpt >= 1)
+  | _ -> chk "expected one problem" false
+
+let%test "count = (1 error, 0 warnings)" =
+  let sample =
+    "File \"frontend/apps/web/index.mlx\", line 11, characters 8-16:\n\
+    \  11 |     <h1>{greeting}</h1>\n\
+    \             ^^^^^^^^\n\
+     Error: Unbound value greeting\n"
+  in
+  count (parse sample) = (1, 0)
+
+let%test "ANSI-wrapped diagnostic parses" =
+  let coloured = "\027[1mFile \"a.ml\", line 3, characters 0-1:\027[0m\nError: oops\n" in
+  match parse coloured with [ p ] -> p.file = "a.ml" && p.line = 3 | _ -> false
+
+let%test "warning severity" =
+  let warn = "File \"b.ml\", line 1, characters 0-1:\nWarning 26 [unused-var]: unused variable x\n" in
+  match parse warn with [ p ] -> p.severity = Warning | _ -> false
+
+let%test_unit "multi-location syntax error is ONE problem" =
+  let chk = Fennec_hunt_unit.check in
+  let syntax =
+    "File \"layout.mlx\", line 13, characters 5-7:\n\
+     Error: Syntax error: ']' expected\n\
+     File \"layout.mlx\", line 7, characters 15-16:\n\
+    \  This '[' might be unmatched\n"
+  in
+  let sp = parse syntax in
+  chk "a multi-location syntax error is ONE problem" (List.length sp = 1);
+  chk "and counts as ONE error (not two)" (count sp = (1, 0));
+  match sp with
+  | [ p ] ->
+    chk "primary location is line 13" (p.line = 13);
+    chk "the secondary location is folded into related"
+      (List.exists (fun s -> Fennec_hunt_unit.str_contains s "might be unmatched") p.related)
+  | _ -> chk "expected one problem" false
+
+let%test "two real errors -> count (2,0)" =
+  let two = "File \"a.ml\", line 1, characters 0-1:\nError: one\nFile \"b.ml\", line 2, characters 0-1:\nError: two\n" in
+  count (parse two) = (2, 0)
+
+let%test_unit "path with 'line' substring -> correct fields" =
+  let chk = Fennec_hunt_unit.check in
+  let trapline = "File \"frontend/timeline2/x.ml\", line 7, characters 9-16:\nError: boom\n" in
+  match parse trapline with
+  | [ p ] ->
+    chk "path with 'line' substring -> real line 7" (p.line = 7);
+    chk "path with 'line' substring -> real col 10" (p.col = 10);
+    chk "path with 'line' substring -> file intact" (p.file = "frontend/timeline2/x.ml")
+  | _ -> chk "expected one problem" false
+
+let%test_unit "path with 'characters' substring -> correct fields" =
+  let chk = Fennec_hunt_unit.check in
+  let trapchars = "File \"src/characters3/y.ml\", line 4, characters 2-3:\nError: boom\n" in
+  match parse trapchars with
+  | [ p ] ->
+    chk "path with 'characters' substring -> real line 4" (p.line = 4);
+    chk "path with 'characters' substring -> real col 3" (p.col = 3)
+  | _ -> chk "expected one problem" false
+
+let%test "unrecognised text -> []" =
+  parse "ld: symbol not found\nmake: *** error" = []
+
+let%test "empty -> []" =
+  parse "" = []

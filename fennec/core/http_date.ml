@@ -19,6 +19,11 @@ let format (epoch : float) : string =
   Printf.sprintf "%s, %02d %s %04d %02d:%02d:%02d GMT" days.(tm.Unix.tm_wday) tm.Unix.tm_mday
     months.(tm.Unix.tm_mon) (tm.Unix.tm_year + 1900) tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
 
+(* ──── format ──── *)
+let%test "format RFC example"   = format 784_111_777.0 = "Sun, 06 Nov 1994 08:49:37 GMT"
+let%test "format epoch 0"       = format 0.0 = "Thu, 01 Jan 1970 00:00:00 GMT"
+let%test "format length 29"     = String.length (format 1_700_000_000.0) = 29
+
 (* Convert a broken-down UTC date to epoch seconds (days-since-epoch math; no
    timezone, all inputs are GMT). Returns None on out-of-range. *)
 let to_epoch ~year ~mon ~day ~hour ~min ~sec : float option =
@@ -69,3 +74,22 @@ let parse (s : string) : float option =
   match parse_imf s with
   | Some t -> Some t
   | None -> ( match parse_rfc850 s with Some t -> Some t | None -> parse_asctime s)
+
+(* ──── parse ──── *)
+let%test "parse IMF"            = parse "Sun, 06 Nov 1994 08:49:37 GMT" = Some 784_111_777.0
+let%test "parse asctime"        = parse "Sun Nov  6 08:49:37 1994" = Some 784_111_777.0
+let%test "parse rfc850"         = parse "Sunday, 06-Nov-94 08:49:37 GMT" = Some 784_111_777.0
+let%test "parse epoch"          = parse "Thu, 01 Jan 1970 00:00:00 GMT" = Some 0.0
+let%test "parse garbage"        = parse "not a date" = None
+let%test "parse empty"          = parse "" = None
+let%test "parse partial"        = parse "Sun, 06 Nov" = None
+let%test "parse bad month"      = parse "Sun, 06 Xyz 1994 08:49:37 GMT" = None
+let%test "parse ws tolerant"    = parse "  Sun, 06 Nov 1994 08:49:37 GMT  " = Some 784_111_777.0
+
+(* ──── round-trip ──── *)
+let%test "rt 0"                 = parse (format 0.0) = Some 0.0
+let%test "rt 1"                 = parse (format 1.0) = Some 1.0
+let%test "rt 784111777"         = parse (format 784_111_777.0) = Some 784_111_777.0
+let%test "rt 1700000000"        = parse (format 1_700_000_000.0) = Some 1_700_000_000.0
+let%test "rt 2000000000"        = parse (format 2_000_000_000.0) = Some 2_000_000_000.0
+let%test "fractional truncates" = parse (format 100.9) = Some 100.0

@@ -66,6 +66,27 @@ let negotiate_encoding ?(accept = None) () : encoding =
     else if deflate_q > 0.0 then Deflate
     else Identity
 
+(* ──── negotiate_encoding ──── *)
+let%test "absent -> identity"           = negotiate_encoding ~accept:None () = Identity
+let%test "empty -> identity"            = negotiate_encoding ~accept:(Some "") () = Identity
+let%test "gzip"                         = negotiate_encoding ~accept:(Some "gzip") () = Gzip
+let%test "gzip,deflate -> gzip"         = negotiate_encoding ~accept:(Some "gzip, deflate") () = Gzip
+let%test "deflate only"                 = negotiate_encoding ~accept:(Some "deflate") () = Deflate
+let%test "gzip;q=0 forbids"             = negotiate_encoding ~accept:(Some "gzip;q=0, deflate") () = Deflate
+let%test "br unsupported -> identity"   = negotiate_encoding ~accept:(Some "br") () = Identity
+let%test "ties prefer gzip"             = negotiate_encoding ~accept:(Some "deflate;q=1.0, gzip;q=1.0") () = Gzip
+let%test "higher-q deflate wins"        = negotiate_encoding ~accept:(Some "gzip;q=0.5, deflate;q=0.9") () = Deflate
+let%test "* enables gzip"               = negotiate_encoding ~accept:(Some "*") () = Gzip
+let%test "gzip;q=0,* -> deflate"        = negotiate_encoding ~accept:(Some "gzip;q=0, *") () = Deflate
+let%test "garbage q -> treated 1.0"     = negotiate_encoding ~accept:(Some "gzip;q=banana") () = Gzip
+let%test "q clamped >1"                 = negotiate_encoding ~accept:(Some "gzip;q=5") () = Gzip
+let%test "negative q clamped to 0"      = negotiate_encoding ~accept:(Some "gzip;q=-1, deflate") () = Deflate
+let%test "whitespace tolerant"          = negotiate_encoding ~accept:(Some "  gzip ;  q=0.8 ") () = Gzip
+let%test "uppercase GZIP"              = negotiate_encoding ~accept:(Some "GZIP") () = Gzip
+let%test "all forbidden -> identity"    = negotiate_encoding ~accept:(Some "gzip;q=0, deflate;q=0") () = Identity
+let%test "identity;q=0 alone"           = negotiate_encoding ~accept:(Some "identity;q=0") () = Identity
+let%test "empty elements ignored"       = negotiate_encoding ~accept:(Some ",,gzip,,") () = Gzip
+
 (* ---- ETag / conditional requests ---- *)
 
 (* A strong ETag is fine for our static content (we hash the bytes). Quote it. *)
@@ -88,6 +109,17 @@ let if_none_match_satisfied ~etag (headers : (string * string) list) : bool =
       in
       List.exists (fun t -> strip t = strip etag) (split_commas v)
 
+(* ──── make_etag / if_none_match_satisfied ──── *)
+let%test "etag quoted"                  = make_etag "abc123" = "\"abc123\""
+let%test "inm exact"                    = if_none_match_satisfied ~etag:"\"abc123\"" [("If-None-Match", "\"abc123\"")]
+let%test "inm star"                     = if_none_match_satisfied ~etag:"\"abc123\"" [("If-None-Match", "*")]
+let%test "inm weak matches strong"      = if_none_match_satisfied ~etag:"\"abc123\"" [("If-None-Match", "W/\"abc123\"")]
+let%test "inm in list"                  = if_none_match_satisfied ~etag:"\"abc123\"" [("If-None-Match", "\"x\", \"abc123\", \"y\"")]
+let%test "inm no match"                 = not (if_none_match_satisfied ~etag:"\"abc123\"" [("If-None-Match", "\"other\"")])
+let%test "inm absent"                   = not (if_none_match_satisfied ~etag:"\"abc123\"" [])
+let%test "inm empty value"              = not (if_none_match_satisfied ~etag:"\"abc123\"" [("If-None-Match", "")])
+let%test "inm ci header name"           = if_none_match_satisfied ~etag:"\"abc123\"" [("IF-NONE-MATCH", "\"abc123\"")]
+
 (* If-Modified-Since: true (=> 304) when the resource's mtime is NOT newer than
    the date the client holds. We compare as HTTP-date strings only when equal;
    for correctness we compare parsed epoch seconds. *)
@@ -96,6 +128,19 @@ let if_modified_since_satisfied ~mtime (headers : (string * string) list) : bool
   | None -> false
   | Some v -> (
     match Http_date.parse v with Some t -> mtime <= t | None -> false)
+
+(* ──── if_modified_since_satisfied ──── *)
+let%test "ims not modified (older)" =
+  let d = Http_date.format 1_000_000.0 in
+  if_modified_since_satisfied ~mtime:999_000.0 [("If-Modified-Since", d)]
+let%test "ims modified (newer)" =
+  let d = Http_date.format 1_000_000.0 in
+  not (if_modified_since_satisfied ~mtime:1_000_001.0 [("If-Modified-Since", d)])
+let%test "ims equal -> not modified" =
+  let d = Http_date.format 1_000_000.0 in
+  if_modified_since_satisfied ~mtime:1_000_000.0 [("If-Modified-Since", d)]
+let%test "ims garbage date"         = not (if_modified_since_satisfied ~mtime:0.0 [("If-Modified-Since", "xxx")])
+let%test "ims absent"               = not (if_modified_since_satisfied ~mtime:0.0 [])
 
 (* ---- Range (RFC 7233), single range only ---- *)
 
@@ -141,3 +186,21 @@ let parse_range ~len (headers : (string * string) list) : [ `None | `Range of ra
             | Some s, Some _ when s >= len -> `Unsatisfiable
             | _ -> `None))
         | _ -> `None)
+
+(* ──── parse_range ──── *)
+let%test "range absent"                 = parse_range ~len:100 [] = `None
+let%test "range 0-49"                   = parse_range ~len:100 [("Range","bytes=0-49")] = `Range { first = 0; last = 49 }
+let%test "range open end 50-"           = parse_range ~len:100 [("Range","bytes=50-")] = `Range { first = 50; last = 99 }
+let%test "range suffix -20"             = parse_range ~len:100 [("Range","bytes=-20")] = `Range { first = 80; last = 99 }
+let%test "range clamp last"             = parse_range ~len:100 [("Range","bytes=90-200")] = `Range { first = 90; last = 99 }
+let%test "range start past end"         = parse_range ~len:100 [("Range","bytes=100-200")] = `Unsatisfiable
+let%test "range suffix 0 unsat"         = parse_range ~len:100 [("Range","bytes=-0")] = `Unsatisfiable
+let%test "range multi declined"         = parse_range ~len:100 [("Range","bytes=0-1,5-6")] = `None
+let%test "range non-bytes unit"         = parse_range ~len:100 [("Range","items=0-1")] = `None
+let%test "range garbage"                = parse_range ~len:100 [("Range","bytes=abc")] = `None
+let%test "range empty spec"             = parse_range ~len:100 [("Range","bytes=")] = `None
+let%test "range just dash"              = parse_range ~len:100 [("Range","bytes=-")] = `None
+let%test "range whole file"             = parse_range ~len:100 [("Range","bytes=0-99")] = `Range { first = 0; last = 99 }
+let%test "range suffix > len"           = parse_range ~len:100 [("Range","bytes=-500")] = `Range { first = 0; last = 99 }
+let%test "range missing bytes="         = parse_range ~len:100 [("Range","0-10")] = `None
+let%test "range len 0 file"             = parse_range ~len:0 [("Range","bytes=0-0")] = `Unsatisfiable

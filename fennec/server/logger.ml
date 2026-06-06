@@ -37,3 +37,31 @@ let make ?sink () : Paw.t =
       let line = Printf.sprintf "[fennec] %s %s %s (%.1fms)%s\n" status meth path ms rid in
       (match sink with Some f -> f line | None -> prerr_string line);
       r)
+
+(* ──── logger tests ──── *)
+
+let req_ ?(meth = H.GET) ?(headers = []) path = H.make_request ~meth ~path ~headers ()
+let finalize_ c = Conn.apply_before_send c (Option.value (Conn.resp c) ~default:(H.text ~status:404 ""))
+
+let%test_unit "logs method, path, status, duration" =
+  let buf = Buffer.create 64 in
+  let lg = make ~sink:(Buffer.add_string buf) () in
+  let _ = finalize_ (Conn.text ~status:201 (lg (Conn.make (req_ ~meth:H.POST "/x"))) "ok") in
+  let out = Buffer.contents buf in
+  Fennec_hunt_unit.check "logs method" (Fennec_hunt_unit.str_contains out "POST");
+  Fennec_hunt_unit.check "logs path" (Fennec_hunt_unit.str_contains out "/x");
+  Fennec_hunt_unit.check "logs status" (Fennec_hunt_unit.str_contains out "201");
+  Fennec_hunt_unit.check "logs duration in ms" (Fennec_hunt_unit.str_contains out "ms")
+
+let%test "custom sink is never colourised" =
+  let buf = Buffer.create 64 in
+  let lg = make ~sink:(Buffer.add_string buf) () in
+  let _ = finalize_ (Conn.text ~status:201 (lg (Conn.make (req_ ~meth:H.POST "/x"))) "ok") in
+  let out = Buffer.contents buf in
+  not (Fennec_hunt_unit.str_contains out "\027[")
+
+let%test_unit "logs the request id when present" =
+  let buf2 = Buffer.create 64 in
+  let c = Request_id.make () (Conn.make (req_ ~headers:[ ("X-Request-Id", "abc123") ] "/")) in
+  let _ = finalize_ (Conn.text (make ~sink:(Buffer.add_string buf2) () c) "ok") in
+  Fennec_hunt_unit.check "request id logged" (Fennec_hunt_unit.str_contains (Buffer.contents buf2) "abc123")

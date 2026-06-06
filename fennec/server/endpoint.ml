@@ -25,6 +25,8 @@ type t = {
 
 let make ~name ?(hosts = [ "*" ]) () : t = { name; hosts; paws = []; matched = [] }
 
+let req_ ?(meth = H.GET) path = H.make_request ~meth ~path ()
+
 (* ---- always-phase (runs on every request) ---- *)
 
 let use (p : Paw.t) (t : t) : t = { t with paws = t.paws @ [ p ] }
@@ -62,3 +64,103 @@ let handler (t : t) : Paw.t =
 
 let name (t : t) : string = t.name
 let hosts (t : t) : string list = t.hosts
+
+(* ──── always-phase tests ──── *)
+
+let%test "api route" =
+  let e = make ~name:"app" ~hosts:[ "app.example.com" ] ()
+          |> get "/api/health" (fun c -> Conn.json c {|{"ok":true}|})
+          |> get "/" (fun c -> Conn.html c "<h1>home</h1>") in
+  (Paw.run (handler e) (req_ "/api/health")).H.body = {|{"ok":true}|}
+
+let%test "home route" =
+  let e = make ~name:"app" ~hosts:[ "app.example.com" ] ()
+          |> get "/api/health" (fun c -> Conn.json c {|{"ok":true}|})
+          |> get "/" (fun c -> Conn.html c "<h1>home</h1>") in
+  (Paw.run (handler e) (req_ "/")).H.body = "<h1>home</h1>"
+
+let%test "unmatched 404" =
+  let e = make ~name:"app" ~hosts:[ "app.example.com" ] ()
+          |> get "/api/health" (fun c -> Conn.json c {|{"ok":true}|})
+          |> get "/" (fun c -> Conn.html c "<h1>home</h1>") in
+  (Paw.run (handler e) (req_ "/nope")).H.status = 404
+
+let%test "name is carried" =
+  let e = make ~name:"app" ~hosts:[ "app.example.com" ] () in
+  name e = "app"
+
+let%test "hosts are carried" =
+  let e = make ~name:"app" ~hosts:[ "app.example.com" ] () in
+  hosts e = [ "app.example.com" ]
+
+let%test "guard halts" =
+  let guard : Paw.t = fun c -> if Conn.path c = "/blocked" then Conn.text ~status:403 c "no" else c in
+  let e2 = make ~name:"guarded" () |> use guard
+           |> get "/blocked" (fun c -> Conn.text c "should-not-reach")
+           |> get "/ok" (fun c -> Conn.text c "ok") in
+  (Paw.run (handler e2) (req_ "/blocked")).H.status = 403
+
+let%test "guard passes others" =
+  let guard : Paw.t = fun c -> if Conn.path c = "/blocked" then Conn.text ~status:403 c "no" else c in
+  let e2 = make ~name:"guarded" () |> use guard
+           |> get "/blocked" (fun c -> Conn.text c "should-not-reach")
+           |> get "/ok" (fun c -> Conn.text c "ok") in
+  (Paw.run (handler e2) (req_ "/ok")).H.body = "ok"
+
+let%test "hosts default to the catch-all" =
+  let e2 = make ~name:"guarded" () in
+  hosts e2 = [ "*" ]
+
+(* ──── matched-phase tests (the 404-stays-404 property) ──── *)
+
+let%test "matched route -> auth runs, gets 401" =
+  let auth_paw : Paw.t = fun c -> Conn.text ~status:401 c "unauthorized" in
+  let e3 = make ~name:"secured" ()
+           |> get "/api/secret" (fun c -> Conn.text c "top secret")
+           |> pipe_matched [ auth_paw ] in
+  (Paw.run (handler e3) (req_ "/api/secret")).H.status = 401
+
+let%test_unit "auth DID run on a matched route" =
+  let auth_ran = ref false in
+  let auth_paw : Paw.t = fun c -> auth_ran := true; Conn.text ~status:401 c "unauthorized" in
+  let e3 = make ~name:"secured" ()
+           |> get "/api/secret" (fun c -> Conn.text c "top secret")
+           |> pipe_matched [ auth_paw ] in
+  let _ = Paw.run (handler e3) (req_ "/api/secret") in
+  Fennec_hunt_unit.check "auth ran" !auth_ran
+
+let%test "unmatched -> 404 (not 401 from auth)" =
+  let auth_paw : Paw.t = fun c -> Conn.text ~status:401 c "unauthorized" in
+  let e3 = make ~name:"secured" ()
+           |> get "/api/secret" (fun c -> Conn.text c "top secret")
+           |> pipe_matched [ auth_paw ] in
+  (Paw.run (handler e3) (req_ "/nonexistent")).H.status = 404
+
+let%test_unit "auth did NOT run on an unmatched route" =
+  let auth_ran = ref false in
+  let auth_paw : Paw.t = fun c -> auth_ran := true; Conn.text ~status:401 c "unauthorized" in
+  let e3 = make ~name:"secured" ()
+           |> get "/api/secret" (fun c -> Conn.text c "top secret")
+           |> pipe_matched [ auth_paw ] in
+  auth_ran := false;
+  let _ = Paw.run (handler e3) (req_ "/nonexistent") in
+  Fennec_hunt_unit.check "auth did not run" (not !auth_ran)
+
+let%test_unit "matched route gets the header stamp" =
+  let stamp : Paw.t = fun c -> Conn.before_send c (fun r -> { r with H.headers = ("X-Auth", "ok") :: r.H.headers }) in
+  let e4 = make ~name:"stamped" ()
+           |> get "/api/data" (fun c -> Conn.text c "data")
+           |> pipe_matched [ stamp ] in
+  let conn4 = Paw.run_conn (handler e4) (req_ "/api/data") in
+  let resp4 = Conn.apply_before_send conn4 (Option.get (Conn.resp conn4)) in
+  Fennec_hunt_unit.check "X-Auth header stamp" (List.assoc_opt "X-Auth" resp4.H.headers = Some "ok")
+
+(* ──── flat pipeline (backward compat) ──── *)
+
+let%test "flat (no pipe_matched) still works" =
+  let e5 = make ~name:"flat" () |> get "/ok" (fun c -> Conn.text c "ok") in
+  (Paw.run (handler e5) (req_ "/ok")).H.body = "ok"
+
+let%test "flat unmatched -> 404" =
+  let e5 = make ~name:"flat" () |> get "/ok" (fun c -> Conn.text c "ok") in
+  (Paw.run (handler e5) (req_ "/nope")).H.status = 404

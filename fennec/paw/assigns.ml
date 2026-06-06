@@ -51,3 +51,46 @@ let mem (t : t) (k : 'a key) : bool = Option.is_some (get t k)
 (* get or raise — for keys a paw guarantees upstream (e.g. current_user after auth) *)
 let get_exn (t : t) (k : 'a key) : 'a =
   match get t k with Some v -> v | None -> invalid_arg ("Assigns.get_exn: missing " ^ k.name)
+
+(* ──── typed assigns ──── *)
+
+let%test "get user" =
+  let user : string key = key "user" in
+  let a = set empty user "ada" in
+  get a user = Some "ada"
+
+let%test "get count" =
+  let count : int key = key "count" in
+  let a = set empty count 42 in
+  get a count = Some 42
+
+let%test "absent key" =
+  let a = empty in
+  get a (key "missing" : float key) = None
+
+let%test "distinct keys same name/type" =
+  let user : string key = key "user" in
+  let a = set empty user "ada" in
+  let user2 : string key = key "user" in
+  get a user2 = None
+
+let%test "set replaces" =
+  let count : int key = key "count" in
+  let a = set (set empty count 42) count 7 in
+  get a count = Some 7
+
+let%test "mem true" =
+  let user : string key = key "user" in
+  let a = set empty user "ada" in
+  mem a user
+
+let%test "mem false" =
+  let user : string key = key "user" in
+  let a = set empty user "ada" in
+  let user2 : string key = key "user" in
+  not (mem a user2)
+
+let%test_unit "get_exn" =
+  let user : string key = key "user" in
+  let a = set empty user "ada" in
+  Fennec_hunt_unit.check_eq "get_exn" ~expected:"ada" ~got:(get_exn a user)

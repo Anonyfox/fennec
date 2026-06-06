@@ -74,6 +74,56 @@ let suite_args ~(cut : suite) (o : options) : string list =
     @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
   | Unit | All -> []
 
+(* ──── suite_of_string tests ──── *)
+
+let%test "unit" = suite_of_string "unit" = Ok Unit
+let%test "http" = suite_of_string "http" = Ok Http
+let%test "browser" = suite_of_string "browser" = Ok Browser
+let%test "all" = suite_of_string "all" = Ok All
+let%test "case-insensitive" = suite_of_string "HTTP" = Ok Http
+let%test "unknown -> error naming the valid set" =
+  match suite_of_string "bogus" with Error m -> Fennec_hunt_unit.str_contains m "unit, http, browser, all" | Ok _ -> false
+let%test "round-trips" =
+  List.for_all (fun s -> suite_of_string (suite_to_string s) = Ok s) [ Unit; Http; Browser; All ]
+
+(* ──── default_options tests ──── *)
+
+let%test "default is the fast unit cut" = default_options.suite = Unit
+let%test "default fail-fast on" = default_options.fail_fast = true
+let%test "default base port clears dev's 4000" = default_options.base_port >= 7000
+
+(* ──── suite_args tests ──── *)
+
+let%test "browser: --headed only when set" =
+  suite_args ~cut:Browser { default_options with headed = true } = [ "--headed" ]
+let%test "browser: no flags by default" =
+  suite_args ~cut:Browser default_options = []
+let%test "browser: grep passes through" =
+  suite_args ~cut:Browser { default_options with grep = Some "checkout" } = [ "--grep"; "checkout" ]
+let%test "browser: screenshots dir passes through" =
+  suite_args ~cut:Browser { default_options with screenshots = Some "shots" } = [ "--screenshots"; "shots" ]
+let%test "browser: jobs + reporter pass through" =
+  suite_args ~cut:Browser { default_options with jobs = Some 3; reporter = Some "plain" } = [ "--jobs"; "3"; "--reporter"; "plain" ]
+let%test "browser: stable flag order" =
+  suite_args ~cut:Browser { default_options with grep = Some "g"; headed = true; screenshots = Some "d"; jobs = Some 2; reporter = Some "pretty" }
+  = [ "--grep"; "g"; "--headed"; "--screenshots"; "d"; "--jobs"; "2"; "--reporter"; "pretty" ]
+let%test "http: grep passes through, browser-only flags don't" =
+  suite_args ~cut:Http { default_options with grep = Some "x"; headed = true; screenshots = Some "d" } = [ "--grep"; "x" ]
+let%test "http: no grep -> no argv" =
+  suite_args ~cut:Http default_options = []
+let%test "unit: no argv" =
+  suite_args ~cut:Unit { default_options with grep = Some "x" } = []
+let%test "all: no argv (dispatches per-cut)" =
+  suite_args ~cut:All { default_options with headed = true } = []
+
+(* ──── fail_fast_limit tests ──── *)
+
+let%test "default fail-fast -> limit 1" = fail_fast_limit ~fail_fast:true ~max_failures:None = 1
+let%test "no-fail-fast -> unbounded" = fail_fast_limit ~fail_fast:false ~max_failures:None = max_int
+let%test "explicit -x wins over fail-fast" = fail_fast_limit ~fail_fast:true ~max_failures:(Some 3) = 3
+let%test "explicit -x wins over no-fail-fast" = fail_fast_limit ~fail_fast:false ~max_failures:(Some 2) = 2
+let%test "-x 0 floored to 1" = fail_fast_limit ~fail_fast:true ~max_failures:(Some 0) = 1
+
 (* per-suite wall-clock backstop. Real suites finish well under this — the hunt runners have
    their own per-request / per-step / per-test timeouts — but a wedged suite (e.g. an infinite
    loop in a check body, which no I/O timeout would catch) is killed so the others still run.

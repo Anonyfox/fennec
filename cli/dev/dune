@@ -4,4 +4,6 @@
 ; into Supervisor.run.
 (library
  (name fennec_dev)
- (libraries unix fennec.core)) ; fennec.core for Dev_proto — the shared CLI<->server wire (Stdlib-only, no Eio bleed)
+ (libraries unix fennec.core fennec-hunt.unit) ; fennec.core for Dev_proto — the shared CLI<->server wire (Stdlib-only, no Eio bleed)
+ (inline_tests (backend fennec-hunt.runner))
+ (preprocess (pps fennec-hunt.ppx)))

@@ -157,3 +157,7 @@ let describe_error = function
 (* ──── describe_errors ──── *)
 
 let describe_errors errs = String.concat "\n" (List.map describe_error errs)
+
+let%test "describe_errors lists all problems" =
+  let msg = describe_errors [ Bad_name ""; Conflicting_pattern ("x.com", "a", "b") ] in
+  Fennec_hunt_unit.str_contains msg "empty" && Fennec_hunt_unit.str_contains msg "x.com"

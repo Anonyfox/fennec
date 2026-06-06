@@ -184,3 +184,159 @@ let make ~(secret : string) ?(cookie = "_fennec_session") ?(path = "/") ?(lifeti
             ~http_only ~same_site ()
         in
         { r with H.headers = ("set-cookie", sc) :: r.H.headers })
+
+(* ──── sign/verify tests ──── *)
+
+let secret_ = "a-stable-server-secret"
+
+let%test "verify round-trips" =
+  verify ~secret:secret_ (sign ~secret:secret_ "hello world") = Some "hello world"
+let%test "wrong secret rejected" =
+  verify ~secret:"other" (sign ~secret:secret_ "hello world") = None
+let%test "tampered token rejected" =
+  verify ~secret:secret_ (sign ~secret:secret_ "hello world" ^ "x") = None
+let%test "no signature -> rejected" =
+  verify ~secret:secret_ "nodot" = None
+let%test "empty -> rejected" =
+  verify ~secret:secret_ "" = None
+
+(* ──── session paw round-trip tests ──── *)
+
+let req_ ?(headers = []) path = H.make_request ~meth:H.GET ~path ~headers ()
+let finalize_ c = Conn.apply_before_send c (Option.get (Conn.resp c))
+let cookie_kv_ set_cookie =
+  match String.index_opt set_cookie ';' with Some i -> String.sub set_cookie 0 i | None -> set_cookie
+let set_cookie_ c =
+  match Fennec_core.Headers.get_all (finalize_ c).H.headers "set-cookie" with s :: _ -> s | [] -> ""
+
+let%test "read within the same request" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  get c1 "user" = Some "ada"
+
+let%test_unit "a session cookie is set after a write" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let r1 = finalize_ c1 in
+  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  Fennec_hunt_unit.check "cookie is set" (set1 <> "");
+  Fennec_hunt_unit.check "cookie is HttpOnly" (cookie_kv_ set1 <> set1)
+
+let%test "session restored on the next request" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let r1 = finalize_ c1 in
+  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let kv = cookie_kv_ set1 in
+  let c2 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
+  get c2 "user" = Some "ada"
+
+let%test "unchanged session emits no Set-Cookie" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let r1 = finalize_ c1 in
+  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let kv = cookie_kv_ set1 in
+  let c3 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
+  let _ = get c3 "user" in
+  let c3 = Conn.text c3 "x" in
+  let r3 = finalize_ c3 in
+  Fennec_core.Headers.get_all r3.H.headers "set-cookie" = []
+
+let%test "tampered cookie yields empty session" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let r1 = finalize_ c1 in
+  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let kv = cookie_kv_ set1 in
+  let c4 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv ^ "x") ] "/")) in
+  get c4 "user" = None
+
+let%test "clear empties the session" =
+  let sp = make ~secret:secret_ () in
+  let c1 = sp (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let r1 = finalize_ c1 in
+  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let kv = cookie_kv_ set1 in
+  let c5 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
+  let c5 = clear c5 in
+  get c5 "user" = None
+
+(* ──── session expiry + refresh tests ──── *)
+
+let%test "unexpired session loads its data" =
+  let cookie payload = "_fennec_session=" ^ sign ~secret:secret_ payload in
+  let c = make ~secret:secret_ () (Conn.make (req_ ~headers:[ ((fun kv -> ("Cookie", kv)) (cookie "_exp=9999999999&user=ada")) ] "/")) in
+  get c "user" = Some "ada"
+
+let%test "expired session loads empty" =
+  let cookie payload = "_fennec_session=" ^ sign ~secret:secret_ payload in
+  let c = make ~secret:secret_ () (Conn.make (req_ ~headers:[ ("Cookie", cookie "_exp=1&user=ada") ] "/")) in
+  get c "user" = None
+
+let%test "_exp hidden from get_all" =
+  let cookie payload = "_fennec_session=" ^ sign ~secret:secret_ payload in
+  let c = make ~secret:secret_ () (Conn.make (req_ ~headers:[ ("Cookie", cookie "_exp=9999999999&user=ada") ] "/")) in
+  get_all c = [ ("user", "ada") ]
+
+let%test "half-expired session is refreshed (Set-Cookie emitted)" =
+  let cookie payload = "_fennec_session=" ^ sign ~secret:secret_ payload in
+  let near = Printf.sprintf "_exp=%.0f&user=ada" (Unix.gettimeofday () +. 10.) in
+  let c = make ~secret:secret_ ~lifetime:100. () (Conn.make (req_ ~headers:[ ("Cookie", cookie near) ] "/")) in
+  let c = Conn.text c "x" in
+  set_cookie_ c <> ""
+
+let%test "fresh unchanged session: no refresh" =
+  let cookie payload = "_fennec_session=" ^ sign ~secret:secret_ payload in
+  let fresh = Printf.sprintf "_exp=%.0f&user=ada" (Unix.gettimeofday () +. 1000.) in
+  let c = make ~secret:secret_ ~lifetime:100. () (Conn.make (req_ ~headers:[ ("Cookie", cookie fresh) ] "/")) in
+  let c = Conn.text c "x" in
+  set_cookie_ c = ""
+
+(* ──── session server-side store tests ──── *)
+
+let%test_unit "server-side store: write and rehydrate" =
+  let store = memory_store () in
+  let c1 = make ~secret:secret_ ~store () (Conn.make (req_ "/")) in
+  let c1 = set c1 "user" "ada" in
+  let c1 = Conn.text c1 "ok" in
+  let kv = cookie_kv_ (set_cookie_ c1) in
+  let value = match String.index_opt kv '=' with Some i -> String.sub kv (i + 1) (String.length kv - i - 1) | None -> "" in
+  let sid = Option.get (verify ~secret:secret_ value) in
+  Fennec_hunt_unit.check "data is in the server store" (store.load sid = Some [ ("user", "ada") ]);
+  let c2 = make ~secret:secret_ ~store () (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
+  Fennec_hunt_unit.check "store: session rehydrated by id" (get c2 "user" = Some "ada")
+
+(* ──── session Secure flag (proxy-aware) tests ──── *)
+
+let%test_unit "Secure flag proxy-aware" =
+  let cookie_for headers =
+    let c = make ~secret:secret_ () (Conn.make (req_ ~headers "/")) in
+    set_cookie_ (Conn.text (set c "user" "ada") "ok")
+  in
+  Fennec_hunt_unit.check "X-Forwarded-Proto=https -> Secure cookie"
+    (Fennec_hunt_unit.str_contains (cookie_for [ ("X-Forwarded-Proto", "https") ]) "Secure");
+  Fennec_hunt_unit.check "plain http -> cookie not Secure"
+    (not (Fennec_hunt_unit.str_contains (cookie_for []) "Secure"))
+
+(* ──── weak-secret guard tests ──── *)
+
+let constructs_ f = match (try Some (f ()) with Invalid_argument _ -> None) with Some _ -> true | None -> false
+
+let%test "empty secret rejected" =
+  not (constructs_ (fun () -> make ~secret:"" ()))
+let%test "short secret rejected" =
+  not (constructs_ (fun () -> make ~secret:"tooshort" ()))
+let%test "16+ byte secret accepted" =
+  constructs_ (fun () -> make ~secret:(String.make 16 'x') ())

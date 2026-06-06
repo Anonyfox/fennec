@@ -72,6 +72,18 @@ let%test "set-cookie default SameSite=Lax" =
 let%test "set-cookie default HttpOnly" =
   let s = to_set_cookie ~name:"k" ~value:"v" () in
   Fennec_hunt_unit.str_contains s "HttpOnly"
+let%test "set-cookie no Secure by default" =
+  let s = to_set_cookie ~name:"k" ~value:"v" () in
+  not (Fennec_hunt_unit.str_contains s "Secure")
+let%test_unit "set-cookie full options" =
+  let s = to_set_cookie ~name:"s" ~value:"v" ~path:"/app" ~domain:"example.com"
+      ~max_age:3600 ~secure:true ~http_only:false ~same_site:Strict () in
+  Fennec_hunt_unit.check "custom path"     (Fennec_hunt_unit.str_contains s "Path=/app");
+  Fennec_hunt_unit.check "domain"          (Fennec_hunt_unit.str_contains s "Domain=example.com");
+  Fennec_hunt_unit.check "max-age"         (Fennec_hunt_unit.str_contains s "Max-Age=3600");
+  Fennec_hunt_unit.check "secure"          (Fennec_hunt_unit.str_contains s "Secure");
+  Fennec_hunt_unit.check "SameSite=Strict" (Fennec_hunt_unit.str_contains s "SameSite=Strict");
+  Fennec_hunt_unit.check "no HttpOnly"     (not (Fennec_hunt_unit.str_contains s "HttpOnly"))
 let%test "set-cookie None implies Secure" =
   let s = to_set_cookie ~name:"k" ~value:"v" ~same_site:None_ () in
   Fennec_hunt_unit.str_contains s "Secure" && Fennec_hunt_unit.str_contains s "SameSite=None"

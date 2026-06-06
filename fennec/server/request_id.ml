@@ -39,3 +39,39 @@ let make ?(header = "x-request-id") () : Paw.t =
 
 (* the request id assigned by {!make}, if any *)
 let current (c : Conn.t) : string option = Conn.get c key
+
+(* ──── request_id tests ──── *)
+
+let req_ ?(headers = []) path = Fennec_core.Http.make_request ~meth:Fennec_core.Http.GET ~path ~headers ()
+
+let%test "sets the assign" =
+  let c = make () (Conn.make (req_ "/")) in
+  current c <> None
+
+let%test_unit "sets the response header" =
+  let c = make () (Conn.make (req_ "/")) in
+  let has = match Conn.resp (Conn.text c "x") with
+    | Some r -> Fennec_core.Headers.mem r.Fennec_core.Http.headers "x-request-id"
+    | None -> false in
+  Fennec_hunt_unit.check "response header present" has
+
+let%test "reuses an inbound id" =
+  let c2 = make () (Conn.make (req_ ~headers:[ ("X-Request-Id", "abc123") ] "/")) in
+  current c2 = Some "abc123"
+
+let%test "minted request ids are unique" =
+  let id_of c = Option.value (current c) ~default:"" in
+  let a = id_of (make () (Conn.make (req_ "/"))) in
+  let b = id_of (make () (Conn.make (req_ "/"))) in
+  a <> "" && a <> b
+
+let%test "control-char inbound id rejected (minted instead)" =
+  let id_of c = Option.value (current c) ~default:"" in
+  let ctrl = id_of (make () (Conn.make (req_ ~headers:[ ("X-Request-Id", "bad\r\nInjected: 1") ] "/"))) in
+  ctrl <> "" && ctrl <> "bad\r\nInjected: 1"
+
+let%test "over-long inbound id rejected" =
+  let id_of c = Option.value (current c) ~default:"" in
+  let long = String.make 200 'a' in
+  let lc = id_of (make () (Conn.make (req_ ~headers:[ ("X-Request-Id", long) ] "/"))) in
+  lc <> long

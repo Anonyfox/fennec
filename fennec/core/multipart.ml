@@ -51,6 +51,11 @@ let boundary_of_content_type (ct : string) : string option =
       | _ -> None)
     parts
 
+(* ──── boundary_of_content_type ──── *)
+let%test "boundary extracts"    = boundary_of_content_type "multipart/form-data; boundary=X" = Some "X"
+let%test "boundary quoted"      = boundary_of_content_type {|multipart/form-data; boundary="a b"|} = Some "a b"
+let%test "boundary absent"      = boundary_of_content_type "text/plain" = None
+
 (* parse a Content-Disposition value: name + optional filename *)
 let parse_disposition (v : string) : string option * string option =
   let unq s = if String.length s >= 2 && s.[0] = '"' && s.[String.length s - 1] = '"'
@@ -101,3 +106,36 @@ let parse ~(boundary : string) (body : string) : part list =
          (* skip the preamble ("") and the closing delimiter (starts with "--") *)
          if chunk = "" || (String.length chunk >= 2 && chunk.[0] = '-' && chunk.[1] = '-') then None
          else parse_part chunk)
+
+(* ──── parse ──── *)
+let _test_body =
+  String.concat ""
+    [ "--X\r\n";
+      "Content-Disposition: form-data; name=\"title\"\r\n\r\n";
+      "Hello World\r\n";
+      "--X\r\n";
+      "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"\r\n";
+      "Content-Type: text/plain\r\n\r\n";
+      "file\r\ncontents\r\n";
+      "--X--\r\n" ]
+
+let%test "parse two parts"      = List.length (parse ~boundary:"X" _test_body) = 2
+
+let%test_unit "parse field part" =
+  match parse ~boundary:"X" _test_body with
+  | field :: _ ->
+    Fennec_hunt_unit.check "field name"        (field.name = "title");
+    Fennec_hunt_unit.check "field no filename"  (field.filename = None);
+    Fennec_hunt_unit.check "field data"         (field.data = "Hello World")
+  | _ -> Fennec_hunt_unit.check "expected parts" false
+
+let%test_unit "parse file part" =
+  match parse ~boundary:"X" _test_body with
+  | _ :: file :: _ ->
+    Fennec_hunt_unit.check "file name"         (file.name = "upload");
+    Fennec_hunt_unit.check "file filename"      (file.filename = Some "a.txt");
+    Fennec_hunt_unit.check "file content-type"  (file.content_type = "text/plain");
+    Fennec_hunt_unit.check "file data"          (file.data = "file\r\ncontents")
+  | _ -> Fennec_hunt_unit.check "expected two parts" false
+
+let%test "parse empty body"     = parse ~boundary:"X" "" = []

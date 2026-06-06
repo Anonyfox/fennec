@@ -677,3 +677,358 @@ module Reconcile (B : BACKEND) = struct
        deps = [] } in
     run_effect eff
 end
+
+(* ──── signals ──── *)
+
+let%test "peek initial" =
+  let s = signal 0 in
+  peek s = 0
+
+let%test_unit "effect runs once on create" =
+  let s = signal 0 in
+  let runs = ref 0 in
+  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  Fennec_hunt_unit.check "effect runs once on create" (!runs = 1)
+
+let%test_unit "effect re-runs on change" =
+  let s = signal 0 in
+  let runs = ref 0 in
+  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  set s 1;
+  Fennec_hunt_unit.check "effect re-runs on change" (!runs = 2)
+
+let%test_unit "no re-run on equal set" =
+  let s = signal 0 in
+  let runs = ref 0 in
+  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  set s 1; set s 1;
+  Fennec_hunt_unit.check "no re-run on equal set" (!runs = 2)
+
+let%test_unit "update notifies" =
+  let s = signal 0 in
+  let runs = ref 0 in
+  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  set s 1; update s (fun n -> n + 1);
+  Fennec_hunt_unit.check "update notifies" (!runs = 3 && peek s = 2)
+
+let%test_unit "disposed effect never re-runs" =
+  let s = signal 0 in
+  let r2 = ref 0 in
+  let stop = watch (fun () -> incr r2; ignore (get s)) in
+  let before = !r2 in
+  stop (); set s 99;
+  Fennec_hunt_unit.check "disposed effect never re-runs" (!r2 = before)
+
+let%test_unit "dynamic deps: tracks a" =
+  let a = signal 1 and b = signal 10 and pick = signal true in
+  let last = ref 0 in
+  let _ = watch (fun () -> last := if get pick then get a else get b) in
+  Fennec_hunt_unit.check "dynamic deps: tracks a" (!last = 1)
+
+let%test_unit "switches to b" =
+  let a = signal 1 and b = signal 10 and pick = signal true in
+  let last = ref 0 in
+  let _ = watch (fun () -> last := if get pick then get a else get b) in
+  set pick false;
+  Fennec_hunt_unit.check "switches to b" (!last = 10)
+
+let%test_unit "no longer tracks a after switch" =
+  let a = signal 1 and b = signal 10 and pick = signal true in
+  let last = ref 0 in
+  let _ = watch (fun () -> last := if get pick then get a else get b) in
+  set pick false; set a 5;
+  Fennec_hunt_unit.check "no longer tracks a after switch" (!last = 10)
+
+let%test_unit "custom eq (always-notify) re-runs on equal set" =
+  let no = signal 0 ~eq:(fun _ _ -> false) in
+  let c = ref 0 in
+  let _ = watch (fun () -> incr c; ignore (get no)) in
+  set no 0;
+  Fennec_hunt_unit.check "custom eq (always-notify) re-runs on equal set" (!c = 2)
+
+(* ──── matcher ──── *)
+
+let%test "root" =
+  Matcher.match_one ~pattern:"/" "/" = Some []
+
+let%test "exact" =
+  Matcher.match_one ~pattern:"/about" "/about" = Some []
+
+let%test "named param" =
+  Matcher.match_one ~pattern:"/users/:id" "/users/42" = Some [("id","42")]
+
+let%test "two params" =
+  Matcher.match_one ~pattern:"/p/:a/:b" "/p/x/y" = Some [("a","x");("b","y")]
+
+let%test "catch-all" =
+  Matcher.match_one ~pattern:"/files/*" "/files/a/b" = Some [("*","a/b")]
+
+let%test "no match (len)" =
+  Matcher.match_one ~pattern:"/users/:id" "/users" = None
+
+let%test "no match (lit)" =
+  Matcher.match_one ~pattern:"/a" "/b" = None
+
+let%test "trailing slash normalizes" =
+  Matcher.match_one ~pattern:"/about" "/about/" = Some []
+
+let%test "find first-match" =
+  let table = [("/", `Home); ("/products", `List); ("/products/:id", `Show)] in
+  Matcher.find table "/products" = Some (`List, [])
+
+let%test "find param" =
+  let table = [("/", `Home); ("/products", `List); ("/products/:id", `Show)] in
+  Matcher.find table "/products/7" = Some (`Show, [("id","7")])
+
+let%test "param accessor" =
+  Matcher.param [("id","7")] "id" = Some "7"
+
+(* ──── head merge ──── *)
+
+let%test_unit "title last wins" =
+  let r = Head.resolve [ (0, [Head.Tag.title "A"; Head.Tag.meta ~name:"description" "old"]);
+                          (1, [Head.Tag.title "B"; Head.Tag.meta ~name:"description" "new"; Head.Tag.og "og:x" "y"]) ] in
+  Fennec_hunt_unit.check "title last wins"
+    (List.exists (function Head.Title "B" -> true | _ -> false) r)
+
+let%test_unit "stale title dropped" =
+  let r = Head.resolve [ (0, [Head.Tag.title "A"]); (1, [Head.Tag.title "B"]) ] in
+  Fennec_hunt_unit.check "stale title dropped"
+    (not (List.exists (function Head.Title "A" -> true | _ -> false) r))
+
+let%test_unit "meta deduped by name (last)" =
+  let r = Head.resolve [ (0, [Head.Tag.meta ~name:"description" "old"]);
+                          (1, [Head.Tag.meta ~name:"description" "new"]) ] in
+  Fennec_hunt_unit.check "meta deduped by name (last)"
+    (List.exists (function Head.Meta a -> List.assoc_opt "content" a = Some "new" | _ -> false) r)
+
+let%test_unit "non-conflicting kept" =
+  let r = Head.resolve [ (0, [Head.Tag.title "A"]);
+                          (1, [Head.Tag.og "og:x" "y"]) ] in
+  Fennec_hunt_unit.check "non-conflicting kept"
+    (List.exists (function Head.Meta a -> List.assoc_opt "property" a = Some "og:x" | _ -> false) r)
+
+let%test_unit "tag_key title" =
+  Fennec_hunt_unit.check_eq "tag_key title"
+    ~expected:"title" ~got:(Head.tag_key (Head.Tag.title "z"))
+
+let%test_unit "tag_key meta" =
+  Fennec_hunt_unit.check_eq "tag_key meta"
+    ~expected:"meta:description" ~got:(Head.tag_key (Head.Tag.meta ~name:"description" "z"))
+
+(* ──── SSR (to_html) ──── *)
+
+let%test_unit "escape text" =
+  Fennec_hunt_unit.check_eq "escape text"
+    ~expected:"&lt;a&amp;&quot;b&gt;" ~got:(to_html (text "<a&\"b>"))
+
+let%test_unit "attr escape" =
+  Fennec_hunt_unit.check_eq "attr escape"
+    ~expected:{|<div class="x"></div>|} ~got:(to_html (h "div" [attr "class" "x"] []))
+
+let%test_unit "void self-close" =
+  Fennec_hunt_unit.check_eq "void self-close"
+    ~expected:"<input/>" ~got:(to_html (h "input" [] []))
+
+let%test_unit "handlers omitted in ssr" =
+  Fennec_hunt_unit.check_eq "handlers omitted in ssr"
+    ~expected:"<button>go</button>" ~got:(to_html (h "button" [on "click" (fun () -> ())] [text "go"]))
+
+let%test_unit "fragment concats" =
+  Fennec_hunt_unit.check_eq "fragment concats"
+    ~expected:"ab" ~got:(to_html (frag [text "a"; text "b"]))
+
+let%test_unit "adjacent text coalesces" =
+  Fennec_hunt_unit.check_eq "adjacent text coalesces"
+    ~expected:"<p>xy</p>" ~got:(to_html (h "p" [] [text "x"; text "y"]))
+
+let%test_unit "raw passthrough" =
+  Fennec_hunt_unit.check_eq "raw passthrough"
+    ~expected:"<x>" ~got:(to_html (raw "<x>"))
+
+let%test_unit "doctype" =
+  Fennec_hunt_unit.check_eq "doctype"
+    ~expected:"<!doctype" ~got:(String.sub (document (h "html" [] [])) 0 9)
+
+(* ──── data resources ──── *)
+
+let%test_unit "seeded resource is ready value" =
+  Data.clear_seed ();
+  Data.put_seed "k" "v";
+  let hit = Data.string "k" ~fallback:"f" () in
+  Fennec_hunt_unit.check_eq "seeded resource is ready value"
+    ~expected:"v" ~got:(Data.value hit)
+
+let%test_unit "seeded not loading" =
+  Data.clear_seed ();
+  Data.put_seed "k" "v";
+  let hit = Data.string "k" ~fallback:"f" () in
+  Fennec_hunt_unit.check "seeded not loading" (not (Data.loading hit))
+
+let%test_unit "miss shows fallback" =
+  Data.clear_seed ();
+  Data.source := (fun _ _ -> ());
+  let miss = Data.string "absent" ~fallback:"f" () in
+  Fennec_hunt_unit.check_eq "miss shows fallback"
+    ~expected:"f" ~got:(Data.value miss)
+
+let%test_unit "miss is loading" =
+  Data.clear_seed ();
+  Data.source := (fun _ _ -> ());
+  let miss = Data.string "absent" ~fallback:"f" () in
+  Fennec_hunt_unit.check "miss is loading" (Data.loading miss)
+
+let%test_unit "to_script assigns global" =
+  Data.clear_seed (); Data.put_seed "u" "ok";
+  let s = Data.to_script () in
+  Fennec_hunt_unit.check "to_script assigns global"
+    (Fennec_hunt_unit.str_contains s "window.__FUR_DATA__={")
+
+let%test_unit "to_script contains pair" =
+  Data.clear_seed (); Data.put_seed "u" "ok";
+  let s = Data.to_script () in
+  Fennec_hunt_unit.check "to_script contains pair"
+    (Fennec_hunt_unit.str_contains s "\"u\":\"ok\"")
+
+let%test "to_script escapes <" =
+  Data.js_string "<x>" = "\"\\u003cx>\""
+
+(* ──── router ──── *)
+
+let%test_unit "relativize strips base" =
+  Fennec_hunt_unit.check_eq "relativize strips base"
+    ~expected:"/products" ~got:(Router.relativize "/shop" "/shop/products")
+
+let%test_unit "relativize base->root" =
+  Fennec_hunt_unit.check_eq "relativize base->root"
+    ~expected:"/" ~got:(Router.relativize "/shop" "/shop")
+
+let%test_unit "absolutize prefixes" =
+  Fennec_hunt_unit.check_eq "absolutize prefixes"
+    ~expected:"/shop/products" ~got:(Router.absolutize "/shop" "/products")
+
+let%test_unit "absolutize root->base" =
+  Fennec_hunt_unit.check_eq "absolutize root->base"
+    ~expected:"/shop" ~got:(Router.absolutize "/shop" "/")
+
+let%test_unit "root base passthrough" =
+  Fennec_hunt_unit.check_eq "root base passthrough"
+    ~expected:"/x" ~got:(Router.relativize "" "/x")
+
+let%test_unit "reverse build" =
+  let dummy _ = fun () -> text "" in
+  let t = Router.make ~base:"/shop" ()
+          |> Router.page ~name:"product" "/products/:id" dummy
+          |> Router.page ~name:"home" "/" dummy in
+  Fennec_hunt_unit.check_eq "reverse build"
+    ~expected:"/products/7" ~got:(Router.build t "product" [("id","7")])
+
+let%test_unit "href base-prefixed" =
+  let dummy _ = fun () -> text "" in
+  let t = Router.make ~base:"/shop" ()
+          |> Router.page ~name:"product" "/products/:id" dummy
+          |> Router.page ~name:"home" "/" dummy in
+  Fennec_hunt_unit.check_eq "href base-prefixed"
+    ~expected:"/shop/products/7" ~got:(Router.href t "product" [("id","7")])
+
+let%test_unit "typed path" =
+  let dummy _ = fun () -> text "" in
+  let t = Router.make ~base:"/shop" ()
+          |> Router.page ~name:"product" "/products/:id" dummy
+          |> Router.page ~name:"home" "/" dummy in
+  Router.activate t;
+  Fennec_hunt_unit.check_eq "typed path"
+    ~expected:"/shop/products/7" ~got:(Router.path t "/products/%d" 7)
+
+let%test_unit "ext raw" =
+  Fennec_hunt_unit.check_eq "ext raw"
+    ~expected:"/admin/3" ~got:(Router.ext "/admin/%d" 3)
+
+(* ──── reconcile (fake backend) ──── *)
+
+module Fake = struct
+  type node = { mutable text : string; mutable attrs : (string * string) list;
+                mutable kids : node list; mutable par : node option }
+  let mk () = { text = ""; attrs = []; kids = []; par = None }
+  let create_text s = let n = mk () in n.text <- s; n
+  let create_element _ = mk ()
+  let get_text n = n.text
+  let set_text n s = n.text <- s
+  let get_attr n k = List.assoc_opt k n.attrs
+  let set_attr n k v = n.attrs <- (k, v) :: List.remove_assoc k n.attrs
+  let remove_attr n k = n.attrs <- List.remove_assoc k n.attrs
+  let set_prop n k v = set_attr n k v
+  let get_prop n k = Option.value ~default:"" (get_attr n k)
+  let detach c = match c.par with Some p -> p.kids <- List.filter (fun x -> x != c) p.kids; c.par <- None | None -> ()
+  let append p c = detach c; p.kids <- p.kids @ [ c ]; c.par <- Some p
+  let remove _ c = detach c
+  let replace p nw od = detach nw;
+    p.kids <- List.concat_map (fun x -> if x == od then [ nw ] else [ x ]) p.kids;
+    nw.par <- Some p; od.par <- None
+  let parent n = n.par
+  let listen _ _ _ = ()
+  let child n i = List.nth_opt n.kids i
+  let first_child n = match n.kids with x :: _ -> Some x | [] -> None
+end
+
+module D = Reconcile (Fake)
+
+let texts_ ul = String.concat "," (List.map (fun li -> match li.Fake.kids with t :: _ -> t.Fake.text | [] -> "") ul.Fake.kids)
+
+let%test_unit "keyed initial" =
+  let model = signal [ 1; 2; 3 ] in
+  let render () = h "ul" [] (each (get model) (fun i -> h ~key:(string_of_int i) "li" [] [ text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  let ul () = List.hd root.Fake.kids in
+  Fennec_hunt_unit.check_eq "keyed initial" ~expected:"1,2,3" ~got:(texts_ (ul ()))
+
+let%test_unit "keyed reorder" =
+  let model = signal [ 1; 2; 3 ] in
+  let render () = h "ul" [] (each (get model) (fun i -> h ~key:(string_of_int i) "li" [] [ text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  set model [ 3; 1; 2 ];
+  Fennec_hunt_unit.check_eq "keyed reorder" ~expected:"3,1,2" ~got:(texts_ (List.hd root.Fake.kids))
+
+let%test_unit "keyed remove" =
+  let model = signal [ 1; 2; 3 ] in
+  let render () = h "ul" [] (each (get model) (fun i -> h ~key:(string_of_int i) "li" [] [ text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  set model [ 3; 1; 2 ]; set model [ 3; 2 ];
+  Fennec_hunt_unit.check_eq "keyed remove" ~expected:"3,2" ~got:(texts_ (List.hd root.Fake.kids))
+
+let%test_unit "keyed add" =
+  let model = signal [ 1; 2; 3 ] in
+  let render () = h "ul" [] (each (get model) (fun i -> h ~key:(string_of_int i) "li" [] [ text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  set model [ 3; 1; 2 ]; set model [ 3; 2 ]; set model [ 3; 2; 4 ];
+  Fennec_hunt_unit.check_eq "keyed add" ~expected:"3,2,4" ~got:(texts_ (List.hd root.Fake.kids))
+
+let%test "no orphans after diff" =
+  let model = signal [ 1; 2; 3 ] in
+  let render () = h "ul" [] (each (get model) (fun i -> h ~key:(string_of_int i) "li" [] [ text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  set model [ 3; 1; 2 ]; set model [ 3; 2 ]; set model [ 3; 2; 4 ];
+  List.length (List.hd root.Fake.kids).Fake.kids = 3
+
+let%test_unit "text patched in place" =
+  let t_ = signal "a" in
+  let render2 () = h "p" [ attr "data-x" (get t_) ] [ text (get t_) ] in
+  let r2 = Fake.create_element "" in
+  let _ = D.mount_root r2 render2 in
+  set t_ "b";
+  let ptext () = match (List.hd r2.Fake.kids).Fake.kids with x :: _ -> x.Fake.text | [] -> "" in
+  Fennec_hunt_unit.check_eq "text patched in place" ~expected:"b" ~got:(ptext ())
+
+let%test_unit "attr patched in place" =
+  let t_ = signal "a" in
+  let render2 () = h "p" [ attr "data-x" (get t_) ] [ text (get t_) ] in
+  let r2 = Fake.create_element "" in
+  let _ = D.mount_root r2 render2 in
+  set t_ "b";
+  Fennec_hunt_unit.check_eq "attr patched in place"
+    ~expected:"b" ~got:(Option.value ~default:"" (List.assoc_opt "data-x" (List.hd r2.Fake.kids).Fake.attrs))
