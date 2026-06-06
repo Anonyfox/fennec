@@ -54,6 +54,21 @@ let () =
   check "a newline-less final settle is flushed on EOF" (match drain 4 with Some (W.Settled_build { outcome = W.Errors 2; _ }) -> true | _ -> false);
   Unix.close rd
 
+(* regression: after EOF, poll must return Exited but NOT spin — the supervisor's `newest`
+   drains with timeout:0. in a loop, so if poll keeps returning Some Exited on a dead fd,
+   `newest` recurses forever → 100% CPU. Verify Exited is returned, then the fd is inert. *)
+let () =
+  print_endline "Dune_watch EOF behaviour (anti-spin):";
+  let rd2, wr2 = Unix.pipe () in
+  let t2 = W.of_fd rd2 in
+  Unix.close wr2; (* immediate EOF *)
+  check "first poll after EOF → Exited" (W.poll t2 ~timeout:0. = Some W.Exited);
+  (* the critical property: subsequent polls ALSO return Exited (eof is sticky), but this is
+     safe because the supervisor's `newest` now stops draining at Exited. We just verify the
+     contract: poll on a dead watcher never blocks and always signals Exited. *)
+  check "second poll after EOF → still Exited (eof is sticky)" (W.poll t2 ~timeout:0. = Some W.Exited);
+  Unix.close rd2
+
 let () =
   if !fails = 0 then print_endline "all Dune_watch tests passed."
   else (Printf.printf "%d FAILED\n" !fails; exit 1)

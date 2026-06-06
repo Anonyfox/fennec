@@ -265,8 +265,12 @@ let run ?port ~targets ~exe ~assets =
     | Dune_watch.Exited -> on_dune_exit ()
   in
   (* collapse to the NEWEST buffered event (zero wait): a burst yields many settles; act on the
-     latest only, restarting once on the final state instead of racing dune's in-flight builds *)
-  let rec newest ev = match (try Dune_watch.poll !dw ~timeout:0. with _ -> None) with Some e -> newest e | None -> ev in
+     latest only, restarting once on the final state instead of racing dune's in-flight builds.
+     STOP at Exited — once the watcher is dead, poll returns Exited on every call (eof is sticky),
+     so draining without this guard spins forever at 100% CPU. *)
+  let rec newest ev = match ev with
+    | Dune_watch.Exited -> ev (* nothing newer than death *)
+    | _ -> match (try Dune_watch.poll !dw ~timeout:0. with _ -> None) with Some e -> newest e | None -> ev in
   (* did the server exit on its own? reap it (WNOHANG) and report a crash on the instance. *)
   let check_server () =
     match !server with
