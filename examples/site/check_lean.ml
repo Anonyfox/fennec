@@ -13,9 +13,13 @@
    of the forbidden module-name needles appear. Pure OCaml — no nm, no objdump, no shell,
    no platform-specific tooling — so it runs anywhere `dune runtest` does. *)
 
-(* the module-name prefixes that may ONLY appear in a dev/test binary, never in prod:
-   every e2e module is wrapped under [Fennec_hunt], and yojson is its (transitive) JSON dep *)
-let forbidden = [ "Fennec_hunt"; "Yojson" ]
+(* the module-name prefixes that may ONLY appear in a dev/test binary, never in prod.
+   Fennec_hunt_cdp / Fennec_hunt_chrome / Fennec_hunt_http_client are the heavy e2e machinery
+   (Chrome CDP, TLS, websockets). Yojson is their transitive JSON dep.
+   Fennec_hunt_unit is ALLOWED: it's the lightweight inline-test runtime (1KB, dep: unix only),
+   so libraries can carry let%test registrations. The registered thunks are inert in production
+   (nobody calls Unit.run). *)
+let forbidden = [ "Fennec_hunt__Cdp"; "Fennec_hunt__Chrome"; "Fennec_hunt__Http_client"; "Yojson" ]
 
 (* allocation-free substring search (the haystack is a multi-MB binary) *)
 let contains hay ndl =
@@ -40,12 +44,13 @@ let () =
   let bytes = read_file path in
   match List.filter (fun ndl -> contains bytes ndl) forbidden with
   | [] ->
-    Printf.printf "prod-lean OK: %s links none of the e2e/CDP test machinery [%s]\n"
+    Printf.printf "prod-lean OK: %s links none of the heavy test machinery [%s]\n"
       (Filename.basename path) (String.concat ", " forbidden)
   | leaked ->
     Printf.eprintf
-      "prod-lean FAIL: %s links forbidden dev/test machinery: %s\n\
-      \  the production server must not carry the fennec-hunt / CDP / yojson weight.\n\
-      \  check that no server depends on `fennec-hunt` (directly or transitively).\n"
+      "prod-lean FAIL: %s links heavy test machinery: %s\n\
+      \  the production server must not carry the CDP/Chrome/yojson test weight.\n\
+      \  check that no server depends on `fennec-hunt` (directly or transitively).\n\
+      \  (fennec-hunt.unit is OK — it's the 1KB inline-test runtime, not the heavy layer.)\n"
       path (String.concat ", " leaked);
     exit 1
