@@ -7,6 +7,26 @@ dependency on any framework. Import whichever a test needs.
 - **Browser tests** (`Fennec_hunt.Live`) — drive a real headless Chromium over the DevTools
   Protocol. No Node, no chromedriver, no Selenium.
 
+## Getting started
+
+A test suite is a plain executable. Depend on the library and run the binary:
+
+```lisp
+; test/dune
+(executable (name api_test) (libraries fennec-hunt))
+```
+
+```sh
+dune build test/api_test.exe
+./_build/default/test/api_test.exe          # exits non-zero if any check fails
+```
+
+Write the suite in `test/api_test.ml` (examples below). In CI it's a build step whose exit
+code is the result — these suites drive a live server (and, for Browser tests, a browser),
+so they aren't hermetic `dune test` targets. Run the **built binary**, not `dune exec`, when
+the suite spawns a server that itself shells out to dune (the workspace lock would deadlock)
+— see [How it works](#how-it-works).
+
 ## Http tests
 
 A typed HTTP/1.1 client (hand-written on Eio sockets — no cohttp) with deterministic
@@ -35,8 +55,17 @@ let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun (
   emptiness); headers; JSON by dotted path (value, type, UUID, datetime, array length);
   cookies; `redirect_to`; `max_elapsed`; and `expect (fun r -> …)` for anything custom.
 - **Cookie jar** — automatic and per-`check`: a `Set-Cookie` is replayed on later requests
-  in the same check. No retry, no polling — a failure reports expected / actual / request /
-  elapsed, immediately.
+  in the same check. No retry, no polling.
+
+A failed check is self-explaining — expected, actual, the request, and how long it took:
+
+```text
+  FAIL  create user (2ms)
+     expected status 201, got 500
+       body: {"error":"db connection refused"}
+       request: POST /users
+       elapsed: 2ms
+```
 
 ## Browser tests
 
@@ -78,8 +107,9 @@ state, and how to re-run just that test.
   it, it tests an already-running server. The wait for readiness is the only wait.
 - **Parallel by URL.** Two runs against two ports are independent — give each CI shard or
   worktree its own port.
-- **Run the built binary**, not `dune exec`, if the spawned server itself shells out to dune
-  (the workspace lock would deadlock): `dune build test/api.exe && _build/default/test/api.exe`.
+- **Run the built binary, not `dune exec`,** if the spawned server itself shells out to dune
+  (`dune describe`, etc.) — `dune exec` holds the workspace lock and the child would deadlock.
+  A suite that only hits an already-running URL has no such constraint.
 
 ## Notes
 

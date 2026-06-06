@@ -457,7 +457,11 @@ let check label body =
     let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
     c.checks_failed <- c.checks_failed + 1;
     Printf.printf "  %s  %s %s\n%!" (color "31" (glyph "✗" "FAIL")) label (color "2" (Printf.sprintf "(%.0fms)" ms));
-    Printf.printf "     %s\n%!" (Printexc.to_string e)
+    (* render the message RAW and multi-line — an assertion failure (Failure msg) carries a
+       formatted multi-line diagnostic; Printexc.to_string would escape the newlines onto one
+       line and wrap it in Failure("…"). Other exceptions fall back to their string form. *)
+    let detail = match e with Failure m -> m | other -> Printexc.to_string other in
+    String.split_on_char '\n' detail |> List.iter (fun line -> Printf.printf "     %s\n%!" line)
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  hunt                                                                      *)
