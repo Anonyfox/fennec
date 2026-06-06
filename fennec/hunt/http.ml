@@ -385,6 +385,29 @@ let head ?headers ?host ?query ?timeout ?expect path = request "HEAD" ?headers ?
 let options ?headers ?host ?query ?timeout ?expect path = request "OPTIONS" ?headers ?host ?query ?timeout ?expect path
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
+(*  eventually — explicit, bounded polling for async expectations              *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+(* the pure policy: re-run [body] until it stops raising (assertions pass) or the deadline.
+   [now]/[sleep] are injected so this is deterministically unit-testable. NOT flaky-retry —
+   the caller opts in explicitly for a genuinely async expectation. *)
+let poll ~now ~sleep ~within ~interval (body : unit -> unit) : unit =
+  let deadline = now () +. within in
+  let rec loop () =
+    match body () with
+    | () -> ()
+    | exception Failure msg ->
+      if now () >= deadline then
+        failwith (Printf.sprintf "eventually: condition not met within %.1fs\n  last failure: %s" within msg)
+      else (sleep interval; loop ())
+  in
+  loop ()
+
+let eventually ?(within = 5.0) ?(interval = 0.2) body =
+  let c = current () in
+  poll ~now:(fun () -> Eio.Time.now c.clock) ~sleep:(Eio.Time.sleep c.clock) ~within ~interval body
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Extractors (from last response)                                           *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
@@ -506,3 +529,11 @@ let hunt label ~url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 1
     any_failed := true;
     Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))))
   else Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed))
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  For_test — pure internals exposed for unit tests; NOT a stable API           *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+module For_test = struct
+  let poll = poll
+end

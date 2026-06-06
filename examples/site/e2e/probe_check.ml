@@ -19,4 +19,9 @@ let () = hunt "probe server" ~url:"http://localhost:4555" ~spawn:[ probe ] @@ fu
     match get "/slow" ~timeout:0.3 with
     | () -> failwith "expected /slow to time out, but the request returned"
     | exception Failure m when contains m "timed out" -> ()  (* the desired outcome *)
-    | exception Failure m -> failwith ("timed out for the wrong reason: " ^ m))
+    | exception Failure m -> failwith ("timed out for the wrong reason: " ^ m));
+
+  check "eventually polls an async endpoint until it's done" (fun () ->
+    (* /flaky is 503 for the first two hits, then 200 {"state":"done"} *)
+    eventually ~within:5.0 ~interval:0.1 (fun () ->
+        get "/flaky" ~expect:[status 200; json_path_is "state" "done"]))

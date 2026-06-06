@@ -15,6 +15,7 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
+  let flaky_hits = ref 0 in (* /flaky returns 503 for the first 2 requests, then 200 *)
   let sock = Eio.Net.listen ~sw ~backlog:16 ~reuse_addr:true (Eio.Stdenv.net env)
       (`Tcp (Eio.Net.Ipaddr.V4.loopback, 4555)) in
   Eio.Net.run_server sock ~on_error:(fun _ -> ()) (fun flow _addr ->
@@ -29,6 +30,10 @@ let () =
         | "/chunked" ->
           "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n\
            2\r\nab\r\n2\r\ncd\r\n2\r\nef\r\n0\r\n\r\n"
+        | "/flaky" ->
+          incr flaky_hits;
+          if !flaky_hits >= 3 then respond {|{"state":"done"}|}
+          else respond ~status:"503 Service Unavailable" {|{"state":"pending"}|}
         | _ -> respond ~status:"404 Not Found" "nope"
       in
       try Eio.Flow.copy_string reply flow with _ -> ())

@@ -58,6 +58,16 @@ val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string *
 val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
 val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?timeout:float -> ?expect:assertion list -> string -> unit
 
+(** {1 Async — explicit, bounded polling} *)
+
+(** [eventually ?within ?interval body] re-runs [body] until it stops raising (its assertions
+    all pass) or [within] seconds elapse (default 5.0; polling every [interval], default 0.2s),
+    then re-raises the last failure. For genuinely async expectations — poll a job's status
+    until it's done, wait for eventual consistency. This is the ONE place a test waits after
+    setup; it is NOT for masking flaky assertions (wrap only what is truly asynchronous).
+    {[ eventually (fun () -> get "/jobs/42" ~expect:[json_path_is "state" "done"]) ]} *)
+val eventually : ?within:float -> ?interval:float -> (unit -> unit) -> unit
+
 (** {1 Status assertions} *)
 
 val status : int -> assertion
@@ -185,3 +195,13 @@ val bearer : string -> string * string
 
 (** Content-Type header for JSON bodies. (Prefer [~json] on the request instead.) *)
 val json_content_type : string * string
+
+(** {1 Internal — exposed for tests; not a stable API}
+
+    Pure cores of the I/O features, with effects (clock, sleep) injected so they can be
+    unit-tested deterministically without a server. Subject to change; do not depend on this. *)
+module For_test : sig
+  (** The pure poll policy behind {!eventually}: re-run [body] until it stops raising or
+      [now ()] passes the [within] deadline, sleeping [interval] between tries. *)
+  val poll : now:(unit -> float) -> sleep:(float -> unit) -> within:float -> interval:float -> (unit -> unit) -> unit
+end
