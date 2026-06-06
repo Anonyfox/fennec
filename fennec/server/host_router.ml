@@ -26,7 +26,11 @@ type error =
   | Multiple_catch_all of string list
   | Conflicting_pattern of string * string * string
 
+(* ──── name_ok ──── *)
+
 let name_ok n = n <> "" && not (String.exists (fun c -> c = ' ' || c = '=' || c = '\t' || c = '\n') n)
+
+(* ──── parse_entry ──── *)
 
 let parse_entry (name, raws, ep) =
   let errs = ref [] in
@@ -38,6 +42,8 @@ let parse_entry (name, raws, ep) =
       raws
   in
   match !errs with [] -> Ok { name; patterns; ep } | es -> Error es
+
+(* ──── build ──── *)
 
 let build (inputs : (string * string list * 'ep) list) : ('ep t, error list) result =
   let errs = ref [] in
@@ -76,23 +82,6 @@ let build (inputs : (string * string list * 'ep) list) : ('ep t, error list) res
     let default = List.find_map (fun e -> if List.mem P.Any e.patterns then Some e.ep else None) entries in
     Ok { trie; default; entries }
 
-let route (t : 'ep t) ~(host : string) : 'ep option =
-  match Host_trie.lookup t.trie ~host with Some _ as hit -> hit | None -> t.default
-
-let entries (t : 'ep t) = t.entries
-
-let describe_error = function
-  | Bad_name n -> Printf.sprintf "endpoint name %S is empty or contains whitespace/'='" n
-  | Duplicate_name n -> Printf.sprintf "two endpoints share the name %S" n
-  | No_patterns n -> Printf.sprintf "endpoint %S declares no host patterns" n
-  | Bad_pattern (n, msg) -> Printf.sprintf "endpoint %S: %s" n msg
-  | Multiple_catch_all names -> Printf.sprintf "more than one catch-all \"*\" (%s) — only one endpoint may be the default" (String.concat ", " names)
-  | Conflicting_pattern (pat, a, b) -> Printf.sprintf "endpoints %S and %S both claim the host %S" a b pat
-
-let describe_errors errs = String.concat "\n" (List.map describe_error errs)
-
-(* -- inline tests --------------------------------------------------------- *)
-
 let build' pairs = build (List.map (fun (n, ps) -> (n, ps, n)) pairs)
 let has_err k = function Error es -> List.exists k es | Ok _ -> false
 
@@ -115,6 +104,11 @@ let%test_unit "multi-error: both reported" =
     Fennec_hunt_unit.check "conflict present" (List.exists (function Conflicting_pattern _ -> true | _ -> false) es);
     Fennec_hunt_unit.check "at least 2 errors" (List.length es >= 2)
   | Ok _ -> Fennec_hunt_unit.check "should have failed" false
+
+(* ──── route ──── *)
+
+let route (t : 'ep t) ~(host : string) : 'ep option =
+  match Host_trie.lookup t.trie ~host with Some _ as hit -> hit | None -> t.default
 
 (* route precedence *)
 let%test "exact beats wildcard + default" =
@@ -142,7 +136,24 @@ let%test "no '*' -> match still routes" =
   let t3 = Result.get_ok (build' [ ("admin", [ "admin.acme.com" ]) ]) in
   route t3 ~host:"admin.acme.com" = Some "admin"
 
-(* entries preserve declaration order *)
+(* ──── entries ──── *)
+
+let entries (t : 'ep t) = t.entries
+
 let%test "entries keep decl order" =
   let te = Result.get_ok (build' [ ("web", [ "*" ]); ("admin", [ "admin.acme.com" ]) ]) in
   List.map (fun e -> e.name) (entries te) = [ "web"; "admin" ]
+
+(* ──── describe_error ──── *)
+
+let describe_error = function
+  | Bad_name n -> Printf.sprintf "endpoint name %S is empty or contains whitespace/'='" n
+  | Duplicate_name n -> Printf.sprintf "two endpoints share the name %S" n
+  | No_patterns n -> Printf.sprintf "endpoint %S declares no host patterns" n
+  | Bad_pattern (n, msg) -> Printf.sprintf "endpoint %S: %s" n msg
+  | Multiple_catch_all names -> Printf.sprintf "more than one catch-all \"*\" (%s) — only one endpoint may be the default" (String.concat ", " names)
+  | Conflicting_pattern (pat, a, b) -> Printf.sprintf "endpoints %S and %S both claim the host %S" a b pat
+
+(* ──── describe_errors ──── *)
+
+let describe_errors errs = String.concat "\n" (List.map describe_error errs)

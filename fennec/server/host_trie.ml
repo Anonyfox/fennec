@@ -25,10 +25,16 @@ type 'ep node = {
 
 type 'ep t = { root : 'ep node }
 
+(* ──── make_node ──── *)
+
 let make_node () = { children = Hashtbl.create 4; payload = None; wildcard = None }
+
+(* ──── split_labels ──── *)
 
 let split_labels (s : string) : string list =
   String.split_on_char '.' s |> List.filter (fun l -> l <> "")
+
+(* ──── build ──── *)
 
 let build (patterns : (Host_pattern.t * 'ep) list) : 'ep t =
   let root = make_node () in
@@ -69,6 +75,8 @@ let build (patterns : (Host_pattern.t * 'ep) list) : 'ep t =
     patterns;
   { root }
 
+(* ──── lookup ──── *)
+
 let lookup (t : 'ep t) ~(host : string) : 'ep option =
   let host = Host_pattern.normalize host in
   let labels = List.rev (split_labels host) in
@@ -86,8 +94,6 @@ let lookup (t : 'ep t) ~(host : string) : 'ep option =
       | None -> best (* can't descend further; return the deepest wildcard we saw *))
   in
   walk t.root labels None
-
-(* -- inline tests --------------------------------------------------------- *)
 
 let pat s = Result.get_ok (Host_pattern.of_string s)
 

@@ -29,18 +29,12 @@ let run (t : 'a Zlib.t) (input : string) : string =
   in
   loop ()
 
+(* ──── gzip ──── *)
+
 (* gzip-encode (RFC 1952 container) — for Content-Encoding: gzip *)
 let gzip ?(level = 6) (s : string) : string =
   let t = Zlib.create_deflate ~level ~window_bits:31 () in
   run t s
-
-(* zlib-wrapped deflate — for Content-Encoding: deflate (browsers accept the
-   zlib-wrapped form; window_bits=15) *)
-let deflate ?(level = 6) (s : string) : string =
-  let t = Zlib.create_deflate ~level ~window_bits:15 () in
-  run t s
-
-(* -- inline tests --------------------------------------------------------- *)
 
 let%test "gzip magic 1f 8b" =
   let g = gzip (String.make 2000 'a') in
@@ -49,6 +43,15 @@ let%test "gzip shrinks repetitive" =
   String.length (gzip (String.make 2000 'a')) < 2000
 let%test "gzip empty input ok" =
   String.length (gzip "") >= 0
+
+(* ──── deflate ──── *)
+
+(* zlib-wrapped deflate — for Content-Encoding: deflate (browsers accept the
+   zlib-wrapped form; window_bits=15) *)
+let deflate ?(level = 6) (s : string) : string =
+  let t = Zlib.create_deflate ~level ~window_bits:15 () in
+  run t s
+
 let%test "deflate zlib header 0x78" =
   let d = deflate (String.make 2000 'b') in
   String.length d >= 1 && Char.code d.[0] = 0x78

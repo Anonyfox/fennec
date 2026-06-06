@@ -5,7 +5,11 @@
 
 type same_site = Strict | Lax | None_
 
+(* ──── same_site_to_string ──── *)
+
 let same_site_to_string = function Strict -> "Strict" | Lax -> "Lax" | None_ -> "None"
+
+(* ──── parse_header ──── *)
 
 (* parse a request [Cookie] header value into name/value pairs (surrounding quotes
    on a value are stripped; whitespace trimmed) *)
@@ -35,6 +39,8 @@ let%test "parse empty val"    = parse_header "k=" = [("k", "")]
 let%test "parse val with ="   = parse_header "k=a=b" = [("k", "a=b")]
 let%test "parse empty header" = parse_header "" = []
 let%test "parse blank segs"   = parse_header ";; a=1;; " = [("a", "1")]
+
+(* ──── to_set_cookie ──── *)
 
 (* serialize one [Set-Cookie] header value. [path] defaults to "/", [http_only] to
    true and [same_site] to [Lax] (modern-safe defaults); [SameSite=None] implies

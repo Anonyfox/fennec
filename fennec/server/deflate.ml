@@ -13,6 +13,8 @@
 let enabled = ref true
 let tail = "\x00\x00\xff\xff"
 
+(* ──── run ──── *)
+
 (* drive zlib's [flate] over a whole string, collecting all output *)
 let run (t : 'a Zlib.t) (input : string) (fl : Zlib.flush) : string =
   let n = String.length input in
@@ -40,6 +42,8 @@ let run (t : 'a Zlib.t) (input : string) (fl : Zlib.flush) : string =
   in
   loop ()
 
+(* ──── compress ──── *)
+
 (* compress a message body for a permessage-deflate frame (RSV1=1) *)
 let compress (payload : string) : string =
   let t = Zlib.create_deflate ~window_bits:(-15) () in
@@ -47,17 +51,20 @@ let compress (payload : string) : string =
   let n = String.length out in
   if n >= 4 && String.sub out (n - 4) 4 = tail then String.sub out 0 (n - 4) else out
 
+let%test "compresses repetitive" = String.length (compress (String.make 5000 'a')) < 5000
+
+(* ──── decompress ──── *)
+
 (* decompress a permessage-deflate frame body (RSV1 set) *)
 let decompress (payload : string) : string =
   let t = Zlib.create_inflate ~window_bits:(-15) () in
   run t (payload ^ tail) Zlib.No_flush
 
-(* -- inline tests --------------------------------------------------------- *)
+(* ──── round-trip (compress + decompress) ──── *)
 
 let%test "rt empty"       = decompress (compress "") = ""
 let%test "rt 1 byte"      = decompress (compress "x") = "x"
 let%test "rt hello"        = decompress (compress "hello world") = "hello world"
 let%test "rt 5000 bytes"   = decompress (compress (String.make 5000 'z')) = String.make 5000 'z'
-let%test "rt utf-8"        = decompress (compress {js|café ✨ 🦊|js}) = {js|café ✨ 🦊|js}
+let%test "rt utf-8"        = decompress (compress {js|cafe ✨ 🦊|js}) = {js|cafe ✨ 🦊|js}
 let%test "rt binary-ish"   = decompress (compress "\x00\x01\x02\xff binary-ish") = "\x00\x01\x02\xff binary-ish"
-let%test "compresses repetitive" = String.length (compress (String.make 5000 'a')) < 5000
