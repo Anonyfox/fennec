@@ -80,9 +80,13 @@ let generate ~dir : string =
               | `Expr -> Printf.sprintf "ignore (\n%s\n)" code
               | `Struct -> Printf.sprintf "let module _ = struct\n%s\nend in ()" code
             in
+            (* emit a real [let%test_unit] (not a raw registration): the ppx that's already on the
+               generated module expands it like any inline unit test — so it registers + runs in the
+               SAME sweep, and is stripped to () in a production build (preserving prod-lean). The
+               name carries the .mli:line so the report still points at the interface example. *)
             Buffer.add_string buf
-              (Printf.sprintf "let () = Fennec_hunt_unit.test_unit_loc ~name:%S ~file:%S ~line:%d (fun () ->\n  let open %s in\n  %s)\n\n"
-                 (Printf.sprintf "doc example (%s:%d)" mli line) mli line m wrapped))
+              (Printf.sprintf "let%%test_unit %S =\n  let open %s in\n  %s\n\n"
+                 (Printf.sprintf "doc example (%s:%d)" mli line) m wrapped))
           blocks)
     mlis;
   Buffer.contents buf
