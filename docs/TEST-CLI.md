@@ -237,6 +237,46 @@ jest's watch-flag zoo, a reporter/coverage flag farm. (`--watch` is deferred —
 - **Interrupted (Ctrl-C)** → structural teardown of every spawned instance (Eio switch / the
   pidfile reaper), no orphans, no held ports.
 
+## Property tests (`let%prop`)
+
+A property test asserts an invariant over *many* generated inputs and, on failure, **shrinks**
+the counterexample to its minimal form — where a unit test checks one example, a property checks
+a hundred and hands you the smallest input that breaks it. It's an inline test like `let%test`:
+swept by the `unit` cut, re-run by the dev loop's inline lane, stripped to nothing in production,
+and counted by coverage.
+
+The headline form is **type-driven** — annotate the arguments and both the generator *and* the
+counterexample printer are derived from the types, so a property reads like a spec:
+
+```ocaml
+let%prop "reversing a list twice is the identity" = fun (l : int list) ->
+  List.rev (List.rev l) = l
+
+let%prop "append lengths add" = fun (a : string list) (b : string list) ->
+  List.length (a @ b) = List.length a + List.length b
+```
+
+Supported: `int` `bool` `char` `string` `float`, and any `list`/`array`/`option`/tuple nesting of
+them; up to four arguments (tupled for you); the body returns `bool`. Use `assume` for a
+precondition. When a type can't express the distribution you need (a range, a constraint), drop to
+the explicit form (`open Fennec_hunt.Prop` for `forall` / `Gen` / `Print`):
+
+```ocaml
+open Fennec_hunt.Prop
+let%prop "clamp stays in range" =
+  forall ~print:Print.int Gen.(int_range 0 1000) (fun n ->
+    let c = max 10 (min 90 n) in c >= 10 && c <= 90)
+```
+
+A failure prints the shrunk value under the property's name, e.g.
+`✗ "every list sums to < 100" — [45; 6; 7; 21; 13; 8] (after 5 shrink steps)`.
+
+It's a lean, pure-OCaml layer over [qcheck-core] (no C, no new transitive deps), and it lives in
+`fennec-hunt` — so it never reaches a production server or the `fennec` binary. **Cost:** at the
+default 100 cases a scalar property is ~40 µs (≈ a unit test); a collection property (`list`/
+`string`) is low-tens-of-ms, dominated by the generator's shrink-tree allocation, not your
+predicate — instant for one, so keep an eye on the case count only for large property suites.
+
 ## Docs & doctests (`fennec test docs` + executable examples)
 
 Two adjacent guards keep documentation honest — both novel for OCaml (the ecosystem has no

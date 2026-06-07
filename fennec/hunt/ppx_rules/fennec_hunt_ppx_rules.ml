@@ -6,9 +6,13 @@
    Supports:
      let%test "name" = <bool expr>          — fails if false
      let%test_unit "name" = <unit expr>     — fails if raises
+     let%prop "name" = fun (x : t) -> <bool> — property test; types drive the generator + printer
+                                               (or = forall <gen> <pred> for a custom generator)
 
    The bodies expand to [Fennec_hunt.Fennec_hunt_unit.test_loc] / [test_unit_loc] calls (registration
-   as a module-init side effect, exactly like Http's [hunt] or Live's [test]).
+   as a module-init side effect, exactly like Http's [hunt] or Live's [test]); a [let%prop] registers
+   like [let%test_unit] but runs its body through [Fennec_hunt.Prop] (a thin QCheck2 layer), so it is
+   swept, re-run, and stripped identically — and counts toward coverage like any inline test.
 
    PRODUCTION STRIP: when the ppx argument [-fennec-drop-tests] is present (passed by the
    build system for the normal library variant, NOT for the test runner variant), every
@@ -103,6 +107,116 @@ let ext_test_unit =
     Extension.Context.structure_item
     Ast_pattern.(__)
     (fun ~ctxt payload -> [ expand_test_unit ~ctxt payload ])
+
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+(*  let%prop "name" = fun (x : t) … -> <bool>   (Property cut — type-driven QCheck2)        *)
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+
+(* From a type annotation, derive a (generator, printer) pair — both under [Fennec_hunt.Prop]
+   so a downstream user lists only [fennec-hunt]. Recurses through list / array / option /
+   tuple; [None] for an unsupported type (the caller errors with an actionable hint). The pair
+   keeps gen and print together so a list/tuple's printer is built from its elements' printers,
+   which is how a failing case prints its value for free. Pure. *)
+let rec prop_gen_of_type (t : core_type) : (expression * expression) option =
+  let loc = t.ptyp_loc in
+  match t.ptyp_desc with
+  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.int], [%expr Fennec_hunt.Prop.Print.int])
+  | Ptyp_constr ({ txt = Lident "bool"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.bool], [%expr Fennec_hunt.Prop.Print.bool])
+  | Ptyp_constr ({ txt = Lident "char"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.char], [%expr Fennec_hunt.Prop.Print.char])
+  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.string], [%expr Fennec_hunt.Prop.Print.string])
+  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.float], [%expr Fennec_hunt.Prop.Print.float])
+  | Ptyp_constr ({ txt = Lident "list"; _ }, [ a ]) ->
+    Option.map (fun (g, p) -> ([%expr Fennec_hunt.Prop.Gen.list [%e g]], [%expr Fennec_hunt.Prop.Print.list [%e p]])) (prop_gen_of_type a)
+  | Ptyp_constr ({ txt = Lident "array"; _ }, [ a ]) ->
+    Option.map (fun (g, p) -> ([%expr Fennec_hunt.Prop.Gen.array [%e g]], [%expr Fennec_hunt.Prop.Print.array [%e p]])) (prop_gen_of_type a)
+  | Ptyp_constr ({ txt = Lident "option"; _ }, [ a ]) ->
+    Option.map (fun (g, p) -> ([%expr Fennec_hunt.Prop.Gen.option [%e g]], [%expr Fennec_hunt.Prop.Print.option [%e p]])) (prop_gen_of_type a)
+  | Ptyp_tuple parts -> prop_gen_of_tuple ~loc parts
+  | _ -> None
+
+(* combine N element (gen, print) pairs into one tuple generator + printer (pair/triple/quad).
+   [None] if any element is unsupported or the arity is outside 2..4. *)
+and prop_gen_of_tuple ~loc (parts : core_type list) : (expression * expression) option =
+  let mapped = List.map prop_gen_of_type parts in
+  if List.exists Option.is_none mapped then None
+  else
+    match List.map Option.get mapped with
+    | [ (g1, p1); (g2, p2) ] ->
+      Some ([%expr Fennec_hunt.Prop.Gen.pair [%e g1] [%e g2]], [%expr Fennec_hunt.Prop.Print.pair [%e p1] [%e p2]])
+    | [ (g1, p1); (g2, p2); (g3, p3) ] ->
+      Some ([%expr Fennec_hunt.Prop.Gen.triple [%e g1] [%e g2] [%e g3]], [%expr Fennec_hunt.Prop.Print.triple [%e p1] [%e p2] [%e p3]])
+    | [ (g1, p1); (g2, p2); (g3, p3); (g4, p4) ] ->
+      Some ([%expr Fennec_hunt.Prop.Gen.quad [%e g1] [%e g2] [%e g3] [%e g4]], [%expr Fennec_hunt.Prop.Print.quad [%e p1] [%e p2] [%e p3] [%e p4]])
+    | _ -> None
+
+(* a property argument is a plain, type-annotated value: [Pparam_val (Nolabel, None, (x : ty))].
+   Returns its annotation, or [None] for anything else (labelled/optional/newtype/unannotated). *)
+let prop_param_type (p : function_param) : core_type option =
+  match p.pparam_desc with
+  | Pparam_val (Nolabel, None, { ppat_desc = Ppat_constraint ({ ppat_desc = Ppat_var _; _ }, ty); _ }) -> Some ty
+  | _ -> None
+
+let pp_type t = Format.asprintf "%a" Pprintast.core_type t
+
+let expand_prop ~ctxt payload =
+  let loc = Expansion_context.Extension.extension_point_loc ctxt in
+  if !drop_tests then noop ~loc
+  else
+    match payload with
+    | PStr [ { pstr_desc = Pstr_value (_, [ vb ]); _ } ] -> (
+      match extract_name vb with
+      | None -> Location.raise_errorf ~loc "let%%prop requires a string literal name: let%%prop \"name\" = fun (x : t) -> ..."
+      | Some name ->
+        let file = Ast_builder.Default.estring ~loc (loc_file loc) in
+        let line = Ast_builder.Default.eint ~loc (loc_line loc) in
+        let ename = Ast_builder.Default.estring ~loc name in
+        let register body =
+          [%stri let () =
+            Fennec_hunt_unit.test_unit_loc ~name:[%e ename] ~file:[%e file] ~line:[%e line]
+              (fun () -> [%e body])]
+        in
+        let expr = vb.pvb_expr in
+        match expr.pexp_desc with
+        | Pexp_function (params, _, _) when params <> [] ->
+          (* Tier 1: a lambda → type-driven. Every argument must be a plain [(x : ty)]. *)
+          let tys = List.map prop_param_type params in
+          if List.exists Option.is_none tys then
+            Location.raise_errorf ~loc
+              "let%%prop %S: every argument must be a plain type-annotated value, e.g. fun (x : int) (y : string) -> ... (or use the explicit form: let%%prop %S = Fennec_hunt.Prop.(forall <gen>) (fun x -> ...))"
+              name name
+          else begin
+            let tys = List.map Option.get tys in
+            let gp = match tys with [ t ] -> prop_gen_of_type t | many -> prop_gen_of_tuple ~loc many in
+            match gp with
+            | None ->
+              Location.raise_errorf ~loc
+                "let%%prop %S: no built-in generator for argument type(s): %s. Supported: int, bool, char, string, float, and list/array/option/tuple(2..4) of those. For anything else, use the explicit form: let%%prop %S = Fennec_hunt.Prop.(forall <gen>) (fun x -> ...)"
+                name (String.concat " * " (List.map pp_type tys)) name
+            | Some (gen, print) ->
+              (* a multi-arg lambda is curried (int -> string -> bool); the generator yields a
+                 tuple, so adapt with the matching uncurryN. A single arg needs no adaptation. *)
+              let pred =
+                match List.length tys with
+                | 1 -> expr
+                | 2 -> [%expr Fennec_hunt.Prop.uncurry2 [%e expr]]
+                | 3 -> [%expr Fennec_hunt.Prop.uncurry3 [%e expr]]
+                | 4 -> [%expr Fennec_hunt.Prop.uncurry4 [%e expr]]
+                | _ ->
+                  Location.raise_errorf ~loc
+                    "let%%prop %S: at most 4 arguments are supported for type-driven generation; group them into a tuple or use the explicit form" name
+              in
+              register [%expr Fennec_hunt.Prop.check ~name:[%e ename] ~print:[%e print] [%e gen] [%e pred]]
+          end
+        | _ ->
+          (* Tier 2: the payload is already a [QCheck2.Test.t] (e.g. [forall <gen> <pred>]). *)
+          register [%expr Fennec_hunt.Prop.check_named ~name:[%e ename] [%e expr]])
+    | _ ->
+      Location.raise_errorf ~loc "let%%prop requires: let%%prop \"name\" = fun (x : t) -> <bool>   (or = forall <gen> <pred>)"
+
+let ext_prop =
+  Extension.V3.declare_inline "prop"
+    Extension.Context.structure_item Ast_pattern.(__)
+    (fun ~ctxt payload -> [ expand_prop ~ctxt payload ])
 
 (* ══════════════════════════════════════════════════════════════════════════════════════ *)
 (*  let%system "name" = <fun sandbox -> unit>   (System cut; _manual variant = opt-in)      *)
@@ -203,6 +317,7 @@ let ext_http =
 let rules = [
   Context_free.Rule.extension ext_test;
   Context_free.Rule.extension ext_test_unit;
+  Context_free.Rule.extension ext_prop;
   Context_free.Rule.extension ext_system;
   Context_free.Rule.extension ext_system_manual;
   Context_free.Rule.extension ext_browser;

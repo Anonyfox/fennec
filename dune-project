@@ -87,7 +87,10 @@
   (x509
    (>= 1.0))
   domain-name
-  mirage-crypto-rng))
+  mirage-crypto-rng
+  ; property testing (let%prop / Fennec_hunt.Prop) — lean, pure-OCaml, test-only weight
+  (qcheck-core
+   (>= 0.20))))
 
 ; The CLI is the distributable: a self-contained `fennec` binary that statically
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a

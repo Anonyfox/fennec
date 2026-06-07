@@ -38,7 +38,7 @@ One root `dune-project`, several independently-publishable packages:
 | --- | --- | --- |
 | **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, and the `Fur` UI runtime | ✅ working |
 | **`fennec-cli`** | The `fennec` binary — a native JS/CSS bundler plus the dev + test CLI, one self-contained binary | ✅ working |
-| **`fennec-hunt`** | Pure-OCaml app testing — HTTP assertions, real-browser (CDP), and system/dev-loop checks; standalone or via `fennec test` | ✅ working |
+| **`fennec-hunt`** | Pure-OCaml app testing — inline unit + property tests, HTTP assertions, real-browser (CDP), and system/dev-loop checks; standalone or via `fennec test` | ✅ working |
 | `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
 
 Concurrency is **Eio-only**, by design.
@@ -60,7 +60,7 @@ Concurrency is **Eio-only**, by design.
 
 ### `fennec-hunt` — testing
 
-- A pure-OCaml testing toolkit: typed **HTTP** assertions (a hand-written client on Eio, no cohttp), a real-**browser** driver over the Chrome DevTools Protocol (auto-waiting page DSL, self-explaining failures, no chromedriver/Selenium), and typed **system** checks for the dev loop (spawn/port/filesystem, deterministic, no orphans).
+- A pure-OCaml testing toolkit: inline **unit** (`let%test`) and type-driven **property** tests (`let%prop`, a lean qcheck-core layer — generators and counterexample printers derived from argument types), typed **HTTP** assertions (a hand-written client on Eio, no cohttp), a real-**browser** driver over the Chrome DevTools Protocol (auto-waiting page DSL, self-explaining failures, no chromedriver/Selenium), and typed **system** checks for the dev loop (spawn/port/filesystem, deterministic, no orphans).
 - Two ways in: use it **standalone** as a library you drive yourself ([`fennec/hunt/README.md`](./fennec/hunt/README.md)), or through the **optimized CLI integration** — `fennec test` (unit / http / browser / system), where a suite is just a `let%http` / `let%browser` / `let%system` block — no `main`, no wiring ([`docs/TEST-CLI.md`](./docs/TEST-CLI.md)).
 
 ## Design commitments

@@ -1,8 +1,12 @@
 # fennec-hunt
 
-Testing for OCaml web apps, in pure OCaml — three independent layers in one package, no
+Testing for OCaml web apps, in pure OCaml — four independent layers in one package, no
 dependency on any framework. Import whichever a test needs.
 
+- **Inline tests** (`Fennec_hunt.Unit` / `Fennec_hunt.Prop`) — `let%test` unit assertions and
+  `let%prop` type-driven **property** tests right next to your code; run by the `unit` cut and
+  stripped to nothing in a production build. Property generators + counterexample printers are
+  derived from argument types (a lean [qcheck-core] layer under the hood).
 - **Http tests** (`Fennec_hunt.Http`) — hit any URL, assert on the response. No browser.
 - **Browser tests** (`Fennec_hunt.Live`) — drive a real headless Chromium over the DevTools
   Protocol. No Node, no chromedriver, no Selenium.
