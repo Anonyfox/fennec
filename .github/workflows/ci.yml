@@ -57,3 +57,14 @@ jobs:
           FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
           opam exec -- "$FENNEC" test http
           CHROME='${{ steps.chrome.outputs.chrome-path }}' opam exec -- "$FENNEC" test browser
+
+      # The example's System suites via `fennec test system`: each spawns the real `fennec dev` and
+      # drives its process/port/livereload/error-panel lifecycle (condition waits, never sleep) —
+      # the typed, deterministic replacement for the old e2e/*.sh. Serial (they share dev's fixed
+      # ports), no Chrome needed. The @manual heal suite (it runs `fennec dev --clean`, wiping
+      # _build) is built but skipped here. Same direct-binary invocation to avoid nesting dune.
+      - name: Example suites (fennec test system)
+        working-directory: examples/site
+        run: |
+          FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
+          opam exec -- "$FENNEC" test system
