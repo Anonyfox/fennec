@@ -3,22 +3,27 @@
    - unit    → delegate to dune's fast gate (`dune build @runtest`)
    - http    → orchestrate the Http suites (per-suite isolated app instance)  [T6]
    - browser → orchestrate the Browser suites (+ Chrome)                       [T7]
-   - all     → unit, then http, then browser (fast-to-slow)
+   - system  → orchestrate the System suites: each SPAWNS the real `fennec dev` itself and drives
+               its process/port/livereload lifecycle, so (unlike http/browser) there is no
+               per-suite server to boot — we just build, set FENNEC_* env, and run them serially
+               (they share dev's fixed ports). Replaces the old e2e/*.sh scripts.
+   - all     → unit, then http, then browser, then system (fast-to-slow)
 
    The pure parts (the cut enum + its parsing, the options record) are unit-tested; the
    orchestration is integration-tested against the example app. *)
 
-type suite = Unit | Http | Browser | All
+type suite = Unit | Http | Browser | System | All
 
 let suite_of_string s =
   match String.lowercase_ascii s with
   | "unit" -> Ok Unit
   | "http" -> Ok Http
   | "browser" -> Ok Browser
+  | "system" -> Ok System
   | "all" -> Ok All
-  | other -> Error (Printf.sprintf "unknown test suite %S — expected one of: unit, http, browser, all" other)
+  | other -> Error (Printf.sprintf "unknown test suite %S — expected one of: unit, http, browser, system, all" other)
 
-let suite_to_string = function Unit -> "unit" | Http -> "http" | Browser -> "browser" | All -> "all"
+let suite_to_string = function Unit -> "unit" | Http -> "http" | Browser -> "browser" | System -> "system" | All -> "all"
 
 type options = {
   suite : suite;
@@ -72,19 +77,20 @@ let suite_args ~(cut : suite) (o : options) : string list =
     @ (match o.screenshots with Some d -> [ "--screenshots"; d ] | None -> [])
     @ (match o.jobs with Some j -> [ "--jobs"; string_of_int j ] | None -> [])
     @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
-  | Unit | All -> []
+  | Unit | System | All -> []  (* unit goes through dune; system's runner takes no argv *)
 
 (* ──── suite_of_string tests ──── *)
 
 let%test "unit" = suite_of_string "unit" = Ok Unit
 let%test "http" = suite_of_string "http" = Ok Http
 let%test "browser" = suite_of_string "browser" = Ok Browser
+let%test "system" = suite_of_string "system" = Ok System
 let%test "all" = suite_of_string "all" = Ok All
 let%test "case-insensitive" = suite_of_string "HTTP" = Ok Http
 let%test "unknown -> error naming the valid set" =
-  match suite_of_string "bogus" with Error m -> Fennec_hunt_unit.str_contains m "unit, http, browser, all" | Ok _ -> false
+  match suite_of_string "bogus" with Error m -> Fennec_hunt_unit.str_contains m "unit, http, browser, system, all" | Ok _ -> false
 let%test "round-trips" =
-  List.for_all (fun s -> suite_of_string (suite_to_string s) = Ok s) [ Unit; Http; Browser; All ]
+  List.for_all (fun s -> suite_of_string (suite_to_string s) = Ok s) [ Unit; Http; Browser; System; All ]
 
 (* ──── default_options tests ──── *)
 
@@ -113,6 +119,8 @@ let%test "http: no grep -> no argv" =
   suite_args ~cut:Http default_options = []
 let%test "unit: no argv" =
   suite_args ~cut:Unit { default_options with grep = Some "x" } = []
+let%test "system: no argv (runner takes none)" =
+  suite_args ~cut:System { default_options with grep = Some "x"; headed = true } = []
 let%test "all: no argv (dispatches per-cut)" =
   suite_args ~cut:All { default_options with headed = true } = []
 
@@ -312,16 +320,123 @@ let run_browser (opts : options) : int =
   orchestrate ~cut:Browser ~dir:"test/browser" ~base:opts.base_port ~jobs:(effective_jobs opts)
     ~limit:(fail_fast_limit ~fail_fast:opts.fail_fast ~max_failures:opts.max_failures) ~args:(suite_args ~cut:Browser opts)
 
+(* ──── system cut ──── *)
+
+(* a suite is "manual" — still BUILT (so it can't bitrot) but EXCLUDED from the automated run —
+   when its source header carries the [@manual] tag. The escape hatch for a suite that can't run
+   unattended: the heal suite runs `fennec dev --clean`, which wipes the shared _build and would
+   delete the other suites' built exes mid-run. Pure over the source text. *)
+let src_is_manual head = Fennec_hunt_unit.str_contains head "@manual"
+
+let%test "manual: tagged header detected" = src_is_manual "(* foo @manual bar *)" = true
+let%test "manual: untagged header not flagged" = src_is_manual "(* a normal suite *)" = false
+
+(* the suite's source header (first 2KB holds the doc-comment that carries the tag) *)
+let read_head path =
+  try
+    let ic = open_in_bin path in
+    Fun.protect ~finally:(fun () -> close_in_noerr ic)
+      (fun () -> really_input_string ic (min 2048 (in_channel_length ic)))
+  with _ -> ""
+
+let suite_is_manual ~cwd ~dir (s : Suites.t) =
+  src_is_manual (read_head (Filename.concat (Filename.concat cwd dir) (s.Suites.name ^ ".ml")))
+
+(* The system cut. Unlike http/browser, the suites SPAWN the real `fennec dev` themselves (the
+   System layer puts each in its own session and reaps the whole group on teardown), so there is
+   no per-suite server for us to boot — we build the server + webroot + suite exes once, then run
+   each suite SERIALLY (they share dev's fixed ports, so never in parallel), with the harness env:
+     FENNEC_BIN        the fennec under test (this very binary)
+     FENNEC_APP_DIR    the project to run `fennec dev` in (the invocation cwd)
+     FENNEC_SERVER_BC  the built server bytecode (for the leftover-reclaim scenario)
+     FENNEC_ROOT       the workspace root (for _build sentinels)
+   [@manual] suites (destructive to the shared build) are built but skipped, with a clear note.
+   Returns the number of failed suites (0 = all passed). *)
+let orchestrate_system ~limit : int =
+  ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned watcher → no lock clash *)
+  (* a suite may spawn the bytecode server DIRECTLY (the leftover-reclaim scenario), and a .bc must
+     dlopen its C stubs — which `opam env` does NOT put on CAML_LD_LIBRARY_PATH. Reuse fennec dev's
+     own fix so the suites inherit it and propagate it to anything they spawn. *)
+  Fennec_dev.Supervisor.ensure_stublibs ();
+  match Discover.find () with
+  | Error msg -> Printf.eprintf "fennec test: %s\n%!" msg; 1
+  | Ok d ->
+    let cwd = Sys.getcwd () in
+    let dir = "test/system" in
+    let all = Suites.discover ~root:d.Discover.root ~cwd ~dir in
+    if all = [] then (
+      Printf.printf "fennec test: no system suites found (looked in %s)\n%!" (Filename.concat cwd dir);
+      0 (* nothing to run is not a failure *))
+    else begin
+      let manual, suites = List.partition (suite_is_manual ~cwd ~dir) all in
+      List.iter
+        (fun (s : Suites.t) ->
+          Printf.printf "  \027[2m\u{2014} skipping %s (@manual: run it directly)\027[0m\n%!" s.Suites.name)
+        manual;
+      if suites = [] then (
+        Printf.printf "fennec test: every system suite is @manual; nothing to run automatically\n%!";
+        0)
+      else
+        (* build from the workspace root (targets are root-relative), then RESTORE cwd: the suites
+           run with cwd = the app dir (= FENNEC_APP_DIR), and `fennec test all` reuses cwd later. *)
+        Fun.protect ~finally:(fun () -> try Sys.chdir cwd with _ -> ()) @@ fun () ->
+        Sys.chdir d.Discover.root;
+        let webroot = Filename.concat d.Discover.src_dir "webroot" in
+        let targets = d.Discover.targets @ [ webroot ] @ List.map (fun (s : Suites.t) -> s.Suites.target) suites in
+        let build_cmd = "dune build " ^ String.concat " " (List.map Filename.quote targets) in
+        match Sys.command build_cmd with
+        | n when n <> 0 -> Printf.eprintf "fennec test: `dune build` failed (exit %d) — see the errors above\n%!" n; 1
+        | _ ->
+          Sys.chdir cwd; (* run the suites from the app dir (Fun.protect restores either way) *)
+          let fennec_bin =
+            let e = Sys.executable_name in
+            if Filename.is_relative e then Filename.concat cwd e else e
+          in
+          let env =
+            [ ("FENNEC_BIN", fennec_bin);
+              ("FENNEC_APP_DIR", cwd);
+              ("FENNEC_SERVER_BC", d.Discover.exe);
+              ("FENNEC_ROOT", d.Discover.root) ]
+          in
+          let failed = ref 0 and ran = ref 0 in
+          List.iter
+            (fun (s : Suites.t) ->
+              if !failed >= limit then () (* fail-fast: stop launching the rest *)
+              else begin
+                incr ran;
+                Printf.printf "\n\027[1m\u{25b6} %s\027[0m\n%!" s.Suites.name;
+                let code = run_suite_exe ~exe:s.Suites.exe ~args:[] ~env ~out:None in
+                if code = 124 then
+                  Printf.printf "  \027[31m\u{2717} suite timed out after %.0fs — killed; other suites still run.\027[0m\n%!" suite_timeout;
+                if code <> 0 then incr failed
+              end)
+            suites;
+          let n = List.length suites in
+          let skipped = n - !ran in
+          let tail = if skipped > 0 then Printf.sprintf " \027[2m(%d skipped after fail-fast)\027[0m" skipped else "" in
+          Printf.printf "\n\027[%sm%s %d/%d system suites passed\027[0m%s\n%!"
+            (if !failed = 0 then "1;32" else "1;31")
+            (if !failed = 0 then "\u{2714}" else "\u{2717}")
+            (!ran - !failed) !ran tail;
+          !failed
+    end
+
+let run_system (opts : options) : int =
+  orchestrate_system ~limit:(fail_fast_limit ~fail_fast:opts.fail_fast ~max_failures:opts.max_failures)
+
 let run (opts : options) : int =
   Reaper.install_signal_handlers (); (* Ctrl-C / SIGTERM → tear down every spawned instance, no orphans *)
   match opts.suite with
   | Unit -> run_unit ()
   | Http -> if run_http opts = 0 then 0 else 1
   | Browser -> if run_browser opts = 0 then 0 else 1
+  | System -> if run_system opts = 0 then 0 else 1
   | All ->
-    (* fast-to-slow; run every cut and aggregate so one report shows the whole picture (the
-       cuts are isolated — a unit failure never poisons http, http never poisons browser) *)
+    (* fast-to-slow; run every cut and aggregate so one report shows the whole picture (the cuts
+       are isolated — a unit failure never poisons http, etc.). System is last: it spawns the real
+       `fennec dev` per suite, the heaviest tier. *)
     let u = run_unit () in
     let h = run_http opts in
     let b = run_browser opts in
-    if u = 0 && h = 0 && b = 0 then 0 else 1
+    let s = run_system opts in
+    if u = 0 && h = 0 && b = 0 && s = 0 then 0 else 1

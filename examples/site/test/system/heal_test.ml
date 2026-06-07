@@ -1,4 +1,11 @@
-(* `fennec dev --clean` system test (dev-only), ported from heal.sh. The opt-in nuclear heal:
+(* @manual — EXCLUDED from `fennec test system`. The --clean case wipes the SHARED _build, which
+   would delete the other suites' built exes mid-run, so the automated cut skips this file. Run it
+   directly when validating --clean:
+     dune build examples/site/test/system/heal_test.exe
+     FENNEC_BIN=$(which fennec) FENNEC_APP_DIR=$PWD/examples/site FENNEC_ROOT=$PWD \
+       _build/default/examples/site/test/system/heal_test.exe
+
+   `fennec dev --clean` system test (dev-only), ported from heal.sh. The opt-in nuclear heal:
    --clean runs a full `dune clean` before starting (for the rare corrupt-_build case a normal
    restart can't fix), while a plain `fennec dev` leaves _build alone. Typed and contained (the
    System layer reaps the whole process group on teardown — no orphans between scenarios).

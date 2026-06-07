@@ -412,13 +412,14 @@ let worker_cmd =
   let doc = "(internal) persistent esbuild build worker used by fennec dev" in
   Cmd.v (Cmd.info "__esbuild-worker" ~doc) Term.(const go $ socket_arg)
 
-(* Run the app's tests in one of three cuts. The default (no SUITE) is the fast unit gate;
+(* Run the app's tests in one of four cuts. The default (no SUITE) is the fast unit gate;
    $(b,http) and $(b,browser) each boot a dedicated, isolated app instance per suite (its own
-   port — and, later, its own database) so stateful suites run in parallel deterministically. *)
+   port — and, later, its own database) so stateful suites run in parallel deterministically;
+   $(b,system) drives the real $(b,fennec dev) lifecycle (replacing the old e2e/*.sh scripts). *)
 let test_cmd =
   let module R = Fennec_testcmd.Run in
   let suite_arg =
-    Arg.(value & pos 0 string "unit" & info [] ~docv:"SUITE" ~doc:"Which tests: unit (default), http, browser, or all.")
+    Arg.(value & pos 0 string "unit" & info [] ~docv:"SUITE" ~doc:"Which tests: unit (default), http, browser, system, or all.")
   in
   let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only suites/cases matching $(docv).") in
   let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) suites fail.") in
@@ -434,24 +435,31 @@ let test_cmd =
     | Ok suite ->
       R.run { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed; screenshots; base_port }
   in
-  let doc = "Run the app's tests (unit, http, browser)" in
+  let doc = "Run the app's tests (unit, http, browser, system)" in
   let man =
     [ `S Manpage.s_description;
       `P
-        "Run the app's tests in one of three cuts. $(b,fennec test) with no argument runs the \
+        "Run the app's tests in one of four cuts. $(b,fennec test) with no argument runs the \
          fast $(b,unit) gate (delegates to $(b,dune runtest)). $(b,http) and $(b,browser) boot a \
          DEDICATED, isolated app instance per suite — its own port (and, in future, its own \
          database) — so stateful suites run in parallel, deterministically, without sharing \
-         state. $(b,all) runs unit, then http, then browser.";
+         state. $(b,system) drives the real $(b,fennec dev) lifecycle end-to-end (process \
+         hygiene, port reclaim, host routing, livereload, the error panel) — the typed, \
+         deterministic replacement for the old $(b,e2e/*.sh) scripts. $(b,all) runs unit, then \
+         http, then browser, then system (fast-to-slow).";
       `P
-        "Suites live by convention in $(b,test/http/) and $(b,test/browser/) (each an \
-         executable using the $(b,fennec-hunt) library). fennec owns the lifecycle — build, boot \
-         per-suite instance, run, tear down — so a suite never spawns a server itself and the \
-         dune build-directory lock is never nested.";
+        "Suites live by convention in $(b,test/http/), $(b,test/browser/), and $(b,test/system/) \
+         (each an executable using the $(b,fennec-hunt) library). For http/browser fennec owns the \
+         lifecycle — build, boot per-suite instance, run, tear down. System suites instead spawn \
+         $(b,fennec dev) themselves (the System layer reaps the whole process group on teardown), \
+         so they run serially and need no booted instance. A system suite tagged $(b,@manual) in \
+         its header is built but skipped by the automated run (e.g. one that runs \
+         $(b,fennec dev --clean), which wipes the shared _build) — run it directly.";
       `S Manpage.s_examples;
       `Pre "  fennec test                # the fast unit gate";
       `Pre "  fennec test http           # the Http suites, each isolated";
       `Pre "  fennec test browser -j1    # the Browser suites, serially";
+      `Pre "  fennec test system         # drive the real fennec dev (was e2e/*.sh)";
       `Pre "  fennec test all            # everything, fast-to-slow" ]
   in
   Cmd.v (Cmd.info "test" ~doc ~man)

@@ -13,3 +13,8 @@
     livereload from the [assets] subdirectory of the exe's build dir. Blocks until killed
     (SIGINT/SIGTERM clean up the children). *)
 val run : ?port:int -> targets:string list -> exe:string -> assets:string -> unit
+
+(** Prepend the opam switch's [stublibs] dir to [CAML_LD_LIBRARY_PATH] (idempotent) so a
+    directly-spawned bytecode server can [dlopen] its C stubs — [opam env] does not set this.
+    Called by [run]; also reused by [fennec test system], whose suites spawn the [.bc] themselves. *)
+val ensure_stublibs : unit -> unit

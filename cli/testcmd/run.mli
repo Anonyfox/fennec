@@ -1,7 +1,7 @@
 (* The `fennec test` entry point — parse the cut + options, dispatch, return an exit code. *)
 
 (** Which tests to run. *)
-type suite = Unit | Http | Browser | All
+type suite = Unit | Http | Browser | System | All
 
 (** Parse a suite name (case-insensitive); a clear error message otherwise. *)
 val suite_of_string : string -> (suite, string) result
