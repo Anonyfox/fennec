@@ -41,10 +41,18 @@ val check : string -> bool -> unit
 
 (** {2 Filesystem — real, contained to the sandbox workdir} *)
 
+(** All four take a sandbox-relative path, OR an absolute path (to touch/read a real file
+    outside the sandbox — e.g. a project source, or a sentinel under [_build]). *)
+
 val write  : sandbox -> string -> string -> unit   (** write a file (creating parent dirs) *)
 val read   : sandbox -> string -> string           (** read a file's contents *)
 val exists : sandbox -> string -> bool
 val rm     : sandbox -> string -> unit             (** remove a file or tree (idempotent) *)
+
+(** [with_edit sandbox path transform f] rewrites the file at [path] with [transform], runs [f],
+    and ALWAYS restores the original content (even on failure) — for editing a real source file
+    under test, like the livereload / error-panel scenarios. *)
+val with_edit : sandbox -> string -> (string -> string) -> (unit -> 'a) -> 'a
 
 (** {2 Processes} *)
 
@@ -52,6 +60,9 @@ type proc
 
 (** The outcome of a one-shot {!run}: exit status, combined stdout+stderr, wall-clock ms. *)
 type result = { status : Unix.process_status; output : string; ms : float }
+
+(** An HTTP response (see {!request}). *)
+type response = { status : int; headers : (string * string) list; body : string }
 
 (** [run sandbox argv] runs a command to completion and returns its result. The multi-turn-CLI
     primitive: call it repeatedly; commands share the sandbox's real working directory.
@@ -93,3 +104,12 @@ val wait_until : ?timeout:float -> (unit -> bool) -> unit
 
 val free_port : sandbox -> int    (** an ephemeral, currently-free port (parallel-safe) *)
 val port_open : int -> bool       (** is something listening on [port] right now? *)
+
+(** {2 HTTP (for asserting against a spawned server)} *)
+
+(** One-shot HTTP request to [localhost:port][path] (always connects to loopback). [host] sets
+    the routing Host header — for testing a host-routed gateway without touching /etc/hosts. *)
+val request : ?host:string -> ?headers:(string * string) list -> ?meth:string -> ?body:string -> int -> string -> response
+
+(** Case-insensitive header lookup on a {!response}. *)
+val header : response -> string -> string option

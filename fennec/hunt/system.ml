@@ -40,6 +40,7 @@ type proc = {
 }
 
 type result = { status : Unix.process_status; output : string; ms : float }
+type response = { status : int; headers : (string * string) list; body : string }
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Ambient env + tally (set by [main])                                          *)
@@ -53,7 +54,8 @@ let next_id () = incr ids; !ids
 
 let now sb = Eio.Time.now (Eio.Stdenv.clock sb.env)
 let fs sb = Eio.Stdenv.fs sb.env
-let p_of sb rel = Eio.Path.(fs sb / Filename.concat sb.dir rel)
+(* sandbox-relative by default; an absolute path is used as-is (to read/edit real project files) *)
+let p_of sb rel = Eio.Path.(fs sb / (if Filename.is_relative rel then Filename.concat sb.dir rel else rel))
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Ports                                                                         *)
@@ -105,6 +107,26 @@ let write sb rel content =
 let read sb rel = Eio.Path.load (p_of sb rel)
 let exists sb rel = match Eio.Path.kind ~follow:true (p_of sb rel) with `Not_found -> false | _ -> true
 let rm sb rel = (try Eio.Path.rmtree ~missing_ok:true (p_of sb rel) with _ -> (try Eio.Path.unlink (p_of sb rel) with _ -> ()))
+
+(* edit a real file under test, restoring its original content on ANY exit (Fun.protect) *)
+let with_edit sb path transform f =
+  let original = read sb path in
+  Fun.protect
+    ~finally:(fun () -> try write sb path original with _ -> ())
+    (fun () -> write sb path (transform original); f ())
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  HTTP (reuses hunt's raw client)                                               *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+let request ?host ?(headers = []) ?(meth = "GET") ?body port path =
+  let net = Eio.Stdenv.net (env_exn ()) in
+  let headers = match host with Some h -> ("Host", h) :: headers | None -> headers in
+  let r = Http_client.request ~net ~host:"localhost" ~port ~meth ~path ~headers ?body () in
+  { status = r.Http_client.status; headers = r.Http_client.headers; body = r.Http_client.body }
+
+let header resp name =
+  List.find_map (fun (k, v) -> if String.lowercase_ascii k = String.lowercase_ascii name then Some v else None) resp.headers
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Processes                                                                     *)

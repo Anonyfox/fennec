@@ -5,12 +5,17 @@
 ; On a custom alias (@system), NOT @runtest: these launch `fennec dev`, which runs
 ; `dune build --watch`, so they must never run nested under dune. The CLI builds them one-shot,
 ; then runs the artifacts directly (the same lock-safe orchestration as the http/browser cuts).
-(executable
- (name process_test)
- (modules process_test)
+(executables
+ (names process_test domains_test livereload_test errors_test heal_test)
+ (modules process_test domains_test livereload_test errors_test heal_test)
  (libraries fennec-hunt fennec-hunt.unit))
 
 (rule
  (alias system)
- (deps process_test.exe)
+ (deps
+  process_test.exe
+  domains_test.exe
+  livereload_test.exe
+  errors_test.exe
+  heal_test.exe)
  (action (progn)))
