@@ -422,7 +422,7 @@ let test_cmd =
     Arg.(value & pos_all string [] & info [] ~docv:"SUITE"
            ~doc:"Which tests: unit (default), http, browser, system, all — or $(b,new <cut> <name>) to scaffold a suite.")
   in
-  let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only suites/cases matching $(docv).") in
+  let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only tests whose name (the $(b,let%http)/$(b,let%browser)/$(b,let%system) label) contains $(docv). A filter that matches nothing fails — never a silent pass.") in
   let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) suites fail.") in
   let no_fail_fast_arg = Arg.(value & flag & info [ "no-fail-fast" ] ~doc:"Run every suite even after a failure (default stops at the first).") in
   let reporter_arg = Arg.(value & opt (some string) None & info [ "reporter" ] ~docv:"R" ~doc:"Browser cut: reporter style ($(b,auto), $(b,plain), $(b,pretty)).") in

@@ -326,9 +326,10 @@ let arg_value flag =
   Array.iteri (fun i s -> if s = flag && i + 1 < Array.length a then r := Some a.(i + 1)) a; !r
 let arg_flag flag = Array.exists (fun s -> s = flag) Sys.argv
 
-(* Run the registered scenarios (filtered), print a summary, return 0 if all passed else 1.
-   THIS is the executable's whole entry point — the generated [run.ml] is just
-   [let () = exit (Fennec_hunt.System.run ())]; userland writes only [let%system] scenarios. *)
+(* Run the registered scenarios (filtered by --grep on the scenario name; --manual includes opt-in
+   ones). Exit codes: [0] all passed, [1] a scenario failed, [3] a --grep was given but matched
+   nothing (so a filter that matches nothing is never a silent green). THIS is the executable's
+   whole entry point — [run.ml] is just [let () = exit (Fennec_hunt.System.run ())]. *)
 let run () =
   handle_sentinel ();
   let grep = arg_value "--grep" and include_manual = arg_flag "--manual" in
@@ -337,16 +338,23 @@ let run () =
       (include_manual || not s.manual)
       && (match grep with Some g -> Fennec_hunt_util.contains s.name g | None -> true)) all in
   let skipped_manual = List.length (List.filter (fun s -> s.manual && not include_manual) all) in
+  let manual_note () =
+    if skipped_manual > 0 then
+      Printf.printf "  %s\n%!" (color "2" (Printf.sprintf "%d @manual scenario%s skipped (pass --manual to include)"
+                                             skipped_manual (if skipped_manual = 1 then "" else "s"))) in
   passed := 0; failed := 0;
-  Eio_main.run (fun env -> ambient := Some env; List.iter run_one chosen);
-  Printf.printf "\n";
-  if skipped_manual > 0 then
-    Printf.printf "  %s\n%!" (color "2" (Printf.sprintf "%d @manual scenario%s skipped (pass --manual to include)"
-                                           skipped_manual (if skipped_manual = 1 then "" else "s")));
-  if !failed > 0 then (
-    Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d of %d scenarios failed" !failed (!passed + !failed)));
-    1)
-  else (Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d scenarios passed" !passed)); 0)
+  match grep, chosen with
+  | Some g, [] ->
+    Printf.printf "\n  %s\n%!" (color "33" (Printf.sprintf "no scenarios matched --grep %s" g));
+    manual_note (); 3
+  | _ ->
+    Eio_main.run (fun env -> ambient := Some env; List.iter run_one chosen);
+    Printf.printf "\n";
+    manual_note ();
+    if !failed > 0 then (
+      Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d of %d scenarios failed" !failed (!passed + !failed)));
+      1)
+    else (Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d scenarios passed" !passed)); 0)
 
 (* Back-compat / self-test entry: register via [f] (which calls [test]) then run. Userland uses
    the generated [run.ml] + [let%system] instead, with no [main] at all. *)

@@ -89,6 +89,13 @@ let main_cli ?binary ?base_url () =
     { Live.default_config with jobs = (if !bail then 1 else !jobs); retries = !retries; bail = !bail;
       grep = !grep; only_file = !only_file; step_timeout = !timeout; screenshot_dir = !screenshots }
   in
+  (* a --grep that matches no test is never a silent green: exit 3 (the orchestrator aggregates
+     this across the per-file fan-out into a "no tests matched" failure). Checked before launching
+     a browser, so a typo'd filter doesn't even spin Chrome up. *)
+  if !grep <> None && Live.select config (Live.registered ()) = [] then begin
+    Printf.eprintf "fennec_hunt: no tests matched --grep %s\n%!" (Option.value !grep ~default:"");
+    exit 3
+  end;
   let r =
     try main ?binary ~reporter ~browsers:!browsers ~headless:(not !headed) ?server_exe:!server ~base_url ~config ()
     with Chrome.No_browser msg ->

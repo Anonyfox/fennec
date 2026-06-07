@@ -40,7 +40,6 @@ type context = {
   mutable cookies : (string * string) list;
   mutable checks_passed : int;
   mutable checks_failed : int;
-  mutable checks_skipped : int; (* filtered out by --grep — reported, never silently dropped *)
 }
 
 let preview s = if String.length s <= 200 then s else String.sub s 0 197 ^ "..."
@@ -78,13 +77,13 @@ let arg_value flag =
      in
      match Array.to_list Sys.argv with _ :: rest -> scan rest | [] -> None)
 
-(* --grep: a check whose label doesn't contain it is skipped (substring, same as the Browser cut).
-   --only-file: the runner runs only hunt blocks from that source file (so `fennec test http` can
-   run one suite file against its own isolated instance). *)
+(* --grep: run only suites (the [let%http "name"] label) whose name contains it — the SAME unit
+   every cut greps (browser → test name, system → scenario name). --only-file: run only hunt blocks
+   from that source file (so `fennec test http` can run one suite file against its own instance). *)
 let grep = arg_value "--grep"
 let only_file = arg_value "--only-file"
-
-let selected label = match Lazy.force grep with None -> true | Some g -> Fennec_hunt_util.contains label g
+let grep_given = lazy (Lazy.force grep <> None)
+let suite_selected (h_label : string) = match Lazy.force grep with None -> true | Some g -> Fennec_hunt_util.contains h_label g
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Timing                                                                    *)
@@ -551,10 +550,6 @@ let json_content_type = ("Content-Type", "application/json")
 
 let check label body =
   let c = current () in
-  if not (selected label) then (
-    c.checks_skipped <- c.checks_skipped + 1;
-    Printf.printf "  %s  %s\n%!" (color "2" (glyph "–" "-")) (color "2" (label ^ " (skipped by --grep)")))
-  else begin
   c.last <- None;
   c.cookies <- [];
   let t0 = Unix.gettimeofday () in
@@ -572,7 +567,6 @@ let check label body =
        line and wrap it in Failure("…"). Other exceptions fall back to their string form. *)
     let detail = match e with Failure m -> m | other -> Printexc.to_string other in
     String.split_on_char '\n' detail |> List.iter (fun line -> Printf.printf "     %s\n%!" line)
-  end
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  hunt                                                                      *)
@@ -620,28 +614,30 @@ let run_one (h : suite) =
   | Some argv ->
     Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
       ~net ~clock ~env:h.env ~host:target.host ~port:target.port ~tls ~timeout:h.timeout argv);
-  let c = { url = target; net; clock; request_timeout = h.request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0; checks_skipped = 0 } in
+  let c = { url = target; net; clock; request_timeout = h.request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0 } in
   ctx := Some c;
   Printf.printf "\n%s %s\n%!" (color "1" (glyph "⟐ " "> " ^ h.label)) (color "2" (Printf.sprintf "(%s)" url));
   Fun.protect h.body ~finally:(fun () -> ctx := None);
   Printf.printf "\n";
-  let skipped = if c.checks_skipped > 0 then Printf.sprintf " (%d skipped)" c.checks_skipped else "" in
   if c.checks_failed > 0 then (
     any_failed := true;
-    Printf.printf "  %s%s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))) (color "2" skipped))
-  else Printf.printf "  %s%s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed)) (color "2" skipped)
+    Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))))
+  else Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed))
 
-(* The runner entry — runs every registered suite (filtered by --only-file), returns 0 if all
-   passed else 1. The whole body of an Http suite runner: [let () = exit (Fennec_hunt.Http.run ())].
-   Userland writes only [let%http] blocks. *)
+(* The runner entry — runs every registered suite (filtered by --only-file and --grep). Exit codes:
+   [0] all passed, [1] a check failed, [3] a --grep was given but matched no suite (so a filter that
+   matches nothing is never a silent green). The whole body of a runner:
+   [let () = exit (Fennec_hunt.Http.run ())]. Userland writes only [let%http] blocks. *)
 let run () =
   let chosen =
     List.rev !suites
     |> List.filter (fun (h : suite) ->
-           match Lazy.force only_file with None -> true | Some f -> h.file <> "" && Fennec_hunt_util.contains h.file f)
+           (match Lazy.force only_file with None -> true | Some f -> h.file <> "" && Fennec_hunt_util.contains h.file f)
+           && suite_selected h.label)
   in
   List.iter run_one chosen;
-  if !any_failed then 1 else 0
+  if chosen = [] && Lazy.force grep_given then 3
+  else if !any_failed then 1 else 0
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  For_test — pure internals exposed for unit tests; NOT a stable API           *)

@@ -174,7 +174,8 @@ Bytecode stublibs: a suite may spawn the `.bc` server directly, which must `dlop
 
 ```
 fennec test [SUITE]
-  -g, --grep RE        run only cases whose label contains RE (substring; http + browser)
+  -g, --grep RE        run only tests whose NAME (the let%cut label) contains RE — every cut;
+                       a filter that matches nothing FAILS (never a silent green)
   -x, --max-failures N stop after N suites fail (default fail-fast = stop at the first)
       --no-fail-fast   run every suite even after a failure
   -j, --jobs N         parallel suites (default = CPUs; -j1 forces serial)

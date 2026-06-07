@@ -56,9 +56,22 @@ let preview ?(max = 120) s =
   let s = String.map (fun c -> if c = '\n' || c = '\t' then ' ' else c) s in
   if String.length s <= max then s else String.sub s 0 (max - 1) ^ "\u{2026}"
 
+(* walk up from [dir] looking for a [name] marker (e.g. dune-project) *)
+let rec find_up name dir =
+  if Sys.file_exists (Filename.concat dir name) then true
+  else
+    let parent = Filename.dirname dir in
+    if parent = dir then false else find_up name parent
+
 (* the fast gate: dune already builds + runs every @runtest test and returns the right exit
-   code. fennec is the only dune-aware process here (no nested watcher), so this is safe. *)
-let run_unit () = Sys.command "dune build @runtest"
+   code. fennec is the only dune-aware process here (no nested watcher), so this is safe. We
+   pre-check for a dune project so the common "ran it in the wrong directory" mistake gets a
+   fennec-flavored hint instead of dune's raw "cannot find root / dune init project NAME". *)
+let run_unit () =
+  if not (find_up "dune-project" (Sys.getcwd ())) then (
+    Printf.eprintf "fennec test: not inside a project (no dune-project found here or above). Run it from your Fennec app.\n%!";
+    1)
+  else Sys.command "dune build @runtest"
 
 (* the argv we hand a suite executable, derived from the options + cut. We pass only what a
    given runner actually honours (both runners ignore unknown argv, but silent no-ops are poor
@@ -197,21 +210,23 @@ let read_file path =
    exposed: a leftover of OURS (reclaim it — SIGKILL, the dev self-heal) vs. a FOREIGN holder
    (name it, never touch it — fail this suite clearly). Teardown is structural (Fun.protect),
    so a failure or exception never orphans the instance. *)
-let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite : Suites.t) ~(inst : Instance.t) : bool * string =
+(* the per-suite exit code: 0 = passed, 3 = the runner had no test matching --grep in THIS suite
+   file (not a failure — the filter likely targets another file), anything else = failed. *)
+let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite : Suites.t) ~(inst : Instance.t) : int * string =
   (* one shared runner exe per cut; restrict it to THIS suite's source file so it runs only that
      file's tests — against this suite's own dedicated instance (per-file isolation preserved). *)
   let args = "--only-file" :: suite.Suites.name :: args in
   let buf = Buffer.create 256 in
   let emit s = if stream then (print_string s; flush stdout) else Buffer.add_string buf s in
   emit (Printf.sprintf "\n\027[1m\u{25b6} %s\027[0m \027[2m(:%d)\027[0m\n" suite.Suites.name inst.Instance.port);
-  let ok =
+  let code =
     match Port.foreign_holder ~exe:server_exe inst.Instance.port with
     | Some (pid, cmd) ->
       emit
         (Printf.sprintf
            "  \027[31m\u{2717} port %d is held by another process (pid %d) \u{2014} not ours, leaving it alone.\027[0m\n     %s\n     free that port, or move the test range with --port.\n"
            inst.Instance.port pid (preview cmd));
-      false
+      1
     | None ->
       ignore (Port.reclaim ~exe:server_exe inst.Instance.port (* clear a leftover of OURS, if any *));
       let boot = Boot.spawn ~exe:server_exe ~env:inst.Instance.server_env in
@@ -223,7 +238,7 @@ let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite 
             emit (Printf.sprintf "  \027[31m\u{2717} instance for %s never came up: %s\027[0m\n" suite.Suites.name msg);
             let log = Boot.read_log boot in
             if log <> "" then emit (Printf.sprintf "     server log:\n%s\n" log);
-            false
+            1
           | Ok () ->
             let code =
               if stream then run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:None
@@ -242,9 +257,9 @@ let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite 
             in
             if code = 124 then
               emit (Printf.sprintf "  \027[31m\u{2717} suite timed out after %.0fs — killed; other suites still run.\027[0m\n" suite_timeout);
-            code = 0)
+            code)
   in
-  (ok, Buffer.contents buf)
+  (code, Buffer.contents buf)
 
 (* orchestrate one cut: discover the server + suites, build everything once, then run each
    suite against its OWN dedicated isolated instance (boot → wait → run → tear down). With
@@ -301,24 +316,39 @@ let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~(args : string list) : i
             (fun ((suite : Suites.t), (inst : Instance.t)) ->
               if over_limit () then None (* fail-fast reached — don't boot this one *)
               else begin
-                let ok, block = run_one_suite ~server_exe:d.Discover.exe ~runner_exe ~args ~stream ~suite ~inst in
-                if not ok then bump ();
+                let code, block = run_one_suite ~server_exe:d.Discover.exe ~runner_exe ~args ~stream ~suite ~inst in
+                if code <> 0 && code <> 3 then bump (); (* only real failures count toward fail-fast *)
                 if not stream then (Mutex.lock pm; print_string block; flush stdout; Mutex.unlock pm);
-                Some { Report.name = suite.Suites.name; port = inst.Instance.port; ok }
+                Some (suite.Suites.name, inst.Instance.port, code)
               end)
             pairs
         in
         let results = List.filter_map Fun.id outcomes in
         let skipped = n - List.length results in
-        let failed = Report.failures results in
-        (* cross-suite footer: one honest roll-up at suite granularity (green iff every suite
-           exited 0) — the per-suite check tallies are already printed above by each runner *)
-        let tail = if skipped > 0 then Printf.sprintf " \027[2m(%d skipped after fail-fast)\027[0m" skipped else "" in
-        Printf.printf "\n\027[%sm%s %s\027[0m%s\n%!"
-          (if failed = 0 then "1;32" else "1;31")
-          (if failed = 0 then "\u{2714}" else "\u{2717}")
-          (Report.summary results) tail;
-        failed
+        (* a suite that exited 3 ran nothing here — its --grep matched no suite in that file (the
+           filter likely targets another file). Such suites are neither pass nor fail. *)
+        let ran = List.filter (fun (_, _, c) -> c <> 3) results in
+        let no_match_here = List.length results - List.length ran in
+        let grep_value = let rec f = function "--grep" :: v :: _ -> Some v | _ :: r -> f r | [] -> None in f args in
+        if grep_value <> None && ran = [] then (
+          (* a --grep that matched nothing in ANY suite — never a silent green *)
+          Printf.printf "\n\027[1;31m\u{2717} no tests matched --grep %s\027[0m\n%!" (Option.value grep_value ~default:"");
+          1)
+        else begin
+          let reports = List.map (fun (name, port, c) -> { Report.name; port; ok = c = 0 }) ran in
+          let failed = Report.failures reports in
+          (* cross-suite footer: green iff every suite that ran exited 0; the per-suite check
+             tallies are already printed above by each runner *)
+          let tail =
+            (if skipped > 0 then Printf.sprintf " \027[2m(%d skipped after fail-fast)\027[0m" skipped else "")
+            ^ (if no_match_here > 0 then Printf.sprintf " \027[2m(%d file(s) with no --grep match)\027[0m" no_match_here else "")
+          in
+          Printf.printf "\n\027[%sm%s %s\027[0m%s\n%!"
+            (if failed = 0 then "1;32" else "1;31")
+            (if failed = 0 then "\u{2714}" else "\u{2717}")
+            (Report.summary reports) tail;
+          failed
+        end
 
 (* parallel suites: explicit -j wins, else default to the machine's CPU count (suites are
    isolated, so this is safe); the orchestrator clamps it to the suite count *)
