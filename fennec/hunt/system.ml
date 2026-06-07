@@ -191,11 +191,26 @@ let stop p =
   while alive p && Eio.Time.now clock < deadline do Eio.Time.sleep clock 0.02 done;
   if alive p then ((try Unix.kill (-p.pid) Sys.sigkill with _ -> ()); ignore (wait_exit p ~timeout:2.0 () : Unix.process_status))
 
-let run sb ?env ?cwd argv =
+let run_cmd sb ?env ?cwd argv =
   let p = spawn sb ?env ?cwd argv in
   let t0 = now sb in
   let status = wait_exit p ~timeout:120.0 () in
   { status; output = output p; ms = (now sb -. t0) *. 1000.0 }
+
+(* ════════════════════════════════════════════════════════════════════════════ *)
+(*  Harness context (typed — set by `fennec test system`, sane defaults by hand)  *)
+(* ════════════════════════════════════════════════════════════════════════════ *)
+
+(* The contract the harness fills in (Test_proto), exposed so a suite never hand-rolls getenv. *)
+let app_dir () = Test_proto.app_dir ()    (* the project to run `fennec dev` in *)
+let fennec () = Test_proto.bin ()         (* the fennec binary under test *)
+let root () = Test_proto.root ()          (* the workspace root *)
+let server_bc () = Test_proto.server_bc () (* the built server bytecode, if provided *)
+
+(* Spawn THIS app's `fennec dev` (extra [args] appended), in the app dir, captured + reaped on
+   teardown like any spawn. The standing-server primitive for System suites — no FENNEC_* in
+   userland. Pair with {!wait_ready}. *)
+let dev ?(args = []) sb = spawn sb ~cwd:(app_dir ()) (fennec () :: "dev" :: args)
 
 let wait_output p ?(timeout = 10.0) sub =
   let clock = Eio.Stdenv.clock p.sb.env in
@@ -230,44 +245,109 @@ let tmp_base () =
   if (try Sys.is_directory shm && (Unix.access shm [ Unix.W_OK ]; true) with _ -> false) then shm
   else Filename.get_temp_dir_name ()
 
-let test name f =
+(* ── registry: scenarios REGISTER as a module-init side effect (the [let%system] ppx, or a hand
+   [test] call), and [run] executes them — the same shape as the Unit / Http / Live registries.
+   Holding the closure (not running on call) is what lets the runner filter (--grep) and skip
+   @manual scenarios, with no hand-written entry point in userland. ── *)
+type scenario = { name : string; manual : bool; file : string; line : int; body : sandbox -> unit }
+
+let registry : scenario list ref = ref []
+let register ~manual ~name ~file ~line body = registry := { name; manual; file; line; body } :: !registry
+
+let test_loc ~name ~file ~line body = register ~manual:false ~name ~file ~line body
+let test_manual_loc ~name ~file ~line body = register ~manual:true ~name ~file ~line body
+let test name body = register ~manual:false ~name ~file:"" ~line:0 body
+
+(* the captured output of every process a scenario spawned (the [.proc-N.log] files) — the
+   evidence to print when it fails *)
+let captured_logs dir =
+  match Sys.readdir dir with
+  | exception _ -> []
+  | entries ->
+    Array.to_list entries
+    |> List.filter (fun f -> String.length f > 0 && f.[0] = '.' && Filename.check_suffix f ".log")
+    |> List.sort compare
+    |> List.filter_map (fun f ->
+           match In_channel.with_open_bin (Filename.concat dir f) In_channel.input_all with
+           | "" | (exception _) -> None
+           | s -> Some s)
+
+let tail ?(max = 2000) s =
+  let n = String.length s in
+  if n <= max then s else "…" ^ String.sub s (n - max) max
+
+(* run ONE scenario in a fresh sandbox and print its outcome. On failure, dump the captured
+   process output (the evidence) and KEEP the sandbox for inspection; on success, remove it. *)
+let run_one (sc : scenario) =
   let env = env_exn () in
   let dir = Filename.concat (tmp_base ()) (Printf.sprintf "fennec-sys-%d-%d" (Unix.getpid ()) (next_id ())) in
   (try Unix.mkdir dir 0o755 with _ -> ());
   let clock = Eio.Stdenv.clock env in
   let t0 = Eio.Time.now clock in
-  let outcome =
-    try Eio.Switch.run (fun sw -> f { dir; env; sw; ports = [] }); Ok ()
-    with e -> Error e
-  in
-  (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(Eio.Stdenv.fs env / dir) with _ -> ());
+  let outcome = try Eio.Switch.run (fun sw -> sc.body { dir; env; sw; ports = [] }); Ok () with e -> Error e in
   let ms = (Eio.Time.now clock -. t0) *. 1000.0 in
   match outcome with
   | Ok () ->
     incr passed;
-    Printf.printf "  %s  %s %s\n%!" (color "32" (glyph "✓" "ok")) name (color "2" (Printf.sprintf "(%.0fms)" ms))
+    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(Eio.Stdenv.fs env / dir) with _ -> ());
+    Printf.printf "  %s  %s %s\n%!" (color "32" (glyph "✓" "ok")) sc.name (color "2" (Printf.sprintf "(%.0fms)" ms))
   | Error e ->
     incr failed;
     let msg = match e with Failure m -> m | Timeout m -> "timeout: " ^ m | e -> Printexc.to_string e in
-    Printf.printf "  %s  %s %s\n%!" (color "31" (glyph "✗" "FAIL")) name (color "2" (Printf.sprintf "(%.0fms)" ms));
-    String.split_on_char '\n' msg |> List.iter (fun l -> Printf.printf "     %s\n%!" l)
+    let loc = if sc.file = "" then "" else color "2" (Printf.sprintf " (%s:%d)" (Filename.basename sc.file) sc.line) in
+    Printf.printf "  %s  %s %s%s\n%!" (color "31" (glyph "✗" "FAIL")) sc.name (color "2" (Printf.sprintf "(%.0fms)" ms)) loc;
+    String.split_on_char '\n' msg |> List.iter (fun l -> Printf.printf "     %s\n%!" l);
+    (match captured_logs dir with
+     | [] -> ()
+     | logs ->
+       Printf.printf "     %s\n%!" (color "2" "── captured process output ──");
+       List.iter (fun s -> String.split_on_char '\n' (tail s)
+                           |> List.iter (fun l -> Printf.printf "     %s %s\n%!" (color "2" "│") l)) logs);
+    Printf.printf "     %s\n%!" (color "2" (Printf.sprintf "(sandbox kept for inspection: %s)" dir))
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Entry point                                                                   *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
-let main f =
-  (match Array.to_list Sys.argv with
-   | _ :: s :: prog :: rest when s = sentinel ->
-     (try ignore (Unix.setsid ()) with _ -> ());
-     (try Unix.execvp prog (Array.of_list (prog :: rest))
-      with _ -> Printf.eprintf "fennec system: exec failed: %s\n%!" prog; exit 127)
-   | _ -> ());
-  passed := 0;
-  failed := 0;
-  Eio_main.run (fun env -> ambient := Some env; f ());
+(* the re-exec hop: when spawned as our own exec helper (argv = [_; sentinel; prog; args…]),
+   become a session leader then exec the real program. Must run before anything else. *)
+let handle_sentinel () =
+  match Array.to_list Sys.argv with
+  | _ :: s :: prog :: rest when s = sentinel ->
+    (try ignore (Unix.setsid ()) with _ -> ());
+    (try Unix.execvp prog (Array.of_list (prog :: rest))
+     with _ -> Printf.eprintf "fennec system: exec failed: %s\n%!" prog; exit 127)
+  | _ -> ()
+
+(* tiny argv reader (the runner has no cmdliner): --grep SUB (substring on the scenario name),
+   --manual (also run @manual scenarios, which are otherwise skipped). *)
+let arg_value flag =
+  let a = Sys.argv and r = ref None in
+  Array.iteri (fun i s -> if s = flag && i + 1 < Array.length a then r := Some a.(i + 1)) a; !r
+let arg_flag flag = Array.exists (fun s -> s = flag) Sys.argv
+
+(* Run the registered scenarios (filtered), print a summary, return 0 if all passed else 1.
+   THIS is the executable's whole entry point — the generated [run.ml] is just
+   [let () = exit (Fennec_hunt.System.run ())]; userland writes only [let%system] scenarios. *)
+let run () =
+  handle_sentinel ();
+  let grep = arg_value "--grep" and include_manual = arg_flag "--manual" in
+  let all = List.rev !registry in
+  let chosen = List.filter (fun s ->
+      (include_manual || not s.manual)
+      && (match grep with Some g -> Fennec_hunt_util.contains s.name g | None -> true)) all in
+  let skipped_manual = List.length (List.filter (fun s -> s.manual && not include_manual) all) in
+  passed := 0; failed := 0;
+  Eio_main.run (fun env -> ambient := Some env; List.iter run_one chosen);
   Printf.printf "\n";
+  if skipped_manual > 0 then
+    Printf.printf "  %s\n%!" (color "2" (Printf.sprintf "%d @manual scenario%s skipped (pass --manual to include)"
+                                           skipped_manual (if skipped_manual = 1 then "" else "s")));
   if !failed > 0 then (
     Printf.printf "  %s\n%!" (color "31" (Printf.sprintf "%d of %d scenarios failed" !failed (!passed + !failed)));
-    exit 1)
-  else Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d scenarios passed" !passed))
+    1)
+  else (Printf.printf "  %s\n%!" (color "32" (Printf.sprintf "%d scenarios passed" !passed)); 0)
+
+(* Back-compat / self-test entry: register via [f] (which calls [test]) then run. Userland uses
+   the generated [run.ml] + [let%system] instead, with no [main] at all. *)
+let main f = handle_sentinel (); f (); exit (run ())

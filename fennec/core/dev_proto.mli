@@ -34,6 +34,15 @@ val env_parallelism : string
     independent package); the equality is guarded by a test so it cannot drift. *)
 val env_test_url : string
 
+(** The System-cut harness contract: [fennec test system] SETS these, a System suite READS them
+    (via {!Fennec_hunt.System} / [Test_proto]). Mirrored in the suite-side package; equality
+    guarded by a test so it cannot drift. *)
+
+val env_test_bin : string        (** [FENNEC_BIN] — the fennec binary under test *)
+val env_test_app_dir : string    (** [FENNEC_APP_DIR] — the project to run [fennec dev] in *)
+val env_test_server_bc : string  (** [FENNEC_SERVER_BC] — the built server bytecode *)
+val env_test_root : string       (** [FENNEC_ROOT] — the dune workspace root *)
+
 (** {1 Exit code} *)
 
 (** Distinct exit code the server uses on [EADDRINUSE], so the supervisor self-heals a port

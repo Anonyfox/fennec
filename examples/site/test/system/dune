@@ -1,21 +1,19 @@
-; System suites for `fennec test system` (needs the built `fennec`). Each spawns the real
-; `fennec dev`, drives its process/port/livereload lifecycle via Fennec_hunt.System, and asserts
-; the observable side effects — replacing the old e2e/*.sh scripts with typed, deterministic tests.
+; System suites for `fennec test system`. Authoring is zero-ceremony: drop a `*_test.ml` with
+;   let%system "name" = fun sb -> …
+; — no main, no env wiring, no edit here. The library force-links every suite module (-linkall)
+; so each one's registrations fire; the one-line `run` executable is the entry point that
+; `fennec test system` builds and runs. (`run` is excluded from the library via the module set.)
 ;
-; On a custom alias (@system), NOT @runtest: these launch `fennec dev`, which runs
-; `dune build --watch`, so they must never run nested under dune. The CLI builds them one-shot,
-; then runs the artifacts directly (the same lock-safe orchestration as the http/browser cuts).
-(executables
- (names process_test domains_test livereload_test errors_test heal_test)
- (modules process_test domains_test livereload_test errors_test heal_test)
- (libraries fennec-hunt fennec-hunt.unit))
+; These drive the REAL `fennec dev`, so they live on their own runner (NOT @runtest) — fennec
+; builds it one-shot and runs the artifact directly, never nesting dune.
+(library
+ (name site_system_suites)
+ (modules (:standard \ run))
+ (libraries fennec-hunt)
+ (library_flags (-linkall))
+ (preprocess (pps fennec-hunt.ppx)))
 
-(rule
- (alias system)
- (deps
-  process_test.exe
-  domains_test.exe
-  livereload_test.exe
-  errors_test.exe
-  heal_test.exe)
- (action (progn)))
+(executable
+ (name run)
+ (modules run)
+ (libraries site_system_suites fennec-hunt))

@@ -8,13 +8,13 @@ let contains = Fennec_hunt.Unit.str_contains
 let pid_alive pid = try Unix.kill pid 0; true with _ -> false
 
 let () = S.main @@ fun () ->
-  S.test "run captures output + exit 0" (fun sb ->
-    let r = S.run sb [ "sh"; "-c"; "echo hello world" ] in
+  S.test "run_cmd captures output + exit 0" (fun sb ->
+    let r = S.run_cmd sb [ "sh"; "-c"; "echo hello world" ] in
     S.check "exit 0" (r.S.status = Unix.WEXITED 0);
     S.check "output captured" (contains r.S.output "hello world"));
 
-  S.test "run surfaces a non-zero exit" (fun sb ->
-    let r = S.run sb [ "sh"; "-c"; "exit 3" ] in
+  S.test "run_cmd surfaces a non-zero exit" (fun sb ->
+    let r = S.run_cmd sb [ "sh"; "-c"; "exit 3" ] in
     S.check "exit 3" (r.S.status = Unix.WEXITED 3));
 
   S.test "filesystem round-trip (creates parent dirs)" (fun sb ->

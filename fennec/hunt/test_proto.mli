@@ -18,3 +18,22 @@ val resolve : explicit:string option -> from_env:string option -> (string, strin
 
 (** [resolve] with [from_env] read from the environment ({!target_url}). *)
 val resolve_url : explicit:string option -> (string, string) result
+
+(** {2 System cut — the harness contract for [fennec test system]} *)
+
+val env_bin : string         (** env var: the fennec binary under test *)
+val env_app_dir : string     (** env var: the project to run [fennec dev] in *)
+val env_server_bc : string   (** env var: the built server bytecode *)
+val env_root : string        (** env var: the dune workspace root *)
+
+(** The fennec binary under test; ["fennec"] (on PATH) when run outside [fennec test]. *)
+val bin : unit -> string
+
+(** The project dir to run [fennec dev] in; the cwd when run outside [fennec test]. *)
+val app_dir : unit -> string
+
+(** The built server bytecode, if the harness provided it. *)
+val server_bc : unit -> string option
+
+(** The workspace root; two levels up from {!app_dir} when run outside [fennec test]. *)
+val root : unit -> string

@@ -20,24 +20,53 @@
 (** Raised by a [wait_*] that exceeds its deadline. *)
 exception Timeout of string
 
-(** {2 Entry point} *)
+(** {2 Authoring a scenario}
 
-(** Call this FIRST in a system-test executable: it intercepts the internal re-exec used to
-    put a spawned process in its own session. Otherwise it runs the Eio event loop, runs [f]
-    (which calls {!test}), prints a summary, and exits 0 if every scenario passed, 1 if any
-    failed. *)
-val main : (unit -> unit) -> unit
+    Write scenarios with the [let%system] ppx — no entry point, no env wiring:
+    {[
+      let%system "the dev server frees its port when killed" = fun sb ->
+        let dev = Fennec_hunt.System.dev sb in   (* spawns THIS app's `fennec dev` *)
+        wait_ready dev ~port:4000 ();
+        signal dev Sys.sigkill;
+        wait_until (fun () -> not (port_open 4000));
+        check "freed" (not (port_open 4000))
+    ]}
+    [let%system_manual] registers an opt-in scenario (skipped unless [--manual]) — for a
+    destructive case like [fennec dev --clean], which wipes the shared [_build].
 
-(** {2 A scenario} *)
+    [fennec test system] discovers [test/system/], builds the suite, and runs it. There is no
+    [main]: the convention is a [-linkall] library of [*_test.ml] plus a one-line runner
+    [let () = exit (Fennec_hunt.System.run ())]. *)
 
 type sandbox
 
-(** [test name f] runs scenario [f] in a fresh sandbox. A raised exception (including a failed
-    {!check}) marks it failed; later scenarios still run. Teardown is total and guaranteed. *)
+(** {2 A scenario (registration)} *)
+
+(** [test name f] registers scenario [f]. Prefer [let%system]; this is the no-ppx form. A raised
+    exception (including a failed {!check}) fails it; other scenarios still run. Teardown is total
+    and guaranteed. *)
 val test : string -> (sandbox -> unit) -> unit
+
+(** ppx-generated registration (with source location); prefer {!test} by hand. *)
+val test_loc : name:string -> file:string -> line:int -> (sandbox -> unit) -> unit
+
+(** ppx-generated registration of an opt-in ([@manual]) scenario; prefer {!test} by hand. *)
+val test_manual_loc : name:string -> file:string -> line:int -> (sandbox -> unit) -> unit
 
 (** [check name cond] fails the current scenario (raising) if [cond] is false. *)
 val check : string -> bool -> unit
+
+(** {2 Entry points} *)
+
+(** Run every registered scenario (honouring [--grep] / [--manual] from argv), print a summary,
+    and return [0] if all passed else [1]. The whole body of a suite runner: [let () = exit
+    (Fennec_hunt.System.run ())]. Also handles the internal re-exec used to session-isolate a
+    spawned process. *)
+val run : unit -> int
+
+(** Register via [f] (which calls {!test}) then {!run}, exiting with its code. A convenience for a
+    self-contained runner; userland uses [let%system] + {!run} with no [main]. *)
+val main : (unit -> unit) -> unit
 
 (** {2 Filesystem — real, contained to the sandbox workdir} *)
 
@@ -58,21 +87,21 @@ val with_edit : sandbox -> string -> (string -> string) -> (unit -> 'a) -> 'a
 
 type proc
 
-(** The outcome of a one-shot {!run}: exit status, combined stdout+stderr, wall-clock ms. *)
+(** The outcome of a one-shot {!run_cmd}: exit status, combined stdout+stderr, wall-clock ms. *)
 type result = { status : Unix.process_status; output : string; ms : float }
 
 (** An HTTP response (see {!request}). *)
 type response = { status : int; headers : (string * string) list; body : string }
 
-(** [run sandbox argv] runs a command to completion and returns its result. The multi-turn-CLI
+(** [run_cmd sandbox argv] runs a command to completion and returns its result. The multi-turn-CLI
     primitive: call it repeatedly; commands share the sandbox's real working directory.
     [cwd] (absolute) overrides the working directory — e.g. to run a tool against an existing
     project rather than the empty sandbox; defaults to the sandbox workdir. *)
-val run : sandbox -> ?env:(string * string) list -> ?cwd:string -> string list -> result
+val run_cmd : sandbox -> ?env:(string * string) list -> ?cwd:string -> string list -> result
 
 (** [spawn sandbox argv] starts a long-running process (in its own session), output captured.
     Reaped — whole group — on sandbox teardown. The standing-server primitive. [cwd] as for
-    {!run}. *)
+    {!run_cmd}. *)
 val spawn : sandbox -> ?env:(string * string) list -> ?cwd:string -> string list -> proc
 
 val output : proc -> string                       (** captured output so far *)
@@ -80,6 +109,19 @@ val pid    : proc -> int
 val alive  : proc -> bool                          (** has not yet exited *)
 val signal : proc -> int -> unit                  (** send a signal to the process *)
 val stop   : proc -> unit                         (** SIGTERM → SIGKILL → reap the whole group *)
+
+(** {2 Harness context — typed, set by [fennec test system] (sane defaults run by hand)}
+
+    So a suite never hand-rolls [getenv] for the framework binary, the app dir, etc. *)
+
+(** Spawn THIS app's [fennec dev] (extra [args] appended), in {!app_dir}, captured + reaped on
+    teardown. The standing-server primitive for System suites. Pair with {!wait_ready}. *)
+val dev : ?args:string list -> sandbox -> proc
+
+val fennec    : unit -> string          (** the fennec binary under test ([fennec] on PATH by hand) *)
+val app_dir   : unit -> string          (** the project to run [fennec dev] in (cwd by hand) *)
+val root      : unit -> string          (** the workspace root *)
+val server_bc : unit -> string option   (** the built server bytecode, if the harness provided it *)
 
 (** {2 Temporal waits — deadline-bounded, raise {!Timeout} on overrun} *)
 

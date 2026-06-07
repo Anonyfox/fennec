@@ -27,6 +27,15 @@ let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) 
    guarded by a test in fennec/hunt/test so drift can never ship. *)
 let env_test_url = "FENNEC_TEST_URL"
 
+(* the System-cut harness contract: `fennec test system` SETS these, a System suite READS them
+   (via Fennec_hunt.System / Test_proto) so a suite never hand-rolls getenv for the fennec binary,
+   the app dir to run `fennec dev` in, the built server (leftover-reclaim), or the workspace root.
+   MIRRORED in Fennec_hunt.Test_proto (suite side); equality guarded by a test in fennec/hunt/test. *)
+let env_test_bin = "FENNEC_BIN"             (* the fennec under test (the orchestrating binary) *)
+let env_test_app_dir = "FENNEC_APP_DIR"     (* the project to run `fennec dev` in *)
+let env_test_server_bc = "FENNEC_SERVER_BC" (* the built server bytecode *)
+let env_test_root = "FENNEC_ROOT"           (* the dune workspace root *)
+
 (* ── exit code (server → CLI, out of band) ────────────────────────────────────────────── *)
 
 (* the server exits with THIS distinct code when it can't bind its port, so the supervisor can tell
@@ -77,6 +86,10 @@ let%test "env_livereload name"  = env_livereload = "FENNEC_LIVERELOAD"
 let%test "env_port name"        = env_port = "FENNEC_PORT"
 let%test "env_parallelism name" = env_parallelism = "FENNEC_PARALLELISM"
 let%test "env_test_url name"    = env_test_url = "FENNEC_TEST_URL"
+let%test "env_test_bin name"        = env_test_bin = "FENNEC_BIN"
+let%test "env_test_app_dir name"    = env_test_app_dir = "FENNEC_APP_DIR"
+let%test "env_test_server_bc name"  = env_test_server_bc = "FENNEC_SERVER_BC"
+let%test "env_test_root name"       = env_test_root = "FENNEC_ROOT"
 
 (* ──── port_in_use_exit ──── *)
 let%test "port_in_use_exit value" = port_in_use_exit = 98
