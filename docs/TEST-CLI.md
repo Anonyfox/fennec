@@ -241,7 +241,21 @@ grouped by file with line numbers.
 fennec docs            # warn-only (exit 0)
 fennec docs --strict   # hard error (exit 1) — a CI gate
 fennec docs --private  # also scan .ml top-level definitions (unexported)
+fennec docs --port     # move .ml-only docs into the .mli (where they render)
 ```
+
+Because odoc renders the curated `.mli`, a doc that lives only in the `.ml` is invisible publicly.
+So each export is one of **three** states, distinguished in the report:
+
+- documented in the `.mli` → ✓ (it renders)
+- bare in the `.mli` but documented in the sibling `.ml` → ⤷ *"documented in .ml — won't render"*
+- documented in neither → ✗ undocumented
+
+`--strict` fails on the latter two (both mean the published docs are blank). `--port` is the
+fixer: it copies each `.ml`-only doc into the `.mli` before the matching item (idempotent, the
+`.mli` wins on conflict, the `.ml` is never touched) — an explicit, diff-reviewable "port over",
+since odoc gives no way to inherit `.ml` docs and a ppx can't bridge the files (the sandbox). The
+convention stays *docs live in the `.mli`*; this just catches and fixes misplacement.
 
 **Doctests — examples that can't drift.** An odoc code block tagged `ocaml` in a doc comment is
 *executable*: it renders in the docs **and** runs as a test (via the shared ppx, alongside

@@ -479,9 +479,10 @@ let test_cmd =
    so this is fennec's — warn by default, --strict to fail (CI), --private to include .ml. *)
 let docs_cmd =
   let paths_arg = Arg.(value & pos_all string [] & info [] ~docv:"PATH" ~doc:"Files or directories to check (default: the whole project).") in
-  let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Exit non-zero if any public export is undocumented (for CI).") in
+  let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Exit non-zero if any export is undocumented or documented only in its $(b,.ml) (for CI).") in
   let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Also check $(b,.ml) top-level definitions (unexported), not just $(b,.mli) exports.") in
-  let go paths strict private_ = Fennec_docs.Docscmd.run ~paths ~strict ~private_ in
+  let port_arg = Arg.(value & flag & info [ "port" ] ~doc:"Copy each doc that lives only in a $(b,.ml) into the sibling $(b,.mli) (where it would actually render). Idempotent; the $(b,.mli) wins on conflict.") in
+  let go paths strict private_ port = Fennec_docs.Docscmd.run ~paths ~strict ~private_ ~port in
   let doc = "Check that public exports carry doc comments" in
   let man =
     [ `S Manpage.s_description;
@@ -491,12 +492,17 @@ let docs_cmd =
          OCaml has no $(i,missing_docs) lint; this is fennec's. Warn-only by default (exit 0); \
          $(b,--strict) makes it a hard error (a CI gate); $(b,--private) also scans $(b,.ml) \
          top-level definitions.";
+      `P
+        "Since odoc renders the curated $(b,.mli), a doc that lives only in the $(b,.ml) is \
+         invisible publicly. Such exports are flagged distinctly ($(i,documented only in .ml)); \
+         $(b,--port) moves them into the $(b,.mli) for you (idempotent, reviewable in a diff).";
       `S Manpage.s_examples;
-      `Pre "  fennec docs                  # warn on undocumented public exports";
+      `Pre "  fennec docs                  # warn on undocumented / misplaced docs";
       `Pre "  fennec docs --strict         # fail the build / CI on any gap";
-      `Pre "  fennec docs --private lib/   # include unexported defs under lib/" ]
+      `Pre "  fennec docs --private lib/   # include unexported defs under lib/";
+      `Pre "  fennec docs --port           # move .ml-only docs into the .mli" ]
   in
-  Cmd.v (Cmd.info "docs" ~doc ~man) Term.(const go $ paths_arg $ strict_arg $ private_arg)
+  Cmd.v (Cmd.info "docs" ~doc ~man) Term.(const go $ paths_arg $ strict_arg $ private_arg $ port_arg)
 
 (* Generate (to stdout) a module running the executable {@ocaml[ ]} doc examples from the .mli
    interfaces in a directory. Not run by hand — wired by a one-time dune (rule), the route_gen
