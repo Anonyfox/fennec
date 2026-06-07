@@ -1,0 +1,16 @@
+; System suites for `fennec test system` (needs the built `fennec`). Each spawns the real
+; `fennec dev`, drives its process/port/livereload lifecycle via Fennec_hunt.System, and asserts
+; the observable side effects — replacing the old e2e/*.sh scripts with typed, deterministic tests.
+;
+; On a custom alias (@system), NOT @runtest: these launch `fennec dev`, which runs
+; `dune build --watch`, so they must never run nested under dune. The CLI builds them one-shot,
+; then runs the artifacts directly (the same lock-safe orchestration as the http/browser cuts).
+(executable
+ (name process_test)
+ (modules process_test)
+ (libraries fennec-hunt fennec-hunt.unit))
+
+(rule
+ (alias system)
+ (deps process_test.exe)
+ (action (progn)))

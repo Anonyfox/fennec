@@ -54,12 +54,15 @@ type proc
 type result = { status : Unix.process_status; output : string; ms : float }
 
 (** [run sandbox argv] runs a command to completion and returns its result. The multi-turn-CLI
-    primitive: call it repeatedly; commands share the sandbox's real working directory. *)
-val run : sandbox -> ?env:(string * string) list -> string list -> result
+    primitive: call it repeatedly; commands share the sandbox's real working directory.
+    [cwd] (absolute) overrides the working directory — e.g. to run a tool against an existing
+    project rather than the empty sandbox; defaults to the sandbox workdir. *)
+val run : sandbox -> ?env:(string * string) list -> ?cwd:string -> string list -> result
 
 (** [spawn sandbox argv] starts a long-running process (in its own session), output captured.
-    Reaped — whole group — on sandbox teardown. The standing-server primitive. *)
-val spawn : sandbox -> ?env:(string * string) list -> string list -> proc
+    Reaped — whole group — on sandbox teardown. The standing-server primitive. [cwd] as for
+    {!run}. *)
+val spawn : sandbox -> ?env:(string * string) list -> ?cwd:string -> string list -> proc
 
 val output : proc -> string                       (** captured output so far *)
 val pid    : proc -> int
@@ -81,6 +84,10 @@ val wait_exit : proc -> ?timeout:float -> unit -> Unix.process_status
 
 (** Block until something is listening on [port] (default 10s). *)
 val wait_port : ?timeout:float -> int -> unit
+
+(** Block until [cond ()] returns true (polling, default 10s) — e.g. a port freeing after a
+    kill: [wait_until (fun () -> not (port_open p))]. Raises {!Timeout} on overrun. *)
+val wait_until : ?timeout:float -> (unit -> bool) -> unit
 
 (** {2 Ports} *)
 

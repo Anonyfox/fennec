@@ -78,15 +78,19 @@ let free_port sb =
       | Unix.ADDR_INET (_, p) -> sb.ports <- p :: sb.ports; p
       | _ -> failwith "free_port")
 
-let wait_port ?(timeout = 10.0) port =
+let wait_until ?(timeout = 10.0) cond =
   let clock = Eio.Stdenv.clock (env_exn ()) in
   let deadline = Eio.Time.now clock +. timeout in
   let rec loop () =
-    if port_open port then ()
-    else if Eio.Time.now clock > deadline then raise (Timeout (Printf.sprintf "nothing listening on :%d after %.0fs" port timeout))
+    if cond () then ()
+    else if Eio.Time.now clock > deadline then raise (Timeout (Printf.sprintf "condition not met within %.0fs" timeout))
     else (Eio.Time.sleep clock 0.05; loop ())
   in
   loop ()
+
+let wait_port ?(timeout = 10.0) port =
+  try wait_until ~timeout (fun () -> port_open port)
+  with Timeout _ -> raise (Timeout (Printf.sprintf "nothing listening on :%d after %.0fs" port timeout))
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Filesystem (sandbox-relative, real)                                          *)
@@ -112,7 +116,7 @@ let output p = try Eio.Path.load Eio.Path.(fs p.sb / p.logpath) with _ -> ""
 let pid p = p.pid
 let alive p = !(p.st) = None
 
-let spawn sb ?(env = []) argv =
+let spawn sb ?(env = []) ?cwd argv =
   let logpath = Filename.concat sb.dir (Printf.sprintf ".proc-%d.log" (next_id ())) in
   let mgr = Eio.Stdenv.process_mgr sb.env in
   let sink = Eio.Path.open_out ~sw:sb.sw ~create:(`If_missing 0o644) Eio.Path.(fs sb / logpath) in
@@ -120,7 +124,7 @@ let spawn sb ?(env = []) argv =
   let full_env =
     Array.append (Unix.environment ()) (Array.of_list (List.map (fun (k, v) -> k ^ "=" ^ v) env))
   in
-  let cwd = Eio.Path.(fs sb / sb.dir) in
+  let cwd = Eio.Path.(fs sb / Option.value cwd ~default:sb.dir) in
   (* re-exec through ourselves so the child setsid's into its own session before exec *)
   let wrapped = Sys.executable_name :: sentinel :: argv in
   let handle =
@@ -165,8 +169,8 @@ let stop p =
   while alive p && Eio.Time.now clock < deadline do Eio.Time.sleep clock 0.02 done;
   if alive p then ((try Unix.kill (-p.pid) Sys.sigkill with _ -> ()); ignore (wait_exit p ~timeout:2.0 () : Unix.process_status))
 
-let run sb ?env argv =
-  let p = spawn sb ?env argv in
+let run sb ?env ?cwd argv =
+  let p = spawn sb ?env ?cwd argv in
   let t0 = now sb in
   let status = wait_exit p ~timeout:120.0 () in
   { status; output = output p; ms = (now sb -. t0) *. 1000.0 }
