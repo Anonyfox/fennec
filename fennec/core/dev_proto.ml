@@ -48,6 +48,11 @@ let urls_prefix = "[fennec:urls]"
 let port_busy_prefix = "fennec: port "
 let chatter_prefix = "[fennec]" (* the server's own human chatter; the CLI suppresses it (its UI says it better) *)
 
+(** [starts_with s pfx] is [true] iff [s] begins with [pfx].
+    {@ocaml[
+      assert (starts_with "fennec:urls web=..." "fennec:urls");
+      assert (not (starts_with "fen" "fennec"))
+    ]} *)
 let starts_with s pfx =
   let lp = String.length pfx in
   String.length s >= lp && String.sub s 0 lp = pfx

@@ -208,3 +208,99 @@ let rules = [
   Context_free.Rule.extension ext_browser;
   Context_free.Rule.extension ext_http;
 ]
+
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+(*  Doctests — executable {@ocaml[ … ]} blocks in doc comments (rustdoc-style)              *)
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+
+(* An odoc code block tagged [ocaml] is treated as an executable example: it renders in the docs
+   AND runs as a test (so examples cannot drift). Opt-in by the tag — a plain [{[ … ]}] block stays
+   purely illustrative, and [{@ocaml skip[ … ]}] renders highlighted but does not run. Each block
+   is compiled + run IN MODULE SCOPE (a local module, so multi-statement blocks work and the block
+   sees the module's own definitions), registered like an inline test and stripped in production. *)
+
+let str_contains hay needle =
+  let hn = String.length hay and nn = String.length needle in
+  if nn = 0 then true
+  else
+    let rec go i = if i + nn > hn then false else if String.sub hay i nn = needle then true else go (i + 1) in
+    go 0
+
+(* extract the bodies of executable [{@ocaml … [ … ]}] blocks from a doc string (skipping ones whose
+   labels contain [skip]). Pure. *)
+let code_blocks (doc : string) : string list =
+  let n = String.length doc in
+  let find sub start =
+    let sl = String.length sub in
+    let rec go j = if j + sl > n then -1 else if String.sub doc j sl = sub then j else go (j + 1) in
+    go start
+  in
+  let blocks = ref [] and i = ref 0 and go = ref true in
+  while !go do
+    let tag = find "{@ocaml" !i in
+    if tag < 0 then go := false
+    else
+      let lb = find "[" (tag + 7) in
+      let rb = if lb < 0 then -1 else find "]}" (lb + 1) in
+      if lb < 0 || rb < 0 then go := false
+      else begin
+        let labels = String.sub doc (tag + 7) (lb - (tag + 7)) in
+        if not (str_contains labels "skip") then blocks := String.sub doc (lb + 1) (rb - lb - 1) :: !blocks;
+        i := rb + 2
+      end
+  done;
+  List.rev !blocks
+
+(* the string payload of a doc-comment attribute, if any *)
+let doc_string (a : attribute) : string option =
+  match (a.attr_name.txt, a.attr_payload) with
+  | ("ocaml.doc" | "ocaml.text"), PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ }, _); _ } ] -> Some s
+  | _ -> None
+
+(* doc strings attached to a structure item (covers the common item kinds + a floating comment) *)
+let item_doc_strings (item : structure_item) : string list =
+  let of_attrs attrs = List.filter_map doc_string attrs in
+  match item.pstr_desc with
+  | Pstr_value (_, vbs) -> List.concat_map (fun (vb : value_binding) -> of_attrs vb.pvb_attributes) vbs
+  | Pstr_type (_, tds) -> List.concat_map (fun (td : type_declaration) -> of_attrs td.ptype_attributes) tds
+  | Pstr_primitive vd -> of_attrs vd.pval_attributes
+  | Pstr_exception te -> of_attrs te.ptyexn_attributes
+  | Pstr_module mb -> of_attrs mb.pmb_attributes
+  | Pstr_attribute a -> (match doc_string a with Some s -> [ s ] | None -> [])
+  | _ -> []
+
+(* one doctest registration from a code block: parse it (a structure, else a bare expression wrapped
+   as [let () = ignore …]), run it inside an anonymous local module so it sees the module's own
+   definitions, and register it like an inline test. *)
+let doctest_item ~loc ~code : structure_item option =
+  (* point the block's locations near the doc comment in the real file, so a compile error or a
+     failed [assert] inside the example reports a sensible file:line (not "line 1" of the block). *)
+  let lexbuf () =
+    let lb = Lexing.from_string code in
+    Lexing.set_position lb { pos_fname = loc_file loc; pos_lnum = loc_line loc; pos_bol = 0; pos_cnum = 0 };
+    Lexing.set_filename lb (loc_file loc);
+    lb
+  in
+  let parse () = Ppxlib.Parse.implementation (lexbuf ()) in
+  let parse_expr () = [ [%stri let () = ignore [%e Ppxlib.Parse.expression (lexbuf ())]] ] in
+  match (try parse () with _ -> (try parse_expr () with _ -> [])) with
+  | [] -> None
+  | items ->
+    let body = Ast_builder.Default.pexp_letmodule ~loc { txt = None; loc } (Ast_builder.Default.pmod_structure ~loc items) [%expr ()] in
+    let name = Ast_builder.Default.estring ~loc (Printf.sprintf "doc example (%s:%d)" (Filename.basename (loc_file loc)) (loc_line loc)) in
+    let file = Ast_builder.Default.estring ~loc (loc_file loc) in
+    let line = Ast_builder.Default.eint ~loc (loc_line loc) in
+    Some [%stri let () = Fennec_hunt_unit.test_unit_loc ~name:[%e name] ~file:[%e file] ~line:[%e line] (fun () -> [%e body])]
+
+(* whole-structure pass: append a registration for every executable doc block. Appended at the END
+   so a doctest sees the whole module. Stripped (emits nothing) in a production build. Registered by
+   BOTH ppx drivers (the standalone test ppx and the fur ppx). *)
+let expand_doctests (str : structure) : structure =
+  if !drop_tests then str
+  else
+    str
+    @ List.concat_map
+        (fun (item : structure_item) ->
+          let loc = item.pstr_loc in
+          List.concat_map (fun doc -> List.filter_map (fun code -> doctest_item ~loc ~code) (code_blocks doc)) (item_doc_strings item))
+        str
