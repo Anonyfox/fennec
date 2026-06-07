@@ -9,7 +9,7 @@ open Fennec_hunt.Live
    awaited evented (one round-trip) like every other condition *)
 let hydrated p = p |> wait_for ~descr:"hydration" "window.__fur_hydrated === true"
 
-let () = test "hydration + isomorphic data (fast-render seed)" @@ fun page ->
+let%browser "hydration + isomorphic data (fast-render seed)" = fun page ->
   page
   |> goto "/" |> hydrated
   |> expect_text ".greeting .msg" "Hello from the server"
@@ -18,7 +18,7 @@ let () = test "hydration + isomorphic data (fast-render seed)" @@ fun page ->
   |> expect_text ".mounted" "mounted"
   |> ignore
 
-let () = test "local signal state (counter increments/decrements)" @@ fun page ->
+let%browser "local signal state (counter increments/decrements)" = fun page ->
   page
   |> goto "/" |> hydrated
   |> click ".cbtn.inc" |> expect_text ".count" "1"
@@ -26,7 +26,7 @@ let () = test "local signal state (counter increments/decrements)" @@ fun page -
   |> click ".cbtn.dec" |> expect_text ".count" "1"
   |> ignore
 
-let () = test "localStorage persists across reloads (Browser facade)" @@ fun page ->
+let%browser "localStorage persists across reloads (Browser facade)" = fun page ->
   page
   |> goto "/" |> hydrated
   |> expect_text ".visits" "visits (localStorage): 1"
@@ -34,7 +34,7 @@ let () = test "localStorage persists across reloads (Browser facade)" @@ fun pag
   |> expect_text ".visits" "visits (localStorage): 2"
   |> ignore
 
-let () = test "data refetch hits the network and resolves" @@ fun page ->
+let%browser "data refetch hits the network and resolves" = fun page ->
   page
   |> goto "/" |> hydrated
   |> click "#refetch"
@@ -42,7 +42,7 @@ let () = test "data refetch hits the network and resolves" @@ fun page ->
   |> expect_text ".greeting .msg" "Hello from the server"
   |> ignore
 
-let () = test "SPA navigation (client-side, no full reload)" @@ fun page ->
+let%browser "SPA navigation (client-side, no full reload)" = fun page ->
   page
   |> goto "/" |> hydrated
   |> eval "window.__spa = 1"
@@ -52,7 +52,7 @@ let () = test "SPA navigation (client-side, no full reload)" @@ fun page ->
   |> expect_js ~descr:"window marker survived (no full reload happened)" "window.__spa===1"
   |> ignore
 
-let () = test "global store + controlled form + keyed list" @@ fun page ->
+let%browser "global store + controlled form + keyed list" = fun page ->
   page
   |> goto "/products" |> hydrated
   |> expect_text ".stats" "todos in store: 0"
@@ -65,7 +65,7 @@ let () = test "global store + controlled form + keyed list" @@ fun page ->
   |> expect_text ".stats" "todos in store: 1"
   |> ignore
 
-let () = test "dynamic route param via typed path link" @@ fun page ->
+let%browser "dynamic route param via typed path link" = fun page ->
   page
   |> goto "/products" |> hydrated
   |> click ".p7"
@@ -73,13 +73,13 @@ let () = test "dynamic route param via typed path link" @@ fun page ->
   |> expect_text "h1" "Product #7"
   |> ignore
 
-let () = test "catch-all renders not_found with the unmatched path" @@ fun page ->
+let%browser "catch-all renders not_found with the unmatched path" = fun page ->
   page
   |> goto "/nope/xyz" |> hydrated
   |> expect_text ".missing" "no route: /nope/xyz"
   |> ignore
 
-let () = test "per-app bundle isolation: web bundle excludes admin code" @@ fun page ->
+let%browser "per-app bundle isolation: web bundle excludes admin code" = fun page ->
   page
   |> goto "/" |> hydrated
   |> expect_js ~descr:"web bundle does not contain 'admin actions'"
@@ -88,7 +88,7 @@ let () = test "per-app bundle isolation: web bundle excludes admin code" @@ fun 
 
 (* forced-race stress: navigation + execution-context swaps. With loaderId-matched loads and
    context-pinned evals these must be deterministic, every run. *)
-let () = test "STRESS: 6 rapid reloads keep localStorage + hydration consistent" @@ fun page ->
+let%browser "STRESS: 6 rapid reloads keep localStorage + hydration consistent" = fun page ->
   let p = page |> goto "/" |> hydrated |> expect_text ".visits" "visits (localStorage): 1" in
   let final =
     List.fold_left
@@ -97,7 +97,7 @@ let () = test "STRESS: 6 rapid reloads keep localStorage + hydration consistent"
   in
   ignore final
 
-let () = test "STRESS: assert immediately after navigation (no settle), many pages" @@ fun page ->
+let%browser "STRESS: assert immediately after navigation (no settle), many pages" = fun page ->
   page
   |> goto "/products" |> expect_text "h1" "Products"
   |> goto "/about" |> expect_text "h1" "About"
@@ -108,19 +108,16 @@ let () = test "STRESS: assert immediately after navigation (no settle), many pag
   |> ignore
 
 (* streaming responses (server send_chunked / send_file) proven over a real fetch *)
-let () = test "send_chunked streams + the client reassembles the chunks" @@ fun page ->
+let%browser "send_chunked streams + the client reassembles the chunks" = fun page ->
   page
   |> goto "/" |> hydrated
   |> eval "fetch('/api/stream').then(r => r.text()).then(t => { window.__stream = t })"
   |> wait_for ~descr:"chunked body reassembled" "window.__stream === 'chunk-1chunk-2chunk-3'"
   |> ignore
 
-let () = test "send_file streams a file body with the right bytes" @@ fun page ->
+let%browser "send_file streams a file body with the right bytes" = fun page ->
   page
   |> goto "/" |> hydrated
   |> eval "fetch('/api/download').then(r => r.text()).then(t => { window.__dl = t })"
   |> wait_for ~descr:"downloaded file body" "window.__dl === 'hello from send_file'"
   |> ignore
-
-(* run every registered test; base_url from FENNEC_TEST_URL, flags (--headed/--grep/…) via argv *)
-let () = Fennec_hunt.Run.main_cli ()

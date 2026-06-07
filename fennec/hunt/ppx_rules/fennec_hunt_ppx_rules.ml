@@ -141,6 +141,62 @@ let ext_system_manual =
     (fun ~ctxt payload -> [ expand_system ~manual:true ~ctxt payload ])
 
 (* ══════════════════════════════════════════════════════════════════════════════════════ *)
+(*  let%browser "name" = <fun page -> unit>   (Browser cut)                                 *)
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+
+(* The RHS is the test function ([fun page -> …]); register it with its source file (for
+   [--only-file], so `fennec test browser` can run one suite file against its own instance). *)
+let expand_browser ~ctxt payload =
+  let loc = Expansion_context.Extension.extension_point_loc ctxt in
+  if !drop_tests then noop ~loc
+  else
+    match payload with
+    | PStr [ { pstr_desc = Pstr_value (_, [ vb ]); _ } ] ->
+      (match extract_name vb with
+       | Some name ->
+         let expr = vb.pvb_expr in
+         let file = Ast_builder.Default.estring ~loc (loc_file loc) in
+         let ename = Ast_builder.Default.estring ~loc name in
+         [%stri let () = Fennec_hunt.Live.test_loc ~name:[%e ename] ~file:[%e file] [%e expr]]
+       | None ->
+         Location.raise_errorf ~loc "let%%browser requires a string literal name: let%%browser \"name\" = fun page -> ...")
+    | _ ->
+      Location.raise_errorf ~loc "let%%browser requires: let%%browser \"name\" = fun page -> <body>"
+
+let ext_browser =
+  Extension.V3.declare_inline "browser"
+    Extension.Context.structure_item Ast_pattern.(__)
+    (fun ~ctxt payload -> [ expand_browser ~ctxt payload ])
+
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+(*  let%http "name" = <fun () -> unit>   (Http cut)                                         *)
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
+
+(* The RHS is the suite body ([fun () -> check …; check …]); register it with its source file
+   (for [--only-file]). The target URL is the harness-assigned FENNEC_TEST_URL at run time. *)
+let expand_http ~ctxt payload =
+  let loc = Expansion_context.Extension.extension_point_loc ctxt in
+  if !drop_tests then noop ~loc
+  else
+    match payload with
+    | PStr [ { pstr_desc = Pstr_value (_, [ vb ]); _ } ] ->
+      (match extract_name vb with
+       | Some name ->
+         let expr = vb.pvb_expr in
+         let file = Ast_builder.Default.estring ~loc (loc_file loc) in
+         let ename = Ast_builder.Default.estring ~loc name in
+         [%stri let () = Fennec_hunt.Http.hunt_loc ~name:[%e ename] ~file:[%e file] [%e expr]]
+       | None ->
+         Location.raise_errorf ~loc "let%%http requires a string literal name: let%%http \"name\" = fun () -> ...")
+    | _ ->
+      Location.raise_errorf ~loc "let%%http requires: let%%http \"name\" = fun () -> <checks>"
+
+let ext_http =
+  Extension.V3.declare_inline "http"
+    Extension.Context.structure_item Ast_pattern.(__)
+    (fun ~ctxt payload -> [ expand_http ~ctxt payload ])
+
+(* ══════════════════════════════════════════════════════════════════════════════════════ *)
 (*  Exported rules (for any driver to register)                                          *)
 (* ══════════════════════════════════════════════════════════════════════════════════════ *)
 
@@ -149,4 +205,6 @@ let rules = [
   Context_free.Rule.extension ext_test_unit;
   Context_free.Rule.extension ext_system;
   Context_free.Rule.extension ext_system_manual;
+  Context_free.Rule.extension ext_browser;
+  Context_free.Rule.extension ext_http;
 ]

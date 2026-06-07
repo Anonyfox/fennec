@@ -54,10 +54,11 @@ let main_cli ?binary ?base_url () =
   let grep = ref None and bail = ref false and jobs = ref 1 and headed = ref false in
   let timeout = ref 5.0 and browsers = ref 1 and server = ref None and retries = ref 0 in
   let style = ref Reporter.Auto and color = ref None and ascii = ref false in
-  let screenshots = ref None in
+  let screenshots = ref None and only_file = ref None in
   let rec parse = function
     | [] -> ()
     | "--grep" :: v :: r -> grep := Some v; parse r
+    | "--only-file" :: v :: r -> only_file := Some v; parse r  (* fennec test: run one suite file against its own instance *)
     | "--bail" :: r -> bail := true; parse r
     | "--jobs" :: v :: r -> jobs := (try int_of_string v with _ -> !jobs); parse r
     | "--retries" :: v :: r -> retries := (try int_of_string v with _ -> !retries); parse r
@@ -86,7 +87,7 @@ let main_cli ?binary ?base_url () =
   let reporter = Reporter.create ~style:!style ~caps () in
   let config =
     { Live.default_config with jobs = (if !bail then 1 else !jobs); retries = !retries; bail = !bail;
-      grep = !grep; step_timeout = !timeout; screenshot_dir = !screenshots }
+      grep = !grep; only_file = !only_file; step_timeout = !timeout; screenshot_dir = !screenshots }
   in
   let r =
     try main ?binary ~reporter ~browsers:!browsers ~headless:(not !headed) ?server_exe:!server ~base_url ~config ()

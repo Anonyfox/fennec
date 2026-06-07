@@ -4,7 +4,7 @@
    FENNEC_TEST_URL. *)
 open Fennec_hunt.Http
 
-let () = hunt "site api (http)" @@ fun () ->
+let%http "site api (http)" = fun () ->
   check "health endpoint: JSON shape + timing" (fun () ->
     get "/api/health" ~expect:[ status 200; is_json; json_path_is "ok" "true"; json_path_is "app" "web"; max_elapsed 500.0 ]);
 

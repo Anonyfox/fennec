@@ -22,13 +22,14 @@ type assertion = response -> unit
 
 (** {1 The hunt block} *)
 
-(** [hunt label ?url ?spawn ?env ?timeout ?request_timeout body] — a test suite against a
-    target server. The target is [~url] if given, else the harness-assigned [FENNEC_TEST_URL]
-    (set per-suite by [fennec test], so a suite gets its own isolated instance and can't
-    hardcode a colliding port), else a clear error. Optionally spawns a command and waits for
-    the target to respond. [~timeout] is the readiness deadline (default 30s);
-    [~request_timeout] is the default per-request deadline (default 10s, overridable per
-    request) — a server that accepts but never answers fails the check, not the whole run. *)
+(** [hunt label ?url ?spawn ?env ?timeout ?request_timeout body] — REGISTER a test suite against a
+    target server; it runs when {!run} runs (so the runner can filter by source file). Prefer
+    [let%http]; this is the no-ppx form. The target is [~url] if given, else the harness-assigned
+    [FENNEC_TEST_URL] (set per-suite by [fennec test], so a suite gets its own isolated instance and
+    can't hardcode a colliding port), else a clear error. Optionally spawns a command and waits for
+    the target to respond. [~timeout] is the readiness deadline (default 30s); [~request_timeout] is
+    the default per-request deadline (default 10s, overridable per request) — a server that accepts
+    but never answers fails the check, not the whole run. *)
 val hunt :
   string ->
   ?url:string ->
@@ -38,6 +39,23 @@ val hunt :
   ?request_timeout:float ->
   (unit -> unit) ->
   unit
+
+(** ppx-generated registration ([let%http]), carrying the source file for [--only-file]. *)
+val hunt_loc :
+  name:string ->
+  file:string ->
+  ?url:string ->
+  ?spawn:string list ->
+  ?env:string array ->
+  ?timeout:float ->
+  ?request_timeout:float ->
+  (unit -> unit) ->
+  unit
+
+(** Run every registered suite (honouring [--grep] on checks and [--only-file] on suites), print
+    the per-suite tallies, and return [0] if all passed else [1]. The whole body of a runner:
+    [let () = exit (Fennec_hunt.Http.run ())]. *)
+val run : unit -> int
 
 (** {1 Test cases} *)
 

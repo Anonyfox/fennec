@@ -114,11 +114,15 @@ module Make (B : Backend.S) : sig
 
   (** {2 The runner} *)
 
-  (** A registered test: a name and a body that drives a page. *)
-  type test = { name : string; body : page -> unit }
+  (** A registered test: a name, the source file it came from (for [--only-file]; ["" ] if
+      registered by hand), and a body that drives a page. *)
+  type test = { name : string; file : string; body : page -> unit }
 
-  (** Register a test (it runs when the suite runs). *)
+  (** Register a test (it runs when the suite runs). Prefer [let%browser]; this is the no-ppx form. *)
   val test : string -> (page -> unit) -> unit
+
+  (** ppx-generated registration (with the source file, for [--only-file]); prefer {!test} by hand. *)
+  val test_loc : name:string -> file:string -> (page -> unit) -> unit
 
   (** All registered tests, in registration order. *)
   val registered : unit -> test list
@@ -138,17 +142,18 @@ module Make (B : Backend.S) : sig
     retries : int;         (** re-run a failing test up to this many times *)
     bail : bool;           (** stop the whole run on the first failure *)
     grep : string option;  (** run only tests whose name contains this substring *)
+    only_file : string option;  (** run only tests registered from this source file (basename match) *)
     base_url : string;     (** {!page.base_url} for every test *)
     step_timeout : float;  (** per-step wait budget, seconds *)
     test_timeout : float;  (** per-test wall-clock budget, seconds *)
     screenshot_dir : string option;  (** [Some dir] → write [<dir>/<test>.png] on failure; [None] → off *)
   }
 
-  (** [jobs=1, retries=0, bail=false, grep=None, base_url="", step_timeout=5, test_timeout=30,
-      screenshot_dir=None]. *)
+  (** [jobs=1, retries=0, bail=false, grep=None, only_file=None, base_url="", step_timeout=5,
+      test_timeout=30, screenshot_dir=None]. *)
   val default_config : config
 
-  (** Filter tests by [config.grep] (identity when [grep] is [None]). *)
+  (** Filter tests by [config.only_file] then [config.grep] (identity when both are [None]). *)
   val select : config -> test list -> test list
 
   (** Run [tests] and return the tally. [provision backend_k] must call [backend_k] with a

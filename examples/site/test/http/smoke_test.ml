@@ -3,7 +3,7 @@
    sub-apps by Host (prod fidelity). *)
 open Fennec_hunt.Http
 
-let () = hunt "site (http)" @@ fun () ->
+let%http "site (http)" = fun () ->
   check "web health endpoint" (fun () ->
     get "/api/health" ~expect:[status 200; is_json; json_path_is "ok" "true"; json_path_is "app" "web"]);
 

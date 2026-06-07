@@ -197,7 +197,10 @@ let read_file path =
    exposed: a leftover of OURS (reclaim it — SIGKILL, the dev self-heal) vs. a FOREIGN holder
    (name it, never touch it — fail this suite clearly). Teardown is structural (Fun.protect),
    so a failure or exception never orphans the instance. *)
-let run_one_suite ~server_exe ~(args : string list) ~stream ~(suite : Suites.t) ~(inst : Instance.t) : bool * string =
+let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite : Suites.t) ~(inst : Instance.t) : bool * string =
+  (* one shared runner exe per cut; restrict it to THIS suite's source file so it runs only that
+     file's tests — against this suite's own dedicated instance (per-file isolation preserved). *)
+  let args = "--only-file" :: suite.Suites.name :: args in
   let buf = Buffer.create 256 in
   let emit s = if stream then (print_string s; flush stdout) else Buffer.add_string buf s in
   emit (Printf.sprintf "\n\027[1m\u{25b6} %s\027[0m \027[2m(:%d)\027[0m\n" suite.Suites.name inst.Instance.port);
@@ -223,14 +226,14 @@ let run_one_suite ~server_exe ~(args : string list) ~stream ~(suite : Suites.t) 
             false
           | Ok () ->
             let code =
-              if stream then run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:None
+              if stream then run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:None
               else begin
                 let tmp = Filename.temp_file "fennec-suite-" ".log" in
                 let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
                 let code =
                   Fun.protect
                     ~finally:(fun () -> try Unix.close fd with _ -> ())
-                    (fun () -> run_suite_exe ~exe:suite.Suites.exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
+                    (fun () -> run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
                 in
                 emit (read_file tmp);
                 (try Sys.remove tmp with _ -> ());
@@ -251,25 +254,32 @@ let run_one_suite ~server_exe ~(args : string list) ~stream ~(suite : Suites.t) 
    Returns the number of failed suites (0 = all passed). *)
 let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~(args : string list) : int =
   ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned dev watcher → no lock clash *)
+  (* the per-suite instance is the bytecode server, which must dlopen its C stubs — `opam env`
+     doesn't put them on CAML_LD_LIBRARY_PATH. Reuse fennec dev's fix (same as the system cut). *)
+  Fennec_dev.Supervisor.ensure_stublibs ();
   match Discover.find () with
   | Error msg -> Printf.eprintf "fennec test: %s\n%!" msg; 1
   | Ok d ->
     let cwd = Sys.getcwd () in
+    (* suites = the source files in the cut dir; we still discover them per-file (for per-suite
+       instance allocation + the --only-file token), but they all compile into ONE runner exe. *)
     let suites = Suites.discover ~root:d.Discover.root ~cwd ~dir in
     if suites = [] then (
       Printf.printf "fennec test: no %s suites found (looked in %s)\n%!" (suite_to_string cut) (Filename.concat cwd dir);
       0 (* nothing to run is not a failure *))
     else
-      (* build the server, its webroot, and the suites in one dune invocation — fennec is the
-         sole dune-aware process, so no nested-build lock deadlock. Targets are root-relative,
-         so build from the workspace root, then RESTORE the cwd: `fennec test all` runs
-         orchestrate once per cut, and a lingering chdir would make the next cut look for its
-         suites under the wrong directory. *)
+      let reldir = Suites.relativize ~root:d.Discover.root ~cwd in
+      let runner_exe = Suites.exe_path ~root:d.Discover.root ~reldir ~dir ~name:"run" in
+      let runner_target = Suites.build_target ~reldir ~dir ~name:"run" in
+      (* build the server, its webroot, and the cut's single runner in one dune invocation — fennec
+         is the sole dune-aware process, so no nested-build lock deadlock. Targets are root-relative,
+         so build from the workspace root, then RESTORE the cwd: `fennec test all` runs orchestrate
+         once per cut, and a lingering chdir would make the next cut look under the wrong directory. *)
       Fun.protect ~finally:(fun () -> try Sys.chdir cwd with _ -> ()) @@ fun () ->
       Sys.chdir d.Discover.root;
       let webroot = Filename.concat d.Discover.src_dir "webroot" in
       let app_targets = d.Discover.targets @ [ webroot ] in
-      let build_cmd = "dune build " ^ String.concat " " (List.map Filename.quote (app_targets @ List.map (fun (s : Suites.t) -> s.target) suites)) in
+      let build_cmd = "dune build " ^ String.concat " " (List.map Filename.quote (app_targets @ [ runner_target ])) in
       match Sys.command build_cmd with
       | n when n <> 0 -> Printf.eprintf "fennec test: `dune build` failed (exit %d) — see the errors above\n%!" n; 1
       | _ ->
@@ -291,7 +301,7 @@ let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~(args : string list) : i
             (fun ((suite : Suites.t), (inst : Instance.t)) ->
               if over_limit () then None (* fail-fast reached — don't boot this one *)
               else begin
-                let ok, block = run_one_suite ~server_exe:d.Discover.exe ~args ~stream ~suite ~inst in
+                let ok, block = run_one_suite ~server_exe:d.Discover.exe ~runner_exe ~args ~stream ~suite ~inst in
                 if not ok then bump ();
                 if not stream then (Mutex.lock pm; print_string block; flush stdout; Mutex.unlock pm);
                 Some { Report.name = suite.Suites.name; port = inst.Instance.port; ok }

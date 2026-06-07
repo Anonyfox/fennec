@@ -104,10 +104,10 @@ let test_runner () =
   let cfg = { D.default_config with jobs = 2; step_timeout = 0.05; test_timeout = 0.3 } in
 
   let tests =
-    [ { D.name = "passes"; body = (fun _ -> ()) };
-      { D.name = "asserts"; body = (fun p -> ignore (p |> D.expect_visible ".never")) };
-      { D.name = "errors"; body = (fun _ -> failwith "boom") };
-      { D.name = "hangs"; body = (fun _ -> Eio.Time.sleep clock 5.0) } ]
+    [ { D.file = ""; D.name ="passes"; body = (fun _ -> ()) };
+      { D.file = ""; D.name ="asserts"; body = (fun p -> ignore (p |> D.expect_visible ".never")) };
+      { D.file = ""; D.name ="errors"; body = (fun _ -> failwith "boom") };
+      { D.file = ""; D.name ="hangs"; body = (fun _ -> Eio.Time.sleep clock 5.0) } ]
   in
   let r = D.run ~clock ~config:cfg ~provision tests in
   let outcome name = (List.find (fun (x : D.result) -> x.name = name) r.results).outcome in
@@ -121,15 +121,15 @@ let test_runner () =
 
   (* retry *)
   let attempts = ref 0 in
-  let flaky = { D.name = "flaky"; body = (fun _ -> incr attempts; if !attempts = 1 then failwith "first") } in
+  let flaky = { D.file = ""; D.name ="flaky"; body = (fun _ -> incr attempts; if !attempts = 1 then failwith "first") } in
   let r2 = D.run ~clock ~config:{ cfg with retries = 1 } ~provision [ flaky ] in
   check "flaky test passes on retry" (r2.passed = 1);
 
   (* bail: stop the run on the first failure *)
   let bt =
-    [ { D.name = "a"; body = (fun _ -> ()) };
-      { D.name = "b-fails"; body = (fun p -> ignore (p |> D.expect_visible ".never")) };
-      { D.name = "c"; body = (fun _ -> ()) } ]
+    [ { D.file = ""; D.name ="a"; body = (fun _ -> ()) };
+      { D.file = ""; D.name ="b-fails"; body = (fun p -> ignore (p |> D.expect_visible ".never")) };
+      { D.file = ""; D.name ="c"; body = (fun _ -> ()) } ]
   in
   let rb = D.run ~clock ~config:{ cfg with bail = true } ~provision bt in
   check "bail stops the run after the first failure" (List.length rb.results = 2);
@@ -137,9 +137,9 @@ let test_runner () =
 
   (* grep: run only matching tests *)
   let gt =
-    [ { D.name = "login works"; body = (fun _ -> ()) };
-      { D.name = "signup works"; body = (fun _ -> ()) };
-      { D.name = "login again"; body = (fun _ -> ()) } ]
+    [ { D.file = ""; D.name ="login works"; body = (fun _ -> ()) };
+      { D.file = ""; D.name ="signup works"; body = (fun _ -> ()) };
+      { D.file = ""; D.name ="login again"; body = (fun _ -> ()) } ]
   in
   let rg = D.run ~clock ~config:{ cfg with grep = Some "login" } ~provision gt in
   check "grep runs only matching tests" (List.length rg.results = 2);
@@ -147,7 +147,7 @@ let test_runner () =
   (* concurrency bound *)
   let cur = ref 0 and mx = ref 0 in
   let bounded f = incr cur; if !cur > !mx then mx := !cur; Fun.protect ~finally:(fun () -> decr cur) (fun () -> f (Fake.world ())) in
-  let yielders = List.init 8 (fun i -> { D.name = Printf.sprintf "y%d" i; body = (fun _ -> Eio.Time.sleep clock 0.005) }) in
+  let yielders = List.init 8 (fun i -> { D.file = ""; D.name =Printf.sprintf "y%d" i; body = (fun _ -> Eio.Time.sleep clock 0.005) }) in
   let rj = D.run ~clock ~config:{ cfg with jobs = 3; test_timeout = 1.0 } ~provision:bounded yielders in
   check "all 8 tests ran" (rj.passed = 8);
   check "concurrency never exceeded jobs (3)" (!mx <= 3)

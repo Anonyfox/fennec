@@ -102,10 +102,11 @@ module Make (B : Backend.S) = struct
   let eval_get js p = B.eval p.backend js
 
   (* ===================================================================== runner ==== *)
-  type test = { name : string; body : page -> unit }
+  type test = { name : string; file : string; body : page -> unit }
 
   let registry : test list ref = ref []
-  let test name body = registry := { name; body } :: !registry
+  let test name body = registry := { name; file = ""; body } :: !registry
+  let test_loc ~name ~file body = registry := { name; file; body } :: !registry  (* ppx (let%browser) *)
   let registered () = List.rev !registry
 
   (* the runner's result/outcome/summary types live in {!Reporter} (they don't depend on the
@@ -116,12 +117,13 @@ module Make (B : Backend.S) = struct
 
   type config = {
     jobs : int; retries : int; bail : bool; grep : string option;
+    only_file : string option;  (* run only tests registered from this source file (basename match) *)
     base_url : string; step_timeout : float; test_timeout : float;
     screenshot_dir : string option;  (* Some dir → write <dir>/<test>.png on failure; None → off *)
   }
   let default_config =
-    { jobs = 1; retries = 0; bail = false; grep = None; base_url = ""; step_timeout = 5.0; test_timeout = 30.0;
-      screenshot_dir = None }
+    { jobs = 1; retries = 0; bail = false; grep = None; only_file = None; base_url = ""; step_timeout = 5.0;
+      test_timeout = 30.0; screenshot_dir = None }
 
   (* how to re-run just this test, copy-pasteable. Prefix from FENNEC_HUNT_RERUN (wrappers set
      it, e.g. "sh examples/site/e2e/run.sh") else the executable name; the test name is
@@ -193,7 +195,12 @@ module Make (B : Backend.S) = struct
     r
 
   let select config tests =
-    match config.grep with None -> tests | Some g -> List.filter (fun (t : test) -> Cdp.contains t.name g) tests
+    let by_file =
+      match config.only_file with
+      | None -> tests
+      | Some f -> List.filter (fun (t : test) -> t.file <> "" && Cdp.contains t.file f) tests
+    in
+    match config.grep with None -> by_file | Some g -> List.filter (fun (t : test) -> Cdp.contains t.name g) by_file
 
   let run ?reporter ~clock ~config ~provision tests : report =
     let tests = select config tests in

@@ -1,14 +1,18 @@
-; Browser suites for `fennec test browser` (needs a system Chrome). Each is a self-contained
-; executable: it registers its tests and runs them via Run.main_cli (base_url from
-; FENNEC_TEST_URL, set per-suite by the CLI). The CLI discovers them by convention, boots an
-; isolated app instance per suite, and runs them.
-; On a custom alias (@browser), NOT @runtest — so a bare `dune test` never needs Chrome.
-(executable
- (name web_test)
- (modules web_test)
- (libraries fennec-hunt))
+; Browser suites for `fennec test browser` (needs a system Chrome). Zero-ceremony authoring: drop
+; a `*_test.ml` with
+;   let%browser "name" = fun page -> page |> goto "/" |> …
+; — no main, no Run.main_cli trailer, no edit here. The -linkall library force-links every suite
+; module so each registers; the one-line `run` executable is the entry. fennec builds it one-shot
+; and runs it PER suite file (--only-file) against that file's own isolated app instance.
+; NOT @runtest — so a bare `dune test` never needs Chrome.
+(library
+ (name site_browser_suites)
+ (modules (:standard \ run))
+ (libraries fennec-hunt)
+ (library_flags (-linkall))
+ (preprocess (pps fennec-hunt.ppx)))
 
-(rule
- (alias browser)
- (deps web_test.exe)
- (action (progn)))
+(executable
+ (name run)
+ (modules run)
+ (libraries site_browser_suites fennec-hunt))

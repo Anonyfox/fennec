@@ -63,28 +63,26 @@ let caps = lazy (Reporter.detect_caps ())
 let color code s = if (Lazy.force caps).Reporter.color then "\027[" ^ code ^ "m" ^ s ^ "\027[0m" else s
 let glyph uni ascii = if (Lazy.force caps).Reporter.unicode then uni else ascii
 
-(* Any failed check across ALL hunt blocks in the process. A hunt never exits mid-run, so
-   every suite reports; the process exits non-zero once at the end if anything failed. *)
+(* Any failed check across ALL hunt blocks in the run. A hunt never exits mid-run, so every suite
+   reports; {!run} returns non-zero once at the end if anything failed. *)
 let any_failed = ref false
-let exit_hook_installed = ref false
-let exiting = ref false
-let install_exit_hook () =
-  if not !exit_hook_installed then begin
-    exit_hook_installed := true;
-    at_exit (fun () -> if !any_failed && not !exiting then (exiting := true; exit 1))
-  end
 
-(* the --grep filter, read once from argv (mirrors the Browser runner's flag) — set per-suite
-   by `fennec test --grep`. A check whose label doesn't contain it is skipped (substring match,
-   same semantics as the Browser cut and [body_contains]). *)
-let grep =
+(* an argv flag value, read once (mirrors the Browser runner's flags), set per-suite by
+   `fennec test`. *)
+let arg_value flag =
   lazy
     (let rec scan = function
-       | "--grep" :: v :: _ -> Some v
+       | f :: v :: _ when f = flag -> Some v
        | _ :: r -> scan r
        | [] -> None
      in
      match Array.to_list Sys.argv with _ :: rest -> scan rest | [] -> None)
+
+(* --grep: a check whose label doesn't contain it is skipped (substring, same as the Browser cut).
+   --only-file: the runner runs only hunt blocks from that source file (so `fennec test http` can
+   run one suite file against its own isolated instance). *)
+let grep = arg_value "--grep"
+let only_file = arg_value "--only-file"
 
 let selected label = match Lazy.force grep with None -> true | Some g -> Fennec_hunt_util.contains label g
 
@@ -580,37 +578,70 @@ let check label body =
 (*  hunt                                                                      *)
 (* ════════════════════════════════════════════════════════════════════════════ *)
 
+(* A registered suite (hunt block). It is REGISTERED, not run, on the [hunt] call — so the runner
+   can filter by source file ([--only-file]) and there is no hand-written entry point in userland;
+   the suites live as module-init side effects, exactly like Browser's [Live.test] and the inline
+   [let%test]. {!run} executes them. *)
+type suite = {
+  label : string;
+  file : string;                 (* source file (ppx-supplied), for --only-file; "" by hand *)
+  url : string option;
+  spawn : string list option;
+  env : string array;
+  timeout : float;
+  request_timeout : float;
+  body : unit -> unit;
+}
+
+let suites : suite list ref = ref []
+
 let hunt label ?url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 10.0) body =
-  (* the target instance: explicit ~url, else the harness-assigned FENNEC_TEST_URL (so a suite
-     run by `fennec test` can't hardcode a colliding port — it gets its isolated instance),
-     else a clear error. *)
-  let url = match Test_proto.resolve_url ~explicit:url with Ok u -> u | Error m -> failwith ("fennec_hunt: " ^ m) in
+  suites := { label; file = ""; url; spawn; env; timeout; request_timeout; body } :: !suites
+
+(* ppx-generated registration (let%http), carrying the source file for --only-file. *)
+let hunt_loc ~name ~file ?url ?spawn ?(env = [||]) ?(timeout = 30.0) ?(request_timeout = 10.0) body =
+  suites := { label = name; file; url; spawn; env; timeout; request_timeout; body } :: !suites
+
+(* run ONE hunt block: resolve the target (explicit ~url, else the harness-assigned
+   FENNEC_TEST_URL, else a clear error), own an Eio loop, optionally spawn the server, run the
+   body's checks against the ambient context, and tally. Sets [any_failed] on any failure. *)
+let run_one (h : suite) =
+  let url = match Test_proto.resolve_url ~explicit:h.url with Ok u -> u | Error m -> failwith ("fennec_hunt: " ^ m) in
   let target = Target.parse_url url in
   let tls = target.scheme = "https" in
   Eio_main.run @@ fun eio_env ->
   Eio.Switch.run @@ fun sw ->
   let net = (Eio.Stdenv.net eio_env :> Target.net) in
   let clock = (Eio.Stdenv.clock eio_env :> Target.clock) in
-  (match spawn with
+  (match h.spawn with
   | None ->
     (* no spawn: an already-running server. Still wait for it (it may be coming up). *)
-    Target.wait_ready ~net ~clock ~host:target.host ~port:target.port ~tls ~timeout ()
+    Target.wait_ready ~net ~clock ~host:target.host ~port:target.port ~tls ~timeout:h.timeout ()
   | Some argv ->
     Target.spawn ~sw ~proc_mgr:(Eio.Stdenv.process_mgr eio_env) ~fs:(Eio.Stdenv.fs eio_env)
-      ~net ~clock ~env ~host:target.host ~port:target.port ~tls ~timeout argv);
-  let c = { url = target; net; clock; request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0; checks_skipped = 0 } in
-  install_exit_hook ();
+      ~net ~clock ~env:h.env ~host:target.host ~port:target.port ~tls ~timeout:h.timeout argv);
+  let c = { url = target; net; clock; request_timeout = h.request_timeout; last = None; last_request = "(no request yet)"; cookies = []; checks_passed = 0; checks_failed = 0; checks_skipped = 0 } in
   ctx := Some c;
-  Printf.printf "\n%s %s\n%!" (color "1" (glyph "⟐ " "> " ^ label)) (color "2" (Printf.sprintf "(%s)" url));
-  Fun.protect body ~finally:(fun () -> ctx := None);
+  Printf.printf "\n%s %s\n%!" (color "1" (glyph "⟐ " "> " ^ h.label)) (color "2" (Printf.sprintf "(%s)" url));
+  Fun.protect h.body ~finally:(fun () -> ctx := None);
   Printf.printf "\n";
-  (* a hunt never exits here — it records failure and lets later suites in the same process
-     run. The process exits non-zero once, at the end, via the at_exit hook. *)
   let skipped = if c.checks_skipped > 0 then Printf.sprintf " (%d skipped)" c.checks_skipped else "" in
   if c.checks_failed > 0 then (
     any_failed := true;
     Printf.printf "  %s%s\n%!" (color "31" (Printf.sprintf "%d/%d checks failed" c.checks_failed (c.checks_passed + c.checks_failed))) (color "2" skipped))
   else Printf.printf "  %s%s\n%!" (color "32" (Printf.sprintf "%d checks passed" c.checks_passed)) (color "2" skipped)
+
+(* The runner entry — runs every registered suite (filtered by --only-file), returns 0 if all
+   passed else 1. The whole body of an Http suite runner: [let () = exit (Fennec_hunt.Http.run ())].
+   Userland writes only [let%http] blocks. *)
+let run () =
+  let chosen =
+    List.rev !suites
+    |> List.filter (fun (h : suite) ->
+           match Lazy.force only_file with None -> true | Some f -> h.file <> "" && Fennec_hunt_util.contains h.file f)
+  in
+  List.iter run_one chosen;
+  if !any_failed then 1 else 0
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  For_test — pure internals exposed for unit tests; NOT a stable API           *)

@@ -72,6 +72,7 @@ let discover ~root ~cwd ~dir : t list =
     let reldir = relativize ~root ~cwd in
     Sys.readdir src_dir |> Array.to_list
     |> List.filter (fun f -> Filename.check_suffix f ".ml")
+    |> List.filter (fun f -> f <> "run.ml")  (* the shared runner entry, not a suite *)
     |> List.sort compare
     |> List.map (fun f ->
            let name = Filename.chop_suffix f ".ml" in
