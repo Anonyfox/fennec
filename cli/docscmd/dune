@@ -1,0 +1,7 @@
+; The `fennec docs` doc-coverage checker. Parses .mli/.ml via ppxlib and reports undocumented
+; exports. Pure extraction is unit-tested inline; only the file walk touches the world.
+(library
+ (name fennec_docs)
+ (libraries ppxlib unix fennec-hunt.unit)
+ (inline_tests (backend fennec-hunt.runner))
+ (preprocess (pps fennec-hunt.ppx)))

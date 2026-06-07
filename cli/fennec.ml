@@ -475,6 +475,29 @@ let test_cmd =
   Cmd.v (Cmd.info "test" ~doc ~man)
     Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
 
+(* Doc-coverage: every public export should carry a doc comment. OCaml has no missing-docs lint,
+   so this is fennec's — warn by default, --strict to fail (CI), --private to include .ml. *)
+let docs_cmd =
+  let paths_arg = Arg.(value & pos_all string [] & info [] ~docv:"PATH" ~doc:"Files or directories to check (default: the whole project).") in
+  let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Exit non-zero if any public export is undocumented (for CI).") in
+  let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Also check $(b,.ml) top-level definitions (unexported), not just $(b,.mli) exports.") in
+  let go paths strict private_ = Fennec_docs.Docscmd.run ~paths ~strict ~private_ in
+  let doc = "Check that public exports carry doc comments" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Parse each $(b,.mli) (the public surface) and report any export — $(b,val), $(b,type), \
+         $(b,exception), $(b,module), $(b,module type) — without a $(b,\\(** ... *\\)) doc comment. \
+         OCaml has no $(i,missing_docs) lint; this is fennec's. Warn-only by default (exit 0); \
+         $(b,--strict) makes it a hard error (a CI gate); $(b,--private) also scans $(b,.ml) \
+         top-level definitions.";
+      `S Manpage.s_examples;
+      `Pre "  fennec docs                  # warn on undocumented public exports";
+      `Pre "  fennec docs --strict         # fail the build / CI on any gap";
+      `Pre "  fennec docs --private lib/   # include unexported defs under lib/" ]
+  in
+  Cmd.v (Cmd.info "docs" ~doc ~man) Term.(const go $ paths_arg $ strict_arg $ private_arg)
+
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
   let man =
@@ -486,6 +509,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd; test_cmd; worker_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; test_cmd; docs_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

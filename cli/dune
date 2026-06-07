@@ -6,4 +6,4 @@
  (public_name fennec)
  (package fennec-cli)
  (modes native)
- (libraries fennec_buildkit cmdliner unix fennec_dev fennec_testcmd))
+ (libraries fennec_buildkit cmdliner unix fennec_dev fennec_testcmd fennec_docs))
