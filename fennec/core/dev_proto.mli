@@ -1,7 +1,7 @@
-(* The dev-time CLI<->server protocol — environment names, stderr line prefixes, the port-conflict
-   exit code, and typed (de)serializers — defined ONCE so the CLI supervisor and the app/server
-   reference the same authoritative wire instead of literals duplicated (and silently drifting)
-   across files. See dev_proto.ml for the rationale. *)
+(** The dev-time CLI↔server protocol — environment variable names, stderr line prefixes, the
+    port-conflict exit code, and typed (de)serializers — defined ONCE here so the CLI supervisor
+    and the app server reference the same authoritative wire, never duplicated literals that can
+    silently drift. See [dev_proto.ml] for the full rationale. *)
 
 (** {1 Environment the CLI sets for the server} *)
 
@@ -51,7 +51,10 @@ val port_in_use_exit : int
 
 (** {1 stderr line protocol (server → CLI)} *)
 
+(** The fixed prefix that starts a URL report line (the server prints this before the name=url list). *)
 val urls_prefix : string
+
+(** The fixed prefix that starts a port-conflict line (the server prints this before the busy port number). *)
 val port_busy_prefix : string
 
 (** Prefix of the server's own human chatter; the CLI suppresses such lines (its UI says it better). *)

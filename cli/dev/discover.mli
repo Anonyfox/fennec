@@ -1,6 +1,8 @@
-(* Find THE server in a dune project — the single executable that calls [Fennec.serve] — with no
-   config and no folder conventions. See discover.ml for the rationale. *)
+(** Find THE server in a dune project — the single executable that calls [Fennec.serve] — with no
+    config and no folder conventions. See [discover.ml] for the rationale. *)
 
+(** Everything the supervisor needs for a discovered server: workspace root, source dir,
+    built executable path, and the dune targets to build and watch. *)
 type t = {
   root : string; (** dune workspace root (absolute) *)
   name : string; (** the server executable's name *)

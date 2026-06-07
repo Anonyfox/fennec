@@ -1,15 +1,17 @@
-(* An endpoint: an app's identity (name + host patterns) and behavior (a two-phase paw pipeline).
-   Ports are not here — the runtime routes by Host in prod and assigns localhost ports in dev.
+(** An endpoint: an app's identity (name + host patterns) and its two-phase paw pipeline.
+    Ports are not part of the endpoint — the runtime routes by Host in prod and assigns localhost
+    ports in dev.
 
-   {b Always-phase} paws ({!pipe}, {!use}, {!get}, {!post}, {!app}, …) run on every request.
-   {b Matched-phase} paws ({!pipe_matched}, {!use_matched}) run ONLY after an always-phase paw
-   answered the conn (a route matched). This prevents the "404 becomes 401" bug class: auth
-   middleware in the matched phase never fires on a request that didn't match any route.
+    {b Always-phase} paws ({!pipe}, {!use}, {!get}, {!post}, {!app}, …) run on every request.
+    {b Matched-phase} paws ({!pipe_matched}, {!use_matched}) run ONLY after an always-phase paw
+    answered (a route matched) — this prevents the "404 becomes 401" class of bugs.
 
-   For simple apps (no matched-phase paws), behavior is identical to a flat pipeline. *)
+    For simple apps (no matched-phase paws) behaviour is identical to a flat pipeline. *)
 
+(** Re-exports {!Fennec_paw.Paw} for convenience in endpoint definitions. *)
 module Paw = Fennec_paw.Paw
 
+(** A named, host-scoped application with a two-phase paw pipeline. *)
 type t
 
 (** [make ~name ?hosts ()] — a named endpoint answering the given host PATTERNS (validated later by
@@ -28,10 +30,19 @@ val use : Paw.t -> t -> t
 (** Prepend a paw so it runs before the rest (e.g. the dev livereload injector). *)
 val prepend : Paw.t -> t -> t
 
+(** Route shorthand: add a GET handler for [pattern] to the always-phase pipeline. *)
 val get : string -> Paw.t -> t -> t
+
+(** Route shorthand: add a POST handler for [pattern] to the always-phase pipeline. *)
 val post : string -> Paw.t -> t -> t
+
+(** Route shorthand: add a PUT handler for [pattern] to the always-phase pipeline. *)
 val put : string -> Paw.t -> t -> t
+
+(** Route shorthand: add a DELETE handler for [pattern] to the always-phase pipeline. *)
 val delete : string -> Paw.t -> t -> t
+
+(** Route shorthand: add a PATCH handler for [pattern] to the always-phase pipeline. *)
 val patch : string -> Paw.t -> t -> t
 
 (** Mount an SSR app. *)
@@ -51,5 +62,8 @@ val pipe_matched : Paw.t list -> t -> t
 (** The composed handler paw (always-phase → [if answered] matched-phase). *)
 val handler : t -> Paw.t
 
+(** The endpoint's stable name (as given to {!make}). *)
 val name : t -> string
+
+(** The host patterns this endpoint answers (as given to {!make}). *)
 val hosts : t -> string list

@@ -3,6 +3,7 @@
     only), strong ETag + conditional 304, [Date], correct [Content-Length], and
     HEAD → empty body. *)
 
+(** Re-exports {!Fennec_core.Http} for use in the responder's type signatures. *)
 module H = Fennec_core.Http
 
 (** Finalize [resp] for [req]. [now] is epoch seconds (for [Date] / conditional). *)

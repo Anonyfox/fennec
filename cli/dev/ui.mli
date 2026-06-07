@@ -10,8 +10,11 @@
     The supervisor is the sole writer to the terminal (it captures the server's output and relays
     it through {!app}), so the live region is never corrupted by interleaving. *)
 
+(** The mutable terminal UI state: the output sink, terminal capabilities, stored URLs,
+    and the current problem region contents. *)
 type t
 
+(** Severity of a one-off {!notice} line. *)
 type level = Info | Warn | Error
 
 (** Create a UI. [out] defaults to stdout (flushed); [caps] defaults to {!Tty.detect}. Both are

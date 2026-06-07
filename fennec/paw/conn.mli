@@ -12,6 +12,9 @@
 
     Server-side only — conns never cross to the client. *)
 
+(** The mutable request/response carrier that flows through a paw pipeline. One conn per
+    request, one fiber — never shared. Build the response through the setters and answerers
+    below; the server reads {!resp}, {!stream}, or {!upgrade_handler} after the pipeline runs. *)
 type t
 
 (** A streamed response body the server writes without buffering. *)
@@ -49,14 +52,22 @@ val answered : t -> bool
 
 (** {1 Request readers} *)
 
+(** The URL path (percent-decoded, without the query string). *)
 val path : t -> string
 
 (** The effective method (a method-override paw may have replaced it). *)
 val meth : t -> Fennec_core.Http.meth
 
+(** The [Host] header value (without port). Used for host-based routing. *)
 val host : t -> string
+
+(** ["http"] or ["https"] derived from the transport. *)
 val scheme : t -> string
+
+(** The client IP, as reported by the transport layer (may be a proxy address, not the browser). *)
 val remote_ip : t -> string option
+
+(** The HTTP version string (e.g. ["HTTP/1.1"] or ["HTTP/2"]). *)
 val version : t -> string
 
 (** A request header, case-insensitive (the first value if repeated). *)
@@ -68,27 +79,32 @@ val req_headers : t -> string -> string list
 (** Query params (parsed + percent-decoded lazily on first read, cached). *)
 val query_params : t -> (string * string) list
 
+(** A single query parameter value by name (case-sensitive). *)
 val query : t -> string -> string option
 
 (** Request cookies (parsed lazily). *)
 val cookies : t -> (string * string) list
 
+(** A single cookie value by name. *)
 val cookie : t -> string -> string option
 
 (** Form body fields ([application/x-www-form-urlencoded] or [multipart/form-data], parsed
     lazily by content type). *)
 val body_params : t -> (string * string) list
 
+(** A single form field value by name. *)
 val body_param : t -> string -> string option
 
 (** Uploaded file parts (multipart). *)
 val files : t -> Fennec_core.Multipart.part list
 
+(** An uploaded file part by form field name. *)
 val file : t -> string -> Fennec_core.Multipart.part option
 
 (** Path params captured by a [:name]/[*splat] route. *)
 val path_params : t -> (string * string) list
 
+(** A named segment captured by a [:name] or [*splat] route pattern. *)
 val path_param : t -> string -> string option
 
 (** A value by name, checked in order: path param, query string, then form body. *)
@@ -96,7 +112,10 @@ val param : t -> string -> string option
 
 (** {1 Typed assigns} — request-scoped, type-safe key/value storage (see {!Assigns}). *)
 
+(** Store a typed value under a key for downstream paws to retrieve. *)
 val assign : t -> 'a Assigns.key -> 'a -> t
+
+(** Retrieve a typed assign value; [None] if the key was never set. *)
 val get : t -> 'a Assigns.key -> 'a option
 
 (** Get or [Invalid_argument] — for a key an upstream paw guarantees. *)
@@ -145,8 +164,13 @@ val before_send : t -> (Fennec_core.Http.response -> Fennec_core.Http.response) 
     answer's content-type wins). *)
 val respond : t -> Fennec_core.Http.response -> t
 
+(** Answer with a [text/plain] body. [status] defaults to 200. *)
 val text : ?status:int -> ?headers:(string * string) list -> t -> string -> t
+
+(** Answer with a [text/html; charset=utf-8] body. [status] defaults to 200. *)
 val html : ?status:int -> ?headers:(string * string) list -> t -> string -> t
+
+(** Answer with an [application/json] body. [status] defaults to 200. *)
 val json : ?status:int -> ?headers:(string * string) list -> t -> string -> t
 
 (** Answer with a Location header + a 3xx status (302 by default). *)

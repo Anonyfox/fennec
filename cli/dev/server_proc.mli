@@ -1,7 +1,9 @@
-(* Our server child process: its pid, the read-end of its merged stdout+stderr, and the partial-line
-   carry buffer — bundled so they can't drift apart. The supervisor holds at most one, as the [Up]
-   arm of its state. The line classifier is pure; the effect of each line stays with the supervisor. *)
+(** The dev server child process: its pid, the read end of its merged stdout+stderr pipe, and a
+    partial-line carry buffer — bundled so they can't drift apart. The supervisor holds at most one,
+    as the [Up] arm of its state machine. The line classifier is pure; acting on each line is the
+    supervisor's responsibility. *)
 
+(** An active server child process. *)
 type t
 
 (** How a line the server printed is classified — the pure routing decision the supervisor acts on. *)
@@ -18,6 +20,7 @@ val classify_line : string -> parsed
     parent reads (so the supervisor is the sole terminal writer). [None] if the spawn fails. *)
 val start : exe:string -> env:string array -> t option
 
+(** The OS process id of the server child. *)
 val pid : t -> int
 
 (** Read available output (non-blocking), split into complete lines, and hand each — classified —

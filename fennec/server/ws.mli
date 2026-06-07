@@ -2,6 +2,7 @@
     invariants (client frames masked, frame/message size caps, control-frame
     constraints, reserved bits); writes are server-side (unmasked). *)
 
+(** WebSocket frame opcode as defined in RFC 6455 §5.2. *)
 type opcode = Continuation | Text | Binary | Close | Ping | Pong | Other of int
 
 (** [rsv1] carries the permessage-deflate "compressed" bit (RFC 7692). *)
@@ -14,7 +15,10 @@ type read_result =
   | Protocol_error of string  (** caller should answer with a Close (1002/1009) *)
 
 (** Per-frame / per-message payload ceilings (bytes). *)
+(** Maximum permitted single-frame payload (bytes); larger frames are a protocol error. *)
 val max_frame_size : int
+
+(** Maximum permitted reassembled message payload (bytes); used to bound memory on fragmented messages. *)
 val max_message_size : int
 
 (** Compute the [Sec-WebSocket-Accept] value for a client key. *)

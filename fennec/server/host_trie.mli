@@ -1,7 +1,8 @@
-(* A reversed-label trie for host-pattern matching — O(1) exact and O(label-depth) suffix. Built
-   once at startup from a pre-validated pattern list; lookup is pure. See host_trie.ml for the
-   algorithm. Lives inside {!Host_router.t} — the router API doesn't change. *)
+(** A reversed-label trie for host-pattern matching — O(1) exact, O(label-depth) suffix. Built
+    once at startup from a pre-validated pattern list; lookup is pure. See [host_trie.ml] for the
+    algorithm. Used internally by {!Host_router}; the router's API does not expose the trie. *)
 
+(** An immutable reversed-label trie mapping host patterns to endpoint payloads. *)
 type 'ep t
 
 (** Build a trie from [(pattern, payload)] pairs. [Any] patterns are silently skipped (the caller

@@ -1,6 +1,7 @@
-(* A Host-header pattern, parsed into a total 3-way shape so matching never re-parses and
-   overlapping patterns order deterministically. See host_pattern.ml. *)
+(** A Host-header pattern, parsed into a total 3-way shape so matching never re-parses and
+    overlapping patterns order deterministically. See [host_pattern.ml]. *)
 
+(** A parsed host pattern: an exact hostname, a wildcard suffix, or the catch-all. *)
 type t =
   | Exact of string  (** a full normalized host, e.g. ["acme.com"] *)
   | Suffix of string  (** the dot-prefixed tail of ["*.x"], e.g. [".acme.com"]; matches >=1 leading label *)

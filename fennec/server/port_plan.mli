@@ -1,7 +1,8 @@
-(* Deterministic dev port allocation from a single base. The gateway (prod-identical Host router)
-   is at the base; endpoint i (declaration order) is at base+1+i. Validated up front so the
-   accessors are total. See port_plan.ml. *)
+(** Deterministic dev port allocation from a single base. The gateway (prod-identical Host router)
+    is at the base; endpoint i (declaration order) is at base+1+i. Validated at construction time
+    so all accessors are total. See [port_plan.ml]. *)
 
+(** An allocated port plan: the gateway port and a contiguous block of per-endpoint ports. *)
 type t
 
 (** [of_base ~base ~count] for [count] endpoints. [Error msg] if [base] is out of range (1..65535)

@@ -5,6 +5,7 @@
 (** The [SameSite] attribute. [None_] (wire value ["None"]) implies [Secure]. *)
 type same_site = Strict | Lax | None_
 
+(** Serialize to the wire value: [Strict] → ["Strict"], [Lax] → ["Lax"], [None_] → ["None"]. *)
 val same_site_to_string : same_site -> string
 
 (** Parse a request [Cookie] header value into [name=value] pairs (quotes stripped,

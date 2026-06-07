@@ -2,6 +2,8 @@
     assoc list (small counts → a list is cache-friendly and beats a hashtable).
     Name comparison is case-insensitive without allocating per lookup. *)
 
+(** An HTTP header list — [(name, value)] pairs in wire order. Names are compared
+    case-insensitively; the list representation is cache-friendly for typical small header counts. *)
 type t = (string * string) list
 
 (** Allocation-free case-insensitive string equality (exposed: header names use it). *)

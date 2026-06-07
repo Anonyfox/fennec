@@ -1,18 +1,35 @@
-(* Platform: the native-vs-browser surface, resolved at LINK time via a dune virtual
-   library — not runtime hook refs. Fur.native = inert stubs (SSR-safe by
-   construction); Fur.browser = js_of_ocaml. You cannot link a client without a real
-   platform, and browser code cannot reach the SSR build. *)
+(** Native-vs-browser surface, resolved at {b link time} via a dune virtual library — not via
+    runtime hook refs. [Fur.native] provides inert SSR-safe stubs; [Fur.browser] provides the
+    js_of_ocaml implementations. A client bundle cannot be linked without a real platform, and
+    browser code cannot reach the SSR build. *)
 
-(* the event currently being dispatched (browser sets it around each handler) *)
+(** {1 Ambient event (read inside DOM event handlers)} *)
+
+(** The [event.target.value] of the currently dispatched event. Call inside a DOM event handler. *)
 val event_value : unit -> string
+
+(** The [event.target.checked] state. Call inside a checkbox event handler. *)
 val event_checked : unit -> bool
+
+(** The [event.key] string. Call inside a keyboard event handler. *)
 val event_key : unit -> string
+
+(** Call [event.preventDefault()] on the currently dispatched event. *)
 val event_prevent_default : unit -> unit
 
-(* localStorage *)
+(** {1 localStorage} *)
+
+(** Read a value from [localStorage]; [None] when absent or in SSR. *)
 val local_get : string -> string option
+
+(** Write a value to [localStorage]. No-op in SSR. *)
 val local_set : string -> string -> unit
+
+(** Remove a key from [localStorage]. No-op in SSR. *)
 val local_remove : string -> unit
 
-(* history *)
+(** {1 History API} *)
+
+(** Push a new URL onto the browser's history stack ([window.history.pushState]).
+    No-op in SSR (path changes are handled by the router's signal directly). *)
 val push_state : string -> unit

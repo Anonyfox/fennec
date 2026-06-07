@@ -11,6 +11,8 @@ type change = Nothing | Css_only | Reload
     (a reload). Pure. *)
 val classify : css:bool -> other:bool -> change
 
+(** Tracks the content hashes of the web root so {!poll} can distinguish a
+    real change from dune's mtime-churn and classify CSS-only vs full-reload. *)
 type t
 
 (** Track the [.css]/[.js]/[.mjs] files under [dir]. *)

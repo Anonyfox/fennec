@@ -10,12 +10,18 @@
 
 (** {1 Core types} *)
 
+(** The request-scoped connection carrier (see {!Fennec_paw.Conn}). *)
 module Conn = Fennec_paw.Conn
+
+(** HTTP types: request, response, status codes, methods (see {!Fennec_core.Http}). *)
 module Http = Fennec_core.Http
+
+(** Cookie parsing and serialization (see {!Fennec_core.Cookie}). *)
 module Cookie = Fennec_core.Cookie
 
 (** {1 Endpoints — named apps routed by host} *)
 
+(** Named apps routed by the request's Host header (see {!Fennec_server.Endpoint}). *)
 module Endpoint = Fennec_server.Endpoint
 
 (** {1 Paw — the pipeline primitive + prebuilt batteries}

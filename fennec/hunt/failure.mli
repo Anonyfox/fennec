@@ -28,6 +28,8 @@ type kind =
   | Errored of string   (** the body raised a non-assertion exception (its message) *)
   | Timed_out of float  (** the test exceeded its wall-clock budget (seconds) *)
 
+(** A complete, renderable test failure: its name, the execution trace, the failure kind,
+    a copy-pasteable rerun command, and an optional screenshot path. *)
 type t = {
   test : string;        (** the test name (also its [--grep] key) *)
   trace : step list;    (** executed steps, in order *)

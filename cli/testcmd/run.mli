@@ -6,6 +6,7 @@ type suite = Unit | Http | Browser | System | Docs | All
 (** Parse a suite name (case-insensitive); a clear error message otherwise. *)
 val suite_of_string : string -> (suite, string) result
 
+(** The lowercase name of a suite cut (e.g. ["http"], ["docs"]). *)
 val suite_to_string : suite -> string
 
 (** Parsed command options. *)

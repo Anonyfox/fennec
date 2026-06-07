@@ -41,7 +41,14 @@ let interface_items (sg : signature) : item list =
       | Psig_value vd -> [ { kind = "val"; name = vd.pval_name.txt; line = line vd.pval_loc; doc = doc_text vd.pval_attributes } ]
       | Psig_type (_, tds) | Psig_typesubst tds ->
         List.map (fun (td : type_declaration) -> { kind = "type"; name = td.ptype_name.txt; line = line td.ptype_loc; doc = doc_text td.ptype_attributes }) tds
-      | Psig_exception te -> [ { kind = "exception"; name = te.ptyexn_constructor.pext_name.txt; line = line te.ptyexn_loc; doc = doc_text te.ptyexn_attributes } ]
+      (* ppxlib attaches the doc comment to pext_attributes (the constructor), not ptyexn_attributes
+         (the type_exception wrapper); check both so either placement works. *)
+      | Psig_exception te ->
+        let doc = match doc_text te.ptyexn_constructor.pext_attributes with
+          | Some _ as d -> d
+          | None -> doc_text te.ptyexn_attributes
+        in
+        [ { kind = "exception"; name = te.ptyexn_constructor.pext_name.txt; line = line te.ptyexn_loc; doc } ]
       | Psig_module md -> [ { kind = "module"; name = Option.value md.pmd_name.txt ~default:"_"; line = line md.pmd_loc; doc = doc_text md.pmd_attributes } ]
       | Psig_modtype mtd -> [ { kind = "module type"; name = mtd.pmtd_name.txt; line = line mtd.pmtd_loc; doc = doc_text mtd.pmtd_attributes } ]
       | _ -> [])

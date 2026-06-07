@@ -1,6 +1,8 @@
-(* Per-suite isolated instance allocation — deterministic, collision-free port blocks so
-   stateful suites run in parallel without sharing a server (or, later, a database). *)
+(** Per-suite isolated instance allocation — deterministic, collision-free port blocks so
+    stateful suites run in parallel without sharing a server (or, later, a database). *)
 
+(** Everything needed to boot and run one isolated suite: its port, its target URL, and the
+    env blocks to pass to the server and the suite runner respectively. *)
 type t = {
   suite : string;                       (** the suite (executable) name *)
   port : int;                           (** the instance's gateway/base port *)

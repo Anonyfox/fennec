@@ -6,8 +6,11 @@
     recognise yields [[]], and the caller falls back to showing the raw text — so information is
     never dropped, only upgraded when recognised. *)
 
+(** A diagnostic severity level as reported by the compiler or dune. *)
 type severity = Error | Warning
 
+(** A single compiler/linker problem parsed from dune's diagnostic output:
+    file location, message text, the source excerpt, and any related hints. *)
 type problem = {
   severity : severity;
   file : string;  (** path as dune reported it (workspace-relative) *)

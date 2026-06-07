@@ -17,7 +17,8 @@
     The argv of every command is a {b list}, never a parsed string — no shell, no quoting, no
     injection. *)
 
-(** Raised by a [wait_*] that exceeds its deadline. *)
+(** Raised by any [wait_*] call that exceeds its deadline.
+    The string payload describes what was being waited on. *)
 exception Timeout of string
 
 (** {2 Authoring a scenario}
@@ -38,6 +39,9 @@ exception Timeout of string
     [main]: the convention is a [-linkall] library of [*_test.ml] plus a one-line runner
     [let () = exit (Fennec_hunt.System.run ())]. *)
 
+(** An isolated test environment: a temporary workdir, a scoped env, and a process registry.
+    Created per scenario and fully torn down on exit — whether the scenario passes, fails,
+    raises an exception, or is timed out. Every process spawned inside is killed on teardown. *)
 type sandbox
 
 (** {2 A scenario (registration)} *)
@@ -85,6 +89,9 @@ val with_edit : sandbox -> string -> (string -> string) -> (unit -> 'a) -> 'a
 
 (** {2 Processes} *)
 
+(** A long-running process spawned inside a sandbox: its output is captured to a file,
+    its whole process group is reaped on sandbox teardown, and it can be probed with
+    {!alive}, {!wait_ready}, {!wait_output}, etc. *)
 type proc
 
 (** The outcome of a one-shot {!run_cmd}: exit status, combined stdout+stderr, wall-clock ms. *)

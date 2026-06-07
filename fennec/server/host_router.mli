@@ -1,11 +1,15 @@
-(* The validated host->endpoint routing table. The only constructor is {!build}, which enforces
-   every routing invariant — so a table that reaches the server is provably well-formed and {!route}
-   is total. Polymorphic over the endpoint payload ['ep], so it's pure and testable in isolation.
-   {!build} reports ALL errors at once so the developer fixes everything in one pass. *)
+(** The validated Host→endpoint routing table. The only constructor is {!build}, which enforces
+    every routing invariant — so a table that reaches the server is provably well-formed and {!route}
+    is total. Polymorphic over the endpoint payload so it's pure and testable in isolation. {!build}
+    reports ALL errors at once so the developer fixes everything in one pass. *)
 
+(** One entry in the routing table: the endpoint's name, its parsed host patterns, and its payload. *)
 type 'ep entry = { name : string; patterns : Host_pattern.t list; ep : 'ep }
+
+(** A validated, immutable host-routing table. *)
 type 'ep t
 
+(** A routing configuration error detected by {!build}. *)
 type error =
   | Bad_name of string  (** empty, or contains whitespace / ['='] *)
   | Duplicate_name of string

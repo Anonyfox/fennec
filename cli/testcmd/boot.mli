@@ -1,7 +1,8 @@
-(* Boot one app instance for a suite — spawn the server bytecode with the suite's isolated env,
-   wait for its port, tear it down. Output → a per-instance log file (no pipe to fill; available
-   for failure diagnostics). I/O; proven via the e2e. *)
+(** Boot one app instance for a test suite — spawn the server bytecode with the suite's isolated
+    env, wait for its port to respond, and tear it down on exit. Output goes to a per-instance log
+    file (no pipe to deadlock; available for failure diagnostics). I/O; proven via the e2e. *)
 
+(** A spawned app instance: its OS pid, the log-file path, and readiness state. *)
 type t
 
 (** The inherited environment with [extra] [(name, value)] pairs appended — for spawning a

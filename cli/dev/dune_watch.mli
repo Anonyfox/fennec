@@ -31,6 +31,8 @@ type line =
   | Settled of outcome  (** a "…, waiting for filesystem changes…" line *)
   | Other  (** anything else: progress, diagnostics, blanks *)
 
+(** Classify a single line of [dune build --watch] output — pure and total. The only place
+    that knows dune's exact wording; exposed for unit-testing against real dune samples. *)
 val classify_line : string -> line
 
 (** Strip ANSI CSI escapes (colour) from a line. Exposed for reuse by the diagnostics parser. *)
@@ -50,6 +52,7 @@ type event =
     }
   | Exited  (** the dune process ended (crashed or was killed) *)
 
+(** An active [dune build --watch] session: the spawned process + its captured stderr pipe. *)
 type t
 
 (** Spawn [dune build --watch <targets>] with its stderr captured. *)

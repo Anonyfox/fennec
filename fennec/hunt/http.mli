@@ -1,23 +1,28 @@
-(* fennec_hunt.Http — full-featured, deterministic HTTP testing.
+(** Full-featured, deterministic HTTP testing.
 
-   Every request is ONE call → ONE response → immediate pass or fail.
-   Works against any URL — local, remote, spawned or pre-existing.
+    Every request is ONE call → ONE response → immediate pass or fail.
+    Works against any URL — local, remote, spawned or pre-existing.
 
-   {[open Fennec_hunt.Http
+    {@ocaml skip[
+    open Fennec_hunt.Http
 
-     let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun () ->
+    let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun () ->
 
-       check "create user" (fun () ->
-         post "/users" ~json:(`Assoc [("name", `String "alice")])
-           ~expect:[status 201; json_path_is "name" "alice"]);
+      check "create user" (fun () ->
+        post "/users" ~json:(`Assoc [("name", `String "alice")])
+          ~expect:[status 201; json_path_is "name" "alice"]);
 
-       check "list users" (fun () ->
-         get "/users" ~expect:[status 200; is_json; json_length "items" 1])
-   ]} *)
+      check "list users" (fun () ->
+        get "/users" ~expect:[status 200; is_json; json_length "items" 1])
+    ]} *)
 
 (** {1 Types} *)
 
+(** An HTTP response received from the server under test. *)
 type response = { status : int; headers : (string * string) list; body : string }
+
+(** A predicate over a {!response} that raises (with a clear message) on failure.
+    Assertions compose: pass a list to [~expect] or chain with {!check}. *)
 type assertion = response -> unit
 
 (** {1 The hunt block} *)
@@ -84,12 +89,25 @@ val file : name:string -> filename:string -> ?content_type:string -> string -> p
     final response (re-GETting each Location with refreshed cookies; bounded to 10 hops). Cookies
     from prior responses in the same [check] are sent automatically. *)
 
+(** Send a GET request to [path] and run each assertion against the response. *)
 val get : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+
+(** Send a POST request to [path] with an optional body and run assertions. *)
 val post : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+
+(** Send a PUT request to [path] with an optional body and run assertions. *)
 val put : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+
+(** Send a PATCH request to [path] with an optional body and run assertions. *)
 val patch : ?headers:(string * string) list -> ?host:string -> ?body:string -> ?query:(string * string) list -> ?form:(string * string) list -> ?json:Yojson.Safe.t -> ?multipart:part list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+
+(** Send a DELETE request to [path] and run assertions. *)
 val delete : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+
+(** Send a HEAD request to [path] and run assertions (response body will be empty). *)
 val head : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
+
+(** Send an OPTIONS request to [path] and run assertions. *)
 val options : ?headers:(string * string) list -> ?host:string -> ?query:(string * string) list -> ?follow:bool -> ?timeout:float -> ?expect:assertion list -> string -> unit
 
 (** {1 Async — explicit, bounded polling} *)
@@ -104,10 +122,19 @@ val eventually : ?within:float -> ?interval:float -> (unit -> unit) -> unit
 
 (** {1 Status assertions} *)
 
+(** Assert the response status is exactly [n]. *)
 val status : int -> assertion
+
+(** Assert the status is in the 2xx success range. *)
 val status_2xx : assertion
+
+(** Assert the status is in the 3xx redirect range. *)
 val status_3xx : assertion
+
+(** Assert the status is in the 4xx client-error range. *)
 val status_4xx : assertion
+
+(** Assert the status is in the 5xx server-error range. *)
 val status_5xx : assertion
 
 (** Status is anything EXCEPT the given code (e.g. [status_not 500] for smoke tests). *)
@@ -115,10 +142,19 @@ val status_not : int -> assertion
 
 (** {1 Body assertions} *)
 
+(** Assert the response body contains the given substring. *)
 val body_contains : string -> assertion
+
+(** Assert the response body is exactly the given string (byte-for-byte). *)
 val body_is : string -> assertion
+
+(** Assert the response body does NOT contain the given substring. *)
 val body_not_contains : string -> assertion
+
+(** Assert the response body is exactly [n] bytes long. *)
 val body_length : int -> assertion
+
+(** Assert the response body is at least [n] bytes long. *)
 val min_body_length : int -> assertion
 
 (** Body matches a PCRE regex pattern. *)
@@ -132,15 +168,27 @@ val body_not_empty : assertion
 
 (** {1 Header assertions} *)
 
+(** Assert a response header has exactly the given value (case-insensitive name). *)
 val header_is : string -> string -> assertion
+
+(** Assert a response header's value contains the given substring. *)
 val header_contains : string -> string -> assertion
+
+(** Assert the response includes the named header (any value). *)
 val has_header : string -> assertion
+
+(** Assert the response does NOT include the named header. *)
 val no_header : string -> assertion
 
 (** {1 Content-type shorthands} *)
 
+(** Assert the [Content-Type] header contains the given MIME type. *)
 val content_type : string -> assertion
+
+(** Assert the [Content-Type] is [application/json] (or [application/json; charset=...] etc.). *)
 val is_json : assertion
+
+(** Assert the [Content-Type] is [text/html]. *)
 val is_html : assertion
 
 (** {1 Redirect + timing assertions} *)
@@ -167,10 +215,19 @@ val json_length : string -> int -> assertion
 
 (** {1 JSON type assertions} *)
 
+(** Assert the JSON value at the path is a string (any value). *)
 val json_is_string : string -> assertion
+
+(** Assert the JSON value at the path is a number. *)
 val json_is_number : string -> assertion
+
+(** Assert the JSON value at the path is a boolean. *)
 val json_is_bool : string -> assertion
+
+(** Assert the JSON value at the path is [null]. *)
 val json_is_null : string -> assertion
+
+(** Assert the JSON value at the path is an array. *)
 val json_is_array : string -> assertion
 
 (** Assert a JSON string field at the path matches a PCRE regex. *)
@@ -200,9 +257,16 @@ val expect : (response -> unit) -> assertion
 (** Read a header value. Raises if absent. *)
 val header : string -> string
 
+(** Read a response header value; [None] if absent. *)
 val header_opt : string -> string option
+
+(** The raw body string of the last response. *)
 val response_body : unit -> string
+
+(** The status code of the last response. *)
 val response_status : unit -> int
+
+(** Wall-clock time of the last request, in milliseconds. *)
 val elapsed_ms : unit -> float
 
 (** Extract a top-level JSON field (string value, or stringified). *)
@@ -217,6 +281,7 @@ val json : unit -> Yojson.Safe.t
 (** Read a cookie value from the jar (accumulated from prior responses in this check). *)
 val cookie : string -> string
 
+(** Look up a cookie value from the jar; [None] if absent. *)
 val cookie_opt : string -> string option
 
 (** {1 Helpers} *)

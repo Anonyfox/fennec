@@ -1,6 +1,7 @@
-(* Discover + build the suite executables for a cut, by directory convention
-   ([test/http/*.ml], [test/browser/*.ml]). Path logic is pure; readdir + dune build are I/O. *)
+(** Discover and build the suite executables for a cut by directory convention
+    ([test/http/*.ml], [test/browser/*.ml]). Path logic is pure; readdir and dune-build are I/O. *)
 
+(** A discovered suite: its name, root-relative dune build target, and absolute artifact path. *)
 type t = {
   name : string;    (** suite name (source basename without [.ml]) *)
   target : string;  (** dune build target, ROOT-relative (built after chdir to the root) *)

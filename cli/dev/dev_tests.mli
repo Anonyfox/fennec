@@ -26,7 +26,12 @@ val targets : t -> string list
 (** Run every runner whose exe mtime advanced since the last call. Returns a summary
     (total passed, total failed, per-lib results) and captures each runner's output.
     Idempotent if nothing changed. *)
+(** Per-library inline test result: pass/fail counts, captured output, and wall-clock time. *)
 type result = { lib : string; passed : int; failed : int; output : string; ms : float }
+
+(** Aggregated result across all re-run libraries: per-lib {!result} list plus total tallies. *)
 type summary = { results : result list; total_passed : int; total_failed : int; ms : float }
 
+(** Re-run every runner whose exe mtime advanced since the last call. Returns [None] if nothing
+    changed. Captures output so the dev UI can display it without interleaving stdout. *)
 val run_changed : t -> summary option

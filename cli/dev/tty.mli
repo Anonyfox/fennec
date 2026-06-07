@@ -3,6 +3,8 @@
     Detection runs once at startup; the rest is pure string-building, so the renderer (and its
     tests) are deterministic given a [t]. *)
 
+(** Detected terminal capabilities. Built once at startup by {!detect} and threaded through the
+    renderer so all output decisions are deterministic given the same [t]. *)
 type t = {
   color : bool;  (** emit ANSI SGR colour *)
   hyperlinks : bool;  (** emit OSC 8 hyperlinks (clickable URLs) *)

@@ -2,6 +2,7 @@
     (prod). Path-traversal-safe, with MIME, strong ETag + conditional 304, Range
     (206/416), Cache-Control, and a symlink-escape (realpath) guard for disk mode. *)
 
+(** Re-exports {!Fennec_core.Http} for use in the static handler's type signatures. *)
 module H = Fennec_core.Http
 
 (** A web root.

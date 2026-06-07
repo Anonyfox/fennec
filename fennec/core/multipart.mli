@@ -2,6 +2,8 @@
     each with its field name, optional filename (for uploads), content type, and raw
     payload. *)
 
+(** One part of a [multipart/form-data] body: the form field name, an optional filename
+    (for uploaded files), the part's content type, and its raw payload bytes. *)
 type part = {
   name : string;             (** the form field name *)
   filename : string option;  (** present for file parts *)

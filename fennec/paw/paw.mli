@@ -33,10 +33,19 @@ val run : t -> Fennec_core.Http.request -> Fennec_core.Http.response
     is an exact match. The paw runs the handler on a match, else declines. *)
 val on : Fennec_core.Http.meth -> string -> t -> t
 
+(** Route a GET request matching [pattern] to [handler]. Sugar for [on GET]. *)
 val get : string -> t -> t
+
+(** Route a POST request matching [pattern] to [handler]. *)
 val post : string -> t -> t
+
+(** Route a PUT request matching [pattern] to [handler]. *)
 val put : string -> t -> t
+
+(** Route a DELETE request matching [pattern] to [handler]. *)
 val delete : string -> t -> t
+
+(** Route a PATCH request matching [pattern] to [handler]. *)
 val patch : string -> t -> t
 
 (** A paw from a [request -> response option] (e.g. static files): answers on [Some], else
