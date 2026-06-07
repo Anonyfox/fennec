@@ -228,6 +228,41 @@ jest's watch-flag zoo, a reporter/coverage flag farm. (`--watch` is deferred —
 - **Interrupted (Ctrl-C)** → structural teardown of every spawned instance (Eio switch / the
   pidfile reaper), no orphans, no held ports.
 
+## Docs & doctests (`fennec docs` + executable examples)
+
+Two adjacent guards keep documentation honest — both novel for OCaml (the ecosystem has no
+`missing_docs` lint, and doctests previously meant pulling in `mdx`).
+
+**Coverage — `fennec docs`.** Parses each `.mli` (the public surface) and reports every export —
+`val` / `type` / `exception` / `module` / `module type` — without a `(** ... *)` doc comment,
+grouped by file with line numbers.
+
+```sh
+fennec docs            # warn-only (exit 0)
+fennec docs --strict   # hard error (exit 1) — a CI gate
+fennec docs --private  # also scan .ml top-level definitions (unexported)
+```
+
+**Doctests — examples that can't drift.** An odoc code block tagged `ocaml` in a doc comment is
+*executable*: it renders in the docs **and** runs as a test (via the shared ppx, alongside
+`let%test`, so `fennec test` runs it and a production build strips it to nothing).
+
+```ocaml
+(** [add a b] sums two integers.
+    {@ocaml[ assert (add 2 3 = 5) ]}      (* renders in odoc AND runs — cannot drift *)
+*)
+let add a b = a + b
+```
+
+- `{@ocaml[ … ]}` runs (compiled + executed in the module's scope, so it sees the definitions
+  around it; multi-statement blocks work). A failing `assert`/compile error fails the test, naming
+  the real file:line.
+- plain `{[ … ]}` stays **illustrative** (renders, never runs) — so existing examples don't suddenly
+  execute; `{@ocaml skip[ … ]}` renders highlighted but doesn't run.
+- Works in `.ml` / `.mlx` (the block lives with the code). **Caveat:** an `.mli`'s examples render
+  in odoc (the public docs) but can't host code in-place — making *those* executable needs an
+  extraction step (the planned follow-on), so today put runnable examples in the `.ml`.
+
 ## Scope
 
 `fennec test` orchestrates **app-targeting** suites (test against your app, isolated) plus the
