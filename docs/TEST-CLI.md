@@ -259,9 +259,23 @@ let add a b = a + b
   the real file:line.
 - plain `{[ … ]}` stays **illustrative** (renders, never runs) — so existing examples don't suddenly
   execute; `{@ocaml skip[ … ]}` renders highlighted but doesn't run.
-- Works in `.ml` / `.mlx` (the block lives with the code). **Caveat:** an `.mli`'s examples render
-  in odoc (the public docs) but can't host code in-place — making *those* executable needs an
-  extraction step (the planned follow-on), so today put runnable examples in the `.ml`.
+- In `.ml` / `.mlx` this is **automatic** (the ppx is already on the file — the block lives with
+  the code and just runs).
+- In an `.mli` (where the public-API docs live and render in odoc), a ppx can't reach it — dune
+  sandboxes the preprocess, so it never sees the `.mli`. So interface examples are made executable
+  by a **one-time dune rule** (the `route_gen` pattern), which extracts them into a generated module
+  that joins the library and runs under `fennec test`:
+
+  ```lisp
+  ; in a test-bearing library's dune — written once, never edited as you add examples
+  (rule
+   (deps (glob_files *.mli))
+   (action (with-stdout-to fennec_doctests.ml (run %{bin:fennec} gen-doctests .))))
+  ```
+
+  The example in `foo.mli` runs with `open Foo` in scope (the public values it documents resolve by
+  their bare names), so it both renders in odoc and executes. `assert (…)`-style expressions and
+  multi-binding blocks both work.
 
 ## Scope
 

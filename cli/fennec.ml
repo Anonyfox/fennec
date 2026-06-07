@@ -498,6 +498,25 @@ let docs_cmd =
   in
   Cmd.v (Cmd.info "docs" ~doc ~man) Term.(const go $ paths_arg $ strict_arg $ private_arg)
 
+(* Generate (to stdout) a module running the executable {@ocaml[ ]} doc examples from the .mli
+   interfaces in a directory. Not run by hand — wired by a one-time dune (rule), the route_gen
+   pattern, so an example in a public interface both renders in odoc AND runs as a test. *)
+let gen_doctests_cmd =
+  let dir_arg = Arg.(value & pos 0 string "." & info [] ~docv:"DIR" ~doc:"Directory whose .mli interfaces to scan (default: the current directory).") in
+  let go dir = print_string (Fennec_docs.Doctest_gen.generate ~dir); 0 in
+  let doc = "Generate doctests from .mli examples (for a dune rule)" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Emit, to stdout, an OCaml module that runs every executable $(b,{@ocaml[ ... ]}) example \
+         in the $(b,.mli) interfaces under $(docv) as a test. Intended for a one-time dune rule \
+         (like $(b,route_gen)) so interface examples render in odoc AND execute:";
+      `Pre "  (rule (deps (glob_files *.mli))";
+      `Pre "        (action (with-stdout-to fennec_doctests.ml (run %{bin:fennec} gen-doctests .))))";
+      `P "The generated module joins the library via $(b,\\(modules :standard\\)) and runs under $(b,fennec test)." ]
+  in
+  Cmd.v (Cmd.info "gen-doctests" ~doc ~man) Term.(const go $ dir_arg)
+
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in
   let man =
@@ -509,6 +528,6 @@ let main_cmd =
       `S Manpage.s_commands ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd; test_cmd; docs_cmd; worker_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; test_cmd; docs_cmd; gen_doctests_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)
