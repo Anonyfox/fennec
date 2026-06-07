@@ -6,6 +6,29 @@ hunt-based suite needs today (hand-wired `(executable)` stanzas, a `run.sh`, the
 stringly-typed `e2e/*.sh` integration scripts — by owning the orchestration, while keeping each
 suite **isolated and deterministic**.
 
+## Quickstart
+
+```sh
+fennec test                         # the fast unit gate (inline let%test, next to your code)
+fennec test new http checkout       # scaffold test/http/checkout_test.ml (+ dune + runner, once)
+# …edit checkout_test.ml…
+fennec test http                    # build + run it, isolated, against your app
+fennec test http --grep checkout    # just that suite (a filter matching nothing FAILS, never green)
+fennec test all                     # unit → http → browser → system
+```
+
+A suite is one block — no `main`, no env wiring, no dune edit:
+
+```ocaml
+(* test/http/checkout_test.ml *)
+open Fennec_hunt.Http
+let%http "checkout" = fun () ->
+  check "home is 200" (fun () -> get "/" ~expect:[ status 200; is_html ])
+```
+
+Drop another `*_test.ml` in the same folder and it just runs. The cuts and the machinery below
+explain *why* this stays isolated, deterministic, and lock-safe.
+
 ## The cuts
 
 The suite is a positional noun (Playwright `--project`, cargo `--lib/--test`, rails

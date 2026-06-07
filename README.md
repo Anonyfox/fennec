@@ -38,7 +38,7 @@ One root `dune-project`, several independently-publishable packages:
 | --- | --- | --- |
 | **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, and the `Fur` UI runtime | ✅ working |
 | **`fennec-cli`** | The `fennec` binary — native JS/CSS bundlers + the dev loop, one self-contained binary | ✅ working |
-| **`fennec-hunt`** | Real-browser end-to-end testing over the Chrome DevTools Protocol, pure OCaml | ✅ working |
+| **`fennec-hunt`** | Pure-OCaml app testing — HTTP assertions, real-browser (CDP), and system/dev-loop checks; standalone or via `fennec test` | ✅ working |
 | `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
 
 Concurrency is **Eio-only**, by design.
@@ -59,7 +59,8 @@ Concurrency is **Eio-only**, by design.
 
 ### `fennec-hunt` — testing
 
-- A real-browser e2e driver: a hand-written WebSocket + Chrome DevTools Protocol client on Eio, an auto-waiting page DSL, a deterministic in-memory fake backend (so the DSL is unit-tested with no browser), self-explaining failure reports, and a reporter that adapts from a TTY to a CI log. No chromedriver, no Selenium. ([details](./fennec/e2e/README.md))
+- A pure-OCaml testing toolkit: typed **HTTP** assertions (a hand-written client on Eio, no cohttp), a real-**browser** driver over the Chrome DevTools Protocol (auto-waiting page DSL, self-explaining failures, no chromedriver/Selenium), and typed **system** checks for the dev loop (spawn/port/filesystem, deterministic, no orphans).
+- Two ways in: use it **standalone** as a library you drive yourself ([`fennec/hunt/README.md`](./fennec/hunt/README.md)), or through the **optimized CLI integration** — `fennec test` (unit / http / browser / system), where a suite is just a `let%http` / `let%browser` / `let%system` block — no `main`, no wiring ([`docs/TEST-CLI.md`](./docs/TEST-CLI.md)).
 
 ## Design commitments
 
@@ -91,7 +92,8 @@ platform from GitHub Releases.
 Deeper docs: [`examples/site/README.md`](./examples/site/README.md) ·
 [`examples/CLI-INTEROP.md`](./examples/CLI-INTEROP.md) ·
 [`fennec/fur/README.md`](./fennec/fur/README.md) ·
-[`fennec/e2e/README.md`](./fennec/e2e/README.md).
+[`fennec/hunt/README.md`](./fennec/hunt/README.md) ·
+[`docs/TEST-CLI.md`](./docs/TEST-CLI.md).
 
 ## License
 
