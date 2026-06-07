@@ -12,3 +12,9 @@
  (name test_unit)
  (libraries fennec-hunt fennec-hunt.unit)
  (preprocess (pps fennec-hunt.ppx)))
+
+; Proves the System layer's primitives (process group teardown, waits, fs, ports).
+; Spawns only sh/sleep — no nested dune, so it's safe under `dune test`.
+(test
+ (name test_system)
+ (libraries fennec-hunt fennec-hunt.unit))
