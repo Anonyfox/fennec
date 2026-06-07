@@ -1,9 +1,10 @@
 # `fennec test` — the testing command
 
-One command for a Fennec app's tests, in three sharp cuts. It erases the boilerplate a
+One command for a Fennec app's tests, in four sharp cuts. It erases the boilerplate a
 hunt-based suite needs today (hand-wired `(executable)` stanzas, a `run.sh`, the
-"build-the-binary-not-`dune exec`" dance, server spawn + readiness + teardown) by owning the
-orchestration — while keeping each suite **isolated and deterministic**.
+"build-the-binary-not-`dune exec`" dance, server spawn + readiness + teardown) — and the
+stringly-typed `e2e/*.sh` integration scripts — by owning the orchestration, while keeping each
+suite **isolated and deterministic**.
 
 ## The cuts
 
@@ -16,9 +17,10 @@ the fast CI gate.
 | `fennec test` | **unit** (default) | nothing | `dune build @runtest` |
 | `fennec test http` | Http suites | a booted app per suite | orchestrated |
 | `fennec test browser` | Browser suites | app per suite **+ Chrome** | orchestrated |
-| `fennec test all` | unit → http → browser | everything | orchestrated, fast-to-slow |
+| `fennec test system` | System suites | the real `fennec dev` (suites spawn it) | orchestrated, serial |
+| `fennec test all` | unit → http → browser → system | everything | orchestrated, fast-to-slow |
 
-Bare `fennec test` runs on every push. `http`/`browser` are explicit and own their setup.
+Bare `fennec test` runs on every push. `http`/`browser`/`system` are explicit and own their setup.
 
 ## Per-suite isolation (the core invariant)
 
@@ -62,11 +64,12 @@ Dune has no glob, so suites are named, but the wiring is one line per dir:
 test/
   http/      *.ml — Http suites (each an executable; hunt-based)
   browser/   *.ml — Browser suites (each registers via Live.test; Run-driven)
+  system/    *.ml — System suites (each spawns `fennec dev`; Fennec_hunt.System)
   dune       — unit tests on @runtest (the default gate)
 ```
 
-Each suite dir declares its executables on a **custom alias** (`@http` / `@browser`), *not*
-`@runtest`, so a bare `dune test` never runs the slow cuts:
+Each suite dir declares its executables on a **custom alias** (`@http` / `@browser` / `@system`),
+*not* `@runtest`, so a bare `dune test` never runs the slow cuts:
 
 ```lisp
 ; test/http/dune
@@ -75,7 +78,8 @@ Each suite dir declares its executables on a **custom alias** (`@http` / `@brows
 ```
 
 `fennec test http` builds `@http` one-shot (fennec holds the workspace lock briefly), then
-runs the built artifacts itself — so nothing nests dune at runtime.
+runs the built artifacts itself — so nothing nests dune at runtime. (System suites take no
+booted server, but the same convention applies: `test/system/*.ml`, built one-shot, run directly.)
 
 ## Lock-safe orchestration
 
@@ -98,11 +102,49 @@ down — no orphans, no held ports. Reuses `cli/dev/`'s `discover`, `port`, and 
 env names; the instance lifecycle (`boot.ml`) is the test command's own. Each suite gets its
 **own** instance — a running `fennec dev` is never reused, since isolation is the whole point.
 
+## The System cut (different by design)
+
+Http/browser suites test your app *through* a server fennec boots for them. **System** suites
+test `fennec dev` *itself* — process hygiene, port reclaim, host routing, livereload, the
+build-error panel — so they **spawn `fennec dev` themselves** and assert its observable side
+effects. That inverts the orchestration:
+
+- **No per-suite instance.** fennec builds the server + webroot + suite exes once, sets the
+  harness env, and runs each suite; the suite owns every process it starts.
+- **Serial, not parallel.** The suites drive dev on its *real* fixed ports (gateway `:4000`,
+  endpoints `:400x`), so they can't share the machine concurrently — they run one at a time.
+- **Typed system primitives, not shell.** Each suite is written against `Fennec_hunt.System`: a
+  typed vocabulary for what the `.sh` scripts did — `spawn`/`run` (argv as a *list*: no shell, no
+  quoting, no injection), condition waits (`wait_ready`, `wait_output`, `wait_until` — deadline-
+  bounded, **never `sleep`-and-hope**), typed filesystem + `with_edit` (edit a real source, always
+  reverted — even on failure), and a one-shot HTTP client (`request`/`header`, with a routing Host
+  header). Every spawned process is put in its own session, so on teardown — pass, fail, exception,
+  or timeout — the **whole process group** is reaped. No orphans, even one the tool under test
+  leaked.
+
+The harness env (set by the orchestrator, read by each suite):
+
+| Env var | Meaning |
+|---|---|
+| `FENNEC_BIN` | the fennec under test (the orchestrating binary itself) |
+| `FENNEC_APP_DIR` | the project to run `fennec dev` in (the invocation cwd) |
+| `FENNEC_SERVER_BC` | the built server bytecode (for the leftover-reclaim scenario) |
+| `FENNEC_ROOT` | the workspace root (for `_build` sentinels) |
+
+**`@manual` tag.** A system suite whose source header carries `@manual` is *built* (so it can't
+bitrot) but **skipped** by the automated run, with a clear note. The escape hatch for a suite that
+can't run unattended: the heal suite runs `fennec dev --clean`, which wipes the shared `_build` and
+would delete the other suites' exes mid-run — run it directly.
+
+Bytecode stublibs: a suite may spawn the `.bc` server directly, which must `dlopen` its C stubs —
+`opam env` does not set `CAML_LD_LIBRARY_PATH`. The cut reuses `fennec dev`'s own `ensure_stublibs`
+(single source of truth) so suites inherit it and propagate it to anything they spawn.
+
 ## Flags (minimal and sharp — nothing more)
 
 ```
 fennec test [SUITE]
-  -g, --grep RE        run only cases whose label contains RE (substring; both cuts)
+  -g, --grep RE        run only cases whose label contains RE (substring; http + browser)
   -x, --max-failures N stop after N suites fail (default fail-fast = stop at the first)
       --no-fail-fast   run every suite even after a failure
   -j, --jobs N         parallel suites (default = CPUs; -j1 forces serial)
@@ -134,18 +176,21 @@ jest's watch-flag zoo, a reporter/coverage flag farm. (`--watch` is deferred —
 
 ## Scope
 
-`fennec test` orchestrates **app-targeting** suites (test against your app, isolated). A
-fully self-contained suite that brings its own fixture server (`hunt ~spawn:[…]`) still
-works — it just brings its own server instead of fennec booting one — and is the path for
-testing-the-tester or third-party servers. The `fennec-hunt` package's *own* integration
-tests (the probe/tls fixtures) live in its package, not under `fennec test`.
+`fennec test` orchestrates **app-targeting** suites (test against your app, isolated) plus the
+**system** suites (which target `fennec dev` itself). A fully self-contained suite that brings its
+own fixture server (`hunt ~spawn:[…]`) still works — it just brings its own server instead of
+fennec booting one — and is the path for testing-the-tester or third-party servers. The
+`fennec-hunt` package's *own* integration tests (the probe/tls fixtures) live in its package, not
+under `fennec test`.
 
 ## Consumers
 
-- **Downstream app**: write `test/http/*.ml` + `test/browser/*.ml`, run `fennec test`. No
-  `run.sh`, no manual executable+spawn wiring, no lock dance.
+- **Downstream app**: write `test/http/*.ml` + `test/browser/*.ml` (+ `test/system/*.ml` to guard
+  the dev workflow), run `fennec test`. No `run.sh`, no `e2e/*.sh`, no manual executable+spawn
+  wiring, no lock dance.
 - **Example app** (done): `run.exe` + `http_test.exe` + `run.sh` collapsed into
   `examples/site/test/http/` (smoke + api) and `examples/site/test/browser/` (the full web
-  suite). CI runs `fennec test http` + `fennec test browser`.
+  suite); the six `e2e/*.sh` scripts collapsed into `examples/site/test/system/` (process,
+  domains, livereload, errors, heal). CI runs `fennec test http` + `browser` + `system`.
 - **lib (`fennec-hunt`)**: pure unit tests via `dune runtest`; untouched by `fennec test`. Its
   own TLS/probe fixtures stay manual exes under `examples/site/e2e/`.

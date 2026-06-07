@@ -1,11 +1,15 @@
 # fennec-hunt
 
-Testing for OCaml web apps, in pure OCaml — two independent layers in one package, no
+Testing for OCaml web apps, in pure OCaml — three independent layers in one package, no
 dependency on any framework. Import whichever a test needs.
 
 - **Http tests** (`Fennec_hunt.Http`) — hit any URL, assert on the response. No browser.
 - **Browser tests** (`Fennec_hunt.Live`) — drive a real headless Chromium over the DevTools
   Protocol. No Node, no chromedriver, no Selenium.
+- **System tests** (`Fennec_hunt.System`) — a typed vocabulary for what shell scripts do
+  (spawn processes, run commands, watch output, poke the filesystem, probe ports), on Eio:
+  argv as a list (no shell, no injection), deadline-bounded condition waits (never `sleep`),
+  and total process-group teardown (no orphans). Replaces hand-rolled `.sh` integration tests.
 
 ## Getting started
 
@@ -103,6 +107,31 @@ state, and how to re-run just that test.
 - **A fake backend** — the DSL is written against an abstract `Backend.S`, so it's
   unit-tested with no browser and behaves identically live.
 
+## System tests
+
+```ocaml
+module S = Fennec_hunt.System
+
+let () = S.main @@ fun () ->
+  S.test "the dev server frees its port when killed" (fun sb ->
+    let dev = S.spawn sb [ "fennec"; "dev" ] in   (* argv is a list — no shell, no quoting *)
+    S.wait_ready dev ~port:4000 ();                (* condition wait, never sleep *)
+    S.signal dev Sys.sigkill;
+    S.wait_until (fun () -> not (S.port_open 4000));
+    S.check "port freed" (not (S.port_open 4000)))
+  (* on teardown the whole process group is reaped — no orphans, even ones the child leaked *)
+```
+
+For testing a tool that itself spawns processes (a dev server, a CLI). Each scenario runs in a
+disposable sandbox; every process goes into its own session, so teardown kills the **whole tree**.
+
+- **Typed, not stringly.** `spawn`/`run` take argv as a list (no shell, no quoting, no injection);
+  results are typed (`status`, `output`, `ms`); paths are typed; HTTP via `request`/`header`.
+- **Deterministic.** `wait_ready` / `wait_output` / `wait_until` / `wait_port` are all
+  deadline-bounded and raise `Timeout` rather than hang — there is no `sleep`-and-hope.
+- **Contained.** `with_edit` rewrites a real source file and always restores it; the sandbox dir
+  and the whole process group are torn down on pass, fail, exception, or timeout.
+
 ## How it works
 
 - **A target is a URL.** The host and port come from `~url`; the client connects to that host
@@ -125,4 +154,4 @@ No cohttp, no Lwt. Browser tests need a Chromium-family browser on `PATH` (or se
 A separate package precisely so a production server never links the test machinery.
 
 See the [API docs](https://anonyfox.github.io/fennec): `Fennec_hunt.Http`, `…Live`, `…Run`,
-`…Backend`, `…Driver`, `…Reporter`, `…Failure`. MIT licensed.
+`…System`, `…Backend`, `…Driver`, `…Reporter`, `…Failure`. MIT licensed.
