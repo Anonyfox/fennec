@@ -418,8 +418,9 @@ let worker_cmd =
    $(b,system) drives the real $(b,fennec dev) lifecycle (replacing the old e2e/*.sh scripts). *)
 let test_cmd =
   let module R = Fennec_testcmd.Run in
-  let suite_arg =
-    Arg.(value & pos 0 string "unit" & info [] ~docv:"SUITE" ~doc:"Which tests: unit (default), http, browser, system, or all.")
+  let pos_arg =
+    Arg.(value & pos_all string [] & info [] ~docv:"SUITE"
+           ~doc:"Which tests: unit (default), http, browser, system, all — or $(b,new <cut> <name>) to scaffold a suite.")
   in
   let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only suites/cases matching $(docv).") in
   let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) suites fail.") in
@@ -429,11 +430,17 @@ let test_cmd =
   let headed_arg = Arg.(value & flag & info [ "headed" ] ~doc:"Browser cut: show the browser window.") in
   let screenshots_arg = Arg.(value & opt (some string) None & info [ "screenshots" ] ~docv:"DIR" ~doc:"Browser cut: write a PNG on failure into $(docv).") in
   let port_arg = Arg.(value & opt int R.default_options.base_port & info [ "port" ] ~docv:"BASE" ~doc:"Base port for per-suite instance blocks.") in
-  let go suite grep max_failures no_fail_fast reporter jobs headed screenshots base_port =
-    match R.suite_of_string suite with
-    | Error msg -> Printf.eprintf "fennec test: %s\n" msg; 1
-    | Ok suite ->
+  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port =
+    let run_with suite =
       R.run { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed; screenshots; base_port }
+    in
+    match positionals with
+    | "new" :: rest -> R.scaffold rest   (* fennec test new <cut> <name> — scaffold a suite *)
+    | [] -> run_with R.Unit
+    | suite :: _ ->
+      (match R.suite_of_string suite with
+       | Error msg -> Printf.eprintf "fennec test: %s\n" msg; 1
+       | Ok suite -> run_with suite)
   in
   let doc = "Run the app's tests (unit, http, browser, system)" in
   let man =
@@ -448,22 +455,25 @@ let test_cmd =
          deterministic replacement for the old $(b,e2e/*.sh) scripts. $(b,all) runs unit, then \
          http, then browser, then system (fast-to-slow).";
       `P
-        "Suites live by convention in $(b,test/http/), $(b,test/browser/), and $(b,test/system/) \
-         (each an executable using the $(b,fennec-hunt) library). For http/browser fennec owns the \
-         lifecycle — build, boot per-suite instance, run, tear down. System suites instead spawn \
-         $(b,fennec dev) themselves (the System layer reaps the whole process group on teardown), \
-         so they run serially and need no booted instance. A system suite tagged $(b,@manual) in \
-         its header is built but skipped by the automated run (e.g. one that runs \
-         $(b,fennec dev --clean), which wipes the shared _build) — run it directly.";
+        "Suites live by convention in $(b,test/http/), $(b,test/browser/), and $(b,test/system/). \
+         Authoring is zero-ceremony: drop a $(b,*_test.ml) with a $(b,let%http) / $(b,let%browser) / \
+         $(b,let%system) block — no main, no env wiring, no dune edit (the cut's library picks new \
+         files up). $(b,fennec test new <cut> <name>) scaffolds the first one. For http/browser \
+         fennec owns the lifecycle — build, boot a per-suite isolated instance, run, tear down. \
+         System suites instead spawn $(b,fennec dev) themselves (the System layer reaps the whole \
+         process group on teardown). A system scenario written with $(b,let%system_manual) is built \
+         but skipped unless $(b,--manual) (e.g. one that runs $(b,fennec dev --clean), which wipes \
+         the shared _build).";
       `S Manpage.s_examples;
-      `Pre "  fennec test                # the fast unit gate";
-      `Pre "  fennec test http           # the Http suites, each isolated";
-      `Pre "  fennec test browser -j1    # the Browser suites, serially";
-      `Pre "  fennec test system         # drive the real fennec dev (was e2e/*.sh)";
-      `Pre "  fennec test all            # everything, fast-to-slow" ]
+      `Pre "  fennec test                    # the fast unit gate";
+      `Pre "  fennec test http               # the Http suites, each isolated";
+      `Pre "  fennec test browser -j1        # the Browser suites, serially";
+      `Pre "  fennec test system             # drive the real fennec dev (was e2e/*.sh)";
+      `Pre "  fennec test all                # everything, fast-to-slow";
+      `Pre "  fennec test new system reclaim # scaffold test/system/reclaim_test.ml" ]
   in
   Cmd.v (Cmd.info "test" ~doc ~man)
-    Term.(const go $ suite_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
+    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
 
 let main_cmd =
   let doc = "Fennec — native JavaScript & CSS build tooling" in

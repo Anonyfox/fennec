@@ -35,3 +35,7 @@ val suite_args : cut:suite -> options -> string list
 
 (** Run the selected cut; returns the process exit code (0 = all passed). *)
 val run : options -> int
+
+(** [scaffold args] handles [fennec test new <cut> <name>] ([args] = the positionals after [new]):
+    create the cut dir's dune + runner (if absent) and a starter suite. Returns the exit code. *)
+val scaffold : string list -> int

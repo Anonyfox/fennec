@@ -393,6 +393,20 @@ let orchestrate_system ~(args : string list) : int =
 
 let run_system (opts : options) : int = orchestrate_system ~args:(suite_args ~cut:System opts)
 
+(* `fennec test new <cut> <name>` — scaffold a suite. [args] is the positionals after "new". *)
+let scaffold (args : string list) : int =
+  match args with
+  | cut :: name :: _ ->
+    (match Scaffold.create ~cwd:(Sys.getcwd ()) ~cut ~name with
+     | Ok created ->
+       List.iter (fun f -> Printf.printf "  \027[32m+\027[0m %s\n" f) created;
+       Printf.printf "\n\027[2mrun it:\027[0m fennec test %s\n%!" cut;
+       0
+     | Error m -> Printf.eprintf "fennec test new: %s\n%!" m; 1)
+  | _ ->
+    Printf.eprintf "usage: fennec test new <cut> <name>   (cut: %s)\n%!" (String.concat ", " Scaffold.cuts);
+    1
+
 let run (opts : options) : int =
   Reaper.install_signal_handlers (); (* Ctrl-C / SIGTERM → tear down every spawned instance, no orphans *)
   match opts.suite with
