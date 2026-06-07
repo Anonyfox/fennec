@@ -27,7 +27,8 @@ examples/site/
   frontend_test/       component unit tests (render via Fur.to_html); `dune test`
   test/http/           Http suites (fennec-hunt); `fennec test http`
   test/browser/        Browser suites (headless Chrome over CDP); `fennec test browser`
-  e2e/                 fennec-hunt's own fixtures (TLS + I/O probes) + dev-supervisor checks
+  test/system/         System suites — drive the real `fennec dev`; `fennec test system`
+  e2e/                 fennec-hunt's own manual fixtures (TLS + I/O probes)
   dune                 build graph: per-app CSS, webroot assembly, prod embed, server exe
 ```
 
@@ -91,39 +92,34 @@ cd examples/site && fennec dev           # gateway on :4000 (host-routed); each 
 # component unit tests (OCaml, no deps)
 dune test examples/site/frontend_test
 
-# the app's Http + Browser suites — `fennec test` boots a dedicated isolated app instance per
-# suite (own port + server), runs them (in parallel), and tears them down. Run from the app dir.
-#   fennec test http        # Http suites in test/http/
-#   fennec test browser     # Browser suites in test/browser/ (needs Chrome; CHROME=/path to override)
-#   fennec test all         # unit → http → browser
-(cd examples/site && fennec test http && fennec test browser)
+# the app's tests — `fennec test` builds once and orchestrates, lock-safe. Run from the app dir.
+#   fennec test            # the fast unit gate (delegates to dune runtest)
+#   fennec test http       # Http suites in test/http/ (dedicated isolated instance per suite)
+#   fennec test browser    # Browser suites in test/browser/ (needs Chrome; CHROME=/path to override)
+#   fennec test system     # System suites in test/system/ (drive the real `fennec dev`)
+#   fennec test all        # unit → http → browser → system (fast-to-slow)
+(cd examples/site && fennec test all)
 
-# livereload regression check: runs `fennec dev`, edits a source file, and asserts the
-# change reaches BOTH the SSR and the freshly-rebuilt, no-cache client bundle (deterministic,
-# no browser). Fails if a watch-target or dev-caching regression makes edits not show.
-sh examples/site/e2e/livereload.sh
+# the System cut replaces the old e2e/*.sh checks with typed, deterministic tests (condition
+# waits, never sleep-and-hope; each spawns `fennec dev` and the whole process group is reaped on
+# teardown — no orphans). It guards everything the scripts did:
+#   - process hygiene  — SIGKILL frees the port, restart binds, a second start reaps the first,
+#                        a clean shutdown leaves nothing (test/system/process_test.ml);
+#   - port reclaim     — a leftover of OUR server is reclaimed; a foreign holder is named, never
+#                        killed (process_test.ml);
+#   - host routing     — the dev gateway (:4000) routes by Host exactly as prod, and `--port N`
+#                        shifts the whole block (domains_test.ml);
+#   - livereload       — an edit reaches BOTH the SSR and the rebuilt no-cache client bundle, and
+#                        a revert leaves no stale build (livereload_test.ml);
+#   - the error panel  — a build error shows the right count + message; a revert-to-identical fix
+#                        clears it (errors_test.ml).
+(cd examples/site && fennec test system)
 
-# process-hygiene check: asserts `fennec dev` can never leave a leftover holding the dev port —
-# SIGKILL frees the port (server self-exits), restarts bind cleanly, a second start reaps the
-# first (single instance), and a clean shutdown leaves nothing behind.
-sh examples/site/e2e/no_leftovers.sh
-
-# error-panel check: a build error shows the right count + a message, and FIXING it clears the
-# panel — even a revert to byte-identical output (which dune rebuilds without bumping the mtime).
-sh examples/site/e2e/errors.sh
-
-# --clean check: a plain `fennec dev` leaves _build alone; `fennec dev --clean` runs a full
-# `dune clean` first (the opt-in escape hatch for a corrupt local build). Leaves _build cleaned.
-sh examples/site/e2e/heal.sh
-
-# port-reclaim check: a stray dev server holding the port is auto-reclaimed on start (only if it's
-# OUR own server); a foreign process is left alone and named with a one-command fix. Needs python3.
-sh examples/site/e2e/reclaim.sh
-
-# host-routing + port check: the dev gateway (:4000) routes by Host EXACTLY as prod does (a
-# specific domain wins, "*" is the default, an unknown host falls to the default), and
-# `fennec dev --port N` shifts the whole port block for isolated parallel instances. Needs curl.
-sh examples/site/e2e/domains.sh
+# `fennec dev --clean` is destructive (it wipes the shared _build), so its test is tagged @manual
+# and skipped by `fennec test system`. Run it directly when you want to validate --clean:
+dune build examples/site/test/system/heal_test.exe
+FENNEC_BIN=$(command -v fennec) FENNEC_APP_DIR=$PWD/examples/site FENNEC_ROOT=$PWD \
+  _build/default/examples/site/test/system/heal_test.exe
 
 # prod: native server with the web root embedded in the binary
 dune build --profile release examples/site/server.exe
