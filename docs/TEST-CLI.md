@@ -56,45 +56,75 @@ always targets the harness-assigned instance. Resolution order: explicit `~url` 
 `FENNEC_TEST_URL` → (if `~spawn` given) a localhost default → otherwise a clear error
 ("run via `fennec test`, or pass `~url`/`~spawn`"). Same for `Run.main_cli ~base_url`.
 
-## Discovery (convention + custom aliases)
+## Authoring — one model, zero ceremony
 
-Dune has no glob, so suites are named, but the wiring is one line per dir:
+A suite is a `let%cut` block — same shape across cuts, differing only in the context the closure
+receives (an Http client, a `page`, a `sandbox`). No `main`, no env wiring, no per-file dune:
+
+```ocaml
+(* test/http/checkout_test.ml *)            (* test/system/reclaim_test.ml *)
+open Fennec_hunt.Http                        module S = Fennec_hunt.System
+let%http "checkout" = fun () ->              let%system "port frees on kill" = fun sb ->
+  check "200" (fun () ->                       let dev = S.dev sb in
+    get "/" ~expect:[ status 200 ])            S.wait_ready dev ~port:4000 ();
+                                               S.signal dev Sys.sigkill;
+(* test/browser/cart_test.ml *)                S.wait_until (fun () -> not (S.port_open 4000))
+open Fennec_hunt.Live
+let%browser "cart" = fun page ->
+  page |> goto "/products" |> click ".add" |> expect_text ".count" "1" |> ignore
+```
+
+`fennec test new <cut> <name>` scaffolds the first file in a cut (the one-time dune + runner + a
+starter); after that, adding a suite is just dropping another `*_test.ml`. `let%system_manual`
+registers an opt-in scenario (skipped unless `--manual`) — for a destructive case like
+`fennec dev --clean`. The ppx strips every block to `()` in a production build (zero cost).
+
+## Discovery (convention + a `-linkall` library)
+
+Each cut dir is ONE library plus a one-line runner — written once (by `fennec test new`), never
+edited as suites are added:
 
 ```
 test/
-  http/      *.ml — Http suites (each an executable; hunt-based)
-  browser/   *.ml — Browser suites (each registers via Live.test; Run-driven)
-  system/    *.ml — System suites (each spawns `fennec dev`; Fennec_hunt.System)
-  dune       — unit tests on @runtest (the default gate)
+  http/      *_test.ml — let%http blocks      (Fennec_hunt.Http)   + run.ml + dune
+  browser/   *_test.ml — let%browser blocks   (Fennec_hunt.Live)   + run.ml + dune
+  system/    *_test.ml — let%system blocks    (Fennec_hunt.System) + run.ml + dune
+  dune       — inline let%test on @runtest (the default gate)
 ```
-
-Each suite dir declares its executables on a **custom alias** (`@http` / `@browser` / `@system`),
-*not* `@runtest`, so a bare `dune test` never runs the slow cuts:
 
 ```lisp
-; test/http/dune
-(executables (names checkout_test users_test) (libraries fennec-hunt fennec))
-(rule (alias http) (deps checkout_test.exe users_test.exe) (action (progn)))
+; test/http/dune — written once; adding suites never touches it
+(library (name http_suites) (modules (:standard \ run)) (libraries fennec-hunt)
+ (library_flags (-linkall)) (preprocess (pps fennec-hunt.ppx)))
+(executable (name run) (modules run) (libraries http_suites fennec-hunt))
 ```
 
-`fennec test http` builds `@http` one-shot (fennec holds the workspace lock briefly), then
-runs the built artifacts itself — so nothing nests dune at runtime. (System suites take no
-booted server, but the same convention applies: `test/system/*.ml`, built one-shot, run directly.)
+`-linkall` forces every suite module to link, so each `let%cut` block registers as a module-init
+side effect (the same mechanism as inline `let%test`); `run.ml` is the entry
+(`let () = exit (Fennec_hunt.Http.run ())`). Dropping a `*_test.ml` needs **no dune edit**
+(`:standard` includes it). These are plain executables (NOT on `@runtest`, since they need a booted
+server / Chrome), so a bare `dune test` stays the fast unit gate, and `fennec test` runs the
+built `run.exe` directly — nothing nests dune at runtime.
 
 ## Lock-safe orchestration
 
 The dune workspace-lock deadlock (a test that shells out to dune while another dune watches)
 is dissolved by making **fennec the only dune-aware orchestrator**:
 
-1. Discover the app server (`discover.ml`), then **`dune shutdown`** any orphaned dev watcher.
-2. **One-shot `dune build`** the server + its webroot + the cut's suites, from the workspace
-   root (then restore the cwd — `test all` runs this once per cut).
-3. Per suite, in parallel (≤ `-j`): make the port usable (**reclaim a leftover of *ours*,
+1. Discover the app server (`discover.ml`), **`dune shutdown`** any orphaned dev watcher, and put
+   the opam stublibs on `CAML_LD_LIBRARY_PATH` (so a directly-spawned bytecode server finds its C
+   stubs — `opam env` doesn't set it).
+2. **One-shot `dune build`** the server + its webroot + the cut's single runner
+   (`test/<cut>/run.exe`), from the workspace root (then restore the cwd — `test all` runs this
+   once per cut).
+3. Per suite **file**, in parallel (≤ `-j`): make the port usable (**reclaim a leftover of *ours*,
    refuse to touch a *foreign* holder** — `port.ml`), **spawn the server artifact directly**
    (`_build/default/.../server.bc`, never `dune exec`) with the `Test_proto` env, wait for
-   readiness (poll the port), run the **suite artifact** with `FENNEC_TEST_URL` set, then tear
-   the instance down (structural `Fun.protect`). In parallel, each suite's output is buffered
-   and flushed as one atomic block so nothing interleaves; serial runs stream live.
+   readiness, then run the runner as **`run.exe --only-file <suite>`** with `FENNEC_TEST_URL` set —
+   so it executes just that file's tests against this dedicated instance — and tear the instance
+   down (structural `Fun.protect`). Parallel output is buffered + flushed atomically; serial runs
+   stream live. (System needs no booted server: its runner runs once, each scenario in its own
+   sandbox, serially.)
 4. Aggregate exit code (non-zero if any suite failed); a cross-suite roll-up footer.
 
 Every spawned pid (server + suite) is registered so Ctrl-C / SIGTERM tears the whole fleet
@@ -185,9 +215,9 @@ under `fennec test`.
 
 ## Consumers
 
-- **Downstream app**: write `test/http/*.ml` + `test/browser/*.ml` (+ `test/system/*.ml` to guard
-  the dev workflow), run `fennec test`. No `run.sh`, no `e2e/*.sh`, no manual executable+spawn
-  wiring, no lock dance.
+- **Downstream app**: `fennec test new <cut> <name>` once, then drop `let%http` / `let%browser` /
+  `let%system` blocks into `test/<cut>/`. No `main`, no `run.sh`, no `e2e/*.sh`, no per-file dune,
+  no manual executable+spawn wiring, no lock dance — `fennec test` orchestrates it.
 - **Example app** (done): `run.exe` + `http_test.exe` + `run.sh` collapsed into
   `examples/site/test/http/` (smoke + api) and `examples/site/test/browser/` (the full web
   suite); the six `e2e/*.sh` scripts collapsed into `examples/site/test/system/` (process,

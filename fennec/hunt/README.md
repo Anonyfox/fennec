@@ -13,23 +13,29 @@ dependency on any framework. Import whichever a test needs.
 
 ## Getting started
 
-A test suite is a plain executable. Depend on the library and run the binary:
-
-```lisp
-; test/dune
-(executable (name api_test) (libraries fennec-hunt))
-```
+In a Fennec app, authoring is zero-ceremony — drop a `*_test.ml` into a cut directory and write a
+`let%http` / `let%browser` / `let%system` block. No `main`, no env wiring, no per-file dune:
 
 ```sh
-dune build test/api_test.exe
-./_build/default/test/api_test.exe          # exits non-zero if any check fails
+fennec test new http checkout     # scaffolds test/http/checkout_test.ml (+ the one-time dune/runner)
+# ...edit checkout_test.ml...
+fennec test http                  # builds + runs it, each suite against its own isolated instance
 ```
 
-Write the suite in `test/api_test.ml` (examples below). In CI it's a build step whose exit
-code is the result — these suites drive a live server (and, for Browser tests, a browser),
-so they aren't hermetic `dune test` targets. Run the **built binary**, not `dune exec`, when
-the suite spawns a server that itself shells out to dune (the workspace lock would deadlock)
-— see [How it works](#how-it-works).
+```ocaml
+(* test/http/checkout_test.ml *)
+open Fennec_hunt.Http
+let%http "checkout" = fun () ->
+  check "home is 200" (fun () -> get "/" ~expect:[ status 200 ])
+```
+
+Each cut dir is a `-linkall` library (so dropping a file auto-registers it) plus a one-line runner
+`let () = exit (Fennec_hunt.Http.run ())`; `fennec test` builds it and runs each suite file against
+its own server instance. See [`fennec test`](../../docs/TEST-CLI.md).
+
+**Standalone** (no Fennec app): a suite is still just an executable — register blocks and call the
+runner yourself; run the **built binary**, not `dune exec`, if it spawns a server that shells out
+to dune (the workspace lock would deadlock — see [How it works](#how-it-works)).
 
 ## Http tests
 
@@ -39,8 +45,7 @@ assertions. One request → one response → immediate pass/fail.
 ```ocaml
 open Fennec_hunt.Http
 
-let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun () ->
-
+let%http "my API" = fun () ->
   check "health" (fun () ->
     get "/health" ~expect:[status 200; is_json; json_path_is "ok" "true"]);
 
@@ -52,6 +57,10 @@ let () = hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun (
     post "/login" ~form:[("user", "admin"); ("pass", "secret")] ~expect:[status 200];
     get "/dashboard" ~expect:[status 200; body_contains "Welcome"])
 ```
+
+The target is the harness-assigned instance (`FENNEC_TEST_URL`). Standalone, use the explicit form
+`hunt "my API" ~url:"http://localhost:4000" ~spawn:["./server"] @@ fun () -> …` and call
+`Fennec_hunt.Http.run ()`.
 
 - **Requests** — `get`/`post`/`put`/`patch`/`delete`/`head`/`options`, with `~headers`,
   `~host` (virtual-host testing), `~query`, `~body` / `~form` / `~json` / `~multipart` (file
@@ -82,16 +91,18 @@ A failed check is self-explaining — expected, actual, the request, and how lon
 ```ocaml
 open Fennec_hunt.Live
 
-let () = test "adds an item to the cart" @@ fun page ->
+let%browser "adds an item to the cart" = fun page ->
   page
   |> goto "/products"
   |> click ".product:first-child .add-to-cart"
   |> expect_text ".cart .count" "1"
   |> expect_visible ".cart .line-item"
   |> ignore
-
-let () = Fennec_hunt.Run.main_cli ~base_url:"http://localhost:8080" ()
 ```
+
+Each test gets a fresh isolated page; `goto "/…"` resolves against the harness-assigned instance.
+Standalone, drop the `let%browser` sugar (use `test "…" @@ fun page -> …`) and end the file with
+`let () = Fennec_hunt.Run.main_cli ~base_url:"http://localhost:8080" ()`.
 
 A step blocks until its condition holds or times out — you never write an explicit wait.
 On timeout the pipe short-circuits and the runner prints which step failed, the page's real
@@ -112,21 +123,22 @@ state, and how to re-run just that test.
 ```ocaml
 module S = Fennec_hunt.System
 
-let () = S.main @@ fun () ->
-  S.test "the dev server frees its port when killed" (fun sb ->
-    let dev = S.spawn sb [ "fennec"; "dev" ] in   (* argv is a list — no shell, no quoting *)
-    S.wait_ready dev ~port:4000 ();                (* condition wait, never sleep *)
-    S.signal dev Sys.sigkill;
-    S.wait_until (fun () -> not (S.port_open 4000));
-    S.check "port freed" (not (S.port_open 4000)))
+let%system "the dev server frees its port when killed" = fun sb ->
+  let dev = S.dev sb in                 (* spawns THIS app's `fennec dev` — typed, no env strings *)
+  S.wait_ready dev ~port:4000 ();        (* condition wait, never sleep *)
+  S.signal dev Sys.sigkill;
+  S.wait_until (fun () -> not (S.port_open 4000));
+  S.check "port freed" (not (S.port_open 4000))
   (* on teardown the whole process group is reaped — no orphans, even ones the child leaked *)
 ```
 
 For testing a tool that itself spawns processes (a dev server, a CLI). Each scenario runs in a
 disposable sandbox; every process goes into its own session, so teardown kills the **whole tree**.
+`let%system_manual` registers an opt-in scenario (skipped unless `--manual`).
 
-- **Typed, not stringly.** `spawn`/`run` take argv as a list (no shell, no quoting, no injection);
-  results are typed (`status`, `output`, `ms`); paths are typed; HTTP via `request`/`header`.
+- **Typed, not stringly.** `spawn`/`run_cmd` take argv as a list (no shell, no quoting, no
+  injection); results are typed (`status`, `output`, `ms`); paths are typed; HTTP via
+  `request`/`header`. `S.dev`/`S.app_dir`/`S.fennec` give the harness context without `getenv`.
 - **Deterministic.** `wait_ready` / `wait_output` / `wait_until` / `wait_port` are all
   deadline-bounded and raise `Timeout` rather than hang — there is no `sleep`-and-hope.
 - **Contained.** `with_edit` rewrites a real source file and always restores it; the sandbox dir
