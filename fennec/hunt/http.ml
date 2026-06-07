@@ -65,6 +65,7 @@ let glyph uni ascii = if (Lazy.force caps).Reporter.unicode then uni else ascii
 (* Any failed check across ALL hunt blocks in the run. A hunt never exits mid-run, so every suite
    reports; {!run} returns non-zero once at the end if anything failed. *)
 let any_failed = ref false
+let executed = ref false (* has [run] run? — drives the bare-usage safety net below *)
 
 (* an argv flag value, read once (mirrors the Browser runner's flags), set per-suite by
    `fennec test`. *)
@@ -629,6 +630,7 @@ let run_one (h : suite) =
    matches nothing is never a silent green). The whole body of a runner:
    [let () = exit (Fennec_hunt.Http.run ())]. Userland writes only [let%http] blocks. *)
 let run () =
+  executed := true;
   let chosen =
     List.rev !suites
     |> List.filter (fun (h : suite) ->
@@ -638,6 +640,12 @@ let run () =
   List.iter run_one chosen;
   if chosen = [] && Lazy.force grep_given then 3
   else if !any_failed then 1 else 0
+
+(* Bare-usage safety net: a standalone suite that registered [hunt] blocks but never called [run]
+   (the trailing [let () = exit (Http.run ())]) still executes on exit and fails the process if a
+   check failed — so a bare hunt file is never a silent no-op. [run] sets [executed], so the
+   orchestrator (which calls it explicitly) and this net never double-run. *)
+let () = at_exit (fun () -> if (not !executed) && !suites <> [] then exit (run ()))
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  For_test — pure internals exposed for unit tests; NOT a stable API           *)
