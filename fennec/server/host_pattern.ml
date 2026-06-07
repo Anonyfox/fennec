@@ -89,3 +89,20 @@ let%test "exact > suffix"             = specificity (Result.get_ok (of_string "a
 let%test "longer suffix > shorter"    = specificity (Result.get_ok (of_string "*.api.acme.com")) > specificity (Result.get_ok (of_string "*.acme.com"))
 let%test "suffix > any"               = specificity (Result.get_ok (of_string "*.acme.com")) > specificity (Result.get_ok (of_string "*"))
 let%test "exact > any"                = specificity (Result.get_ok (of_string "acme.com")) > specificity (Result.get_ok (of_string "*"))
+
+(* ──── properties ──── *)
+
+(* normalization is a fixpoint: re-normalizing a host never changes it (and never raises on
+   arbitrary input — host headers are attacker-controlled). *)
+let%prop "normalize is idempotent" = fun (h : string) -> normalize (normalize h) = normalize h
+
+(* parsing a pattern and rendering it back round-trips exactly. Generates valid patterns from
+   lowercase dotted labels (a suffix needs ≥2 labels so its remainder clears the 2-char floor). *)
+let%prop "of_string then to_string round-trips a valid pattern" =
+  let open Fennec_hunt_prop in
+  let label = Gen.(string_size ~gen:(map (fun n -> Char.chr (Char.code 'a' + n)) (int_range 0 25)) (int_range 1 5)) in
+  let dotted ~min = Gen.(map (String.concat ".") (list_size (int_range min 3) label)) in
+  let pat = Gen.(oneof [ pure Any;
+                         map (fun h -> Exact h) (dotted ~min:1);
+                         map (fun h -> Suffix ("." ^ h)) (dotted ~min:2) ]) in
+  forall ~print:to_string pat (fun p -> of_string (to_string p) = Ok p)

@@ -27,5 +27,5 @@
 (test
  (name test_prop)
  (modules test_prop)
- (libraries fennec-hunt fennec-hunt.unit)
+ (libraries fennec-hunt fennec-hunt.unit fennec-hunt.prop)
  (preprocess (pps fennec-hunt.ppx)))

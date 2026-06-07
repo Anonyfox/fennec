@@ -40,6 +40,10 @@ let%test "parse val with ="   = parse_header "k=a=b" = [("k", "a=b")]
 let%test "parse empty header" = parse_header "" = []
 let%test "parse blank segs"   = parse_header ";; a=1;; " = [("a", "1")]
 
+(* robustness: the Cookie request header is attacker-controlled — parsing must never raise. *)
+let%prop "parse_header never raises on arbitrary input" = fun (s : string) ->
+  ignore (parse_header s); true
+
 (* ──── to_set_cookie ──── *)
 
 (* serialize one [Set-Cookie] header value. [path] defaults to "/", [http_only] to

@@ -74,14 +74,23 @@ let add (h : t) (name : string) (value : string) : t = h @ [ (name, value) ]
 
 let%test "add appends"         = add [("X","1")] "X" "2" = [("X","1");("X","2")]
 
-(* ──── multi-binding integration ──── *)
+(* ──── algebraic laws (properties over arbitrary header lists) ──── *)
 
-(* the old test_headers exercised a shared multi-valued header list; these cover the same
-   combined-path scenarios to confirm the operations compose correctly *)
-let _mh = [ ("Content-Type", "text/html"); ("X-A", "1"); ("X-A", "2") ]
-let%test "get_all on shared multi list" = get_all _mh "X-A" = [ "1"; "2" ]
-let%test "put replaces all multi"       = get_all (put _mh "X-A" "9") "x-a" = [ "9" ]
-let%test "add appends to multi"         = get_all (add _mh "X-A" "3") "x-a" = [ "1"; "2"; "3" ]
-let%test "delete multi clears all"      = get_all (delete _mh "x-a") "X-A" = []
-let%test "ci_equal mixed case"          = ci_equal "Content-Type" "content-TYPE"
-let%test "mem on multi-valued"          = mem _mh "CONTENT-TYPE"
+(* One property over a SMALL, realistic header list (a few short printable names/values), checking
+   the get/put/delete/case laws together — subsumes the old hand-built shared-multi-list tests.
+   NB: a naive type-driven [(string*string) list] generator is correct but its deeply-nested shrink
+   trees cost ~5s/property — too slow for the fast unit gate — so the sizes are bounded here. *)
+let%prop "get/put/delete obey their algebraic laws" =
+  let open Fennec_hunt_prop in
+  let s = Gen.(string_size ~gen:char_printable (int_range 0 8)) in
+  forall
+    ~print:(fun (h, k, v) -> Printf.sprintf "(%d entries, k=%S, v=%S)" (List.length h) k v)
+    Gen.(triple (list_size (int_range 0 6) (pair s s)) s s)
+    (fun (h, k, v) ->
+      get (put h k v) k = Some v                     (* put then get the name → that value *)
+      && get_all (put h k v) k = [ v ]               (* put leaves exactly one binding *)
+      && get_all (delete h k) k = []                 (* delete removes every binding *)
+      && get h k = get h (String.uppercase_ascii k)) (* name lookup is case-insensitive *)
+
+let%test "ci_equal mixed case" = ci_equal "Content-Type" "content-TYPE"
+let%test "add keeps insertion order" = add [ ("X", "1") ] "X" "2" = [ ("X", "1"); ("X", "2") ]

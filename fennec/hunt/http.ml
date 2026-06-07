@@ -694,6 +694,9 @@ let%test "chunked: hex size 0x10"       = For_test.decode_chunked "10\r\n0123456
 let%test "chunked: extension ignored"   = For_test.decode_chunked "2;foo=bar\r\nok\r\n0\r\n\r\n" = "ok"
 let%test "chunked: empty"               = For_test.decode_chunked "0\r\n\r\n" = ""
 let%test "chunked: malformed best-effort" = For_test.decode_chunked "2\r\nab\r\nGARBAGE" = "ab"
+(* the body comes from a (possibly hostile) server — best-effort decoding must never raise *)
+let%prop "decode_chunked never raises on arbitrary input" = fun (s : string) ->
+  ignore (For_test.decode_chunked s); true
 
 (* --- encode_multipart --- *)
 let%test "multipart: field part" =
@@ -728,6 +731,9 @@ let%test "parse_url: full"           = For_test.parse_url "http://localhost:4000
 let%test "parse_url: no scheme"      = For_test.parse_url "example.com:8080" = ("http", "example.com", 8080, "")
 let%test "parse_url: https default"  = For_test.parse_url "https://acme.com" = ("https", "acme.com", 443, "")
 let%test "parse_url: bare host"      = For_test.parse_url "localhost" = ("http", "localhost", 80, "")
+(* parse_url is total: any string yields a (scheme, host, port, path) tuple, never an exception *)
+let%prop "parse_url never raises on arbitrary input" = fun (s : string) ->
+  ignore (For_test.parse_url s); true
 
 (* --- encoders --- *)
 let%test "encode_query escapes"      = For_test.encode_query [("q", "a b&c"); ("n", "1")] = "q=a%20b%26c&n=1"

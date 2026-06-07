@@ -3,6 +3,6 @@
 ; extraction is unit-tested inline; only the file walk touches the world.
 (library
  (name fennec_docs)
- (libraries ppxlib unix fennec-hunt.unit)
+ (libraries ppxlib unix fennec-hunt.unit fennec-hunt.prop)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec-hunt.ppx)))

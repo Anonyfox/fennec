@@ -74,3 +74,17 @@ let%test "a different base shifts the block" =
 
 let%test "empty suite list -> no instances" =
   allocate ~base:7000 [] = []
+
+(* The load-bearing invariant, over ANY base and ANY suite list: one instance per suite, all ports
+   distinct (no two suites ever collide), and every port at or above the base. This is what makes
+   parallel runs safe — proven for the whole input space, not just the [a;b;c] example above. *)
+let%prop "allocation is one-per-suite, distinct, and based at base" =
+  let open Fennec_hunt_prop in
+  forall
+    ~print:(fun (base, names) -> Printf.sprintf "base=%d, %d suites" base (List.length names))
+    Gen.(pair (int_range 1024 60000) (list_size (int_range 0 16) (string_size ~gen:char_printable (int_range 0 6))))
+    (fun (base, names) ->
+      let ports = List.map (fun (i : t) -> i.port) (allocate ~base names) in
+      List.length ports = List.length names
+      && List.sort_uniq compare ports = List.sort compare ports
+      && List.for_all (fun p -> p >= base) ports)

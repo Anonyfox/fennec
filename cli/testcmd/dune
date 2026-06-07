@@ -1,11 +1,12 @@
 ; The `fennec test` orchestration, as a library of focused modules (instance allocation,
 ; suite discovery, the run loop) so the testable logic is unit-tested in isolation. The CLI
 ; `test` subcommand is a thin call into it. Depends on fennec.core (the Dev_proto env wire)
-; and fennec_dev (server spawn / port / discovery, reused from the dev supervisor) — NOT on
-; fennec-hunt, so the `fennec` binary stays a lean install. The `docs` cut delegates to
-; fennec_docs (doc-coverage), already linked into the binary.
+; and fennec_dev (server spawn / port / discovery, reused from the dev supervisor) — NOT on the
+; full fennec-hunt (browser/http/system), so the `fennec` binary stays a lean install. The `docs`
+; cut delegates to fennec_docs (doc-coverage). fennec-hunt.prop is the lean property-test layer
+; (qcheck-core, pure OCaml, test-stripped in prod) for the inline let%prop checks here.
 (library
  (name fennec_testcmd)
- (libraries unix threads.posix fennec.core fennec_dev fennec-hunt.unit fennec_docs)
+ (libraries unix threads.posix fennec.core fennec_dev fennec-hunt.unit fennec-hunt.prop fennec_docs)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec-hunt.ppx)))

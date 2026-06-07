@@ -182,6 +182,10 @@ let%test "promote_source multi-insert keeps line alignment (no shifting)" =
   out = "(** da *)\nval a : int\n(** db *)\nval b : int\n"
 let%test "promote_source skips a doc containing the comment terminator" =
   promote_source "val f : int\n" [ (1, "has *) inside") ] = "val f : int\n"
+(* with no insertions, promote_source must return the source untouched — for ANY source. This is
+   what guarantees `--promote` never mangles a file it has nothing to add to. *)
+let%prop "promote_source with no inserts is the identity" = fun (src : string) ->
+  promote_source src [] = src
 let%test "render_doc multi-line" =
   render_doc ~indent:"" "first\nsecond" = "(** first\n    second *)"
 

@@ -1,0 +1,12 @@
+; Workspace-wide build environment.
+;
+; In the `release` profile, set FENNEC_DROP_TESTS so the fennec test ppx strips every inline-test
+; body (let%test / let%test_unit / let%prop / executable doctests) down to `let () = ()`. That keeps
+; the shipped binary lean — it links none of the test runtime (Fennec_hunt_unit / Fennec_hunt_prop)
+; or its deps (qcheck-core). The dev profile leaves tests in place, so `dune runtest` and
+; `fennec test` run them all. (env-vars are part of each action's environment, so dune rebuilds
+; correctly when the profile changes.)
+(env
+ (release
+  (env-vars
+   (FENNEC_DROP_TESTS true))))

@@ -62,9 +62,11 @@ let decompress (payload : string) : string =
 
 (* ──── round-trip (compress + decompress) ──── *)
 
-let%test "rt empty"       = decompress (compress "") = ""
-let%test "rt 1 byte"      = decompress (compress "x") = "x"
-let%test "rt hello"        = decompress (compress "hello world") = "hello world"
-let%test "rt 5000 bytes"   = decompress (compress (String.make 5000 'z')) = String.make 5000 'z'
-let%test "rt utf-8"        = decompress (compress {js|cafe ✨ 🦊|js}) = {js|cafe ✨ 🦊|js}
-let%test "rt binary-ish"   = decompress (compress "\x00\x01\x02\xff binary-ish") = "\x00\x01\x02\xff binary-ish"
+(* The round-trip law, over arbitrary bytes (Gen.char is the full 0..255 range, so this covers
+   binary, UTF-8, embedded NULs) and sizes up to 8 KiB (so it subsumes the old empty / 1-byte /
+   5000-byte / utf-8 / binary examples in one stroke). *)
+let%prop "compress then decompress is the identity" =
+  let open Fennec_hunt_prop in
+  forall ~print:String.escaped
+    Gen.(string_size (int_range 0 8192))
+    (fun s -> decompress (compress s) = s)

@@ -1,7 +1,7 @@
 ; Fur core — signals, vdom, SSR, head, data, router, reconciler. Pure + abstract
 ; (.mli is the contract + recompile firewall). Platform ops are a virtual library.
 (library (name fennec_fur) (public_name fennec.fur) (wrapped false)
- (libraries fennec.fur.platform fennec-hunt.unit)
+ (libraries fennec.fur.platform fennec-hunt.unit fennec-hunt.prop)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec.fur.ppx))
  (modes byte native) (flags (:standard -w -a)))

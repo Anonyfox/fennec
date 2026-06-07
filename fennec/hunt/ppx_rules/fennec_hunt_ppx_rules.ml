@@ -25,7 +25,13 @@ open Ppxlib
 (*  Strip gate                                                                           *)
 (* ══════════════════════════════════════════════════════════════════════════════════════ *)
 
-let drop_tests = ref false
+(* Strip inline-test bodies (let%test / let%test_unit / let%prop / doctests → [let () = ()]) so a
+   production build links NONE of the test runtime or its deps (Fennec_hunt_unit, Fennec_hunt_prop,
+   qcheck-core). Driven by the [FENNEC_DROP_TESTS] env var, which the root [dune] sets in the
+   [release] profile — so [dune build --profile release] strips, while [dune runtest] (dev profile)
+   keeps every test. The explicit [-fennec-drop-tests] flag still forces it on. *)
+let env_truthy = function Some v -> v <> "" && v <> "0" && v <> "false" | None -> false
+let drop_tests = ref (env_truthy (Sys.getenv_opt "FENNEC_DROP_TESTS"))
 let () = Driver.add_arg "-fennec-drop-tests"
   (Arg.Set drop_tests) ~doc:" Strip inline test bodies (zero cost in production)"
 
@@ -120,17 +126,17 @@ let ext_test_unit =
 let rec prop_gen_of_type (t : core_type) : (expression * expression) option =
   let loc = t.ptyp_loc in
   match t.ptyp_desc with
-  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.int], [%expr Fennec_hunt.Prop.Print.int])
-  | Ptyp_constr ({ txt = Lident "bool"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.bool], [%expr Fennec_hunt.Prop.Print.bool])
-  | Ptyp_constr ({ txt = Lident "char"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.char], [%expr Fennec_hunt.Prop.Print.char])
-  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.string], [%expr Fennec_hunt.Prop.Print.string])
-  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> Some ([%expr Fennec_hunt.Prop.Gen.float], [%expr Fennec_hunt.Prop.Print.float])
+  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> Some ([%expr Fennec_hunt_prop.Gen.int], [%expr Fennec_hunt_prop.Print.int])
+  | Ptyp_constr ({ txt = Lident "bool"; _ }, []) -> Some ([%expr Fennec_hunt_prop.Gen.bool], [%expr Fennec_hunt_prop.Print.bool])
+  | Ptyp_constr ({ txt = Lident "char"; _ }, []) -> Some ([%expr Fennec_hunt_prop.Gen.char], [%expr Fennec_hunt_prop.Print.char])
+  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> Some ([%expr Fennec_hunt_prop.Gen.string], [%expr Fennec_hunt_prop.Print.string])
+  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> Some ([%expr Fennec_hunt_prop.Gen.float], [%expr Fennec_hunt_prop.Print.float])
   | Ptyp_constr ({ txt = Lident "list"; _ }, [ a ]) ->
-    Option.map (fun (g, p) -> ([%expr Fennec_hunt.Prop.Gen.list [%e g]], [%expr Fennec_hunt.Prop.Print.list [%e p]])) (prop_gen_of_type a)
+    Option.map (fun (g, p) -> ([%expr Fennec_hunt_prop.Gen.list [%e g]], [%expr Fennec_hunt_prop.Print.list [%e p]])) (prop_gen_of_type a)
   | Ptyp_constr ({ txt = Lident "array"; _ }, [ a ]) ->
-    Option.map (fun (g, p) -> ([%expr Fennec_hunt.Prop.Gen.array [%e g]], [%expr Fennec_hunt.Prop.Print.array [%e p]])) (prop_gen_of_type a)
+    Option.map (fun (g, p) -> ([%expr Fennec_hunt_prop.Gen.array [%e g]], [%expr Fennec_hunt_prop.Print.array [%e p]])) (prop_gen_of_type a)
   | Ptyp_constr ({ txt = Lident "option"; _ }, [ a ]) ->
-    Option.map (fun (g, p) -> ([%expr Fennec_hunt.Prop.Gen.option [%e g]], [%expr Fennec_hunt.Prop.Print.option [%e p]])) (prop_gen_of_type a)
+    Option.map (fun (g, p) -> ([%expr Fennec_hunt_prop.Gen.option [%e g]], [%expr Fennec_hunt_prop.Print.option [%e p]])) (prop_gen_of_type a)
   | Ptyp_tuple parts -> prop_gen_of_tuple ~loc parts
   | _ -> None
 
@@ -142,11 +148,11 @@ and prop_gen_of_tuple ~loc (parts : core_type list) : (expression * expression) 
   else
     match List.map Option.get mapped with
     | [ (g1, p1); (g2, p2) ] ->
-      Some ([%expr Fennec_hunt.Prop.Gen.pair [%e g1] [%e g2]], [%expr Fennec_hunt.Prop.Print.pair [%e p1] [%e p2]])
+      Some ([%expr Fennec_hunt_prop.Gen.pair [%e g1] [%e g2]], [%expr Fennec_hunt_prop.Print.pair [%e p1] [%e p2]])
     | [ (g1, p1); (g2, p2); (g3, p3) ] ->
-      Some ([%expr Fennec_hunt.Prop.Gen.triple [%e g1] [%e g2] [%e g3]], [%expr Fennec_hunt.Prop.Print.triple [%e p1] [%e p2] [%e p3]])
+      Some ([%expr Fennec_hunt_prop.Gen.triple [%e g1] [%e g2] [%e g3]], [%expr Fennec_hunt_prop.Print.triple [%e p1] [%e p2] [%e p3]])
     | [ (g1, p1); (g2, p2); (g3, p3); (g4, p4) ] ->
-      Some ([%expr Fennec_hunt.Prop.Gen.quad [%e g1] [%e g2] [%e g3] [%e g4]], [%expr Fennec_hunt.Prop.Print.quad [%e p1] [%e p2] [%e p3] [%e p4]])
+      Some ([%expr Fennec_hunt_prop.Gen.quad [%e g1] [%e g2] [%e g3] [%e g4]], [%expr Fennec_hunt_prop.Print.quad [%e p1] [%e p2] [%e p3] [%e p4]])
     | _ -> None
 
 (* a property argument is a plain, type-annotated value: [Pparam_val (Nolabel, None, (x : ty))].
@@ -182,7 +188,7 @@ let expand_prop ~ctxt payload =
           let tys = List.map prop_param_type params in
           if List.exists Option.is_none tys then
             Location.raise_errorf ~loc
-              "let%%prop %S: every argument must be a plain type-annotated value, e.g. fun (x : int) (y : string) -> ... (or use the explicit form: let%%prop %S = Fennec_hunt.Prop.(forall <gen>) (fun x -> ...))"
+              "let%%prop %S: every argument must be a plain type-annotated value, e.g. fun (x : int) (y : string) -> ... (or use the explicit form: let%%prop %S = Fennec_hunt_prop.(forall <gen>) (fun x -> ...))"
               name name
           else begin
             let tys = List.map Option.get tys in
@@ -190,7 +196,7 @@ let expand_prop ~ctxt payload =
             match gp with
             | None ->
               Location.raise_errorf ~loc
-                "let%%prop %S: no built-in generator for argument type(s): %s. Supported: int, bool, char, string, float, and list/array/option/tuple(2..4) of those. For anything else, use the explicit form: let%%prop %S = Fennec_hunt.Prop.(forall <gen>) (fun x -> ...)"
+                "let%%prop %S: no built-in generator for argument type(s): %s. Supported: int, bool, char, string, float, and list/array/option/tuple(2..4) of those. For anything else, use the explicit form: let%%prop %S = Fennec_hunt_prop.(forall <gen>) (fun x -> ...)"
                 name (String.concat " * " (List.map pp_type tys)) name
             | Some (gen, print) ->
               (* a multi-arg lambda is curried (int -> string -> bool); the generator yields a
@@ -198,18 +204,18 @@ let expand_prop ~ctxt payload =
               let pred =
                 match List.length tys with
                 | 1 -> expr
-                | 2 -> [%expr Fennec_hunt.Prop.uncurry2 [%e expr]]
-                | 3 -> [%expr Fennec_hunt.Prop.uncurry3 [%e expr]]
-                | 4 -> [%expr Fennec_hunt.Prop.uncurry4 [%e expr]]
+                | 2 -> [%expr Fennec_hunt_prop.uncurry2 [%e expr]]
+                | 3 -> [%expr Fennec_hunt_prop.uncurry3 [%e expr]]
+                | 4 -> [%expr Fennec_hunt_prop.uncurry4 [%e expr]]
                 | _ ->
                   Location.raise_errorf ~loc
                     "let%%prop %S: at most 4 arguments are supported for type-driven generation; group them into a tuple or use the explicit form" name
               in
-              register [%expr Fennec_hunt.Prop.check ~name:[%e ename] ~print:[%e print] [%e gen] [%e pred]]
+              register [%expr Fennec_hunt_prop.check ~name:[%e ename] ~print:[%e print] [%e gen] [%e pred]]
           end
         | _ ->
           (* Tier 2: the payload is already a [QCheck2.Test.t] (e.g. [forall <gen> <pred>]). *)
-          register [%expr Fennec_hunt.Prop.check_named ~name:[%e ename] [%e expr]])
+          register [%expr Fennec_hunt_prop.check_named ~name:[%e ename] [%e expr]])
     | _ ->
       Location.raise_errorf ~loc "let%%prop requires: let%%prop \"name\" = fun (x : t) -> <bool>   (or = forall <gen> <pred>)"
 

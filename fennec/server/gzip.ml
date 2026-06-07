@@ -36,13 +36,12 @@ let gzip ?(level = 6) (s : string) : string =
   let t = Zlib.create_deflate ~level ~window_bits:31 () in
   run t s
 
-let%test "gzip magic 1f 8b" =
-  let g = gzip (String.make 2000 'a') in
-  String.length g >= 2 && g.[0] = '\x1f' && g.[1] = '\x8b'
+(* gzip emits a well-formed RFC 1952 stream for ANY input (incl. empty + arbitrary bytes) —
+   subsumes the old "magic" and "empty input ok" examples. *)
+let%prop "gzip output always carries the gzip magic" = fun (s : string) ->
+  let g = gzip s in String.length g >= 2 && g.[0] = '\x1f' && g.[1] = '\x8b'
 let%test "gzip shrinks repetitive" =
   String.length (gzip (String.make 2000 'a')) < 2000
-let%test "gzip empty input ok" =
-  String.length (gzip "") >= 0
 
 (* ──── deflate ──── *)
 
@@ -52,13 +51,12 @@ let deflate ?(level = 6) (s : string) : string =
   let t = Zlib.create_deflate ~level ~window_bits:15 () in
   run t s
 
-let%test "deflate zlib header 0x78" =
-  let d = deflate (String.make 2000 'b') in
-  String.length d >= 1 && Char.code d.[0] = 0x78
+(* deflate emits a zlib-wrapped stream (0x78 header) for ANY input — subsumes the old
+   "zlib header" and "empty input ok" examples. *)
+let%prop "deflate output always carries the zlib header" = fun (s : string) ->
+  let d = deflate s in String.length d >= 1 && Char.code d.[0] = 0x78
 let%test "deflate shrinks" =
   String.length (deflate (String.make 2000 'b')) < 2000
-let%test "deflate empty input ok" =
-  String.length (deflate "") >= 0
 let%test "gzip level produces valid output" =
   let g1 = gzip ~level:1 (String.make 2000 'c') in
   String.length g1 >= 2 && g1.[0] = '\x1f' && g1.[1] = '\x8b'

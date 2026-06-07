@@ -140,6 +140,11 @@ let%test_unit "parse file part" =
 
 let%test "parse empty body"     = parse ~boundary:"X" "" = []
 
+(* robustness: a multipart body is attacker-controlled — parsing must never raise, for ANY
+   boundary and ANY body (it always splits on "--"^boundary, so it also always terminates). *)
+let%prop "parse never raises on arbitrary input" = fun (boundary : string) (body : string) ->
+  ignore (parse ~boundary body); true
+
 (* ──── individual field / file assertions ──── *)
 
 (* promote sub-checks to standalone tests for fine-grained failure reporting *)

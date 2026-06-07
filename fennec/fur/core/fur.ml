@@ -783,6 +783,11 @@ let%test "find param" =
 let%test "param accessor" =
   Matcher.param [("id","7")] "id" = Some "7"
 
+(* the documented invariant for ANY path: splitting yields only non-empty segments (so leading,
+   trailing, and doubled slashes never produce an empty segment that would corrupt matching). *)
+let%prop "segments are always non-empty" = fun (path : string) ->
+  List.for_all (fun seg -> seg <> "") (Matcher.segments path)
+
 (* ──── head merge ──── *)
 
 let%test_unit "title last wins" =

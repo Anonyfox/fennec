@@ -178,20 +178,23 @@ let%test "RFC accept-key" = accept_key "dGhlIHNhbXBsZSBub25jZQ==" = "s3pPLMBiTxa
 
 (* ──── frame round-trip ──── *)
 
-let%test_unit "round-trip: empty text" =
-  match roundtrip_ (mk_ Text "") with Frame g -> Fennec_hunt_unit.check "opcode" (g.opcode = Text); Fennec_hunt_unit.check "payload" (g.payload = "") | _ -> failwith "decode"
-let%test_unit "round-trip: short" =
-  match roundtrip_ (mk_ Text "reload") with Frame g -> Fennec_hunt_unit.check "payload" (g.payload = "reload") | _ -> failwith "decode"
-let%test_unit "round-trip: 125 (7-bit max)" =
-  let s = String.make 125 'a' in match roundtrip_ (mk_ Text s) with Frame g -> Fennec_hunt_unit.check "len" (g.payload = s) | _ -> failwith "decode"
-let%test_unit "round-trip: 126 (16-bit len)" =
-  let s = String.make 126 'b' in match roundtrip_ (mk_ Text s) with Frame g -> Fennec_hunt_unit.check "len" (g.payload = s) | _ -> failwith "decode"
+(* Round-trip law: any well-formed data frame survives write→read. Covers fin/rsv1, all three
+   data opcodes, binary payloads (Gen.char is the full 0..255 range), and the 7-bit↔16-bit length
+   boundary (lengths ≤ 1000) — subsuming the old empty/short/125/126/binary/rsv1 examples. *)
+let%prop "a well-formed frame survives write→read (masked)" =
+  let open Fennec_hunt_prop in
+  let frame_gen =
+    Gen.(map
+           (fun (opcode, payload, (fin, rsv1)) -> { fin; rsv1; opcode; payload })
+           (triple (oneof_list [ Continuation; Text; Binary ]) (string_size (int_range 0 1000)) (pair bool bool)))
+  in
+  forall ~print:(fun f -> Printf.sprintf "{fin=%b rsv1=%b |payload|=%d}" f.fin f.rsv1 (String.length f.payload))
+    frame_gen
+    (fun f -> match roundtrip_ f with Frame g -> g = f | _ -> false)
+
+(* the 64-bit length path (payload > 65535) stays an explicit example — too big to generate 100×. *)
 let%test_unit "round-trip: 70000 (64-bit len)" =
   let s = String.make 70000 'd' in match roundtrip_ (mk_ Text s) with Frame g -> Fennec_hunt_unit.check "len" (g.payload = s) | _ -> failwith "decode"
-let%test_unit "round-trip: binary" =
-  match roundtrip_ (mk_ Binary "\x00\x01\x02\xff") with Frame g -> Fennec_hunt_unit.check "payload" (g.payload = "\x00\x01\x02\xff") | _ -> failwith "decode"
-let%test_unit "round-trip: rsv1 set" =
-  match roundtrip_ (mk_ ~rsv1:true Text "compressed") with Frame g -> Fennec_hunt_unit.check "rsv1" g.rsv1 | _ -> failwith "decode"
 
 (* ──── hardening ──── *)
 

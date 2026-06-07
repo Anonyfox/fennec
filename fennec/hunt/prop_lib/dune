@@ -1,0 +1,13 @@
+; The property-testing surface for `let%prop` — a lean QCheck2 layer over the inline Unit
+; runtime. Its OWN sub-library (fennec-hunt.prop) so a downstream library opts into property
+; tests with ONE lean dependency (qcheck-core is pure OCaml, and let%prop bodies are stripped in
+; a production build) WITHOUT linking the full fennec-hunt (browser/http/system) — and so the
+; `fennec` binary, which links only fennec-hunt.unit, never pulls qcheck-core.
+;
+; The ppx ([let%prop]) emits [Fennec_hunt_prop.*]; the main fennec-hunt re-exports this as
+; [Fennec_hunt.Prop] (like Fennec_hunt.Unit re-exports fennec-hunt.unit).
+(library
+ (name fennec_hunt_prop)
+ (public_name fennec-hunt.prop)
+ (libraries fennec-hunt.unit qcheck-core)
+ (modules fennec_hunt_prop))
