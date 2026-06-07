@@ -1,7 +1,7 @@
 # `fennec test` — the testing command
 
-One command for a Fennec app's tests, in four sharp cuts. It erases the boilerplate a
-hunt-based suite needs today (hand-wired `(executable)` stanzas, a `run.sh`, the
+One command for a Fennec app's tests and doc-coverage. For the four test cuts it erases the
+boilerplate a hunt-based suite needs today (hand-wired `(executable)` stanzas, a `run.sh`, the
 "build-the-binary-not-`dune exec`" dance, server spawn + readiness + teardown) — and the
 stringly-typed `e2e/*.sh` integration scripts — by owning the orchestration, while keeping each
 suite **isolated and deterministic**.
@@ -14,7 +14,8 @@ fennec test new http checkout       # scaffold test/http/checkout_test.ml (+ dun
 # …edit checkout_test.ml…
 fennec test http                    # build + run it, isolated, against your app
 fennec test http --grep checkout    # just that suite (a filter matching nothing FAILS, never green)
-fennec test all                     # unit → http → browser → system
+fennec test all                     # unit → http → browser → system → docs
+fennec test docs                    # doc-coverage (warn-only; --strict gates, --promote fixes)
 ```
 
 A suite is one block — no `main`, no env wiring, no dune edit:
@@ -41,9 +42,11 @@ the fast CI gate.
 | `fennec test http` | Http suites | a booted app per suite | orchestrated |
 | `fennec test browser` | Browser suites | app per suite **+ Chrome** | orchestrated |
 | `fennec test system` | System suites | the real `fennec dev` (suites spawn it) | orchestrated, serial |
-| `fennec test all` | unit → http → browser → system | everything | orchestrated, fast-to-slow |
+| `fennec test docs` | doc-coverage (doctests already run under `unit`) | nothing | parses `.mli`/`.ml`; **warns** by default |
+| `fennec test all` | unit → http → browser → system → docs | everything | orchestrated, fast-to-slow |
 
-Bare `fennec test` runs on every push. `http`/`browser`/`system` are explicit and own their setup.
+Bare `fennec test` runs on every push. `http`/`browser`/`system` are explicit and own their setup;
+`docs` warns by default (so `all` stays green on a half-documented tree) — opt into `--strict` to gate.
 
 ## Per-suite isolation (the core invariant)
 
@@ -196,7 +199,7 @@ Bytecode stublibs: a suite may spawn the `.bc` server directly, which must `dlop
 ## Flags (minimal and sharp — nothing more)
 
 ```
-fennec test [SUITE]
+fennec test [SUITE] [PATH…]
   -g, --grep RE        run only tests whose NAME (the let%cut label) contains RE — every cut;
                        a filter that matches nothing FAILS (never a silent green)
   -x, --max-failures N stop after N suites fail (default fail-fast = stop at the first)
@@ -206,7 +209,13 @@ fennec test [SUITE]
       --headed         browser cut only: show the browser window
       --screenshots DIR  browser cut only: write a PNG on failure into DIR
       --reporter R     browser cut only: reporter style (auto | plain | pretty)
+      --strict         docs cut only: fail (exit 1) on a coverage gap — a CI gate (else warn)
+      --private        docs cut only: also check .ml top-level defs, not just .mli exports
+      --promote        docs cut only: move .ml-only docs up into the .mli (the fixer)
 ```
+
+`fennec test docs [PATH…]` takes optional paths (files or dirs) to check; with none it scans the
+whole project.
 
 Strict exit code (non-zero if any suite fails). Fail-fast is at the **suite** level (the
 orchestrator's unit; it can't count another process's cases). A wedged suite is killed by a
@@ -228,20 +237,23 @@ jest's watch-flag zoo, a reporter/coverage flag farm. (`--watch` is deferred —
 - **Interrupted (Ctrl-C)** → structural teardown of every spawned instance (Eio switch / the
   pidfile reaper), no orphans, no held ports.
 
-## Docs & doctests (`fennec docs` + executable examples)
+## Docs & doctests (`fennec test docs` + executable examples)
 
 Two adjacent guards keep documentation honest — both novel for OCaml (the ecosystem has no
 `missing_docs` lint, and doctests previously meant pulling in `mdx`).
 
-**Coverage — `fennec docs`.** Parses each `.mli` (the public surface) and reports every export —
-`val` / `type` / `exception` / `module` / `module type` — without a `(** ... *)` doc comment,
-grouped by file with line numbers.
+**Coverage — `fennec test docs`.** Doc-coverage is a verification like any other test — "every
+public export is documented" is a check that passes or fails — so it's a *cut* of `fennec test`,
+not a separate command. It WARNS by default (a missing doc is advisory until you opt into
+`--strict`). It parses each `.mli` (the public surface) and reports every export — `val` / `type` /
+`exception` / `module` / `module type` — without a `(** ... *)` doc comment, grouped by file with
+line numbers.
 
 ```sh
-fennec docs            # warn-only (exit 0)
-fennec docs --strict   # hard error (exit 1) — a CI gate
-fennec docs --private  # also scan .ml top-level definitions (unexported)
-fennec docs --port     # move .ml-only docs into the .mli (where they render)
+fennec test docs            # warn-only (exit 0)
+fennec test docs --strict   # hard error (exit 1) — a CI gate
+fennec test docs --private  # also scan .ml top-level definitions (unexported)
+fennec test docs --promote  # move .ml-only docs into the .mli (where they render)
 ```
 
 Because odoc renders the curated `.mli`, a doc that lives only in the `.ml` is invisible publicly.
@@ -251,9 +263,9 @@ So each export is one of **three** states, distinguished in the report:
 - bare in the `.mli` but documented in the sibling `.ml` → ⤷ *"documented in .ml — won't render"*
 - documented in neither → ✗ undocumented
 
-`--strict` fails on the latter two (both mean the published docs are blank). `--port` is the
+`--strict` fails on the latter two (both mean the published docs are blank). `--promote` is the
 fixer: it copies each `.ml`-only doc into the `.mli` before the matching item (idempotent, the
-`.mli` wins on conflict, the `.ml` is never touched) — an explicit, diff-reviewable "port over",
+`.mli` wins on conflict, the `.ml` is never touched) — an explicit, diff-reviewable promotion,
 since odoc gives no way to inherit `.ml` docs and a ppx can't bridge the files (the sandbox). The
 convention stays *docs live in the `.mli`*; this just catches and fixes misplacement.
 

@@ -97,7 +97,8 @@ dune test examples/site/frontend_test
 #   fennec test http       # Http suites in test/http/ (dedicated isolated instance per suite)
 #   fennec test browser    # Browser suites in test/browser/ (needs Chrome; CHROME=/path to override)
 #   fennec test system     # System suites in test/system/ (drive the real `fennec dev`)
-#   fennec test all        # unit → http → browser → system (fast-to-slow)
+#   fennec test docs       # doc-coverage (warn-only; --strict gates, --promote moves .ml docs to .mli)
+#   fennec test all        # unit → http → browser → system → docs (fast-to-slow)
 (cd examples/site && fennec test all)
 
 # the System cut replaces the old e2e/*.sh checks with typed, deterministic tests (condition

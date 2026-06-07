@@ -68,3 +68,11 @@ jobs:
         run: |
           FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
           opam exec -- "$FENNEC" test system
+
+      # Doc-coverage gate: every public export in the fennec packages must carry a doc comment.
+      # Scoped to the framework libraries (not the example app). Warn-only on the example — it's
+      # userland, not the public API. Running at the workspace root, not examples/site.
+      - name: Doc coverage (fennec test docs --strict)
+        run: |
+          FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
+          opam exec -- "$FENNEC" test docs --strict fennec/ cli/

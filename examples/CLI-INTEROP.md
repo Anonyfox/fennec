@@ -9,7 +9,7 @@ the rule wins — change the design, not the rule (or change this doc deliberate
 | Actor | Package / location | Owns |
 | --- | --- | --- |
 | **dune** | (the build tool) | The build graph. The **only** source-tree watcher. Builds everything — the native OCaml server, the js_of_ocaml client bundle (Fennec.Fur), and assets (CSS/JS) — because assets are dune rules that call the CLI. |
-| **CLI** (`fennec`) | `cli/`, package `fennec-cli` | Operational lifecycle only: `fennec build` (one-shot asset build, invoked *by* dune rules) and `fennec dev` (orchestrates `dune build --watch` + supervises the server process). Distributed as a prebuilt binary. |
+| **CLI** (`fennec`) | `cli/`, package `fennec-cli` | Two things dune doesn't do (see § The CLI's command surface): **bundle assets** (`fennec build`, invoked *by* dune rules) and **orchestrate the lifecycle** (`fennec dev` watches via dune + supervises the server; `fennec test` builds via dune + runs the suites, incl. the `docs` doc-coverage cut). Never watches source or owns the build graph. Internal plumbing (`__esbuild-worker`, `gen-doctests`) is machine-facing only. Distributed as a prebuilt binary. |
 | **Framework** (`fennec`) | `fennec/`, package `fennec` | The runtime: HTTP core, Eio server, and the livereload **relay** (holds the browser sockets; the CLI drives it). Watches nothing itself. Shipped to opam. |
 | **User app** | e.g. `examples/site/` | A **plain dune project**. Depends on the framework lib; uses dune rules that call the CLI for assets. Knows nothing about the CLI's existence at the code level. |
 
@@ -28,9 +28,40 @@ The framework watches nothing; it only relays the CLI's frontend signal to the
 browser over the livereload socket. Nobody parses dune's stdout. Nobody runs a
 second source watcher. This is what keeps the parts decoupled.
 
+## The CLI's command surface (clean-cut from dune, by rule)
+
+The CLI does exactly two kinds of thing, both deliberately *outside* what dune does — it never
+watches source and never re-implements the build graph:
+
+1. **Bundle assets dune can't** — `fennec build` (esbuild for JS, Lightning CSS + grass for
+   CSS/SCSS). A general-purpose bundler that runs standalone; in a Fennec project, dune *rules*
+   call it (§ Asset pipeline). dune owns *when* it runs; `build` owns *how* to bundle.
+2. **Orchestrate dune and react to its outputs** — the framework lifecycle:
+   - `fennec dev` — runs `dune build --watch` and supervises the server, reacting to build
+     *outputs* (the reactor; § Livereload).
+   - `fennec test` — runs one-shot `dune build`s (and `@runtest` for the unit cut), then runs the
+     suites against isolated app instances. Cuts: `unit` (inline tests + doctests) · `http` ·
+     `browser` · `system` · `docs`. It invokes dune as a *builder*; it never watches.
+
+**Three human verbs — `build`, `dev`, `test` — and nothing else to type.** Doc-coverage is **not**
+a separate command: "every public export is documented" is a check that passes or fails, exactly
+like a test, so it's the `docs` cut of `fennec test` (warn by default; `--strict` gates;
+`--promote` moves `.ml`-only docs into the `.mli`). Reading source for that check is one-shot
+analysis, not a watcher — so it stays within the load-bearing principle.
+
+**Internal plumbing**, listed under INTERNAL COMMANDS in `--help`, never run by hand:
+`__esbuild-worker` (the warm worker `fennec dev` spawns) and `gen-doctests` (codegen a dune *rule*
+calls so `.mli` examples run under `fennec test`). Machine-facing, like `build`-via-rule.
+
+The test for any command: it either (a) does what dune can't — bundle, or analyze source one-shot —
+or (b) orchestrates dune + reacts to its outputs. None watches source or re-implements the build
+graph. **Delete the CLI and the project is still a plain dune project**: `dune build` builds it,
+`dune exec` runs it, `dune runtest` runs the inline tests. The CLI is convenience and quality on
+top, never a replacement for dune.
+
 ## Touchpoints (the entire interface surface)
 
-1. **CLI → dune**: a standard `dune build --watch <target>` invocation. No custom protocol.
+1. **CLI → dune**: a standard `dune build [--watch] <target>` invocation — `--watch` for `dev`, one-shot (incl. `@runtest`) for `test`. No custom protocol.
 2. **dune → CLI**: asset rules call `%{bin:fennec} build …`. Outputs are ordinary dune targets.
 3. **CLI ↔ app**: process lifecycle (spawn / signal / wait) + a small wire defined in ONE place — `Fennec_core.Dev_proto`, referenced by both sides (constants + typed (de)serializers, round-tripped in tests) so it can't drift silently:
    - **CLI → app, via env**: `FENNEC_ENV`; `FENNEC_PORT` (the base port — dev allocates its block from here, prod listens on it); `FENNEC_LIVERELOAD` (a dev-only loopback socket path); `FENNEC_DEV_PARENT` (the supervisor's pid — the server self-exits when orphaned); `FENNEC_DEV_UI`; `FENNEC_ESBUILD_WORKER`; `FENNEC_PARALLELISM` (optional per-core worker override; auto otherwise).
@@ -94,8 +125,10 @@ to wait on: the browser's reconnect retry (nothing fires when a server returns)
 and the CLI's ~1 Hz crash check (a crashed process emits no fs event).
 
 The heavy *source-tree* watching is always dune's optimized native watcher; the
-CLI never touches source. We never hand-roll a watcher — the CLI uses a proven
-library.
+CLI never *watches* source and never re-implements the build graph. (It may *read*
+source once, on demand — `fennec test docs` parses `.mli`/`.ml` for doc-coverage,
+`gen-doctests` extracts examples — but that's one-shot analysis, not a second
+watcher.) We never hand-roll a watcher — the CLI uses a proven library.
 
 The livereload script is injected into HTML responses **in memory** (before the
 last `</body>`); it never rewrites a user file on disk. All of it is gated on dev

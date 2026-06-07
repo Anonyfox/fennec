@@ -1,14 +1,14 @@
-(* Doc-coverage for `fennec docs`. OCaml has no missing-docs lint (Rust's [missing_docs] has no
+(* Doc-coverage for `fennec test docs`. OCaml has no missing-docs lint (Rust's [missing_docs] has no
    equivalent; warning 70 only flags a missing .mli FILE, not undocumented items) — so this is
    fennec's. It parses .mli/.ml via ppxlib and reports exports lacking a doc comment.
 
    Because odoc renders the CURATED .mli (a doc in the .ml is invisible when an .mli exists), each
    .mli export is one of three states:
      - documented in the .mli            → ✔ (it renders)
-     - bare in the .mli, documented in .ml → ⤷ "ml-only": won't render publicly; move it (or --port)
+     - bare in the .mli, documented in .ml → ⤷ "ml-only": won't render publicly; move it (or --promote)
      - documented in neither             → ✗ undocumented
-   [--port] copies each ml-only doc into the .mli where the .mli lacks one (idempotent; the .mli
-   wins on conflict; the .ml is read but never modified) — the explicit, reviewable "port over".
+   [--promote] copies each ml-only doc into the .mli where the .mli lacks one (idempotent; the .mli
+   wins on conflict; the .ml is read but never modified) — the explicit, reviewable promotion.
 
    Extraction + classification + the port rewrite are pure (unit-tested); only the file walk and
    read/write touch the world. *)
@@ -152,7 +152,7 @@ let str_contains hay needle =
 (* insert a doc comment before each given 1-based line of [src]. [inserts] is (line, text). A text
    that would close the comment early is skipped. One pass, so line numbers never shift, and the
    rest of the file is byte-preserved. Pure. *)
-let port_source (src : string) (inserts : (int * string) list) : string =
+let promote_source (src : string) (inserts : (int * string) list) : string =
   let by_line = Hashtbl.create 16 in
   List.iter (fun (l, t) -> if not (str_contains t "*)") then Hashtbl.replace by_line l t) inserts;
   let lines = String.split_on_char '\n' src in
@@ -168,13 +168,13 @@ let port_source (src : string) (inserts : (int * string) list) : string =
     lines;
   Buffer.contents buf
 
-let%test "port_source inserts before the line, keeping indentation" =
-  port_source "  val f : int\n" [ (1, "f docs") ] = "  (** f docs *)\n  val f : int\n"
-let%test "port_source multi-insert keeps line alignment (no shifting)" =
-  let out = port_source "val a : int\nval b : int\n" [ (1, "da"); (2, "db") ] in
+let%test "promote_source inserts before the line, keeping indentation" =
+  promote_source "  val f : int\n" [ (1, "f docs") ] = "  (** f docs *)\n  val f : int\n"
+let%test "promote_source multi-insert keeps line alignment (no shifting)" =
+  let out = promote_source "val a : int\nval b : int\n" [ (1, "da"); (2, "db") ] in
   out = "(** da *)\nval a : int\n(** db *)\nval b : int\n"
-let%test "port_source skips a doc containing the comment terminator" =
-  port_source "val f : int\n" [ (1, "has *) inside") ] = "val f : int\n"
+let%test "promote_source skips a doc containing the comment terminator" =
+  promote_source "val f : int\n" [ (1, "has *) inside") ] = "val f : int\n"
 let%test "render_doc multi-line" =
   render_doc ~indent:"" "first\nsecond" = "(** first\n    second *)"
 
@@ -237,7 +237,7 @@ let do_report ~strict files : int =
             | Ml_only _ ->
               incr mlonly;
               Printf.printf "  %s %s  %s %s  %s\n%!" (c "36" "\u{2937}") loc it.kind (c "1" it.name)
-                (c "2" "documented in .ml — won't render; move to the .mli, or `fennec docs --port`"))
+                (c "2" "documented in .ml — won't render; move to the .mli, or `fennec test docs --promote`"))
           (List.sort (fun (a, _) (b, _) -> compare a.line b.line) flagged))
     files;
   if !undoc = 0 && !mlonly = 0 then (
@@ -252,12 +252,12 @@ let do_report ~strict files : int =
     Printf.printf "\n%s %s of %d public export%s%s\n%!"
       (if strict then c "1;31" "\u{2717}" else c "1;33" "\u{26a0}")
       (String.concat " + " parts) !total (if !total = 1 then "" else "s")
-      (if strict then "" else c "2" "  (--strict to fail; --port to move .ml docs into the .mli)");
+      (if strict then "" else c "2" "  (--strict to fail; --promote to move .ml docs into the .mli)");
     if strict then 1 else 0
   end
 
-let do_port files : int =
-  let ported = ref 0 and touched = ref 0 in
+let do_promote files : int =
+  let promoted = ref 0 and touched = ref 0 in
   List.iter
     (fun f ->
       if Filename.check_suffix f ".mli" then begin
@@ -266,20 +266,20 @@ let do_port files : int =
         in
         if inserts <> [] then begin
           let src = try In_channel.with_open_bin f In_channel.input_all with _ -> "" in
-          let out = port_source src inserts in
+          let out = promote_source src inserts in
           if out <> src then begin
             (try Out_channel.with_open_bin f (fun oc -> Out_channel.output_string oc out) with _ -> ());
             incr touched;
-            ported := !ported + List.length inserts;
+            promoted := !promoted + List.length inserts;
             Printf.printf "  %s %s %s\n%!" (c "1;32" "\u{2192}") (c "1" (strip_dot f)) (c "2" (Printf.sprintf "(+%d doc%s)" (List.length inserts) (if List.length inserts = 1 then "" else "s")))
           end
         end
       end)
     files;
-  if !ported = 0 then Printf.printf "%s nothing to port (no .ml-only docs found)\n%!" (c "1;32" "\u{2714}")
-  else Printf.printf "\n%s ported %d doc%s into %d file%s — review the diff\n%!" (c "1;32" "\u{2714}") !ported (if !ported = 1 then "" else "s") !touched (if !touched = 1 then "" else "s");
+  if !promoted = 0 then Printf.printf "%s nothing to promote (no .ml-only docs found)\n%!" (c "1;32" "\u{2714}")
+  else Printf.printf "\n%s promoted %d doc%s into %d file%s — review the diff\n%!" (c "1;32" "\u{2714}") !promoted (if !promoted = 1 then "" else "s") !touched (if !touched = 1 then "" else "s");
   0
 
-let run ~(paths : string list) ~strict ~private_ ~port : int =
-  let files = gather ~private_:(private_ || port) paths in
-  if port then do_port files else do_report ~strict files
+let run ~(paths : string list) ~strict ~private_ ~promote : int =
+  let files = gather ~private_:(private_ || promote) paths in
+  if promote then do_promote files else do_report ~strict files

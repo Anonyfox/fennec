@@ -1,18 +1,21 @@
 (* The `fennec test` entry point: parse the cut + options, dispatch.
 
-   - unit    → delegate to dune's fast gate (`dune build @runtest`)
+   - unit    → delegate to dune's fast gate (`dune build @runtest`) — inline tests + doctests
    - http    → orchestrate the Http suites (per-suite isolated app instance)  [T6]
    - browser → orchestrate the Browser suites (+ Chrome)                       [T7]
    - system  → orchestrate the System suites: each SPAWNS the real `fennec dev` itself and drives
                its process/port/livereload lifecycle, so (unlike http/browser) there is no
                per-suite server to boot — we just build, set FENNEC_* env, and run them serially
                (they share dev's fixed ports). Replaces the old e2e/*.sh scripts.
-   - all     → unit, then http, then browser, then system (fast-to-slow)
+   - docs    → doc-coverage: every public export should carry a doc comment (delegates to
+               {!Fennec_docs.Docscmd}). A check like any other test — but WARN by default (a missing
+               doc is advisory); --strict makes it a gate, --promote moves .ml-only docs into the .mli.
+   - all     → unit, then http, then browser, then system, then docs (fast-to-slow)
 
    The pure parts (the cut enum + its parsing, the options record) are unit-tested; the
    orchestration is integration-tested against the example app. *)
 
-type suite = Unit | Http | Browser | System | All
+type suite = Unit | Http | Browser | System | Docs | All
 
 let suite_of_string s =
   match String.lowercase_ascii s with
@@ -20,10 +23,11 @@ let suite_of_string s =
   | "http" -> Ok Http
   | "browser" -> Ok Browser
   | "system" -> Ok System
+  | "docs" -> Ok Docs
   | "all" -> Ok All
-  | other -> Error (Printf.sprintf "unknown test suite %S — expected one of: unit, http, browser, system, all" other)
+  | other -> Error (Printf.sprintf "unknown test suite %S — expected one of: unit, http, browser, system, docs, all" other)
 
-let suite_to_string = function Unit -> "unit" | Http -> "http" | Browser -> "browser" | System -> "system" | All -> "all"
+let suite_to_string = function Unit -> "unit" | Http -> "http" | Browser -> "browser" | System -> "system" | Docs -> "docs" | All -> "all"
 
 type options = {
   suite : suite;
@@ -35,12 +39,18 @@ type options = {
   headed : bool;              (* browser cut: show the window *)
   screenshots : string option;(* browser cut: PNG-on-failure dir *)
   base_port : int;            (* per-suite instance block base *)
+  (* docs cut *)
+  strict : bool;              (* docs: fail (not just warn) on a coverage gap *)
+  private_ : bool;            (* docs: also check .ml top-level defs, not just .mli exports *)
+  promote : bool;             (* docs: move each .ml-only doc up into its .mli *)
+  paths : string list;        (* docs: files/dirs to check (empty = whole project) *)
 }
 
 let default_options =
   (* base 8200: clear of dev's 4000 AND of macOS's port 7000 (AirPlay/ControlCenter) *)
   { suite = Unit; grep = None; max_failures = None; fail_fast = true;
-    reporter = None; jobs = None; headed = false; screenshots = None; base_port = 8200 }
+    reporter = None; jobs = None; headed = false; screenshots = None; base_port = 8200;
+    strict = false; private_ = false; promote = false; paths = [] }
 
 (* how many suite failures to tolerate before we stop launching the rest. An explicit
    --max-failures wins; otherwise fail-fast stops at the first failure and --no-fail-fast
@@ -91,7 +101,7 @@ let suite_args ~(cut : suite) (o : options) : string list =
     @ (match o.jobs with Some j -> [ "--jobs"; string_of_int j ] | None -> [])
     @ (match o.reporter with Some r -> [ "--reporter"; r ] | None -> [])
   | System -> grep_args o   (* the system runner honours --grep (substring on the scenario name) *)
-  | Unit | All -> []        (* unit goes through dune *)
+  | Unit | Docs | All -> [] (* unit goes through dune; docs runs in-process (no runner exe) *)
 
 (* ──── suite_of_string tests ──── *)
 
@@ -102,9 +112,9 @@ let%test "system" = suite_of_string "system" = Ok System
 let%test "all" = suite_of_string "all" = Ok All
 let%test "case-insensitive" = suite_of_string "HTTP" = Ok Http
 let%test "unknown -> error naming the valid set" =
-  match suite_of_string "bogus" with Error m -> Fennec_hunt_unit.str_contains m "unit, http, browser, system, all" | Ok _ -> false
+  match suite_of_string "bogus" with Error m -> Fennec_hunt_unit.str_contains m "unit, http, browser, system, docs, all" | Ok _ -> false
 let%test "round-trips" =
-  List.for_all (fun s -> suite_of_string (suite_to_string s) = Ok s) [ Unit; Http; Browser; System; All ]
+  List.for_all (fun s -> suite_of_string (suite_to_string s) = Ok s) [ Unit; Http; Browser; System; Docs; All ]
 
 (* ──── default_options tests ──── *)
 
@@ -139,6 +149,8 @@ let%test "system: no grep -> no argv" =
   suite_args ~cut:System default_options = []
 let%test "all: no argv (dispatches per-cut)" =
   suite_args ~cut:All { default_options with headed = true } = []
+let%test "docs: no argv (runs in-process)" =
+  suite_args ~cut:Docs { default_options with grep = Some "x" } = []
 
 (* ──── fail_fast_limit tests ──── *)
 
@@ -423,6 +435,16 @@ let orchestrate_system ~(args : string list) : int =
 
 let run_system (opts : options) : int = orchestrate_system ~args:(suite_args ~cut:System opts)
 
+(* ──── docs cut ──── *)
+
+(* Doc-coverage is a verification like any test — "every public export is documented" is a check
+   that passes or fails — so it's a cut of `fennec test`, not its own command. Unlike the others it
+   WARNS by default (a missing doc is advisory; --strict makes it a CI gate) and runs in-process (no
+   runner exe, no instance). [~promote] is forced off under `all` (it mutates .mli files — that's an
+   explicit `fennec test docs --promote`, never a side effect of a broad run). *)
+let run_docs ~promote (o : options) : int =
+  Fennec_docs.Docscmd.run ~paths:o.paths ~strict:o.strict ~private_:o.private_ ~promote
+
 (* `fennec test new <cut> <name>` — scaffold a suite. [args] is the positionals after "new". *)
 let scaffold (args : string list) : int =
   match args with
@@ -444,12 +466,15 @@ let run (opts : options) : int =
   | Http -> if run_http opts = 0 then 0 else 1
   | Browser -> if run_browser opts = 0 then 0 else 1
   | System -> if run_system opts = 0 then 0 else 1
+  | Docs -> run_docs ~promote:opts.promote opts
   | All ->
     (* fast-to-slow; run every cut and aggregate so one report shows the whole picture (the cuts
-       are isolated — a unit failure never poisons http, etc.). System is last: it spawns the real
-       `fennec dev` per suite, the heaviest tier. *)
+       are isolated — a unit failure never poisons http, etc.). System is the heaviest tier (it
+       spawns the real `fennec dev`); docs is last and, by default, only WARNS — so `all` stays
+       green on a half-documented tree unless --strict is passed (and it never promotes). *)
     let u = run_unit () in
     let h = run_http opts in
     let b = run_browser opts in
     let s = run_system opts in
-    if u = 0 && h = 0 && b = 0 && s = 0 then 0 else 1
+    let d = run_docs ~promote:false opts in
+    if u = 0 && h = 0 && b = 0 && s = 0 && d = 0 then 0 else 1

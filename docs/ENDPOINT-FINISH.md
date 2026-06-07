@@ -297,7 +297,7 @@ docs are up to date, and the example's `server.ml` reads as the ideal reference.
 
 **Why.** The proof that the work is done, not just "tests pass."
 
-**How.** Full `dune runtest` + `fennec test all` (unit → http → browser → system; the system
+**How.** Full `dune runtest` + `fennec test all` (unit → http → browser → system → docs; the system
 cut drives a real `fennec dev` and replaces the old `e2e/*.sh`) + a live `fennec dev` session
 (content edit, CSS edit, error + recovery, the named banner). Review the final `server.ml`
 line by line — every line should earn its place.

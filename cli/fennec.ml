@@ -1,14 +1,19 @@
-(* The `fennec` command-line tool.
+(* The `fennec` command-line tool: a native asset bundler and the framework's dev + test CLI,
+   sitting beside dune (which owns the build graph and is the sole watcher of source).
 
-   Today it exposes a single subcommand, [build], which drives the native
-   bundlers (esbuild for JavaScript, Lightning CSS + grass for CSS/SCSS) that are
-   statically linked in via {!Fennec_buildkit}. One invocation handles a mix of
-   JS and CSS entry points: the engine is chosen per input from its file
-   extension, so callers never pick a tool by hand.
+   Three user commands:
+   - [build] bundles JS (esbuild) and CSS/SCSS (Lightning CSS + grass), statically linked via
+     {!Fennec_buildkit} — one self-contained binary, engine chosen per input extension. It's a
+     general-purpose bundler; in a Fennec project, dune rules call it.
+   - [dev] runs the supervised livereload loop: discover the server (the executable calling
+     [Fennec.serve], via {!Discover}), watch the build OUTPUTS, restart on a backend change, and
+     hot-reload the frontend without a restart.
+   - [test] runs and verifies the app — unit/http/browser/system tests plus doc-coverage
+     ([fennec test docs]); delegates to {!Fennec_testcmd}.
 
-   A long-running [dev] subcommand runs the livereload dev loop: it discovers the
-   server (the one executable calling [Fennec.serve], via {!Discover}), watches and
-   supervises it, and hot-reloads the frontend. [build] is the one-shot production path. *)
+   Plus plumbing not run by hand (listed under INTERNAL COMMANDS): [__esbuild-worker], the warm
+   worker `fennec dev` spawns, and [gen-doctests], codegen a dune rule calls so .mli examples run
+   under `fennec test`. *)
 
 let version = "0.0.1"
 
@@ -410,17 +415,18 @@ let worker_cmd =
   let socket_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"SOCKET") in
   let go socket = Esbuild_worker.serve ~socket (* loops until signalled; never returns *) in
   let doc = "(internal) persistent esbuild build worker used by fennec dev" in
-  Cmd.v (Cmd.info "__esbuild-worker" ~doc) Term.(const go $ socket_arg)
+  Cmd.v (Cmd.info "__esbuild-worker" ~doc ~docs:"INTERNAL COMMANDS") Term.(const go $ socket_arg)
 
-(* Run the app's tests in one of four cuts. The default (no SUITE) is the fast unit gate;
+(* Run + verify the app across five cuts. The default (no SUITE) is the fast unit gate;
    $(b,http) and $(b,browser) each boot a dedicated, isolated app instance per suite (its own
    port — and, later, its own database) so stateful suites run in parallel deterministically;
-   $(b,system) drives the real $(b,fennec dev) lifecycle (replacing the old e2e/*.sh scripts). *)
+   $(b,system) drives the real $(b,fennec dev) lifecycle (replacing the old e2e/*.sh scripts);
+   $(b,docs) checks doc-coverage (warn by default). $(b,new <cut> <name>) scaffolds a suite. *)
 let test_cmd =
   let module R = Fennec_testcmd.Run in
   let pos_arg =
     Arg.(value & pos_all string [] & info [] ~docv:"SUITE"
-           ~doc:"Which tests: unit (default), http, browser, system, all — or $(b,new <cut> <name>) to scaffold a suite.")
+           ~doc:"Which cut: unit (default), http, browser, system, docs, all — $(b,docs PATH...) checks doc-coverage; $(b,new <cut> <name>) scaffolds a suite.")
   in
   let grep_arg = Arg.(value & opt (some string) None & info [ "grep"; "g" ] ~docv:"RE" ~doc:"Run only tests whose name (the $(b,let%http)/$(b,let%browser)/$(b,let%system) label) contains $(docv). A filter that matches nothing fails — never a silent pass.") in
   let max_failures_arg = Arg.(value & opt (some int) None & info [ "max-failures"; "x" ] ~docv:"N" ~doc:"Stop after $(docv) suites fail.") in
@@ -430,30 +436,38 @@ let test_cmd =
   let headed_arg = Arg.(value & flag & info [ "headed" ] ~doc:"Browser cut: show the browser window.") in
   let screenshots_arg = Arg.(value & opt (some string) None & info [ "screenshots" ] ~docv:"DIR" ~doc:"Browser cut: write a PNG on failure into $(docv).") in
   let port_arg = Arg.(value & opt int R.default_options.base_port & info [ "port" ] ~docv:"BASE" ~doc:"Base port for per-suite instance blocks.") in
-  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port =
-    let run_with suite =
-      R.run { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed; screenshots; base_port }
+  let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Docs cut: fail (exit non-zero) on any undocumented or $(b,.ml)-only export — a CI gate. Default: warn only.") in
+  let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Docs cut: also check $(b,.ml) top-level definitions, not just $(b,.mli) exports.") in
+  let promote_arg = Arg.(value & flag & info [ "promote" ] ~doc:"Docs cut: move each doc that lives only in a $(b,.ml) up into the sibling $(b,.mli), where it renders. Idempotent; the $(b,.mli) wins on conflict.") in
+  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port strict private_ promote =
+    let opts ?(paths = []) suite =
+      { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed;
+        screenshots; base_port; strict; private_; promote; paths }
     in
     match positionals with
-    | "new" :: rest -> R.scaffold rest   (* fennec test new <cut> <name> — scaffold a suite *)
-    | [] -> run_with R.Unit
+    | "new" :: rest -> R.scaffold rest               (* fennec test new <cut> <name> — scaffold a suite *)
+    | "docs" :: paths -> R.run (opts ~paths R.Docs)  (* trailing positionals are paths to check *)
+    | [] -> R.run (opts R.Unit)
     | suite :: _ ->
       (match R.suite_of_string suite with
        | Error msg -> Printf.eprintf "fennec test: %s\n" msg; 1
-       | Ok suite -> run_with suite)
+       | Ok suite -> R.run (opts suite))
   in
-  let doc = "Run the app's tests (unit, http, browser, system)" in
+  let doc = "Run + verify the app: tests (unit, http, browser, system) and doc-coverage (docs)" in
   let man =
     [ `S Manpage.s_description;
       `P
-        "Run the app's tests in one of four cuts. $(b,fennec test) with no argument runs the \
+        "Run the app's tests in one of five cuts. $(b,fennec test) with no argument runs the \
          fast $(b,unit) gate (delegates to $(b,dune runtest)). $(b,http) and $(b,browser) boot a \
          DEDICATED, isolated app instance per suite — its own port (and, in future, its own \
          database) — so stateful suites run in parallel, deterministically, without sharing \
          state. $(b,system) drives the real $(b,fennec dev) lifecycle end-to-end (process \
          hygiene, port reclaim, host routing, livereload, the error panel) — the typed, \
-         deterministic replacement for the old $(b,e2e/*.sh) scripts. $(b,all) runs unit, then \
-         http, then browser, then system (fast-to-slow).";
+         deterministic replacement for the old $(b,e2e/*.sh) scripts. $(b,docs) checks \
+         doc-coverage — a verification like any other, but WARN by default ($(b,--strict) makes \
+         it a CI gate; $(b,--promote) moves $(b,.ml)-only docs into the $(b,.mli)). $(b,all) runs \
+         unit, then http, then browser, then system, then docs (fast-to-slow; docs only warns, so \
+         $(b,all) stays green on a half-documented tree unless $(b,--strict)).";
       `P
         "Suites live by convention in $(b,test/http/), $(b,test/browser/), and $(b,test/system/). \
          Authoring is zero-ceremony: drop a $(b,*_test.ml) with a $(b,let%http) / $(b,let%browser) / \
@@ -470,39 +484,13 @@ let test_cmd =
       `Pre "  fennec test browser -j1        # the Browser suites, serially";
       `Pre "  fennec test system             # drive the real fennec dev (was e2e/*.sh)";
       `Pre "  fennec test all                # everything, fast-to-slow";
+      `Pre "  fennec test docs               # doc-coverage (warn-only)";
+      `Pre "  fennec test docs --strict      # …make missing docs a CI gate";
+      `Pre "  fennec test docs --promote     # move .ml-only docs into the .mli";
       `Pre "  fennec test new system reclaim # scaffold test/system/reclaim_test.ml" ]
   in
   Cmd.v (Cmd.info "test" ~doc ~man)
-    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg)
-
-(* Doc-coverage: every public export should carry a doc comment. OCaml has no missing-docs lint,
-   so this is fennec's — warn by default, --strict to fail (CI), --private to include .ml. *)
-let docs_cmd =
-  let paths_arg = Arg.(value & pos_all string [] & info [] ~docv:"PATH" ~doc:"Files or directories to check (default: the whole project).") in
-  let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Exit non-zero if any export is undocumented or documented only in its $(b,.ml) (for CI).") in
-  let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Also check $(b,.ml) top-level definitions (unexported), not just $(b,.mli) exports.") in
-  let port_arg = Arg.(value & flag & info [ "port" ] ~doc:"Copy each doc that lives only in a $(b,.ml) into the sibling $(b,.mli) (where it would actually render). Idempotent; the $(b,.mli) wins on conflict.") in
-  let go paths strict private_ port = Fennec_docs.Docscmd.run ~paths ~strict ~private_ ~port in
-  let doc = "Check that public exports carry doc comments" in
-  let man =
-    [ `S Manpage.s_description;
-      `P
-        "Parse each $(b,.mli) (the public surface) and report any export — $(b,val), $(b,type), \
-         $(b,exception), $(b,module), $(b,module type) — without a $(b,\\(** ... *\\)) doc comment. \
-         OCaml has no $(i,missing_docs) lint; this is fennec's. Warn-only by default (exit 0); \
-         $(b,--strict) makes it a hard error (a CI gate); $(b,--private) also scans $(b,.ml) \
-         top-level definitions.";
-      `P
-        "Since odoc renders the curated $(b,.mli), a doc that lives only in the $(b,.ml) is \
-         invisible publicly. Such exports are flagged distinctly ($(i,documented only in .ml)); \
-         $(b,--port) moves them into the $(b,.mli) for you (idempotent, reviewable in a diff).";
-      `S Manpage.s_examples;
-      `Pre "  fennec docs                  # warn on undocumented / misplaced docs";
-      `Pre "  fennec docs --strict         # fail the build / CI on any gap";
-      `Pre "  fennec docs --private lib/   # include unexported defs under lib/";
-      `Pre "  fennec docs --port           # move .ml-only docs into the .mli" ]
-  in
-  Cmd.v (Cmd.info "docs" ~doc ~man) Term.(const go $ paths_arg $ strict_arg $ private_arg $ port_arg)
+    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg $ strict_arg $ private_arg $ promote_arg)
 
 (* Generate (to stdout) a module running the executable {@ocaml[ ]} doc examples from the .mli
    interfaces in a directory. Not run by hand — wired by a one-time dune (rule), the route_gen
@@ -510,7 +498,7 @@ let docs_cmd =
 let gen_doctests_cmd =
   let dir_arg = Arg.(value & pos 0 string "." & info [] ~docv:"DIR" ~doc:"Directory whose .mli interfaces to scan (default: the current directory).") in
   let go dir = print_string (Fennec_docs.Doctest_gen.generate ~dir); 0 in
-  let doc = "Generate doctests from .mli examples (for a dune rule)" in
+  let doc = "(internal) generate .mli doctests for a dune rule" in
   let man =
     [ `S Manpage.s_description;
       `P
@@ -521,19 +509,31 @@ let gen_doctests_cmd =
       `Pre "        (action (with-stdout-to fennec_doctests.ml (run %{bin:fennec} gen-doctests .))))";
       `P "The generated module joins the library via $(b,\\(modules :standard\\)) and runs under $(b,fennec test)." ]
   in
-  Cmd.v (Cmd.info "gen-doctests" ~doc ~man) Term.(const go $ dir_arg)
+  Cmd.v (Cmd.info "gen-doctests" ~doc ~man ~docs:"INTERNAL COMMANDS") Term.(const go $ dir_arg)
 
 let main_cmd =
-  let doc = "Fennec — native JavaScript & CSS build tooling" in
+  let doc = "Native asset bundler and the Fennec framework's dev + test CLI" in
   let man =
     [ `S Manpage.s_description;
       `P
-        "Fennec bundles JavaScript (esbuild) and compiles/optimizes CSS and SCSS (Lightning CSS \
-         + grass) from a single self-contained binary — no Node, no separate toolchain. It also \
-         drives the development lifecycle (see the $(b,dev) command).";
-      `S Manpage.s_commands ]
+        "$(b,fennec) is the command-line companion to a Fennec app's $(b,dune) build. dune owns \
+         the build graph and is the sole watcher of your source; $(b,fennec) does the parts dune \
+         can't: it bundles assets — JavaScript via esbuild, CSS/SCSS via Lightning CSS + grass, \
+         from one self-contained binary (no Node, no separate toolchain) — and it drives the \
+         development and verification lifecycle.";
+      `P
+        "$(b,build) bundles assets (and is what your dune rules call); $(b,dev) runs the \
+         supervised livereload loop; $(b,test) runs and verifies everything — unit, http, \
+         browser, and system tests, plus doc-coverage ($(b,fennec test docs)).";
+      `P
+        "$(b,fennec) is convenience and quality on top, never a replacement for dune: delete it \
+         and the project is still a plain dune project — $(b,dune build) and $(b,dune exec) build \
+         and run it. You lose only the automated restart, CSS hot-swap, and orchestrated test cuts.";
+      `S Manpage.s_commands;
+      `S "INTERNAL COMMANDS";
+      `P "Invoked by dune rules or by $(b,fennec dev) itself — not run by hand." ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd; test_cmd; docs_cmd; gen_doctests_cmd; worker_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

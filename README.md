@@ -37,7 +37,7 @@ One root `dune-project`, several independently-publishable packages:
 | Package | What it is | Status |
 | --- | --- | --- |
 | **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, and the `Fur` UI runtime | ✅ working |
-| **`fennec-cli`** | The `fennec` binary — native JS/CSS bundlers + the dev loop, one self-contained binary | ✅ working |
+| **`fennec-cli`** | The `fennec` binary — a native JS/CSS bundler plus the dev + test CLI, one self-contained binary | ✅ working |
 | **`fennec-hunt`** | Pure-OCaml app testing — HTTP assertions, real-browser (CDP), and system/dev-loop checks; standalone or via `fennec test` | ✅ working |
 | `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
 
@@ -56,6 +56,7 @@ Concurrency is **Eio-only**, by design.
 
 - **`fennec build`** — bundles JS (esbuild) and compiles/optimizes CSS + SCSS (Lightning CSS + grass) from a single statically-linked binary. The native engines (Go + Rust) are linked in at release time, so end users download a prebuilt binary — no Node, no toolchain.
 - **`fennec dev`** — runs `dune build --watch` (dune is the sole source watcher) and supervises the server; a native fs-watcher reacts to build *outputs* to restart the backend or hot-swap CSS. A felt dev loop around **~0.1 s** (measured). Delete the CLI and a plain `dune build --watch` + `dune exec` still works — the decoupling is a contract, not an accident (see [`CLI-INTEROP.md`](./examples/CLI-INTEROP.md)).
+- **`fennec test`** — runs and verifies the app in five cuts: `unit` (inline tests + doctests), `http`, `browser`, `system`, and `docs` (doc-coverage, warn by default). It orchestrates dune and runs each suite isolated and deterministic — authoring is a bare `let%http` / `let%browser` / `let%system` block, no `main`, no wiring ([`docs/TEST-CLI.md`](./docs/TEST-CLI.md)).
 
 ### `fennec-hunt` — testing
 
