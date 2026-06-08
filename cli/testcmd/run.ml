@@ -39,6 +39,8 @@ type options = {
   headed : bool;              (* browser cut: show the window *)
   screenshots : string option;(* browser cut: PNG-on-failure dir *)
   base_port : int;            (* per-suite instance block base *)
+  mongo : bool;               (* --mongo: launch a managed mongod + export MONGO_URL so the app's
+                                 Dynamic backend uses the real driver (else the in-memory engine) *)
   (* docs cut *)
   strict : bool;              (* docs: fail (not just warn) on a coverage gap *)
   private_ : bool;            (* docs: also check .ml top-level defs, not just .mli exports *)
@@ -50,7 +52,7 @@ let default_options =
   (* base 8200: clear of dev's 4000 AND of macOS's port 7000 (AirPlay/ControlCenter) *)
   { suite = Unit; grep = None; max_failures = None; fail_fast = true;
     reporter = None; jobs = None; headed = false; screenshots = None; base_port = 8200;
-    strict = false; private_ = false; promote = false; paths = [] }
+    mongo = false; strict = false; private_ = false; promote = false; paths = [] }
 
 (* how many suite failures to tolerate before we stop launching the rest. An explicit
    --max-failures wins; otherwise fail-fast stops at the first failure and --no-fail-fast
@@ -60,6 +62,30 @@ let fail_fast_limit ~fail_fast ~max_failures =
 
 module Discover = Fennec_dev.Discover
 module Port = Fennec_dev.Port
+module Mongod = Fennec_mongo_mongod.Mongod
+
+(* --mongo: launch a managed mongod and export MONGO_URL, so the app's Dynamic backend talks to a
+   real database. The pid is tracked in the Reaper (Ctrl-C / SIGTERM kills it) and the instance is
+   stopped on teardown; the lifecycle's own at_exit is the backstop and its data dir is ephemeral —
+   so no mongod ever dangles. An absent or failed mongod degrades to the in-memory backend
+   (MONGO_URL stays unset) rather than breaking the run. *)
+let start_mongo () =
+  match Mongod.find () with
+  | None ->
+    Printf.eprintf "fennec test --mongo: no mongod found — using the in-memory backend.\n%s\n%!" (Mongod.install_hint ());
+    None
+  | Some _ -> (
+    try
+      let t = Mongod.start () in
+      Reaper.track (Mongod.pid t);
+      Unix.putenv "MONGO_URL" (Mongod.uri t);
+      Printf.eprintf "fennec test --mongo: managed mongod at %s\n%!" (Mongod.uri t);
+      Some t
+    with e ->
+      Printf.eprintf "fennec test --mongo: could not launch mongod (%s) — using the in-memory backend.\n%!" (Printexc.to_string e);
+      None)
+
+let stop_mongo = function None -> () | Some t -> Reaper.untrack (Mongod.pid t); (try Mongod.stop t with _ -> ())
 
 (* one-line preview of a (possibly long, possibly multi-line) command for diagnostics *)
 let preview ?(max = 120) s =
@@ -466,6 +492,10 @@ let run (opts : options) : int =
      Same fix the dev loop (Supervisor.run) and the system cut already use; doing it once here covers
      http/browser too. Idempotent. Keeps the dev/test loop fast (bytecode + a prebuilt dll), no native. *)
   Fennec_dev.Supervisor.ensure_stublibs ();
+  (* --mongo launches a managed mongod + exports MONGO_URL for every spawned instance; stopped on
+     teardown (and reaped on Ctrl-C / at_exit). Off → the in-memory backend, unchanged. *)
+  let mongo = if opts.mongo then start_mongo () else None in
+  Fun.protect ~finally:(fun () -> stop_mongo mongo) @@ fun () ->
   match opts.suite with
   | Unit -> run_unit ()
   | Http -> if run_http opts = 0 then 0 else 1

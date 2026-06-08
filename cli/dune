@@ -6,4 +6,6 @@
  (public_name fennec)
  (package fennec-cli)
  (modes native)
- (libraries fennec_buildkit cmdliner unix fennec_dev fennec_testcmd fennec_docs))
+ ; fennec-mongo.mongod is the pure-Unix mongod *lifecycle* launcher (no libmongoc / C) — it keeps
+ ; the `fennec` binary self-contained while enabling `dev --mongo` / `test --mongo`.
+ (libraries fennec_buildkit cmdliner unix fennec_dev fennec_testcmd fennec_docs fennec-mongo.mongod))

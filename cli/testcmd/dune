@@ -7,6 +7,7 @@
 ; (qcheck-core, pure OCaml, test-stripped in prod) for the inline let%prop checks here.
 (library
  (name fennec_testcmd)
- (libraries unix threads.posix fennec.core fennec_dev fennec-hunt.unit fennec-hunt.prop fennec_docs)
+ (libraries unix threads.posix fennec.core fennec_dev fennec-mongo.mongod fennec-hunt.unit
+   fennec-hunt.prop fennec_docs)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec-hunt.ppx)))

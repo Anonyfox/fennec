@@ -327,7 +327,16 @@ let dev_cmd =
     in
     Arg.(value & opt (some int) None & info [ "port" ] ~docv:"PORT" ~doc)
   in
-  let go target exe assets dry clean port =
+  let mongo_arg =
+    let doc =
+      "Launch a managed MongoDB ($(b,mongod)) for the dev session and point the app at it via \
+       $(b,MONGO_URL), so the data layer uses the real driver instead of the in-memory engine. The \
+       instance is ephemeral, isolated, and reaped on exit (no dangling process); an absent mongod \
+       degrades to in-memory."
+    in
+    Arg.(value & flag & info [ "mongo" ] ~doc)
+  in
+  let go target exe assets dry clean port mongo =
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -362,6 +371,22 @@ let dev_cmd =
          scratch — fast for an opam-installed fennec (only your app rebuilds), slow with vendored
          deps. Announced because it can pause a while. *)
       if clean then (Printf.printf "fennec dev: dune clean (full rebuild)…\n%!"; ignore (Sys.command "dune clean >/dev/null 2>&1"));
+      (* --mongo: a managed mongod for the dev session; MONGO_URL points the app (spawned below by
+         the supervisor) at it. The lifecycle's at_exit reaps it when dev exits (Ctrl-C → graceful
+         shutdown → exit → stop + clean the ephemeral data dir); an absent mongod degrades to the
+         in-memory backend (MONGO_URL stays unset). *)
+      if mongo then (
+        let module M = Fennec_mongo_mongod.Mongod in
+        match M.find () with
+        | None ->
+          Printf.eprintf "fennec dev --mongo: no mongod found — the app uses the in-memory backend.\n%s\n%!" (M.install_hint ())
+        | Some _ -> (
+          try
+            let t = M.start () in
+            Unix.putenv "MONGO_URL" (M.uri t);
+            Printf.eprintf "fennec dev --mongo: managed mongod at %s\n%!" (M.uri t)
+          with e ->
+            Printf.eprintf "fennec dev --mongo: could not launch mongod (%s) — in-memory backend.\n%!" (Printexc.to_string e)));
       match exe with
       | Some exe_path ->
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
@@ -408,7 +433,7 @@ let dev_cmd =
       `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
-  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg)
+  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg)
 
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =
@@ -439,10 +464,11 @@ let test_cmd =
   let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Docs cut: fail (exit non-zero) on any undocumented or $(b,.ml)-only export — a CI gate. Default: warn only.") in
   let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Docs cut: also check $(b,.ml) top-level definitions, not just $(b,.mli) exports.") in
   let promote_arg = Arg.(value & flag & info [ "promote" ] ~doc:"Docs cut: move each doc that lives only in a $(b,.ml) up into the sibling $(b,.mli), where it renders. Idempotent; the $(b,.mli) wins on conflict.") in
-  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port strict private_ promote =
+  let mongo_arg = Arg.(value & flag & info [ "mongo" ] ~doc:"Launch a managed MongoDB ($(b,mongod)) for the run and point the app at it via $(b,MONGO_URL), so the data layer uses the real driver instead of the in-memory engine. The instance is ephemeral, isolated, and torn down on exit (no dangling process); an absent mongod degrades to in-memory.") in
+  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port strict private_ promote mongo =
     let opts ?(paths = []) suite =
       { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed;
-        screenshots; base_port; strict; private_; promote; paths }
+        screenshots; base_port; mongo; strict; private_; promote; paths }
     in
     match positionals with
     | "new" :: rest -> R.scaffold rest               (* fennec test new <cut> <name> — scaffold a suite *)
@@ -490,7 +516,7 @@ let test_cmd =
       `Pre "  fennec test new system reclaim # scaffold test/system/reclaim_test.ml" ]
   in
   Cmd.v (Cmd.info "test" ~doc ~man)
-    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg $ strict_arg $ private_arg $ promote_arg)
+    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg $ strict_arg $ private_arg $ promote_arg $ mongo_arg)
 
 (* Generate (to stdout) a module running the executable {@ocaml[ ]} doc examples from the .mli
    interfaces in a directory. Not run by hand — wired by a one-time dune (rule), the route_gen
