@@ -359,14 +359,25 @@ it stays a clean standalone package.
    pkg-config names `mongoc2`/`bson2` (+ `mongoc2-static`/`bson2-static`, with `libmongoc2.a`/
    `libbson2.a` present — the static-vendoring path); `foreign_stubs (language c)` + `-cclib` link
    flags work; dynamic linking needs the lib dir on the loader path (rpath/static fixes this).
-   **Marshalling strategy:** OCaml encodes `Bson.t` → BSON binary bytes → C `bson_new_from_data`
-   (and back via `bson_get_data`), so the C layer stays a thin opaque-buffer shim — no per-type C
-   marshalling. NEXT, in order: (a) `Bson.to_bytes`/`of_bytes` BSON binary codec in `fennec-mongo.bson`
-   (round-trip-tested, incl. validation against libbson); (b) a robust build via dune-configurator
-   (graceful "no libmongoc → :memory: only" degrade, CI-safe); (c) the `Backend.S` driver impl over
-   the FFI (insert/update/remove/find/find_one/count + `observe_changes` via change streams);
-   (d) differential correctness tests — every op through Minimongo AND real mongo, asserted equal;
-   (e) static vendoring for a self-contained build.
+   **This is a PORT, not a greenfield build** — the adjacent `ocaml-light/mongo/` already has the
+   complete driver, and we reuse its design wholesale:
+   - **Marshalling = extended JSON via libbson** (NOT a hand-written BSON binary codec — that idea is
+     dropped). The FFI passes canonical/relaxed extended-JSON strings; `bson_init_from_json` /
+     `bson_as_canonical_extended_json` do the byte-level work. Decimal128 is just `{$numberDecimal}`
+     (a string), so libbson handles it — no decimal128 binary math in OCaml.
+   - **Vendoring is solved**: port `vendor/mcd.tar.gz` (mongo-c-driver 2.3.x source) + `vendor/build.sh`
+     (static archives, native TLS → OS cert store, SASL/zstd/snappy off, idempotent per-OS cache) +
+     `config/discover.ml` (`Configurator.V1`: build, then `mongoc2-static`/`bson2-static` pkg-config
+     → flags, rewriting `-lfoo` → full `.a` path for static inclusion; a portability guard asserts
+     "only system libraries ship").
+   NEXT, in order: (a) port `bson_json` → `fennec-mongo` (`Bson.t ↔ extended JSON`), swapping the old
+   Yojson backing for fennec's own pure JSON (fennec forbids yojson in shipped binaries); round-trip
+   tested. (b) port `ffi/mongoc_stubs.c` + `config/discover.ml` + `vendor/` (the buildkit), with a
+   graceful "no libmongoc → :memory: only" degrade so CI without it stays green. (c) port the Eio
+   layer (`client`/`collection`/`database`/`change_stream`) and expose it as a `Backend.S` impl
+   (insert/update/remove/find/find_one/count + `observe_changes` via change streams) so
+   `Reactive.Make` runs over real mongo unchanged. (d) differential correctness tests — every op
+   through Minimongo AND real mongo (gated by the lifecycle manager), results asserted equal.
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
