@@ -78,11 +78,14 @@ let sleep secs = try ignore (Unix.select [] [] [] secs) with _ -> ()
 (* still running? (0) ; or reaped with a status *)
 let exited pid = match Unix.waitpid [ Unix.WNOHANG ] pid with 0, _ -> None | _, status -> Some status | exception _ -> Some (Unix.WEXITED 0)
 
-let make_temp_dir () =
+(* a fresh private dir. [temp_file] then remove+mkdir has a TOCTOU window (another process could
+   take the name between remove and mkdir → EEXIST); retry a few times rather than let an
+   unhandled Unix_error escape [start]. *)
+let rec make_temp_dir ?(attempts = 5) () =
   let f = Filename.temp_file "fennec-mongod-" "" in
   Sys.remove f;
-  Unix.mkdir f 0o755;
-  f
+  try Unix.mkdir f 0o755; f
+  with Unix.Unix_error (Unix.EEXIST, _, _) when attempts > 1 -> make_temp_dir ~attempts:(attempts - 1) ()
 
 let rm_rf dir = if Sys.file_exists dir then ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote dir)))
 

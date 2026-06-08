@@ -96,9 +96,16 @@ let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.han
     h
   in
   let stopped = ref false in
+  (* The contract (Reactive.run_publication): existing docs are replayed as [added] SYNCHRONOUSLY
+     during registration, because the caller signals DDP [ready] the instant this returns — so the
+     client must see the initial set BEFORE ready (Minimongo does exactly this). Hence: take the
+     first snapshot and fire its [added] here, in the caller's fiber, BEFORE forking — then fork only
+     the polling loop. (The snapshot's [find] suspends this fiber on its systhread, so without this
+     split the initial [added] would run only after [run_publication] had already returned and fired
+     [ready] — i.e. ready-before-data, the bug this avoids.) *)
+  let prev = ref (index (snap ())) in
+  Hashtbl.iter (fun id d -> added id (Diff.fields_without_id d)) !prev;
   Eio.Fiber.fork ~sw:c.sw (fun () ->
-      let prev = ref (index (snap ())) in
-      Hashtbl.iter (fun id d -> added id (Diff.fields_without_id d)) !prev;
       while not !stopped do
         c.sleep c.poll;
         if not !stopped then begin

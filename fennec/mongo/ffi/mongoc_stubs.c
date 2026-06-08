@@ -113,14 +113,20 @@ static void sb_init(strbuf *b) {
   b->cap = 256;
   b->len = 0;
   b->data = (char *)malloc(b->cap);
-  b->data[0] = '\0';
+  if (b->data) b->data[0] = '\0';
+  else b->cap = 0; /* OOM: stay dead; callers check b->data before using it */
 }
 
 static void sb_append(strbuf *b, const char *s) {
+  if (!b->data) return; /* a prior (re)alloc failed — remain dead, no NULL write */
   size_t n = strlen(s);
   if (b->len + n + 1 > b->cap) {
-    while (b->len + n + 1 > b->cap) b->cap *= 2;
-    b->data = (char *)realloc(b->data, b->cap);
+    size_t cap = b->cap;
+    while (b->len + n + 1 > cap) cap *= 2;
+    char *nd = (char *)realloc(b->data, cap);
+    if (!nd) { free(b->data); b->data = NULL; return; } /* OOM: free old (no leak), go dead */
+    b->data = nd;
+    b->cap = cap;
   }
   memcpy(b->data + b->len, s, n + 1);
   b->len += n;
@@ -178,6 +184,8 @@ CAMLprim value ocaml_mongo_pool_new(value v_uri) {
   p->pool = pool;
   p->uri = uri;
   res = caml_alloc_custom(&pool_ops, sizeof(mongo_pool *), 0, 1);
+  Pool_val(res) = NULL; /* the data slot is uninitialized after alloc; NULL it so a GC firing before
+                           the real pointer lands sees NULL (the finalizer guards on it), not garbage */
   Pool_val(res) = p;
   CAMLreturn(res);
 }
@@ -228,7 +236,7 @@ CAMLprim value ocaml_mongo_command(value v_pool, value v_db, value v_cmd) {
       mongoc_client_t *client = mongoc_client_pool_pop(p->pool);
       if (mongoc_client_command_simple(client, db, &cmd, NULL, &reply, &error)) {
         out = bson_as_canonical_extended_json(&reply, NULL);
-        ok = 1;
+        ok = (out != NULL); /* serializer can return NULL (unrenderable value / OOM) — don't copy NULL */
         bson_destroy(&reply);
       }
       mongoc_client_pool_push(p->pool, client);
@@ -279,20 +287,21 @@ CAMLprim value ocaml_mongo_find(value v_pool, value v_db, value v_coll,
         sb_init(&buf);
         sb_append(&buf, "[");
         const bson_t *doc;
-        int first = 1;
+        int first = 1, bad = 0;
         while (mongoc_cursor_next(cur, &doc)) {
           char *s = bson_as_canonical_extended_json(doc, NULL);
+          if (!s) { bad = 1; break; } /* unrenderable doc — fail, don't emit malformed JSON */
           if (!first) sb_append(&buf, ",");
           sb_append(&buf, s);
           bson_free(s);
           first = 0;
         }
         sb_append(&buf, "]");
-        if (mongoc_cursor_error(cur, &error)) {
+        if (bad || mongoc_cursor_error(cur, &error) || !buf.data) {
           ok = 0;
         } else {
           out = strdup(buf.data);
-          ok = 1;
+          ok = (out != NULL);
         }
         sb_free(&buf);
         mongoc_cursor_destroy(cur);
@@ -355,20 +364,21 @@ CAMLprim value ocaml_mongo_aggregate(value v_pool, value v_db, value v_coll,
         sb_init(&buf);
         sb_append(&buf, "[");
         const bson_t *doc;
-        int first = 1;
+        int first = 1, bad = 0;
         while (mongoc_cursor_next(cur, &doc)) {
           char *s = bson_as_canonical_extended_json(doc, NULL);
+          if (!s) { bad = 1; break; } /* unrenderable doc — fail, don't emit malformed JSON */
           if (!first) sb_append(&buf, ",");
           sb_append(&buf, s);
           bson_free(s);
           first = 0;
         }
         sb_append(&buf, "]");
-        if (mongoc_cursor_error(cur, &error)) {
+        if (bad || mongoc_cursor_error(cur, &error) || !buf.data) {
           ok = 0;
         } else {
           out = strdup(buf.data);
-          ok = 1;
+          ok = (out != NULL);
         }
         sb_free(&buf);
         mongoc_cursor_destroy(cur);
@@ -442,9 +452,16 @@ static value mongo_write(write_op op, mongo_pool *p, char *db, char *coll,
   }
   caml_leave_blocking_section();
 
-  if (!ok) {
+  /* db/coll/aj/bj are owned here now (the wrappers no longer free them) — release on BOTH exit
+     paths, including the caml_failwith below, which longjmps and would otherwise skip a free. */
+  free(db);
+  free(coll);
+  free(aj);
+  free(bj); /* NULL for insert/delete — free(NULL) is a no-op */
+
+  if (!ok || !out) {
     char msg[512];
-    snprintf(msg, sizeof msg, "write: %s", error.message);
+    snprintf(msg, sizeof msg, "write: %s", ok ? "could not encode reply to JSON" : error.message);
     if (out) bson_free(out);
     caml_failwith(msg);
   }
@@ -460,10 +477,7 @@ CAMLprim value ocaml_mongo_insert_one(value v_pool, value v_db, value v_coll,
   char *db = strdup(String_val(v_db));
   char *coll = strdup(String_val(v_coll));
   char *doc = strdup(String_val(v_doc));
-  value r = mongo_write(OP_INSERT, p, db, coll, doc, NULL);
-  free(db);
-  free(coll);
-  free(doc);
+  value r = mongo_write(OP_INSERT, p, db, coll, doc, NULL); /* frees db/coll/doc on every path */
   CAMLreturn(r);
 }
 
@@ -475,11 +489,7 @@ CAMLprim value ocaml_mongo_update_one(value v_pool, value v_db, value v_coll,
   char *coll = strdup(String_val(v_coll));
   char *filter = strdup(String_val(v_filter));
   char *update = strdup(String_val(v_update));
-  value r = mongo_write(OP_UPDATE, p, db, coll, filter, update);
-  free(db);
-  free(coll);
-  free(filter);
-  free(update);
+  value r = mongo_write(OP_UPDATE, p, db, coll, filter, update); /* frees all four on every path */
   CAMLreturn(r);
 }
 
@@ -490,10 +500,7 @@ CAMLprim value ocaml_mongo_delete_one(value v_pool, value v_db, value v_coll,
   char *db = strdup(String_val(v_db));
   char *coll = strdup(String_val(v_coll));
   char *filter = strdup(String_val(v_filter));
-  value r = mongo_write(OP_DELETE, p, db, coll, filter, NULL);
-  free(db);
-  free(coll);
-  free(filter);
+  value r = mongo_write(OP_DELETE, p, db, coll, filter, NULL); /* frees db/coll/filter every path */
   CAMLreturn(r);
 }
 
@@ -575,6 +582,7 @@ CAMLprim value ocaml_mongo_watch_open(value v_pool, value v_db, value v_coll,
     caml_failwith(msg);
   }
   res = caml_alloc_custom(&stream_ops, sizeof(mongo_stream *), 0, 1);
+  Stream_val(res) = NULL; /* NULL before the real pointer lands — finalizer-safe if a GC fires */
   Stream_val(res) = s;
   CAMLreturn(res);
 }
@@ -594,7 +602,7 @@ CAMLprim value ocaml_mongo_watch_next(value v_stream) {
     const bson_t *doc;
     if (mongoc_change_stream_next(s->stream, &doc)) {
       out = bson_as_canonical_extended_json(doc, NULL);
-      state = 1;
+      state = (out != NULL) ? 1 : -1; /* NULL serialization → surface as error, not a NULL copy */
     } else if (mongoc_change_stream_error_document(s->stream, &error, NULL)) {
       state = -1;
     } else {
@@ -605,7 +613,7 @@ CAMLprim value ocaml_mongo_watch_next(value v_stream) {
 
   if (state == -1) {
     char msg[512];
-    snprintf(msg, sizeof msg, "watch_next: %s", error.message);
+    snprintf(msg, sizeof msg, "watch_next: %s", error.message[0] ? error.message : "could not encode change event to JSON");
     caml_failwith(msg);
   }
   if (state == 0) CAMLreturn(Val_int(0)); /* None */

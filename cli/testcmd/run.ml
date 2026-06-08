@@ -495,6 +495,11 @@ let run (opts : options) : int =
   (* --mongo launches a managed mongod + exports MONGO_URL for every spawned instance; stopped on
      teardown (and reaped on Ctrl-C / at_exit). Off → the in-memory backend, unchanged. *)
   let mongo = if opts.mongo then start_mongo () else None in
+  (* a launched mongod is shared (one database) across suites, so run suites SERIALLY — concurrent
+     suites would otherwise write the same collections out from under each other (nondeterministic).
+     In-memory backends are per-instance, so this only forces serial when a real mongod is in play.
+     Per-suite database isolation is a future enhancement that would lift this. *)
+  let opts = match mongo with Some _ -> { opts with jobs = Some 1 } | None -> opts in
   Fun.protect ~finally:(fun () -> stop_mongo mongo) @@ fun () ->
   match opts.suite with
   | Unit -> run_unit ()
