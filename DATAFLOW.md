@@ -351,11 +351,22 @@ it stays a clean standalone package.
 
 1. **`fennec-mongo` pure trio** (bson + query + minimongo) — port, native + JS (jsoo; links into the
    client, no npm), unit/property-tested (`let%test`/`let%prop`). ✓ **DONE** (commit `c5df89a`).
-2. **`fennec-mongo.driver`** — libmongoc static archive (buildkit pattern) + change-stream `Live`;
-   integration test behind a real-mongod gate. **Decision reaffirmed (2026-06): vendored libmongoc
-   over a pure-OCaml wire driver** — battle-tested, full feature coverage; the cost (C vendoring +
-   FFI) is accepted. Plan: bind a system libmongoc (pkg-config) first to get correctness working
-   against a launched mongod, then statically vendor for a self-contained build. NEXT.
+2. **`fennec-mongo.driver`** — libmongoc + change-stream `Live`; integration test behind a
+   real-mongod gate. **Decision reaffirmed (2026-06): vendored libmongoc over a pure-OCaml wire
+   driver** — battle-tested, full feature coverage; the cost (C vendoring + FFI) is accepted.
+   ◑ **FFI de-risked** — proved a C stub linking libmongoc connects to a lifecycle-launched mongod
+   and runs a command (`{ping:1}` → PASS). Concrete build facts (mongo-c-driver 2.x via Homebrew):
+   pkg-config names `mongoc2`/`bson2` (+ `mongoc2-static`/`bson2-static`, with `libmongoc2.a`/
+   `libbson2.a` present — the static-vendoring path); `foreign_stubs (language c)` + `-cclib` link
+   flags work; dynamic linking needs the lib dir on the loader path (rpath/static fixes this).
+   **Marshalling strategy:** OCaml encodes `Bson.t` → BSON binary bytes → C `bson_new_from_data`
+   (and back via `bson_get_data`), so the C layer stays a thin opaque-buffer shim — no per-type C
+   marshalling. NEXT, in order: (a) `Bson.to_bytes`/`of_bytes` BSON binary codec in `fennec-mongo.bson`
+   (round-trip-tested, incl. validation against libbson); (b) a robust build via dune-configurator
+   (graceful "no libmongoc → :memory: only" degrade, CI-safe); (c) the `Backend.S` driver impl over
+   the FFI (insert/update/remove/find/find_one/count + `observe_changes` via change streams);
+   (d) differential correctness tests — every op through Minimongo AND real mongo, asserted equal;
+   (e) static vendoring for a self-contained build.
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
