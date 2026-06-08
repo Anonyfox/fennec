@@ -9,6 +9,6 @@
  (virtual_modules ddp_client)
  (default_implementation fennec.live.client.native)
  (modes byte native)
- (libraries fennec.fur fennec-mongo.bson)
+ (libraries fennec.fur fennec-mongo.bson fennec-mongo.bson_json)
  (flags
   (:standard -w -a)))

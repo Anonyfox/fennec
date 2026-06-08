@@ -9,6 +9,10 @@ module Msg = Fennec_ddp.Message
 module MS = Fennec_live.Merge_store
 module Live = Fennec_live.Live
 module Subkey = Fennec_live.Subkey
+module BJ = Fennec_mongo_bson_json.Bson_json
+
+(* the key the SSR embedded this subscription's hydration docs under (Fur's seed table) *)
+let seed_key name params = "ddp:" ^ Subkey.key name params
 
 (* one deduped subscription: identical (name, params) share this state (and its [ready] signal),
    refcounted so the server sub is torn down only when the last holder stops *)
@@ -78,6 +82,14 @@ let subscribe t ~name ?(params = []) () : subscription =
         let st = { id = "s" ^ string_of_int t.subc; refcount = 1; ready_sig = Fur.signal false } in
         Hashtbl.replace t.subs key st;
         Hashtbl.replace t.by_id st.id st;
+        (* flicker-free hydration: if the SSR embedded this sub's docs (Fur's seed table), install
+           them under this sub id and mark ready BEFORE sending the live Sub — so the first paint
+           matches the server HTML; the live Sub then re-confirms + streams deltas under the same id. *)
+        (match Hashtbl.find_opt Fur.Data.seed (seed_key name params) with
+        | Some json ->
+          (try MS.seed (Live.store t.live) ~sub:st.id ~collection:(Subkey.collection_of_name name) (BJ.list_of_string json) with _ -> ());
+          Fur.set st.ready_sig true
+        | None -> ());
         t.send (Msg.encode (Msg.Sub { id = st.id; name; params }));
         st
   in
@@ -104,5 +116,8 @@ let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
 let call t ~name ?(params = []) () =
   t.methodc <- t.methodc + 1;
   t.send (Msg.encode (Msg.Method { method_ = name; params; id = "m" ^ string_of_int t.methodc; random_seed = None }))
+
+(* SSR-only concept: the browser receives data over the live socket, not a publication registry *)
+let publish ~name (_ : Bson.t list -> Bson.t list) = ignore name
 
 let find t = Live.find t.live

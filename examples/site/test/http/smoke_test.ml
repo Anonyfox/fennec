@@ -10,6 +10,11 @@ let%http "site (http)" = fun () ->
   check "web home page" (fun () ->
     get "/" ~expect:[status 200; is_html; body_contains "Welcome to the Fennec site"]);
 
+  (* SSR renders the live data: the realtime task list's seeded docs appear in the server-rendered
+     HTML (no client JS), proving the SSR-seed path — the browser then hydrates it flicker-free *)
+  check "home page server-renders the live tasks (SSR seed)" (fun () ->
+    get "/" ~expect:[status 200; body_contains "Buy milk"; body_contains "Walk the dog"]);
+
   check "admin without auth → 401 (matched-phase)" (fun () ->
     get "/" ~host:"admin.localhost" ~expect:[status 401]);
 

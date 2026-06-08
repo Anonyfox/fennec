@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+fennec agent dev bridge
+
+Usage:
+  tools/agent/fennec-dev start [fennec-dev-args...]
+  tools/agent/fennec-dev stop
+  tools/agent/fennec-dev status
+  tools/agent/fennec-dev wait [--timeout SECONDS]
+  tools/agent/fennec-dev hook [--timeout SECONDS]
+
+Environment:
+  FENNEC_AGENT_STATE_DIR   state dir (default: <repo>/.fennec/agent)
+  FENNEC_AGENT_TIMEOUT     wait timeout in seconds (default: 12)
+
+The bridge runs `fennec dev` in the background with stdout/stderr redirected to
+an append-only log. `wait` blocks until the next dev-loop settle after it starts.
+`hook` is intended for agent PostToolUse/PostToolBatch hooks: it waits, then emits
+JSON additionalContext for harnesses that understand it.
+EOF
+}
+
+repo_root() {
+  git rev-parse --show-toplevel 2>/dev/null || pwd
+}
+
+ROOT="$(repo_root)"
+STATE_DIR="${FENNEC_AGENT_STATE_DIR:-$ROOT/.fennec/agent}"
+LOG="$STATE_DIR/dev.log"
+PIDFILE="$STATE_DIR/dev.pid"
+
+mkdir -p "$STATE_DIR"
+
+is_alive() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+current_pid() {
+  [[ -f "$PIDFILE" ]] && cat "$PIDFILE" || true
+}
+
+log_size() {
+  [[ -f "$LOG" ]] && wc -c < "$LOG" | tr -d ' ' || printf '0'
+}
+
+start_dev() {
+  local pid
+  pid="$(current_pid)"
+  if is_alive "$pid"; then
+    printf 'fennec dev already running: pid %s\n' "$pid"
+    printf 'log: %s\n' "$LOG"
+    return 0
+  fi
+
+  : > "$LOG"
+  (
+    cd "$ROOT"
+    exec nohup dune exec -- fennec dev "$@" </dev/null
+  ) >> "$LOG" 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" > "$PIDFILE"
+  printf 'started fennec dev: pid %s\n' "$pid"
+  printf 'log: %s\n' "$LOG"
+}
+
+stop_dev() {
+  local pid
+  pid="$(current_pid)"
+  if is_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    sleep 0.2
+    if is_alive "$pid"; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+    printf 'stopped fennec dev: pid %s\n' "$pid"
+  else
+    printf 'fennec dev is not running\n'
+  fi
+  rm -f "$PIDFILE"
+}
+
+status_dev() {
+  local pid
+  pid="$(current_pid)"
+  if is_alive "$pid"; then
+    printf 'running: pid %s\n' "$pid"
+  else
+    printf 'not running\n'
+  fi
+  printf 'log: %s\n' "$LOG"
+  if [[ -f "$LOG" ]]; then
+    tail -n 20 "$LOG"
+  fi
+}
+
+summarize_chunk() {
+  python3 - "$1" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+data = open(path, "r", encoding="utf-8", errors="replace").read()
+lines = [ln.rstrip() for ln in data.splitlines() if ln.strip()]
+
+def interesting(ln):
+    s = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ln)
+    needles = [
+        "build failed",
+        "last good build still serving",
+        "server not running",
+        "Error:",
+        "ready",
+        " reload",
+        " css",
+        "resolved",
+        "tests ",
+        "dune watcher exited",
+        "server kept crashing",
+        "port",
+    ]
+    return any(n in s for n in needles)
+
+picked = []
+for ln in lines:
+    s = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ln)
+    if interesting(s):
+        picked.append(s)
+
+if not picked:
+    sys.exit(1)
+
+# Keep the context lean but include enough of a compile error to act.
+for ln in picked[-24:]:
+    print(ln)
+PY
+}
+
+chunk_has_settle() {
+  local chunk="$1"
+  grep -Eq 'build failed| reload| css|resolved|ready|server kept crashing|dune watcher exited' "$chunk"
+}
+
+wait_next() {
+  local timeout="${1:-${FENNEC_AGENT_TIMEOUT:-12}}"
+  local start size chunk tmp deadline
+  if [[ ! -f "$LOG" ]]; then
+    printf 'fennec dev log not found: %s\n' "$LOG" >&2
+    return 2
+  fi
+
+  start="$(log_size)"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/fennec-agent-wait.XXXXXX")"
+  deadline=$(( $(date +%s) + timeout ))
+
+  while (( $(date +%s) <= deadline )); do
+    size="$(log_size)"
+    if (( size > start )); then
+      tail -c +"$((start + 1))" "$LOG" > "$tmp"
+      if chunk_has_settle "$tmp"; then
+        # Give test-runner output a short chance to land after the build event.
+        sleep 0.4
+        size="$(log_size)"
+        tail -c +"$((start + 1))" "$LOG" > "$tmp"
+        summarize_chunk "$tmp" || cat "$tmp"
+        rm -f "$tmp"
+        return 0
+      fi
+    fi
+    sleep 0.1
+  done
+
+  rm -f "$tmp"
+  printf 'no fennec dev settle within %ss\n' "$timeout" >&2
+  return 1
+}
+
+json_escape() {
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
+}
+
+hook_wait() {
+  local timeout event input tmp summary escaped
+  timeout="${1:-${FENNEC_AGENT_TIMEOUT:-12}}"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/fennec-agent-hook.XXXXXX")"
+  cat > "$tmp" || true
+  event="$(python3 - "$tmp" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    print(data.get("hook_event_name") or "PostToolUse")
+except Exception:
+    print("PostToolUse")
+PY
+)"
+
+  if ! summary="$(wait_next "$timeout")"; then
+    rm -f "$tmp"
+    exit 0
+  fi
+  rm -f "$tmp"
+
+  escaped="$(printf 'Fennec dev feedback after this tool:\n%s\n' "$summary" | json_escape)"
+  python3 - "$event" "$escaped" <<'PY'
+import json, sys
+event = sys.argv[1]
+text = json.loads(sys.argv[2])
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": event,
+        "additionalContext": text,
+    }
+}))
+PY
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  start)
+    shift
+    start_dev "$@"
+    ;;
+  stop)
+    stop_dev
+    ;;
+  status)
+    status_dev
+    ;;
+  wait)
+    shift
+    timeout="${FENNEC_AGENT_TIMEOUT:-12}"
+    while (($#)); do
+      case "$1" in
+        --timeout)
+          timeout="$2"; shift 2 ;;
+        *)
+          printf 'unknown wait argument: %s\n' "$1" >&2; exit 2 ;;
+      esac
+    done
+    wait_next "$timeout"
+    ;;
+  hook)
+    shift
+    timeout="${FENNEC_AGENT_TIMEOUT:-12}"
+    while (($#)); do
+      case "$1" in
+        --timeout)
+          timeout="$2"; shift 2 ;;
+        *)
+          printf 'unknown hook argument: %s\n' "$1" >&2; exit 2 ;;
+      esac
+    done
+    hook_wait "$timeout"
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    printf 'unknown command: %s\n\n' "$cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

@@ -66,6 +66,9 @@ let setup_realtime ~sw =
     (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))
     [ "Buy milk"; "Walk the dog" ];
   RData.publish "tasks" (fun () -> RData.Cursor (RData.cursor tasks ()));
+  (* SSR: hand the same docs to the SSR reactive so the first server-rendered paint already includes
+     the tasks; the browser hydrates them flicker-free, then the live subscription re-confirms. *)
+  Ddp_client.publish ~name:"tasks" (fun _ -> RData.Collection.fetch (RData.Collection.find tasks ()));
   RData.methods
     [ ( "addTask",
         fun _ args ->
