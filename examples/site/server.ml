@@ -45,18 +45,25 @@ let powered_by : Fennec.Paw.t =
    subscribes and renders it live; addTask inserts and the new doc is pushed back through the open
    subscription — server→client push, no refetch.
 
-   This example runs on the in-memory backend so the dev/test server stays plain bytecode (fast
-   rebuilds). A real-MongoDB app uses the runtime-selectable Fennec_data_mongo.Dynamic backend
-   inside [serve ~on_start] (it needs the Eio runtime + a native/byte-complete build, since it links
-   libmongoc) — the backend, lifecycle, and correctness are proven in fennec.data.mongo's tests. *)
-module RData = Fennec_data.Reactive.Mini
+   The backend is the runtime-selectable Dynamic one: real MongoDB when MONGO_URL is set (the CLI's
+   `--mongo` flag launches a managed mongod and sets it), else the in-memory engine. The driver is a
+   hard dependency — the dev/test server still runs as fast bytecode: dune builds libmongoc + the C
+   stub ONCE, and the dev/test harness puts that stub dir on CAML_LD_LIBRARY_PATH (so the bytecode
+   dlopens it), so per-edit only OCaml recompiles — no native, no relink. *)
+module D = Fennec_data_mongo.Dynamic
+module RData = Fennec_data.Reactive.Make (D)
 module RT = Fennec_realtime.Make (RData)
 
 let realtime_ddp = RT.paw ~path:"/ddp" ()
 
-(* runs once in the server's Eio context (serve ~on_start): seed, publish, register the method *)
-let setup_realtime ~sw:_ ~sleep:_ =
-  let tasks = RData.Collection.create ~name:"tasks" (Minimongo.create ()) in
+(* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method *)
+let setup_realtime ~sw ~sleep =
+  let backend =
+    match Sys.getenv_opt "MONGO_URL" with
+    | Some url when String.trim url <> "" -> D.real ~sw ~sleep (Fennec_data_mongo.connect url) ~db:"fennec_example" ~name:"tasks"
+    | _ -> D.mem (Minimongo.create ())
+  in
+  let tasks = RData.Collection.create ~name:"tasks" backend in
   List.iter
     (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))
     [ "Buy milk"; "Walk the dog" ];

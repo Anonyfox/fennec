@@ -461,6 +461,11 @@ let scaffold (args : string list) : int =
 
 let run (opts : options) : int =
   Reaper.install_signal_handlers (); (* Ctrl-C / SIGTERM → tear down every spawned instance, no orphans *)
+  (* every cut spawns the app's bytecode server; put the project's own C-stub dir (where dune stages
+     e.g. the mongo driver's libmongoc stub) on CAML_LD_LIBRARY_PATH so the bytecode can dlopen it.
+     Same fix the dev loop (Supervisor.run) and the system cut already use; doing it once here covers
+     http/browser too. Idempotent. Keeps the dev/test loop fast (bytecode + a prebuilt dll), no native. *)
+  Fennec_dev.Supervisor.ensure_stublibs ();
   match opts.suite with
   | Unit -> run_unit ()
   | Http -> if run_http opts = 0 then 0 else 1

@@ -25,13 +25,35 @@ let stublibs_dir () =
     | Some lib when lib <> "" -> Some (Filename.concat lib "stublibs")
     | _ -> None)
 
+(* dune stages every PROJECT-LOCAL C-stub dll (e.g. the in-repo / vendored mongo driver) under the
+   build root, as a symlink into the per-lib build dir. The opam switch's stublibs (above) only has
+   INSTALLED deps' stubs, so a project's own driver needs this dir too. The build root is the
+   dune-project dir — usually the cwd, but when the runner is invoked from a subdir (e.g. an example
+   inside a monorepo) dune's _build is at the ANCESTOR holding dune-project, so search upward. *)
+let project_stublibs () =
+  let mk base = Filename.concat base "_build/install/default/lib/stublibs" in
+  let cwd = Sys.getcwd () in
+  let root =
+    let rec up d =
+      if Sys.file_exists (Filename.concat d "dune-project") then Some d
+      else
+        let p = Filename.dirname d in
+        if p = d then None else up p
+    in
+    up cwd
+  in
+  List.sort_uniq compare (mk cwd :: (match root with Some r -> [ mk r ] | None -> []))
+
 let ensure_stublibs () =
-  match stublibs_dir () with
-  | None -> ()
-  | Some dir ->
+  let add dir =
     let cur = try Sys.getenv "CAML_LD_LIBRARY_PATH" with Not_found -> "" in
     if not (List.mem dir (String.split_on_char ':' cur)) then
       Unix.putenv "CAML_LD_LIBRARY_PATH" (if cur = "" then dir else dir ^ ":" ^ cur)
+  in
+  (* project-local staged stubs (added even if not yet built — the dir appears after the build,
+     before the bytecode server runs), then the opam switch's stubs for installed deps *)
+  List.iter add (project_stublibs ());
+  match stublibs_dir () with Some d -> add d | None -> ()
 
 (* ---- child processes ---- *)
 (* the server child (spawn, drain, reap, graceful stop) lives in {!Server_proc}; here we only need
