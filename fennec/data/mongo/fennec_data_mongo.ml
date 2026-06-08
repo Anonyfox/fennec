@@ -117,3 +117,30 @@ let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.han
         end
       done);
   { Backend.stop = (fun () -> stopped := true) }
+
+(* alias the native collection type so [Dynamic] can name it (its own [collection] shadows it) *)
+type mongo_collection = collection
+
+(* A runtime-selectable backend: in-memory OR this native driver, behind ONE Backend.S, so an app
+   picks at boot (real mongo if configured, else :memory:) with no type change downstream. The
+   per-op dispatch references the outer (native) ops — they are not shadowed because each [let] here
+   is non-recursive. *)
+module Dynamic = struct
+  module Mini = Backend.Mini
+
+  type collection = Mem of Minimongo.t | Real of mongo_collection
+
+  let mem m = Mem m
+  let real ?poll ~sw ~sleep conn ~db ~name = Real (collection ?poll ~sw ~sleep conn ~db ~name)
+  let insert c d = match c with Mem m -> Mini.insert m d | Real r -> insert r d
+  let update c ~multi ~upsert s m = match c with Mem mm -> Mini.update mm ~multi ~upsert s m | Real r -> update r ~multi ~upsert s m
+  let remove c s = match c with Mem m -> Mini.remove m s | Real r -> remove r s
+  let find c q = match c with Mem m -> Mini.find m q | Real r -> find r q
+  let find_one c q = match c with Mem m -> Mini.find_one m q | Real r -> find_one r q
+  let count c s = match c with Mem m -> Mini.count m s | Real r -> count r s
+
+  let observe_changes c q ~added ~changed ~removed =
+    match c with
+    | Mem m -> Mini.observe_changes m q ~added ~changed ~removed
+    | Real r -> observe_changes r q ~added ~changed ~removed
+end
