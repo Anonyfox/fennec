@@ -15,9 +15,15 @@ tags: ["build" "javascript" "css" "esbuild" "bundler" "cli"]
 homepage: "https://github.com/Anonyfox/fennec"
 bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [
-  "ocaml" {>= "4.14"}
+  "ocaml" {>= "5.2"}
   "dune" {>= "3.16" & >= "3.16"}
   "cmdliner" {>= "1.1.0"}
+  "fennec"
+  "fennec-mongo"
+  "fennec-hunt"
+  "eio" {>= "1.0"}
+  "eio_main"
+  "ppxlib" {>= "0.28"}
   "odoc" {with-doc}
 ]
 build: [

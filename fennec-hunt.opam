@@ -11,7 +11,9 @@ redirects, timing — plus an automatic per-test cookie jar. http and https targ
 layer drives a real headless Chromium via a hand-written Chrome DevTools Protocol client: an
 auto-waiting page DSL, rich self-explaining failures, a deterministic in-memory fake backend
 (so the DSL is unit-tested without a browser), and a terminal reporter that adapts from a TTY
-to a CI log. No Node, no chromedriver, no Selenium, no Lwt. Shipped separately so production servers never link it."""
+to a CI log. No Node, no chromedriver, no Selenium, no Lwt. The small inline-test runtime and
+ppx rules are intentionally reusable by the framework and CLI; the browser/http machinery stays
+separate unless a user asks for it."""
 maintainer: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 authors: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 license: "MIT"
@@ -29,7 +31,7 @@ tags: [
 homepage: "https://github.com/Anonyfox/fennec"
 bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [
-  "ocaml" {>= "5.0"}
+  "ocaml" {>= "5.2"}
   "dune" {>= "3.16" & >= "3.16"}
   "eio" {>= "1.0"}
   "eio_main"

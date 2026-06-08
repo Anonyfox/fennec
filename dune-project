@@ -36,7 +36,7 @@
   ("web" "framework" "eio" "isomorphic" "ssr" "websocket"))
  (depends
   (ocaml
-   (>= 4.14))
+   (>= 5.2))
   (dune
    (>= 3.16))
   (eio
@@ -47,30 +47,33 @@
   zlib
   bigstringaf
   fennec-mongo
+  fennec-hunt
   (ppxlib
    (>= 0.28))
   js_of_ocaml
   js_of_ocaml-ppx))
 
-; The testing package (Fennec_hunt). A DEV/TEST tool, kept in its OWN package so the runtime
-; `fennec` — and every production server that links it — never carries the test machinery or
-; its yojson dependency. Two independent layers, standalone (no dependency on the framework):
+; The testing package (Fennec_hunt). It is kept in its OWN package and stays standalone
+; (no dependency on the framework), but the framework intentionally depends on its tiny inline-test
+; runtime/ppx pieces so production modules can keep colocated let%test / let%prop checks. DX wins:
+; the same syntax works everywhere, and Dune's package metadata is honest about it. Two independent layers:
 ; an Http layer (a typed HTTP/1.1 client + deterministic assertions over any URL) and a
 ; Browser layer (a hand-written WebSocket + Chrome DevTools Protocol client, an auto-waiting
 ; page DSL, an in-memory fake backend for unit tests, a cross-platform reporter). No npm, no
 ; Lwt, no chromedriver, no cohttp — only a Chromium-family browser at runtime, for the Browser
-; layer. (The prod-lean guarantee is enforced by a runtest tripwire: examples/site/check_lean.ml.)
+; layer. The prod-lean guarantee is now "no full browser/http machinery unless asked for";
+; fennec-hunt.unit/.prop/.ppx.rules are part of the developer platform.
 (package
  (name fennec-hunt)
  (synopsis "HTTP + real-browser testing for OCaml web apps — pure OCaml/Eio, no Node or Selenium")
  (description
-  "A two-layer testing library for OCaml web apps, with no dependency on any framework. The\nHttp layer is a typed HTTP/1.1 client (hand-written on Eio sockets, no cohttp) with\ndeterministic assertions over any URL — status, body, headers, JSON-by-path, cookies,\nredirects, timing — plus an automatic per-test cookie jar. http and https targets both work\n(TLS via tls-eio, accept-any-cert by default for self-signed/staging servers). The Browser\nlayer drives a real headless Chromium via a hand-written Chrome DevTools Protocol client: an\nauto-waiting page DSL, rich self-explaining failures, a deterministic in-memory fake backend\n(so the DSL is unit-tested without a browser), and a terminal reporter that adapts from a TTY\nto a CI log. No Node, no chromedriver, no Selenium, no Lwt. Shipped separately so production servers never link it.")
+  "A two-layer testing library for OCaml web apps, with no dependency on any framework. The\nHttp layer is a typed HTTP/1.1 client (hand-written on Eio sockets, no cohttp) with\ndeterministic assertions over any URL — status, body, headers, JSON-by-path, cookies,\nredirects, timing — plus an automatic per-test cookie jar. http and https targets both work\n(TLS via tls-eio, accept-any-cert by default for self-signed/staging servers). The Browser\nlayer drives a real headless Chromium via a hand-written Chrome DevTools Protocol client: an\nauto-waiting page DSL, rich self-explaining failures, a deterministic in-memory fake backend\n(so the DSL is unit-tested without a browser), and a terminal reporter that adapts from a TTY\nto a CI log. No Node, no chromedriver, no Selenium, no Lwt. The small inline-test runtime and\nppx rules are intentionally reusable by the framework and CLI; the browser/http machinery stays\nseparate unless a user asks for it.")
  (tags
   ("testing" "http" "integration" "e2e" "browser" "chrome" "devtools-protocol" "tls" "eio"))
  (depends
   ; Eio is direct-style effects, so OCaml 5+ is required (not 4.14).
   (ocaml
-   (>= 5.0))
+   (>= 5.2))
   (dune
    (>= 3.16))
   (eio
@@ -107,11 +110,19 @@
   ("build" "javascript" "css" "esbuild" "bundler" "cli"))
  (depends
   (ocaml
-   (>= 4.14))
+   (>= 5.2))
   (dune
    (>= 3.16))
   (cmdliner
-   (>= 1.1.0))))
+   (>= 1.1.0))
+  fennec
+  fennec-mongo
+  fennec-hunt
+  (eio
+   (>= 1.0))
+  eio_main
+  (ppxlib
+   (>= 0.28))))
 
 ; Non-published: the userland examples. This package exists only to declare the
 ; example's extra build deps (the mlx dialect) so CI can build them, WITHOUT those
@@ -124,7 +135,7 @@
   "The userland examples that exercise the fennec framework end to end — the\nliving DX benchmark. Not published to opam.")
  (depends
   (ocaml
-   (>= 4.14))
+   (>= 5.2))
   (dune
    (>= 3.16))
   fennec
@@ -149,9 +160,11 @@
   ("mongodb" "bson" "minimongo" "database" "query" "javascript" "jsoo"))
  (depends
   (ocaml
-   (>= 4.14))
+   (>= 5.2))
   (dune
    (>= 3.16))
   re
+  (eio
+   (>= 1.0))
   dune-configurator
   (conf-pkg-config :build)))

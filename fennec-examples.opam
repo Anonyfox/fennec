@@ -10,7 +10,7 @@ license: "MIT"
 homepage: "https://github.com/Anonyfox/fennec"
 bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [
-  "ocaml" {>= "4.14"}
+  "ocaml" {>= "5.2"}
   "dune" {>= "3.16" & >= "3.16"}
   "fennec"
   "fennec-cli"
