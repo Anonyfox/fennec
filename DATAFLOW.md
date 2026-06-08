@@ -353,8 +353,10 @@ it stays a clean standalone package.
    client, no npm), unit/property-tested (`let%test`/`let%prop`). ✓ **DONE** (commit `c5df89a`).
 2. **`fennec-mongo.driver`** — libmongoc static archive (buildkit pattern) + change-stream `Live`;
    integration test behind a real-mongod gate.
-3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the unified
-   backend; the suite runs on both `:memory:` and real mongo.
+3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
+   backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
+   ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
+   compiles to JS.
 4. **DDP codec + session** — pure, unit-tested; re-prove the Meteor interop captures.
 5. **DDP on fennec's server** — `Paw.Websocket.make "/websocket"` + `/sockjs` shim; server↔server DDP
    round-trip under `fennec test` (a new `realtime` system scenario).

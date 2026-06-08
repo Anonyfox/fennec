@@ -46,6 +46,7 @@
   base64
   zlib
   bigstringaf
+  fennec-mongo
   (ppxlib
    (>= 0.28))
   js_of_ocaml
