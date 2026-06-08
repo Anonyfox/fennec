@@ -366,8 +366,11 @@ it stays a clean standalone package.
    the merge box; methods route through `R.call`), with `serve`/`serve_sockjs`/`paw`. Proven end to
    end over a fake `Ws_channel` (connect/sub→tagged-added+ready, live delta push, method result,
    method-error code, sockjs framing). Remaining: a live Eio server↔client round-trip system test.
-6. **Client** — merge box + ddp ws client + the Fur `subscribe`/`find` binding; SSR seed + hydrate;
-   prove a live tick end-to-end in headless Chrome (the browser cut).
+6. **Client** — ◑ read side **DONE**: `fennec/live` (`fennec.live`) has the §5b `Merge_store`
+   (precedence + refcount + progressive enrichment), `Subkey`, and the Fur `Live.find` binding (a
+   signal that recomputes as the store changes — proven native, compiles to JS) + `seed` for SSR
+   hydration. Remaining: the js_of_ocaml DDP WebSocket client + `subscribe` (feed the store from a
+   live `/websocket`), and the headless-Chrome browser-cut proof of a live tick.
 7. **CLI mongod helper** — detect/fetch/launch a dev mongod; `:memory:` stays the test default.
 8. **(Stretch) latency compensation** — only after the DX discussion (§9).
 
