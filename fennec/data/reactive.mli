@@ -204,6 +204,25 @@ module type REACTIVE = sig
       drive a DDP session, feed a sink from [observe_changes] directly — DATAFLOW.md §6.) *)
   val subscribe : string -> subscription
 
+  (** The names of the registered publications (e.g. to wire a transport). *)
+  val publications : unit -> string list
+
+  (** The names of the registered methods. *)
+  val method_names : unit -> string list
+
+  (** [run_publication name ~added ~changed ~removed] runs the named publication's cursors with
+      field-level observe deltas wired straight to the callbacks (the [collection] is per document),
+      returning a handle that stops every cursor. This is the delta-driven entry a DDP session feeds
+      its sink from — unlike {!subscribe} it keeps no merge box; the caller emits [ready] after it
+      returns ([observe_changes] replays existing documents synchronously as [added]). An unknown
+      publication yields a no-op handle. *)
+  val run_publication :
+    string ->
+    added:(collection:string -> id:string -> fields:(string * doc) list -> unit) ->
+    changed:(collection:string -> id:string -> fields:(string * doc) list -> cleared:string list -> unit) ->
+    removed:(collection:string -> id:string -> unit) ->
+    live_handle
+
   (** Pure EJSON structural operations. *)
   module EJSON : sig
     (** Value equality; [key_order_sensitive] (default false) controls document field-order. *)

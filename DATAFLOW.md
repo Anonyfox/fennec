@@ -360,8 +360,12 @@ it stays a clean standalone package.
 4. **DDP codec + session** — pure, unit-tested. ✓ **DONE** — `fennec/ddp` (`fennec.ddp`): `Json`
    + `Ejson` + `Message` + `Session` (extended sub-tagged mode) + `Sockjs`, 9 tests, compiles to
    JS. (Re-proving captured real-Meteor frames rides along with the server wiring in Phase 5.)
-5. **DDP on fennec's server** — `Paw.Websocket.make "/websocket"` + `/sockjs` shim; server↔server DDP
-   round-trip under `fennec test` (a new `realtime` system scenario).
+5. **DDP on fennec's server** — `Paw.Websocket.make "/websocket"` + `/sockjs` shim. ✓ **DONE** —
+   `fennec/realtime` (`fennec.realtime`): `Make(R)` bridges a reactive instance to a DDP session
+   (delta-driven — publications feed the session sink from `run_publication`/`observe_changes`, not
+   the merge box; methods route through `R.call`), with `serve`/`serve_sockjs`/`paw`. Proven end to
+   end over a fake `Ws_channel` (connect/sub→tagged-added+ready, live delta push, method result,
+   method-error code, sockjs framing). Remaining: a live Eio server↔client round-trip system test.
 6. **Client** — merge box + ddp ws client + the Fur `subscribe`/`find` binding; SSR seed + hydrate;
    prove a live tick end-to-end in headless Chrome (the browser cut).
 7. **CLI mongod helper** — detect/fetch/launch a dev mongod; `:memory:` stays the test default.

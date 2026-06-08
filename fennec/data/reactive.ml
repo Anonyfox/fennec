@@ -132,6 +132,15 @@ module type REACTIVE = sig
   }
 
   val subscribe : string -> subscription
+  val publications : unit -> string list
+  val method_names : unit -> string list
+
+  val run_publication :
+    string ->
+    added:(collection:string -> id:string -> fields:(string * doc) list -> unit) ->
+    changed:(collection:string -> id:string -> fields:(string * doc) list -> cleared:string list -> unit) ->
+    removed:(collection:string -> id:string -> unit) ->
+    live_handle
 
   module EJSON : sig
     val equals : ?key_order_sensitive:bool -> doc -> doc -> bool
@@ -449,6 +458,33 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
           is_ready = (fun () -> true);
           stop = (fun () -> List.iter (fun s -> s ()) !stoppers);
         }
+
+  let publications () = Hashtbl.fold (fun k _ acc -> k :: acc) _pubs []
+  let method_names () = Hashtbl.fold (fun k _ acc -> k :: acc) _methods []
+
+  (* Run a publication's cursors with field-level observe deltas wired straight to the callbacks
+     (the [collection] is per-doc). The delta-driven entry a DDP session uses — no merge box; the
+     caller emits [ready] after this returns (observe_changes replays existing docs synchronously
+     as [added] during registration). *)
+  let run_publication name ~added ~changed ~removed : live_handle =
+    match Hashtbl.find_opt _pubs name with
+    | None -> { stop = (fun () -> ()) }
+    | Some f ->
+        let stoppers = ref [] in
+        let observe_one (cur : Collection.cursor) =
+          let coll = Collection.(cur.coll.name) in
+          let h =
+            Collection.observe_changes cur
+              ~added:(fun id fields -> added ~collection:coll ~id ~fields:(Query.Diff.kvs_of fields))
+              ~changed:(fun id fields cleared ->
+                changed ~collection:coll ~id ~fields:(Query.Diff.kvs_of fields) ~cleared)
+              ~removed:(fun id -> removed ~collection:coll ~id)
+              ()
+          in
+          stoppers := h.stop :: !stoppers
+        in
+        (match f () with Cursor c -> observe_one c | Cursors cs -> List.iter observe_one cs);
+        { stop = (fun () -> List.iter (fun s -> s ()) !stoppers) }
 
   (* ---- EJSON structural ops (pure) ---- *)
   module EJSON = struct
