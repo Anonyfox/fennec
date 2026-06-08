@@ -11,6 +11,8 @@
 module Conn = Fennec_paw.Conn
 module Endpoint = Fennec_server.Endpoint
 module Tls = Fennec_server.Tls_termination (* in-process HTTPS termination: load a cert+key, pass to serve ~tls *)
+module Cert_store = Fennec_server.Cert_store (* pluggable ACME cert storage: file (default) / memory / custom *)
+module Acme = Fennec_server.Acme (* automatic HTTPS (Let's Encrypt): serve ~acme:(Acme.auto ~email ()) *)
 module Livereload = Fennec_server.Livereload
 module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
@@ -112,7 +114,7 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?on_error ?on_start (endpoints : Endpoint.t list) : unit =
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start (endpoints : Endpoint.t list) : unit =
   if not (Atomic.compare_and_set started false true) then
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
@@ -152,6 +154,24 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?on_error ?on_start (endp
      sleep), after the switch is live and BEFORE any connection is served. This is where an app
      creates resources that need the runtime — e.g. a real-mongo backend's collections and their
      observe loops, which fork into [sw] and live for the server's lifetime. *)
+  (* TLS source the server reads per connection. ~acme runs the ACME lifecycle here (before the
+     server binds): it forks the :80 HTTP-01 listener and blocks on the initial issue (or loads a
+     cached cert), so :443 has a cert before its first connection; the renewal loop then hot-reloads
+     [cert_ref]. ~tls (BYO cert) is a constant source. The certifiable domains are the router's
+     concrete (Exact) hosts unless overridden — wildcards/catch-all are reported by Acme.run. *)
+  let cert_ref = ref None in
+  let tls_source =
+    match acme with
+    | Some cfg ->
+      let exact =
+        List.concat_map (fun e -> List.filter_map (fun h -> match Fennec_server.Host_pattern.of_string h with Ok (Fennec_server.Host_pattern.Exact d) -> Some d | _ -> None) (Endpoint.hosts e)) endpoints
+        |> List.sort_uniq compare
+      in
+      let domains = match Fennec_server.Acme.domains_override cfg with Some d -> d | None -> exact in
+      Fennec_server.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains cfg cert_ref;
+      Some (fun () -> !cert_ref)
+    | None -> ( match tls with Some t -> Some (fun () -> Some t) | None -> None)
+  in
   (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
@@ -169,7 +189,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?on_error ?on_start (endp
     Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Fennec_server.Host_router.describe_errors errs);
     exit 1
   | Ok router -> (
-    match Fennec_server.Server.run ~timeout ~max_conns ?tls ?on_error ~dev:is_dev ~on_listen:announce ~env router with
+    match Fennec_server.Server.run ~timeout ~max_conns ?tls:tls_source ?on_error ~dev:is_dev ~on_listen:announce ~env router with
     | Ok () -> ()
     | Error (`Port_in_use port) ->
       Printf.eprintf "%s\n%!" (Dev_proto.port_busy_line port);

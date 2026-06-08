@@ -8,7 +8,7 @@
  ; tls-eio + tls + x509 + the RNG: in-process HTTPS termination (Server.run ?tls). digestif/base64
  ; for the WS handshake; zlib for gzip/permessage-deflate.
  (libraries fennec.core fennec.paw eio eio.unix eio_main unix digestif base64 zlib bigstringaf
-   tls tls-eio x509 ca-certs domain-name zarith mirage-crypto-rng.unix fennec-mongo.json
+   tls tls-eio x509 ca-certs domain-name zarith ptime mirage-crypto-rng.unix fennec-mongo.json
    fennec-hunt.unit fennec-hunt.prop)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec-hunt.ppx)))

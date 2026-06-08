@@ -529,7 +529,9 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
       let handle flow addr =
         Eio.Semaphore.acquire slots;
         Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () ->
-            match tls with
+            (* [tls] is a SOURCE read per connection (not a static config) so ACME renewal can swap
+               the live cert with no restart; [None] (no TLS, or ACME hasn't issued yet) serves plain *)
+            match (match tls with Some src -> src () | None -> None) with
             | None -> serve_conn flow addr
             | Some cfg -> (
               (* terminate TLS for this connection; a failed handshake (a non-TLS client, an SNI

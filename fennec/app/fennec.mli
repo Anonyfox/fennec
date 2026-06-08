@@ -174,6 +174,39 @@ module Tls : sig
   val of_pem : cert:string -> key:string -> t
 end
 
+(** Pluggable storage for ACME account keys + issued certificates. The default ({!Acme.auto} with no
+    [~store]) is a file store; an ephemeral or multi-replica deployment provides its own (a k8s
+    Secret / S3 / Redis / DB) by building a {!t}. See {!Fennec_server.Cert_store}. *)
+module Cert_store : sig
+  (** A cert store — a record of operations (so an external backend is just a value, no functor). *)
+  type t = Fennec_server.Cert_store.t = {
+    get : string -> string option;
+    put : string -> string -> unit;
+    delete : string -> unit;
+    with_lease : string -> (unit -> unit) -> bool;  (** multi-instance dedup: only the holder runs the thunk *)
+  }
+
+  (** [memory ()] — in-process; dev / test / ephemeral (lost on restart). *)
+  val memory : unit -> t
+
+  (** [file ~dir] — the default: atomic, [0600] files under [dir]; survives restarts. *)
+  val file : dir:string -> t
+end
+
+(** Automatic HTTPS via ACME (Let's Encrypt): HTTP-01 for the host router's concrete domains, a
+    {!Cert_store}-backed cert, and zero-downtime renewal. Pass {!Acme.auto} to {!serve} as [~acme].
+    Wildcards (DNS-01) and a dynamic catch-all (on-demand TLS) are out of scope. See
+    {!Fennec_server.Acme}. *)
+module Acme : sig
+  (** ACME configuration. *)
+  type config = Fennec_server.Acme.config
+
+  (** [auto ~email ?store ?staging ?domains ?directory ()] — automatic certificates. [store] defaults
+      to a file store under [$FENNEC_ACME_DIR] / [$XDG_STATE_HOME/fennec/acme]; [domains] overrides
+      the router-derived (Exact) set; [staging] uses Let's Encrypt staging (rate-limit-free testing). *)
+  val auto : email:string -> ?store:Cert_store.t -> ?staging:bool -> ?domains:string list -> ?directory:string -> unit -> config
+end
+
 (** {1 Entry point} *)
 
 (** Start the server with the given endpoints, blocking. In dev mode, livereload is
@@ -190,7 +223,9 @@ end
     is where an app creates resources that need the runtime, e.g. a real-mongo backend's collections
     and their observe loops (which fork into [sw]); the in-memory backend needs nothing here.
 
-    [~tls] terminates HTTPS in-process (no reverse proxy) — see {!Tls}.
+    [~tls] terminates HTTPS in-process with a BYO certificate (no reverse proxy) — see {!Tls}.
+    [~acme] instead obtains + auto-renews Let's Encrypt certificates for the concrete domains — see
+    {!Acme}. (Give one or the other; [~acme] takes precedence.)
 
     This is the single place that starts the server — a second call is a runtime error.
     The CLI's discovery ({!Discover}) finds this call site automatically. *)
@@ -198,6 +233,7 @@ val serve :
   ?timeout:float ->
   ?max_conns:int ->
   ?tls:Tls.t ->
+  ?acme:Acme.config ->
   ?on_error:(request_error -> Http.response) ->
   ?on_start:(sw:Eio.Switch.t -> sleep:(float -> unit) -> unit) ->
   Endpoint.t list ->
