@@ -2,8 +2,8 @@
 ; the native libmongoc backend against a REAL mongod, and assert identical results — the proof that
 ; Minimongo is a faithful swap for real mongo across query/update operators. Skips (passes) when the
 ; native driver wasn't built or no mongod is installed.
-(test
- (name test_diff)
+(tests
+ (names test_diff test_observe)
  (libraries fennec.data.mongo fennec.data fennec-mongo.mongod fennec-mongo.bson fennec-mongo.query
    fennec-mongo.minimongo eio eio.unix eio_main fennec-hunt.unit)
  (preprocess
