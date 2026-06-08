@@ -59,8 +59,8 @@ let realtime_ddp = RT.paw ~path:"/ddp" ()
 (* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method.
    [Dynamic.from_env] is the whole backend choice — real mongo when the CLI's --mongo flag exported
    MONGO_URL, else the in-memory engine — no config branch here. *)
-let setup_realtime ~sw ~sleep =
-  let backend = D.from_env ~sw ~sleep ~db:"fennec_example" ~name:"tasks" () in
+let setup_realtime ~sw =
+  let backend = D.from_env ~sw ~db:"fennec_example" ~name:"tasks" () in
   let tasks = RData.Collection.create ~name:"tasks" backend in
   List.iter
     (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))
@@ -102,7 +102,7 @@ let admin =
 (* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
    watches the served bundles and pings the server's dev control socket, which relays
    a CSS hot-swap or full reload to the browser. The server watches nothing. *)
-let () = Fennec.serve ~on_start:(fun ~sw ~sleep -> setup_realtime ~sw ~sleep) [ web; admin ]
+let () = Fennec.serve ~on_start:(fun ~sw ~sleep:_ -> setup_realtime ~sw) [ web; admin ]
 
 
 

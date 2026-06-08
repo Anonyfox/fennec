@@ -40,10 +40,10 @@ let%test "insert/find/update/remove/count agree between Minimongo and a real mon
         Fun.protect
           ~finally:(fun () -> M.stop t)
           (fun () ->
-            Eio_main.run @@ fun env ->
+            Eio_main.run @@ fun _env ->
             Eio.Switch.run @@ fun sw ->
             let conn = Mongo.connect (M.uri t) in
-            let mc = Mongo.collection ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) conn ~db:"diff" ~name:"c" in
+            let mc = Mongo.collection ~sw conn ~db:"diff" ~name:"c" in
             let mini = Minimongo.create () in
             let docs =
               [ B.doc [ ("_id", B.str "1"); ("name", B.str "ann"); ("age", B.int 30); ("tags", B.array [ B.str "a"; B.str "b" ]) ];
