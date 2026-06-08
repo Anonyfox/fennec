@@ -29,11 +29,12 @@ in the `fennec` framework** + a **client data layer on Fur** + **CLI help for mo
 ## 1. The shape, in one picture
 
 ```
-                         ┌─────────────────────────── fennec-mongo (own opam pkg + generated npm) ──┐
+                         ┌───────────────────────────────── fennec-mongo (one opam package, no npm) ──┐
    native only           │  driver/  ── libmongoc + libbson, statically linked (FFI, Eio systhread) │
    (real MongoDB)        │  live/    ── change streams → observe_changes (field-level deltas)        │
-                         │  ┌─────────── pure trio (native + js_of_ocaml + npm) ──────────────────┐ │
-   pure, dual-target ────┼─▶│ bson  ·  query (matcher/modifier/projection/sorter/diff/id)  · mem  │ │
+                         │  ┌─────────── pure trio (native + js_of_ocaml) ────────────────────────┐ │
+   pure, links into ─────┼─▶│ bson  ·  query (matcher/modifier/projection/sorter/diff/id)  · mem  │ │
+   the jsoo client       │  │  (same source on server (native) and client (jsoo) — one toolchain) │ │
                          │  └  (mem = Minimongo: in-memory Mongo + simulated observe_changes)──────┘ │
                          └────────────────────────────────▲──────────────────────────────────────────┘
                                                            │ Backend.S  (insert/update/remove/find/count/observe_changes)
@@ -76,7 +77,7 @@ in the `fennec` framework** + a **client data layer on Fur** + **CLI help for mo
 
 ## 3. `fennec-mongo` — the standalone data package
 
-A self-contained MongoDB story, useful outside fennec, published two ways. Mirrors
+A self-contained MongoDB story, useful outside fennec, published as one opam package. Mirrors
 `ocaml-light/mongo/` (which already has zero Meteor/DDP dependencies).
 
 ### 3.1 Library layout (sub-libraries under the `fennec-mongo` package)
@@ -117,13 +118,22 @@ self-contained story as esbuild/Lightning-CSS. **Decided:** libmongoc + libbson 
 compiled from pinned source** into the archive (exactly like the Go/Rust shims) — reproducible, no
 fetch/trust step, builds fast enough to carry its weight.
 
-### 3.3 Dual publish
+### 3.3 Publish: opam only — **no npm package**
 
 - **opam** package `fennec-mongo` (native): the full driver + pure trio. A real OCaml MongoDB
-  library anyone can use, fennec or not.
-- **generated npm** package: the **pure trio compiled to JS** (`bson` + `query` + `minimongo`) — a
-  standalone in-browser/Node Minimongo + BSON + query engine. Emitted from the same sources (no
-  hand-maintained JS). This is the part that's "standalone useful" beyond fennec.
+  library, usable by any OCaml project.
+- **No npm package.** The prototype's npm bundle existed *only* because its Melange/React client
+  consumed Minimongo as JS modules. fennec's client is **js_of_ocaml**, so a fennec app links the
+  pure trio straight into its own `(modes js)` client bundle (§7) — no separate artifact, no second
+  toolchain, no Melange. The trio is plain OCaml; jsoo compiles it as part of the client. A
+  standalone JS Minimongo for *non-OCaml* consumers is out of scope; if ever wanted it's a jsoo
+  `Js.export` bundle (one toolchain), decided then — never Melange.
+
+**Measured guarantee — the dev hot loop stays free.** dune's dev profile uses jsoo *separate
+compilation*: each library is compiled to JS once and cached (`bson.cma.js`, `minimongo.cma.js`).
+Linking the trio into a `(modes js)` client costs a one-time **~0.46s** cold jsoo build; thereafter
+editing an app module re-jsoo's only that module and links the cached lib JS (**~0.11s**),
+*unchanged* by the trio's presence. So the data layer adds nothing to the per-edit cycle.
 
 ### 3.4 The live-query contract (`observe_changes`)
 
@@ -318,7 +328,7 @@ path above → `result` + `updated`. (v1: no client-side optimism; §9.)
 ## 11. Package & dependency DAG (target)
 
 ```
-fennec-mongo  (new opam pkg; pure trio also → npm)
+fennec-mongo  (one opam pkg; pure trio links into the jsoo client — no npm)
    bson ← query ← mem(minimongo)            [native + js]
    bson → json → driver(libmongoc, static)  [native only]
         ▲
@@ -339,8 +349,8 @@ it stays a clean standalone package.
 
 ## 12. Implementation phasing
 
-1. **`fennec-mongo` pure trio** (bson + query + minimongo) — port, native + js, unit-tested
-   (`let%test`/`let%prop`); emit the npm package.
+1. **`fennec-mongo` pure trio** (bson + query + minimongo) — port, native + JS (jsoo; links into the
+   client, no npm), unit/property-tested (`let%test`/`let%prop`). ✓ **DONE** (commit `c5df89a`).
 2. **`fennec-mongo.driver`** — libmongoc static archive (buildkit pattern) + change-stream `Live`;
    integration test behind a real-mongod gate.
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the unified
@@ -366,9 +376,11 @@ All resolved, applying the project's established principles:
 - **Change streams in dev — the CLI auto-stands-up a single-node replica set** when real-mongo is
   used (change streams require an RS); `:memory:` Minimongo is the default everywhere else and needs
   none.
-- **npm package — publish the pure trio (`bson` + `query` + `minimongo`) as one package** (working
-  name `@anonyfox/minimongo`), emitted from the same OCaml sources via js_of_ocaml — a standalone
-  in-browser/Node Minimongo. Name adjustable.
+- **No npm package — opam only.** The npm bundle was a Melange/React-era need; fennec's jsoo client
+  links the pure trio directly into its own client bundle, with **zero added per-edit cost** (dune
+  separate compilation caches each lib's JS — measured one-time ~0.46s, hot loop ~0.11s; §3.3). A
+  standalone JS Minimongo is out of scope unless a non-OCaml consumer appears — then a jsoo
+  `Js.export` bundle, never Melange.
 - **Ordered publications (`addedBefore`/`movedBefore`) — defer.** Decode them in the codec (cheap,
   keeps Meteor interop) but don't implement merge-box ordering until a sorted-pub use case is real.
 - **Userland API ergonomics — its own later DX pass.** Land the mechanics end-to-end first, then do
