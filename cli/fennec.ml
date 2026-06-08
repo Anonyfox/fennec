@@ -371,22 +371,11 @@ let dev_cmd =
          scratch — fast for an opam-installed fennec (only your app rebuilds), slow with vendored
          deps. Announced because it can pause a while. *)
       if clean then (Printf.printf "fennec dev: dune clean (full rebuild)…\n%!"; ignore (Sys.command "dune clean >/dev/null 2>&1"));
-      (* --mongo: a managed mongod for the dev session; MONGO_URL points the app (spawned below by
-         the supervisor) at it. The lifecycle's at_exit reaps it when dev exits (Ctrl-C → graceful
-         shutdown → exit → stop + clean the ephemeral data dir); an absent mongod degrades to the
-         in-memory backend (MONGO_URL stays unset). *)
-      if mongo then (
-        let module M = Fennec_mongo_mongod.Mongod in
-        match M.find () with
-        | None ->
-          Printf.eprintf "fennec dev --mongo: no mongod found — the app uses the in-memory backend.\n%s\n%!" (M.install_hint ())
-        | Some _ -> (
-          try
-            let t = M.start () in
-            Unix.putenv "MONGO_URL" (M.uri t);
-            Printf.eprintf "fennec dev --mongo: managed mongod at %s\n%!" (M.uri t)
-          with e ->
-            Printf.eprintf "fennec dev --mongo: could not launch mongod (%s) — in-memory backend.\n%!" (Printexc.to_string e)));
+      (* --mongo: a managed single-node replica-set mongod for the dev session (a replica set so
+         change streams work); MONGO_URL points the app (spawned below by the supervisor) at it. The
+         lifecycle's at_exit reaps it when dev exits (Ctrl-C → graceful shutdown → exit → stop +
+         clean the ephemeral data dir); an absent mongod degrades to the in-memory backend. *)
+      if mongo then ignore (Fennec_dev.Mongo_rs.launch ());
       match exe with
       | Some exe_path ->
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the

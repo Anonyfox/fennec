@@ -154,7 +154,7 @@ let ensure_at_exit () =
   let fresh = with_lock (fun () -> if !at_exit_installed then false else (at_exit_installed := true; true)) in
   if fresh then at_exit stop_all
 
-let start ?mongod ?port ?dbpath ?(timeout = 30.) () =
+let start ?mongod ?port ?dbpath ?replset ?(timeout = 30.) () =
   let bin = match mongod with Some b -> b | None -> ( match find () with Some b -> b | None -> raise (Not_installed (install_hint ()))) in
   let port = match port with Some p -> p | None -> free_port () in
   let ephemeral, dbpath = match dbpath with Some d -> (false, d) | None -> (true, make_temp_dir ()) in
@@ -162,8 +162,12 @@ let start ?mongod ?port ?dbpath ?(timeout = 30.) () =
   let logpath = Filename.concat dbpath "mongod.log" in
   let devnull = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
   let log_fd = Unix.openfile logpath [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
+  (* --replSet makes this a (single-node) replica set, which MongoDB requires for change streams;
+     the caller then initiates it + waits for PRIMARY (the driver's Server.start ~reuse:true). *)
   let args =
-    [| bin; "--dbpath"; dbpath; "--port"; string_of_int port; "--bind_ip"; "127.0.0.1"; "--nounixsocket" |]
+    Array.of_list
+      ([ bin; "--dbpath"; dbpath; "--port"; string_of_int port; "--bind_ip"; "127.0.0.1"; "--nounixsocket" ]
+      @ match replset with Some r -> [ "--replSet"; r ] | None -> [])
   in
   let pid =
     try Unix.create_process bin args devnull log_fd log_fd

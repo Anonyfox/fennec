@@ -28,8 +28,12 @@ val install_hint : unit -> string
     connections (or [timeout] seconds, default 30, elapse — then it is killed and {!Launch_failed}
     is raised). [mongod] overrides the discovered binary; [port] defaults to a free loopback port;
     [dbpath] defaults to a fresh temp dir (marking the instance ephemeral — its data dir is removed
-    on {!stop}). @raise Not_installed if no binary is found. *)
-val start : ?mongod:string -> ?port:int -> ?dbpath:string -> ?timeout:float -> unit -> t
+    on {!stop}). [replset] launches the node with [--replSet <name>] — a (single-node) replica set,
+    which MongoDB requires for change streams; the caller then initiates it and waits for PRIMARY
+    (e.g. {!Fennec_mongo_driver.Server.start} in reuse mode). @raise Not_installed if no binary is
+    found. *)
+val start :
+  ?mongod:string -> ?port:int -> ?dbpath:string -> ?replset:string -> ?timeout:float -> unit -> t
 
 (** The TCP port the instance listens on (loopback only). *)
 val port : t -> int

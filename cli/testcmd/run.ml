@@ -64,26 +64,13 @@ module Discover = Fennec_dev.Discover
 module Port = Fennec_dev.Port
 module Mongod = Fennec_mongo_mongod.Mongod
 
-(* --mongo: launch a managed mongod and export MONGO_URL, so the app's Dynamic backend talks to a
-   real database. The pid is tracked in the Reaper (Ctrl-C / SIGTERM kills it) and the instance is
-   stopped on teardown; the lifecycle's own at_exit is the backstop and its data dir is ephemeral —
-   so no mongod ever dangles. An absent or failed mongod degrades to the in-memory backend
-   (MONGO_URL stays unset) rather than breaking the run. *)
+(* --mongo: launch a managed single-node replica-set mongod and export MONGO_URL, so the app's
+   Dynamic backend talks to a real database with working CHANGE STREAMS (Mongo_rs handles the spawn +
+   replSet initiate + wait-PRIMARY). The pid is tracked in the Reaper (Ctrl-C / SIGTERM kills it) and
+   the instance is stopped on teardown; the lifecycle's own at_exit is the backstop and its data dir
+   is ephemeral — so no mongod ever dangles. Absent/failed mongod degrades to in-memory. *)
 let start_mongo () =
-  match Mongod.find () with
-  | None ->
-    Printf.eprintf "fennec test --mongo: no mongod found — using the in-memory backend.\n%s\n%!" (Mongod.install_hint ());
-    None
-  | Some _ -> (
-    try
-      let t = Mongod.start () in
-      Reaper.track (Mongod.pid t);
-      Unix.putenv "MONGO_URL" (Mongod.uri t);
-      Printf.eprintf "fennec test --mongo: managed mongod at %s\n%!" (Mongod.uri t);
-      Some t
-    with e ->
-      Printf.eprintf "fennec test --mongo: could not launch mongod (%s) — using the in-memory backend.\n%!" (Printexc.to_string e);
-      None)
+  match Fennec_dev.Mongo_rs.launch () with Some t -> Reaper.track (Mongod.pid t); Some t | None -> None
 
 let stop_mongo = function None -> () | Some t -> Reaper.untrack (Mongod.pid t); (try Mongod.stop t with _ -> ())
 

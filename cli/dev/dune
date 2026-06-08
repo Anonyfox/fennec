@@ -4,6 +4,9 @@
 ; into Supervisor.run.
 (library
  (name fennec_dev)
- (libraries unix fennec.core fennec-hunt.unit) ; fennec.core for Dev_proto — the shared CLI<->server wire (Stdlib-only, no Eio bleed)
+ ; fennec.core for Dev_proto — the shared CLI<->server wire (Stdlib-only, no Eio bleed). The mongo
+ ; deps (Mongo_rs: --mongo launches a managed replica set, initiated via the driver) bring Eio +
+ ; libmongoc in for the CLI only.
+ (libraries unix fennec.core fennec-hunt.unit fennec-mongo.mongod fennec-mongo.driver eio eio_main)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec-hunt.ppx)))
