@@ -1,0 +1,11 @@
+; The native MongoDB driver — the Eio + libmongoc layer ported from comet's proven mongo/lib:
+; Client (a pooled connection), Collection / Database (the everyday CRUD + admin surface),
+; Change_stream (the reactive primitive), Live (the change-stream live-query engine — ONE stream
+; per collection fanned out to per-query views), and Server (the single-node replica-set lifecycle
+; that makes change streams "just work" locally). Blocking C calls run off the Eio scheduler via
+; Internal.run (a systhread), so a change-stream read never freezes the app. Native only (links the
+; C FFI + Eio); the browser/SSR use the pure in-memory minimongo instead.
+(library
+ (name fennec_mongo_driver)
+ (public_name fennec-mongo.driver)
+ (libraries fennec-mongo.ffi fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.query eio eio.unix))
