@@ -504,6 +504,21 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
       (Port_plan.gateway plan, by_host) :: forced
   in
   Eio.Switch.run @@ fun sw ->
+  (* graceful shutdown: SIGINT/SIGTERM stops accepting + drains in-flight requests (each already
+     bounded by [request_timeout]), then [run_server] returns and the server exits cleanly — what a
+     zero-downtime deploy / k8s rolling update needs. The handler only flips an atomic
+     (async-signal-safe); a fiber turns that into [run_server]'s [stop] promise. *)
+  let shutting_down = Atomic.make false in
+  let on_sig (_ : int) = Atomic.set shutting_down true in
+  ignore (Sys.signal Sys.sigint (Sys.Signal_handle on_sig));
+  ignore (Sys.signal Sys.sigterm (Sys.Signal_handle on_sig));
+  let stop_p, stop_r = Eio.Promise.create () in
+  Eio.Fiber.fork ~sw (fun () ->
+      let rec wait () =
+        if Atomic.get shutting_down then Eio.Promise.resolve stop_r ()
+        else (Eio.Time.sleep clock 0.1; wait ())
+      in
+      wait ());
   List.iter
     (fun (port, resolve) ->
       let socket =
@@ -521,7 +536,9 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
         let client_gone = e = End_of_file || contains s "Connection reset" || contains s "Connection_reset" || contains s "Broken pipe" || contains s "EPIPE" in
         if not client_gone then Printf.eprintf "fennec: connection error: %s\n%!" s
       in
-      Eio.Fiber.fork ~sw (fun () -> if parallelism > 1 then Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, parallelism - 1) ~on_error else Eio.Net.run_server socket handle ~on_error))
+      Eio.Fiber.fork ~sw (fun () ->
+          if parallelism > 1 then Eio.Net.run_server socket handle ~additional_domains:(domain_mgr, parallelism - 1) ~stop:stop_p ~on_error
+          else Eio.Net.run_server socket handle ~stop:stop_p ~on_error))
     binds;
   (* every port is now bound — announce ONLY here (a failed bind exit 98'd above). Each endpoint is
      announced at its own contiguous forced port (base+1+i); the gateway (base) is the supervisor's
