@@ -365,7 +365,11 @@ it stays a clean standalone package.
    (delta-driven — publications feed the session sink from `run_publication`/`observe_changes`, not
    the merge box; methods route through `R.call`), with `serve`/`serve_sockjs`/`paw`. Proven end to
    end over a fake `Ws_channel` (connect/sub→tagged-added+ready, live delta push, method result,
-   method-error code, sockjs framing). Remaining: a live Eio server↔client round-trip system test.
+   method-error code, sockjs framing) AND over a **real WebSocket**: `examples/site/e2e/realtime_e2e`
+   is a self-contained `(test)` (CI-run via `dune runtest`) — a minimal RFC 6455 server (fennec's
+   `Ws` codec) wires a DDP session, and a `Cdp` WebSocket client does a full connect/subscribe/method
+   round-trip asserting the live server→client push (the method's insert → `observe_changes` →
+   sub-tagged `added` → frame). The whole server stack across a socket, deterministic, no browser.
 6. **Client** — ◑ read side **DONE**: `fennec/live` (`fennec.live`) has the §5b `Merge_store`
    (precedence + refcount + progressive enrichment), `Subkey`, and the Fur `Live.find` binding (a
    signal that recomputes as the store changes — proven native, compiles to JS) + `seed` for SSR
