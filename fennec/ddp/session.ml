@@ -31,9 +31,14 @@ type t = {
 let create ~session_id ~emit ~pubs ~methods =
   { emit; pubs; methods; subs = Hashtbl.create 16; session_id }
 
-let err code reason = { Msg.error = code; reason = Some reason; message = None; error_type = "Meteor.Error" }
+(* A method raises this for an application-level error (a code + reason the client switches on);
+   the session maps it to the DDP error payload. Control exceptions are re-raised; any other
+   unexpected exception becomes a generic 500. *)
+exception Method_error of { code : string; reason : string }
 
-let handle (t : t) (m : Msg.t) : unit =
+let err code reason = { Msg.code; reason = Some reason; message = None; error_type = "Meteor.Error" }
+
+let dispatch (t : t) (m : Msg.t) : unit =
   match m with
   | Msg.Connect _ -> t.emit (Msg.Connected { session = t.session_id })
   | Msg.Ping { id } -> t.emit (Msg.Pong { id })
@@ -71,9 +76,15 @@ let handle (t : t) (m : Msg.t) : unit =
           t.emit (Msg.Result { id; error = Some (err "404" ("no method " ^ method_)); result = None });
           t.emit (Msg.Updated { methods = [ id ] })
       | Some f ->
-          (match (try Ok (f params) with _ -> Error "method failed") with
+          (match
+             try Ok (f params) with
+             | Method_error { code; reason } -> Error (code, reason)
+             | (Stack_overflow | Out_of_memory) as e -> raise e
+             | _ -> Error ("500", "method failed")
+           with
            | Ok v -> t.emit (Msg.Result { id; error = None; result = Some v })
-           | Error e -> t.emit (Msg.Result { id; error = Some (err "500" e); result = None }));
+           | Error (code, reason) ->
+               t.emit (Msg.Result { id; error = Some (err code reason); result = None }));
           t.emit (Msg.Updated { methods = [ id ] }))
   | _ -> ()
 

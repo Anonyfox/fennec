@@ -17,7 +17,10 @@ let looks_like_marker (j : Json.t) : bool =
   | Json.Obj [ ("$date", Json.Number _) ] -> true
   | Json.Obj [ ("$binary", Json.String _) ] -> true
   | Json.Obj [ ("$escape", _) ] -> true
+  (* both key orders, since decode accepts both — otherwise a literal {$value;$type} document is
+     not escaped on encode and is then misread as a custom type on decode (silent corruption) *)
   | Json.Obj [ ("$type", Json.String _); ("$value", _) ] -> true
+  | Json.Obj [ ("$value", _); ("$type", Json.String _) ] -> true
   | _ -> false
 
 let rec of_bson (b : Bson.t) : Json.t =
@@ -60,7 +63,7 @@ let rec to_bson (j : Json.t) : Bson.t =
   | Json.Null -> Bson.Null
   | Json.Bool b -> Bson.Bool b
   | Json.Number f ->
-      if Float.is_integer f && Float.abs f < 1e15 then Bson.Int (int_of_float f)
+      if Float.is_integer f && Float.abs f < Json.int_cutoff then Bson.Int (int_of_float f)
       else Bson.Float f
   | Json.String s -> Bson.String s
   | Json.List xs -> Bson.Array (List.map to_bson xs)
@@ -68,7 +71,7 @@ let rec to_bson (j : Json.t) : Bson.t =
 
 and of_obj kvs =
   match kvs with
-  | [ ("$date", Json.Number ms) ] -> Bson.Date (Int64.of_float ms)
+  | [ ("$date", Json.Number ms) ] when Float.is_finite ms -> Bson.Date (Int64.of_float ms)
   | [ ("$binary", Json.String b64) ] -> Bson.Binary { subtype = "00"; base64 = b64 }
   | [ ("$escape", Json.Obj inner) ] ->
       (* the object is literal: decode its values but do NOT treat it as a marker *)
@@ -87,7 +90,8 @@ and of_typed ty v =
       Bson.Regex { pattern = p; options = o }
   | "CodeScope", Json.List [ Json.String s; Json.Obj kvs ] ->
       Bson.Code_with_scope (s, List.map (fun (k, x) -> (k, to_bson x)) kvs)
-  | "Timestamp", Json.List [ Json.Number t; Json.Number i ] ->
+  | "Timestamp", Json.List [ Json.Number t; Json.Number i ]
+    when Float.is_finite t && Float.is_finite i ->
       Bson.Timestamp { t = int_of_float t; i = int_of_float i }
   | "MinKey", _ -> Bson.Min_key
   | "MaxKey", _ -> Bson.Max_key

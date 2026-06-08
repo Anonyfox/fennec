@@ -4,7 +4,7 @@
    Ejson codec. Pure -> native + JS. *)
 
 type error = {
-  error : string;
+  code : string;
   reason : string option;
   message : string option;
   error_type : string; (* "Meteor.Error" *)
@@ -64,7 +64,7 @@ let error_to_json (e : error) : Json.t =
   let extra_of l = List.filter_map (fun (k, v) -> Option.map (fun j -> (k, j)) v) l in
   Json.Obj
     (extra_of
-       [ ("error", some (s e.error));
+       [ ("error", some (s e.code));
          ("reason", Option.map s e.reason);
          ("message", Option.map s e.message);
          ("errorType", some (s e.error_type)) ])
@@ -141,7 +141,7 @@ let error_of_json = function
   | Json.Obj _ as j ->
       Some
         {
-          error = code_of (Json.member "error" j);
+          code = code_of (Json.member "error" j);
           reason = str_opt (Json.member "reason" j);
           message = str_opt (Json.member "message" j);
           error_type = (match str_opt (Json.member "errorType" j) with Some t -> t | None -> "Meteor.Error");

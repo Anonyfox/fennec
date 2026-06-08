@@ -15,7 +15,7 @@ type live_handle = { stop : unit -> unit }
 module type REACTIVE = sig
   type backend_collection
 
-  exception Error of { error : string; reason : string }
+  exception Error of { code : string; reason : string }
 
   type invocation = { user_id : string option; is_simulation : bool }
   type method_handler = invocation -> doc list -> doc
@@ -142,9 +142,9 @@ end
 module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collection = struct
   type backend_collection = B.collection
 
-  exception Error of { error : string; reason : string }
+  exception Error of { code : string; reason : string }
 
-  let error ?(reason = "") code = raise (Error { error = code; reason })
+  let error ?(reason = "") code = raise (Error { code; reason })
 
   (* ---- methods ---- *)
   type invocation = { user_id : string option; is_simulation : bool }
@@ -277,13 +277,15 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       (* Detect whether the upsert inserted by snapshotting before/after. We can't trust the
          backend's modified-count: a real-Mongo upsert that INSERTS reports nModified=0 (the new
          doc is "upserted", not "modified"), whereas Meteor's numberAffected counts it as 1. *)
-      let before = B.find c.backend (Backend.query ~selector:sel ()) in
+      let ids docs = List.map Query.Diff.doc_id docs in
+      let before_ids = ids (B.find c.backend (Backend.query ~selector:sel ())) in
       let n = B.update c.backend ~multi ~upsert:true sel m in
-      let after = B.find c.backend (Backend.query ~selector:sel ()) in
-      let inserted = List.length after > List.length before in
+      let after_ids = ids (B.find c.backend (Backend.query ~selector:sel ())) in
+      let inserted = List.length after_ids > List.length before_ids in
+      (* the inserted id is the one now present that was not before — not merely [after]'s head,
+         which would be wrong when the selector also matched pre-existing documents *)
       let inserted_id =
-        if inserted then match after with d :: _ -> Some (Query.Diff.doc_id d) | [] -> None
-        else None
+        if inserted then List.find_opt (fun id -> not (List.mem id before_ids)) after_ids else None
       in
       { number_affected = (if inserted then 1 else n); inserted_id }
 
@@ -392,7 +394,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     stop : unit -> unit;
   }
 
-  let with_id id fields = Bson.Document (("_id", Bson.String id) :: Query.Diff.kvs_of fields)
+  (* reconstruct the [_id] field with the collection's id type — a MONGO collection's _id is an
+     Object_id, not a String, so the merge box must not coerce it *)
+  let with_id id_gen id fields =
+    let idv = match id_gen with MONGO -> Bson.Object_id id | STRING -> Bson.String id in
+    Bson.Document (("_id", idv) :: Query.Diff.kvs_of fields)
 
   let subscribe name : subscription =
     match Hashtbl.find_opt _pubs name with
@@ -408,9 +414,10 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
         let stoppers = ref [] in
         let observe_one (cur : Collection.cursor) =
           let coll = Collection.(cur.coll.name) in
+          let id_gen = Collection.(cur.coll.id_generation) in
           let h =
             Collection.observe_changes cur
-              ~added:(fun id fields -> Hashtbl.replace (box_for coll) id (with_id id fields))
+              ~added:(fun id fields -> Hashtbl.replace (box_for coll) id (with_id id_gen id fields))
               ~changed:(fun id fields cleared ->
                 let b = box_for coll in
                 let base =

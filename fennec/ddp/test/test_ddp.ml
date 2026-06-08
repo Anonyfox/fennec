@@ -37,15 +37,15 @@ let%test "Message round-trips connect / method / result" =
       | _ -> false)
 let%test "Message coerces a numeric error code to a string" =
   match Message.decode {|{"msg":"nosub","id":"x","error":{"error":404,"reason":"nope"}}|} with
-  | Message.Nosub { error = Some e; _ } -> e.Message.error = "404"
+  | Message.Nosub { error = Some e; _ } -> e.Message.code = "404"
   | _ -> false
 
 (* ── session state machine ── *)
 let%test "session: connect emits connected; ping emits pong" =
   let out = ref [] in
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods:(Hashtbl.create 1) in
-  Session.handle s (Message.Connect { session = None; version = "1"; support = [] });
-  Session.handle s (Message.Ping { id = Some "p" });
+  Session.dispatch s (Message.Connect { session = None; version = "1"; support = [] });
+  Session.dispatch s (Message.Ping { id = Some "p" });
   match !out with
   | [ Message.Pong { id = Some "p" }; Message.Connected { session = "S" } ] -> true
   | _ -> false
@@ -57,7 +57,7 @@ let%test "session: sub runs the publication sub-tagged and emits ready" =
       sink.ready ();
       { Session.stop = (fun () -> ()) });
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) in
-  Session.handle s (Message.Sub { id = "sub1"; name = "feed"; params = [] });
+  Session.dispatch s (Message.Sub { id = "sub1"; name = "feed"; params = [] });
   List.exists (function Message.Added a -> a.sub = Some "sub1" && a.collection = "items" | _ -> false) !out
   && List.exists (function Message.Ready { subs = [ "sub1" ] } -> true | _ -> false) !out
 let%test "session: method emits result + updated; unknown pub emits nosub" =
@@ -65,8 +65,8 @@ let%test "session: method emits result + updated; unknown pub emits nosub" =
   let methods = Hashtbl.create 1 in
   Hashtbl.replace methods "sum" (fun args -> match args with [ B.Int a; B.Int b ] -> B.Int (a + b) | _ -> B.Null);
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods in
-  Session.handle s (Message.Method { method_ = "sum"; params = [ B.int 2; B.int 3 ]; id = "m1"; random_seed = None });
-  Session.handle s (Message.Sub { id = "s2"; name = "nope"; params = [] });
+  Session.dispatch s (Message.Method { method_ = "sum"; params = [ B.int 2; B.int 3 ]; id = "m1"; random_seed = None });
+  Session.dispatch s (Message.Sub { id = "s2"; name = "nope"; params = [] });
   List.exists (function Message.Result { id = "m1"; result = Some (B.Int 5); _ } -> true | _ -> false) !out
   && List.exists (function Message.Updated { methods = [ "m1" ] } -> true | _ -> false) !out
   && List.exists (function Message.Nosub { id = "s2"; error = Some _ } -> true | _ -> false) !out
@@ -77,5 +77,27 @@ let%test "sockjs wrap/unwrap round-trip; path detection" =
   Sockjs.unwrap (Sockjs.wrap msgs) = msgs
   && Sockjs.is_sockjs_path "/sockjs/abc/def/websocket"
   && not (Sockjs.is_sockjs_path "/websocket")
+
+(* ── audit regressions ── *)
+let%test "EJSON escapes a $value-first marker-shaped document (no silent type corruption)" =
+  let d = B.doc [ ("$value", B.str "x"); ("$type", B.str "oid") ] in
+  B.equal (Ejson.decode (Ejson.encode d)) d
+let%test "JSON serializes non-finite numbers as null (valid wire bytes)" =
+  Json.to_string (Json.Number (1.0 /. 0.0)) = "null" && Json.to_string (Json.Number nan) = "null"
+let%test "JSON rejects trailing garbage and a lone minus" =
+  (match Json.parse_opt "1 xyz" with None -> true | Some _ -> false)
+  && (match Json.parse_opt "-" with None -> true | Some _ -> false)
+  && (match Json.parse_opt "[1,2]" with Some (Json.List _) -> true | _ -> false)
+let%test "session: a method's Method_error is reported, not collapsed to 500" =
+  let out = ref [] in
+  let methods = Hashtbl.create 1 in
+  Hashtbl.replace methods "boom" (fun _ -> raise (Session.Method_error { code = "403"; reason = "Not authorized" }));
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods in
+  Session.dispatch s (Message.Method { method_ = "boom"; params = []; id = "m"; random_seed = None });
+  List.exists
+    (function
+      | Message.Result { error = Some e; _ } -> e.Message.code = "403" && e.Message.reason = Some "Not authorized"
+      | _ -> false)
+    !out
 
 let () = exit (Fennec_hunt_unit.run ())

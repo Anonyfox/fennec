@@ -33,12 +33,16 @@ let escape_string (buf : Buffer.t) (s : string) =
     s;
   Buffer.add_char buf '"'
 
+(* the integral cutoff shared by serialize and (in Ejson) the Int/Float decode boundary *)
+let int_cutoff = 1e15
+
 let number_to_string (f : float) : string =
-  if Float.is_integer f && Float.abs f < 1e15 then string_of_int (int_of_float f)
+  (* JSON has no NaN/Infinity; match JSON.stringify and emit null rather than invalid wire bytes *)
+  if not (Float.is_finite f) then "null"
+  else if Float.is_integer f && Float.abs f < int_cutoff then string_of_int (int_of_float f)
   else
     (* shortest round-trippable-ish form; protocol numbers are small/simple *)
-    let s = Printf.sprintf "%.17g" f in
-    s
+    Printf.sprintf "%.17g" f
 
 let rec write (buf : Buffer.t) (j : t) =
   match j with
@@ -74,6 +78,7 @@ exception Parse_error of string
 let parse (s : string) : t =
   let n = String.length s in
   let pos = ref 0 in
+  let depth = ref 0 in
   let fail msg = raise (Parse_error (Printf.sprintf "%s at %d" msg !pos)) in
   let peek () = if !pos < n then s.[!pos] else '\000' in
   let adv () = incr pos in
@@ -138,16 +143,19 @@ let parse (s : string) : t =
           | 'u' ->
               let cp = hex4 () in
               let cp =
-                if cp >= 0xD800 && cp <= 0xDBFF then
-                  (* high surrogate; expect \uXXXX low surrogate *)
+                if cp >= 0xD800 && cp <= 0xDBFF then (
+                  (* high surrogate; expect a \uXXXX low surrogate, else the replacement char *)
                   if peek () = '\\' then (
                     adv ();
                     if peek () = 'u' then (
                       adv ();
                       let lo = hex4 () in
-                      0x10000 + ((cp - 0xD800) lsl 10) + (lo - 0xDC00))
-                    else fail "expected low surrogate")
-                  else fail "expected low surrogate"
+                      if lo >= 0xDC00 && lo <= 0xDFFF then
+                        0x10000 + ((cp - 0xD800) lsl 10) + (lo - 0xDC00)
+                      else 0xFFFD)
+                    else 0xFFFD)
+                  else 0xFFFD)
+                else if cp >= 0xDC00 && cp <= 0xDFFF then 0xFFFD (* lone low surrogate *)
                 else cp
               in
               add_utf8 buf cp;
@@ -162,8 +170,8 @@ let parse (s : string) : t =
     skip_ws ();
     match peek () with
     | '"' -> String (parse_string ())
-    | '{' -> parse_obj ()
-    | '[' -> parse_arr ()
+    | '{' -> incr depth; if !depth > 1000 then fail "nesting too deep"; let v = parse_obj () in decr depth; v
+    | '[' -> incr depth; if !depth > 1000 then fail "nesting too deep"; let v = parse_arr () in decr depth; v
     | 't' -> lit "true" (Bool true)
     | 'f' -> lit "false" (Bool false)
     | 'n' -> lit "null" Null
@@ -186,7 +194,9 @@ let parse (s : string) : t =
         (match peek () with '+' | '-' -> adv () | _ -> ());
         while (match peek () with '0' .. '9' -> true | _ -> false) do adv () done
     | _ -> ());
-    Number (float_of_string (String.sub s start (!pos - start)))
+    (match float_of_string_opt (String.sub s start (!pos - start)) with
+     | Some f -> Number f
+     | None -> fail "invalid number")
   and parse_arr () =
     expect '[';
     skip_ws ();
@@ -228,9 +238,13 @@ let parse (s : string) : t =
   in
   let v = parse_value () in
   skip_ws ();
+  if !pos <> n then fail "trailing characters";
   v
 
 (* ---- small accessors used by the codecs ---------------------------------- *)
+
+(* a non-raising parse for the network boundary, where malformed input is expected *)
+let parse_opt (s : string) : t option = try Some (parse s) with Parse_error _ -> None
 
 let member (k : string) (j : t) : t option =
   match j with Obj kvs -> List.assoc_opt k kvs | _ -> None

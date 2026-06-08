@@ -125,4 +125,17 @@ let%test "EJSON clone + key-order-insensitive equals" =
   R.EJSON.equals (R.EJSON.clone v) v
   && R.EJSON.equals (doc [ ("a", i 1); ("b", i 2) ]) (doc [ ("b", i 2); ("a", i 1) ])
 
+let%test "publish preserves the Object_id _id type for a MONGO collection" =
+  let c = coll ~id_generation:R.MONGO "mids" in
+  let _ = C.insert c (doc [ ("n", i 1) ]) in
+  R.publish "mids_pub" (fun () -> R.Cursor (R.cursor c ()));
+  let sub = R.subscribe "mids_pub" in
+  let ok =
+    match sub.R.documents () with
+    | [ (_, d) ] -> ( match B.get d "_id" with Some (B.Object_id _) -> true | _ -> false)
+    | _ -> false
+  in
+  sub.R.stop ();
+  ok
+
 let () = exit (Fennec_hunt_unit.run ())

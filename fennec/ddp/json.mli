@@ -17,8 +17,18 @@ val to_string : t -> string
 (** Raised by {!parse} on malformed input. *)
 exception Parse_error of string
 
-(** Parse a JSON string. @raise Parse_error on malformed input. *)
+(** Parse a JSON string. @raise Parse_error on malformed/trailing input. Non-finite numbers
+    serialize as [null] (JSON has no NaN/Infinity); nesting is bounded; malformed [\u] surrogates
+    decode to U+FFFD. *)
 val parse : string -> t
+
+(** [parse_opt s] is [Some (parse s)], or [None] on malformed input — the non-raising form for the
+    network boundary, where bad input is expected. *)
+val parse_opt : string -> t option
+
+(** The magnitude below which an integral number serializes as an integer (and {!Ejson} decodes to
+    [Int]); at or above it, numbers stay floats. *)
+val int_cutoff : float
 
 (** [member k j] is the value of object field [k] in [j], or [None] (also [None] for a non-object). *)
 val member : string -> t -> t option

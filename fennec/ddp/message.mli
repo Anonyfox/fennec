@@ -2,10 +2,10 @@
     (DATAFLOW.md §2). Absent optional fields are omitted on encode and tolerated on decode; EJSON
     fields/params go through {!Ejson}. Pure — native and JavaScript. *)
 
-(** A DDP error payload (in [nosub] / [result]). The error code is a string in DDP v1, but real
-    Meteor sends a number — {!of_json} coerces it. *)
+(** A DDP error payload (in [nosub] / [result]). [code] is a string in DDP v1, but real Meteor
+    sends a number — {!of_json} coerces it. (On the wire the field is named ["error"].) *)
 type error = {
-  error : string;
+  code : string;
   reason : string option;
   message : string option;
   error_type : string;

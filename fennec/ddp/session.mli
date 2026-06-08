@@ -24,6 +24,11 @@ type publication = params:Bson.t list -> sink -> handle
 (** A server method: arguments to a result value. *)
 type method_fn = Bson.t list -> Bson.t
 
+(** A {!method_fn} raises this for an application-level error (code + reason); the session maps it
+    to the DDP error payload. Control exceptions ([Stack_overflow]/[Out_of_memory]) propagate; any
+    other exception becomes a generic ["500"]. *)
+exception Method_error of { code : string; reason : string }
+
 (** A live session. *)
 type t
 
@@ -36,10 +41,10 @@ val create :
   methods:(string, method_fn) Hashtbl.t ->
   t
 
-(** [handle t m] advances the session on an incoming message: [connect]→[connected], [sub]→ run the
-    publication (sub-tagged deltas) + [ready] or [nosub], [unsub]→stop + [nosub], [method]→[result]
-    + [updated], [ping]→[pong]. *)
-val handle : t -> Message.t -> unit
+(** [dispatch t m] advances the session on an incoming message: [connect]→[connected], [sub]→ run
+    the publication (sub-tagged deltas) + [ready] or [nosub], [unsub]→stop + [nosub],
+    [method]→[result] + [updated], [ping]→[pong]. *)
+val dispatch : t -> Message.t -> unit
 
 (** [close t] stops all running subscriptions (the connection closed). *)
 val close : t -> unit

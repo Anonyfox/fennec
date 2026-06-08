@@ -16,8 +16,8 @@ module type REACTIVE = sig
   (** The backend collection type this instance is built on. *)
   type backend_collection
 
-  (** Raised by methods and by denied client writes: [error] is a code, [reason] a message. *)
-  exception Error of { error : string; reason : string }
+  (** Raised by methods and by denied client writes: a [code] and a [reason] message. *)
+  exception Error of { code : string; reason : string }
 
   (** The context a method runs in: the calling user (if any) and whether this is a client-side
       latency-compensation simulation. *)
@@ -197,8 +197,11 @@ module type REACTIVE = sig
     stop : unit -> unit;
   }
 
-  (** [subscribe name] starts the named publication and returns a live {!subscription} (a per-
-      collection merge box fed by the publication's cursors). *)
+  (** [subscribe name] starts the named publication and returns a {!subscription} — a server-side,
+      per-collection merge box fed by the publication's cursors. [documents]/[documents_of] are
+      {e snapshot} getters (the current merged state) and [is_ready] is always [true]; live
+      per-document reactivity is via {!Collection.observe_changes}, {e not} via polling this. (To
+      drive a DDP session, feed a sink from [observe_changes] directly — DATAFLOW.md §6.) *)
   val subscribe : string -> subscription
 
   (** Pure EJSON structural operations. *)
