@@ -149,11 +149,17 @@ type request_error = Fennec_server.Server.request_error =
     renders plain text (500 / 503 / 404). Override to render JSON, branded error pages, or
     log to a structured sink — one function, one place.
 
+    [~on_start] runs once in the server's Eio context — after the runtime is live and before any
+    connection is served — receiving the server's long-lived switch and a clock-backed [sleep]. It
+    is where an app creates resources that need the runtime, e.g. a real-mongo backend's collections
+    and their observe loops (which fork into [sw]); the in-memory backend needs nothing here.
+
     This is the single place that starts the server — a second call is a runtime error.
     The CLI's discovery ({!Discover}) finds this call site automatically. *)
 val serve :
   ?timeout:float ->
   ?max_conns:int ->
   ?on_error:(request_error -> Http.response) ->
+  ?on_start:(sw:Eio.Switch.t -> sleep:(float -> unit) -> unit) ->
   Endpoint.t list ->
   unit

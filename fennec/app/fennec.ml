@@ -109,7 +109,7 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?on_error (endpoints : Endpoint.t list) : unit =
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?on_error ?on_start (endpoints : Endpoint.t list) : unit =
   if not (Atomic.compare_and_set started false true) then
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
@@ -145,6 +145,11 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?on_error (endpoints : Endpoin
         in
         watch ())
   | None -> ());
+  (* app startup hook — runs once in the server's Eio context (the long-lived switch + a clock-backed
+     sleep), after the switch is live and BEFORE any connection is served. This is where an app
+     creates resources that need the runtime — e.g. a real-mongo backend's collections and their
+     observe loops, which fork into [sw] and live for the server's lifetime. *)
+  (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
      line first. The dev supervisor owns the terminal: report named URLs for its banner, else stay quiet. *)

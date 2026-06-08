@@ -43,28 +43,30 @@ let powered_by : Fennec.Paw.t =
 (* the realtime backend: a published "tasks" collection + an addTask method, served as DDP over a
    websocket at /ddp by fennec.realtime over the in-memory reactive engine. The browser (Task_list)
    subscribes and renders it live; addTask inserts and the new doc is pushed back through the open
-   subscription — server→client push, no refetch. *)
+   subscription — server→client push, no refetch.
+
+   This example runs on the in-memory backend so the dev/test server stays plain bytecode (fast
+   rebuilds). A real-MongoDB app uses the runtime-selectable Fennec_data_mongo.Dynamic backend
+   inside [serve ~on_start] (it needs the Eio runtime + a native/byte-complete build, since it links
+   libmongoc) — the backend, lifecycle, and correctness are proven in fennec.data.mongo's tests. *)
 module RData = Fennec_data.Reactive.Mini
 module RT = Fennec_realtime.Make (RData)
 
-let tasks = RData.Collection.create ~name:"tasks" (Minimongo.create ())
+let realtime_ddp = RT.paw ~path:"/ddp" ()
 
-let () =
+(* runs once in the server's Eio context (serve ~on_start): seed, publish, register the method *)
+let setup_realtime ~sw:_ ~sleep:_ =
+  let tasks = RData.Collection.create ~name:"tasks" (Minimongo.create ()) in
   List.iter
     (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))
-    [ "Buy milk"; "Walk the dog" ]
-
-let () = RData.publish "tasks" (fun () -> RData.Cursor (RData.cursor tasks ()))
-
-let () =
+    [ "Buy milk"; "Walk the dog" ];
+  RData.publish "tasks" (fun () -> RData.Cursor (RData.cursor tasks ()));
   RData.methods
     [ ( "addTask",
         fun _ args ->
           match args with
           | [ Bson.String t ] -> Bson.String (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ]))
           | _ -> Bson.Null ) ]
-
-let realtime_ddp = RT.paw ~path:"/ddp" ()
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)
@@ -95,7 +97,7 @@ let admin =
 (* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
    watches the served bundles and pings the server's dev control socket, which relays
    a CSS hot-swap or full reload to the browser. The server watches nothing. *)
-let () = Fennec.serve [ web; admin ]
+let () = Fennec.serve ~on_start:(fun ~sw ~sleep -> setup_realtime ~sw ~sleep) [ web; admin ]
 
 
 
