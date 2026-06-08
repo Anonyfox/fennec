@@ -1,0 +1,119 @@
+(* Native MongoDB backend — a {!Fennec_data.Backend.S} over the statically-linked libmongoc driver,
+   so the reactive/DDP/realtime stack runs over a real mongod with no other change (it is the same
+   seam Minimongo implements in memory).
+
+   Every blocking driver call runs in an Eio systhread (each libmongoc stub releases the OCaml
+   runtime lock), so a mongo round-trip suspends only the calling fiber, not the scheduler. CRUD that
+   the typed FFI does not cover directly (multi/upsert update, multi-delete, count) goes through the
+   driver's generic [command]. [observe_changes] polls + diffs: it works against a standalone mongod
+   (change streams, which need a replica set, are a later optimization). *)
+
+module Ffi = Fennec_mongo_ffi.Mongo_ffi
+module BJ = Fennec_mongo_bson_json.Bson_json
+module Diff = Query.Diff
+module Id = Query.Id
+module Backend = Fennec_data.Backend
+module B = Bson
+
+let available = Ffi.available
+
+type connection = Ffi.pool
+
+let connect uri =
+  Ffi.init ();
+  Ffi.pool_new uri
+
+type collection = {
+  pool : Ffi.pool;
+  db : string;
+  name : string;
+  sw : Eio.Switch.t; (* observe forks its polling loop here *)
+  sleep : float -> unit; (* observe's inter-poll sleep (an Eio clock sleep) *)
+  poll : float;
+}
+
+let collection ?(poll = 0.5) ~sw ~sleep conn ~db ~name = { pool = conn; db; name; sw; sleep; poll }
+
+(* run a blocking driver call off the scheduler *)
+let run = Eio_unix.run_in_systhread
+let empty_doc = function B.Document [] -> true | _ -> false
+
+let int_field reply k =
+  match B.get reply k with Some v -> ( match B.as_float v with Some f -> int_of_float f | None -> 0) | None -> 0
+
+let command c (cmd : B.t) = BJ.of_string (run (fun () -> Ffi.command c.pool c.db (BJ.to_string cmd)))
+
+(* ---- Backend.S ---------------------------------------------------------- *)
+
+let insert c (d : B.t) =
+  let kvs = Diff.kvs_of d in
+  let id, doc =
+    match List.assoc_opt "_id" kvs with
+    | Some v -> (Diff.id_to_string v, d)
+    | None ->
+        let id = Id.random_id () in
+        (id, B.Document (("_id", B.String id) :: kvs))
+  in
+  ignore (run (fun () -> Ffi.insert_one c.pool c.db c.name (BJ.to_string doc)));
+  id
+
+let update c ~multi ~upsert sel m =
+  let reply =
+    command c
+      (B.doc
+         [ ("update", B.str c.name);
+           ( "updates",
+             B.array [ B.doc [ ("q", sel); ("u", m); ("multi", B.bool multi); ("upsert", B.bool upsert) ] ] ) ])
+  in
+  int_field reply "n"
+
+let remove c sel =
+  let reply =
+    command c (B.doc [ ("delete", B.str c.name); ("deletes", B.array [ B.doc [ ("q", sel); ("limit", B.int 0) ] ]) ])
+  in
+  int_field reply "n"
+
+let opts_of (q : Backend.query) =
+  B.Document
+    (List.filter_map Fun.id
+       [ (if empty_doc q.sort then None else Some ("sort", q.sort));
+         (if q.skip > 0 then Some ("skip", B.int q.skip) else None);
+         (if q.limit > 0 then Some ("limit", B.int q.limit) else None);
+         (if empty_doc q.fields then None else Some ("projection", q.fields)) ])
+
+let find c (q : Backend.query) =
+  BJ.list_of_string (run (fun () -> Ffi.find c.pool c.db c.name (BJ.to_string q.selector) (BJ.to_string (opts_of q))))
+
+let find_one c (q : Backend.query) = match find c { q with Backend.limit = 1 } with x :: _ -> Some x | [] -> None
+let count c sel = int_field (command c (B.doc [ ("count", B.str c.name); ("query", sel) ])) "n"
+
+(* observe via polling: initial snapshot, then re-find + per-id field diff each tick *)
+let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.handle =
+  let snap () = find c { q with Backend.skip = 0; limit = 0; sort = B.Document [] } in
+  let index docs =
+    let h = Hashtbl.create 64 in
+    List.iter (fun d -> Hashtbl.replace h (Diff.doc_id d) d) docs;
+    h
+  in
+  let stopped = ref false in
+  Eio.Fiber.fork ~sw:c.sw (fun () ->
+      let prev = ref (index (snap ())) in
+      Hashtbl.iter (fun id d -> added id (Diff.fields_without_id d)) !prev;
+      while not !stopped do
+        c.sleep c.poll;
+        if not !stopped then begin
+          let cur = index (snap ()) in
+          Hashtbl.iter (fun id _ -> if not (Hashtbl.mem cur id) then removed id) !prev;
+          Hashtbl.iter
+            (fun id d ->
+              match Hashtbl.find_opt !prev id with
+              | None -> added id (Diff.fields_without_id d)
+              | Some old -> (
+                  match Diff.diff_fields ~old_doc:old ~new_doc:d with
+                  | [], [] -> ()
+                  | upd, cleared -> changed id (B.Document upd) cleared))
+            cur;
+          prev := cur
+        end
+      done);
+  { Backend.stop = (fun () -> stopped := true) }

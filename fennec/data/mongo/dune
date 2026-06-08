@@ -1,0 +1,10 @@
+; Native MongoDB backend: a Fennec_data.Backend.S over the statically-linked libmongoc driver, so the
+; whole reactive / DDP / realtime stack runs over a real mongod UNCHANGED (same seam Minimongo
+; implements in memory). Every blocking driver call runs in an Eio systhread so the scheduler keeps
+; going. Native only (it links the C FFI + Eio) — the browser/SSR use fennec.data with the in-memory
+; backend instead.
+(library
+ (name fennec_data_mongo)
+ (public_name fennec.data.mongo)
+ (libraries fennec.data fennec-mongo.ffi fennec-mongo.bson_json fennec-mongo.bson fennec-mongo.query
+   eio eio.unix))

@@ -382,11 +382,19 @@ it stays a clean standalone package.
      flag). Proven end to end: connect + ping + insert + find against a lifecycle-launched mongod,
      and the test binary depends on **OS libraries only** (otool/ldd guard `portability/check.sh`,
      run on `dune test`) — self-contained + statically linked, the downstream-binary guarantee.
-   NEXT: (c) port the Eio layer (`client`/`collection`/`database`/`change_stream`) wrapping the raw
-   FFI in Eio systhreads, exposed as a `Backend.S` impl (insert/update/remove/find/find_one/count +
-   `observe_changes` via change streams) so `Reactive.Make` runs over real mongo unchanged.
-   (d) differential correctness tests — every op through Minimongo AND real mongo (gated by the
-   lifecycle manager), results asserted equal.
+   - (c) ✓ **Backend.S over real mongo DONE** — `fennec/data/mongo` (`fennec.data.mongo`, native):
+     a `Fennec_data.Backend.S` over the FFI. Each blocking call runs in an Eio systhread
+     (`Eio_unix.run_in_systhread`); CRUD the typed FFI doesn't cover (multi/upsert update,
+     multi-delete, count) goes through the driver's generic `command`. `observe_changes` polls +
+     diffs (`Query.Diff`) — works against a standalone mongod. `Reactive.Make (Fennec_data_mongo)`
+     compiles, so the whole reactive/DDP/realtime stack runs over real mongo unchanged.
+   - (d) ✓ **differential correctness DONE** — `test_diff`: the same ops (insert / find across
+     eq/`$gte`/array-contains/`$in`/`$or` / multi-`$set` update / remove / count) through
+     `Backend.Mini` AND a real mongod (gated by the lifecycle manager), results asserted equal —
+     Minimongo proven a faithful swap.
+   Remaining optimization (not blocking): `observe_changes` via **change streams** (lower latency
+   than polling, but needs a single-node replica-set lifecycle), and a live realtime-over-real-mongo
+   e2e. **Phase 2 is functionally complete: real MongoDB works behind the same seam Minimongo does.**
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
