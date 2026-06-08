@@ -118,6 +118,23 @@ let%test "a non-operator modifier replaces, preserving _id" =
   Bson.get r "_id" = Some (Bson.String "k")
   && Bson.get r "b" = Some (Bson.Int 2)
   && Bson.get r "a" = None
+let%test "$bit or/and/xor" =
+  let bit cur op n =
+    Bson.get (Modifier.apply (d [ ("f", i cur) ]) (d [ ("$bit", d [ ("f", d [ (op, i n) ]) ]) ])) "f"
+  in
+  bit 1 "or" 4 = Some (Bson.Int 5) && bit 7 "and" 1 = Some (Bson.Int 1) && bit 5 "xor" 1 = Some (Bson.Int 4)
+let%test "$push with $each + $sort + $slice" =
+  let r =
+    Modifier.apply (d [ ("a", Bson.array []) ])
+      (d [ ("$push", d [ ("a", d [ ("$each", Bson.array [ i 3; i 1; i 2 ]); ("$sort", i 1); ("$slice", i 2) ]) ]) ])
+  in
+  Bson.get r "a" = Some (Bson.array [ i 1; i 2 ])
+let%test "$push with $position inserts at an index" =
+  let r =
+    Modifier.apply (d [ ("a", Bson.array [ i 1; i 2 ]) ])
+      (d [ ("$push", d [ ("a", d [ ("$each", Bson.array [ i 9 ]); ("$position", i 0) ]) ]) ])
+  in
+  Bson.get r "a" = Some (Bson.array [ i 9; i 1; i 2 ])
 
 (* ── Projection ── *)
 let%test "include keeps the listed fields and _id" =

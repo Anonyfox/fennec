@@ -74,6 +74,18 @@ let combine f_int f_i64 f_flt (cur : Bson.t option) (operand : Bson.t) ~absent :
 let zero_like = function Int _ -> Int 0 | Int64 _ -> Int64 0L | Float _ -> Float 0. | x -> x
 let as_array = function Some (Array xs) -> xs | _ -> []
 
+let rec take_n n = function x :: tl when n > 0 -> x :: take_n (n - 1) tl | _ -> []
+let rec drop_n n = function _ :: tl when n > 0 -> drop_n (n - 1) tl | l -> l
+
+(* $push $sort modifier: [{field: 1|-1}] for document arrays, or [1|-1] for scalar arrays *)
+let sort_array spec xs =
+  let by sign = List.stable_sort (fun a b -> sign * Bson.compare a b) xs in
+  match spec with
+  | Document _ -> Sorter.sort spec xs
+  | Int k -> by (if k < 0 then -1 else 1)
+  | Float f -> by (if f < 0. then -1 else 1)
+  | _ -> xs
+
 let each_values = function
   | Document kvs when List.mem_assoc "$each" kvs -> (
       match List.assoc "$each" kvs with Array xs -> xs | x -> [ x ])
@@ -120,7 +132,48 @@ let apply_op (d : Bson.t) (op : string) (arg : Bson.t) : Bson.t =
   | "$push" ->
       over (fun acc path v ->
           let cur = as_array (get_path acc path) in
-          set acc path (Array (cur @ each_values v)))
+          let to_add = each_values v in
+          (* $each modifiers: $position (insert index), $sort, $slice *)
+          let pos, sort_spec, slice_n =
+            match v with
+            | Document kvs when List.mem_assoc "$each" kvs ->
+                ( (match List.assoc_opt "$position" kvs with Some (Int n) -> Some n | _ -> None),
+                  List.assoc_opt "$sort" kvs,
+                  match List.assoc_opt "$slice" kvs with Some (Int n) -> Some n | _ -> None )
+            | _ -> (None, None, None)
+          in
+          let combined =
+            match pos with
+            | Some p ->
+                let p = if p < 0 then max 0 (List.length cur + p) else p in
+                take_n p cur @ to_add @ drop_n p cur
+            | None -> cur @ to_add
+          in
+          let combined = match sort_spec with Some spec -> sort_array spec combined | None -> combined in
+          let combined =
+            match slice_n with
+            | Some n when n >= 0 -> take_n n combined
+            | Some n -> drop_n (max 0 (List.length combined + n)) combined
+            | None -> combined
+          in
+          set acc path (Array combined))
+  | "$bit" ->
+      over (fun acc path v ->
+          let bitop cv =
+            match v with
+            | Document [ (op, operand) ] ->
+                let ov = match operand with Int n -> n | Int64 n -> Int64.to_int n | _ -> 0 in
+                ( match op with
+                  | "and" -> cv land ov
+                  | "or" -> cv lor ov
+                  | "xor" -> cv lxor ov
+                  | _ -> cv )
+            | _ -> cv
+          in
+          match get_path acc path with
+          | Some (Int n) -> set acc path (Int (bitop n))
+          | Some (Int64 n) -> set acc path (Int64 (Int64.of_int (bitop (Int64.to_int n))))
+          | _ -> acc)
   | "$addToSet" ->
       over (fun acc path v ->
           let cur = as_array (get_path acc path) in

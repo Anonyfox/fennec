@@ -1,9 +1,12 @@
 (** Update-modifier engine: applies a Mongo update document to an in-memory BSON document. Pure.
 
     Supported operators: [$set] [$unset] [$inc] [$mul] [$min] [$max] [$rename] [$setOnInsert]
-    (insert-time only) [$push] (+ [$each]) [$addToSet] (+ [$each]) [$pull] [$pullAll] [$pop]. Dotted
-    paths target nested fields. A modifier with no [$]-operators is a full replacement (preserving
-    [_id]).
+    (insert-time only) [$push] (with [$each]/[$position]/[$sort]/[$slice]) [$addToSet] (+ [$each])
+    [$pull] [$pullAll] [$pop] [$bit] ([and]/[or]/[xor]). Dotted paths target nested fields. A
+    modifier with no [$]-operators is a full replacement (preserving [_id]). Not handled here:
+    [$currentDate] (needs a clock — the framework layer rewrites it to a [$set] with the timestamp)
+    and the positional array operators [$] / [$[]] / [$[<id>]] (need the query selector /
+    arrayFilters).
 
     Edge cases worth knowing: [$inc]/[$mul] promote across [Int]/[Int64]/[Float] and leave a
     present-but-non-numeric field {e unchanged} (they never overwrite it); [$mul] of a missing field
