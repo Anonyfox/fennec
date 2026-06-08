@@ -352,7 +352,10 @@ it stays a clean standalone package.
 1. **`fennec-mongo` pure trio** (bson + query + minimongo) — port, native + JS (jsoo; links into the
    client, no npm), unit/property-tested (`let%test`/`let%prop`). ✓ **DONE** (commit `c5df89a`).
 2. **`fennec-mongo.driver`** — libmongoc static archive (buildkit pattern) + change-stream `Live`;
-   integration test behind a real-mongod gate.
+   integration test behind a real-mongod gate. **Decision reaffirmed (2026-06): vendored libmongoc
+   over a pure-OCaml wire driver** — battle-tested, full feature coverage; the cost (C vendoring +
+   FFI) is accepted. Plan: bind a system libmongoc (pkg-config) first to get correctness working
+   against a launched mongod, then statically vendor for a self-contained build. NEXT.
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
@@ -380,6 +383,11 @@ it stays a clean standalone package.
    addTask pushes a new doc back through the open subscription into the DOM — the whole loop,
    fennec-mongo → reactive → DDP → realtime server → jsoo client → merge store → Fur signal → DOM.
 7. **CLI mongod helper** — detect/fetch/launch a dev mongod; `:memory:` stays the test default.
+   ◑ lifecycle lib **DONE** — `fennec/mongo/mongod` (`fennec-mongo.mongod`, native/Unix): `find` +
+   `install_hint` + `start`/`stop`/`with_ephemeral` (own data dir + free port, waits until it
+   accepts connections, graceful SIGTERM→SIGKILL, ephemeral dir auto-removed). Proven against a real
+   mongod 8.3.3 (launch→connect→stop→cleanup). Remaining: fold it into `fennec dev`/`fennec test`
+   (no new verb) so a real mongod is one flag away.
 8. **(Stretch) latency compensation** — only after the DX discussion (§9).
 
 ---

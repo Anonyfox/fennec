@@ -1,0 +1,8 @@
+; mongod lifecycle (native): detect the system mongod, launch a managed dev/test instance with its
+; own data dir + port, wait until it accepts connections, and stop it gracefully (SIGTERM then
+; SIGKILL, ephemeral data dir auto-removed). Pure process management (Unix) — no driver, no jsoo.
+; The CLI's dev/test orchestration uses this; the libmongoc driver talks to the launched instance.
+(library
+ (name fennec_mongo_mongod)
+ (public_name fennec-mongo.mongod)
+ (libraries unix))
