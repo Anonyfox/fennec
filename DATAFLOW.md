@@ -370,11 +370,15 @@ it stays a clean standalone package.
    `Ws` codec) wires a DDP session, and a `Cdp` WebSocket client does a full connect/subscribe/method
    round-trip asserting the live server→client push (the method's insert → `observe_changes` →
    sub-tagged `added` → frame). The whole server stack across a socket, deterministic, no browser.
-6. **Client** — ◑ read side **DONE**: `fennec/live` (`fennec.live`) has the §5b `Merge_store`
-   (precedence + refcount + progressive enrichment), `Subkey`, and the Fur `Live.find` binding (a
-   signal that recomputes as the store changes — proven native, compiles to JS) + `seed` for SSR
-   hydration. Remaining: the js_of_ocaml DDP WebSocket client + `subscribe` (feed the store from a
-   live `/websocket`), and the headless-Chrome browser-cut proof of a live tick.
+6. **Client** — ✓ **DONE**. `fennec/live` (`fennec.live`): the §5b `Merge_store` (precedence +
+   refcount + progressive enrichment), `Subkey`, the Fur `Live.find` binding (a signal that
+   recomputes as the store changes), `seed` for SSR hydration. `fennec/live/client`
+   (`fennec.live.client`): the DDP WebSocket client, isomorphic via a virtual module (browser impl =
+   a real Js_of_ocaml WebSocket; native stub for SSR), with `connect`/`subscribe`/`call`/`find`.
+   Wired into `examples/site` as a live task list (`task_list.mlx` + the `/ddp` endpoint), and
+   **proven in a real headless Chrome** (`test/browser`): subscribe renders the seeded docs, and
+   addTask pushes a new doc back through the open subscription into the DOM — the whole loop,
+   fennec-mongo → reactive → DDP → realtime server → jsoo client → merge store → Fur signal → DOM.
 7. **CLI mongod helper** — detect/fetch/launch a dev mongod; `:memory:` stays the test default.
 8. **(Stretch) latency compensation** — only after the DX discussion (§9).
 

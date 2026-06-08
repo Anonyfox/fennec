@@ -121,3 +121,17 @@ let%browser "send_file streams a file body with the right bytes" = fun page ->
   |> eval "fetch('/api/download').then(r => r.text()).then(t => { window.__dl = t })"
   |> wait_for ~descr:"downloaded file body" "window.__dl === 'hello from send_file'"
   |> ignore
+
+(* THE FULL REALTIME LOOP, in a real browser: the page connects a DDP WebSocket to /ddp, subscribes
+   to "tasks", and renders the live merge store. First we see the seeded docs (server→client initial
+   data over the socket); then clicking "Add task" calls the addTask method — the server inserts and
+   the new doc is pushed back through the open subscription (server→client live push) and rendered
+   reactively. fennec-mongo → reactive → DDP → realtime server → jsoo client → Fur signal → DOM. *)
+let%browser "realtime DDP: subscribe renders seeded tasks; addTask pushes live" = fun page ->
+  page
+  |> goto "/" |> hydrated
+  |> expect_text ".tasks .task-items" "Buy milk"
+  |> expect_text ".tasks .task-items" "Walk the dog"
+  |> click ".tasks .add-task"
+  |> expect_text ".tasks .task-items" "Task 1"
+  |> ignore

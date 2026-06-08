@@ -38,11 +38,18 @@ let connect ?(path = "/websocket") () : t =
   let scheme = if protocol = "https:" then "wss://" else "ws://" in
   let url = scheme ^ host ^ path in
   let ws = Js.Unsafe.new_obj (Js.Unsafe.pure_js_expr "WebSocket") [| Js.Unsafe.inject (Js.string url) |] in
-  let send str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
+  let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
+  (* queue sends until the socket is open — subscribe/call can fire (on_mount) before [onopen] *)
+  let is_open = ref false in
+  let pending = Queue.create () in
+  let send str = if !is_open then raw str else Queue.add str pending in
   let t = { live = Live.create (); send; subc = 0; methodc = 0 } in
   Js.Unsafe.set ws (Js.string "onopen")
     (Dom.handler (fun _ ->
-         send (Msg.encode (Msg.Connect { session = None; version = "1"; support = [ "1" ] }));
+         is_open := true;
+         raw (Msg.encode (Msg.Connect { session = None; version = "1"; support = [ "1" ] }));
+         Queue.iter raw pending;
+         Queue.clear pending;
          Js._true));
   Js.Unsafe.set ws (Js.string "onmessage")
     (Dom.handler (fun ev ->
