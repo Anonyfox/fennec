@@ -382,19 +382,24 @@ it stays a clean standalone package.
      flag). Proven end to end: connect + ping + insert + find against a lifecycle-launched mongod,
      and the test binary depends on **OS libraries only** (otool/ldd guard `portability/check.sh`,
      run on `dune test`) — self-contained + statically linked, the downstream-binary guarantee.
-   - (c) ✓ **Backend.S over real mongo DONE** — `fennec/data/mongo` (`fennec.data.mongo`, native):
-     a `Fennec_data.Backend.S` over the FFI. Each blocking call runs in an Eio systhread
-     (`Eio_unix.run_in_systhread`); CRUD the typed FFI doesn't cover (multi/upsert update,
-     multi-delete, count) goes through the driver's generic `command`. `observe_changes` polls +
-     diffs (`Query.Diff`) — works against a standalone mongod. `Reactive.Make (Fennec_data_mongo)`
-     compiles, so the whole reactive/DDP/realtime stack runs over real mongo unchanged.
-   - (d) ✓ **differential correctness DONE** — `test_diff`: the same ops (insert / find across
-     eq/`$gte`/array-contains/`$in`/`$or` / multi-`$set` update / remove / count) through
-     `Backend.Mini` AND a real mongod (gated by the lifecycle manager), results asserted equal —
-     Minimongo proven a faithful swap.
-   Remaining optimization (not blocking): `observe_changes` via **change streams** (lower latency
-   than polling, but needs a single-node replica-set lifecycle), and a live realtime-over-real-mongo
-   e2e. **Phase 2 is functionally complete: real MongoDB works behind the same seam Minimongo does.**
+   - (c) ✓ **the driver layer DONE** — `fennec/mongo/driver` (`fennec-mongo.driver`, native): the
+     full `mongo/lib` ported from comet — `Client`/`Collection`/`Database` (CRUD + aggregate +
+     distinct + indexes + reset helpers), `Change_stream` (typed events parsed from `operationType`),
+     `Live` (the change-stream live-query engine: ONE stream per collection fanned out in-process to
+     per-query views with caches + transition routing; interval polling only as an overflow guard
+     above a stream budget), and `Server` (the single-node replica-set lifecycle). Blocking calls run
+     in an Eio systhread.
+   - (d) ✓ **Backend.S over real mongo DONE** — `fennec/data/mongo` (`fennec.data.mongo`, native): a
+     thin `Fennec_data.Backend.S` adapter over the driver. `observe_changes` is REAL CHANGE STREAMS
+     via `Live` (not polling) — the existing set replayed synchronously (ready-after-data), then
+     field-level deltas off the stream. `Reactive.Make (Fennec_data_mongo)` compiles, so the whole
+     reactive/DDP/realtime stack runs over real mongo unchanged.
+   - (e) ✓ **correctness DONE** — `test_diff`: insert / find ($eq/$gte/array/$in/$or) / multi-$set /
+     remove / count / **aggregate** ($match→$sort→$project) agree between `Backend.Mini` and a real
+     mongod. `test_observe`: a live insert/update/remove becomes added/changed/removed over a real
+     change stream, against a hermetic single-node replica set (`Server.with_ephemeral`).
+   **Phase 2 is COMPLETE: real MongoDB — change streams included — works behind the same seam
+   Minimongo does.**
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
@@ -421,12 +426,14 @@ it stays a clean standalone package.
    **proven in a real headless Chrome** (`test/browser`): subscribe renders the seeded docs, and
    addTask pushes a new doc back through the open subscription into the DOM — the whole loop,
    fennec-mongo → reactive → DDP → realtime server → jsoo client → merge store → Fur signal → DOM.
-7. **CLI mongod helper** — detect/fetch/launch a dev mongod; `:memory:` stays the test default.
-   ◑ lifecycle lib **DONE** — `fennec/mongo/mongod` (`fennec-mongo.mongod`, native/Unix): `find` +
-   `install_hint` + `start`/`stop`/`with_ephemeral` (own data dir + free port, waits until it
-   accepts connections, graceful SIGTERM→SIGKILL, ephemeral dir auto-removed). Proven against a real
-   mongod 8.3.3 (launch→connect→stop→cleanup). Remaining: fold it into `fennec dev`/`fennec test`
-   (no new verb) so a real mongod is one flag away.
+7. **CLI mongod helper** — ✓ **DONE**. `fennec/mongo/mongod` (`fennec-mongo.mongod`, native/Unix) is
+   the pure spawn+reap lifecycle (`find`/`install_hint`/`start ?replset`/`stop`/`with_ephemeral`;
+   no-dangling via a process registry + at_exit backstop). `fennec dev --mongo` / `fennec test
+   --mongo` (no new verb) launch a managed single-node **replica set** — `Mongo_rs`: `mongod
+   --replSet`, then initiate the set + wait for PRIMARY via the driver's `Server` (reuse mode adopts
+   the running process) — export `MONGO_URL`, and reap it on teardown. So real mongo with working
+   change streams is one flag away; `:memory:` Minimongo stays the default everywhere else. Proven:
+   `fennec test browser --mongo` runs the example's realtime over change streams, no dangling mongod.
 8. **(Stretch) latency compensation** — only after the DX discussion (§9).
 
 ---
