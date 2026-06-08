@@ -47,6 +47,24 @@ path.write_text(text.replace(old, new, 1), encoding="utf-8")
 PY
 }
 
+regex_replace_in_file() {
+  local file="$1" pattern="$2" to="$3"
+  python3 - "$file" "$pattern" "$to" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+pattern = sys.argv[2]
+new = sys.argv[3]
+text = path.read_text(encoding="utf-8")
+next_text, n = re.subn(pattern, new, text, count=1)
+if n != 1:
+    raise SystemExit(f"probe pattern not found in {path}: {pattern!r}")
+path.write_text(next_text, encoding="utf-8")
+PY
+}
+
 raw_wait_log() {
   local start="$1" pattern="$2" timeout="$3"
   python3 - "$LOG" "$start" "$pattern" "$timeout" <<'PY'
@@ -101,7 +119,7 @@ require_contains "$ready" "ready"
 
 printf '== one hook after rapid multifile edit batch ==\n'
 replace_in_file "$ABOUT" "the same components run in both places." "fastlane batch probe."
-replace_in_file "$SCSS" "--accent: #0b7285;" "--accent: #0c8599;"
+regex_replace_in_file "$SCSS" '--accent: #[0-9a-fA-F]{6};' '--accent: #0c8599;'
 hook1="$(printf '{"hook_event_name":"PostToolUse"}' | FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" hook --timeout 30)"
 printf '%s\n' "$hook1"
 require_contains "$hook1" "hookSpecificOutput"

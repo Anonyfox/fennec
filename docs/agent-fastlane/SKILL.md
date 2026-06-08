@@ -33,4 +33,12 @@ Interpret the result:
 
 Do not repeatedly poll the dev terminal. The bridge coalesces the next dev-loop settle after the edit. Use one wait after a batch of related edits, not after every tiny internal read.
 
-For Claude Code, configure `tools/agent/fennec-dev hook --timeout 12` as a `PostToolBatch` or `PostToolUse` hook so the feedback is injected automatically. For Codex, use hooks when the active CLI version fires them for file-edit tools; otherwise run the single wait command explicitly after edits.
+For Claude Code, configure `tools/agent/fennec-dev hook --timeout 12` as a `PostToolBatch` or `PostToolUse` hook so the feedback is injected automatically. For Codex, use hooks when the active CLI version fires them for file-edit tools; Codex CLI 0.120.0 was verified to inject `PostToolUse` context for `Bash`, but not for native `apply_patch`. If file-edit hooks are not verified, run the single wait command explicitly after edits.
+
+When changing the bridge itself, verify the contract mechanically:
+
+```sh
+tools/agent/verify-fennec-dev-fastlane
+```
+
+The verifier covers a rapid multifile edit batch, the settled-before-hook race, file restore, and watcher cleanup.

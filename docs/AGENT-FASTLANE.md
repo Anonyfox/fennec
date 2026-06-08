@@ -22,6 +22,9 @@ location.
 
 `wait` starts from the current log offset and blocks until the next semantic
 settle: ready, reload, css, resolved, build failed, watcher restart, or crash.
+Internally it follows the dev log with a blocking event stream (`tail -f` plus
+`select`), while the offset file catches events that settled just before the
+hook started.
 
 `hook` wraps `wait` and emits Claude Code-compatible JSON with
 `hookSpecificOutput.additionalContext`, so the feedback lands next to the tool
@@ -85,17 +88,23 @@ tools/agent/fennec-dev stop
 
 ## Codex
 
-Codex hook coverage has changed across 2026 releases. When the active Codex CLI
-fires `PostToolUse` / `PostToolBatch` for the file-writing tools in use, point it
-at the same hook command:
+Codex hook coverage has changed across 2026 releases. A smoke test against
+Codex CLI 0.120.0 confirmed that `PostToolUse` for `Bash` can inject
+`hookSpecificOutput.additionalContext` into the next model step. The same smoke
+did not fire for the native `apply_patch` file-change tool in that build, so do
+not assume Codex can remove post-edit checks for native file edits unless the
+active CLI version has been verified.
+
+When the active Codex CLI fires `PostToolUse` for the file-writing tools in use,
+point it at the same hook command:
 
 ```sh
 tools/agent/fennec-dev hook --timeout 12
 ```
 
 If a Codex build does not fire hooks for `apply_patch`, the fallback skill
-instruction is: after a file-editing tool call, run exactly one wait command
-before reasoning about the result:
+instruction is: after a native file-editing tool call, run exactly one wait
+command before reasoning about the result:
 
 ```sh
 tools/agent/fennec-dev wait --timeout 12
@@ -131,3 +140,16 @@ the same semantics into `fennec dev` itself:
 That removes log parsing and closes the race where a build settles before a hook
 starts. The bridge gives Claude/Codex a working fastlane today without changing
 the human TUI.
+
+## Mechanical Verification
+
+Run the verifier when changing the bridge:
+
+```sh
+tools/agent/verify-fennec-dev-fastlane
+```
+
+It starts an isolated dev loop, performs a rapid multifile edit batch, calls one
+hook, restores the files, then tests the settled-before-hook race by observing a
+dev event land before invoking the hook. It also asserts that `stop` leaves no
+`fennec dev` or `dune --watch` process behind.
