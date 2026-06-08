@@ -160,6 +160,34 @@ let%test "$regex honors the case-insensitive option" =
     (d [ ("name", d [ ("$regex", Bson.str "FOO"); ("$options", Bson.str "i") ]) ])
     (d [ ("name", Bson.str "foobar") ])
 
+(* ── Geospatial ── *)
+let pt x y = Bson.array [ Bson.float x; Bson.float y ]
+let geojson_pt x y = d [ ("type", Bson.str "Point"); ("coordinates", pt x y) ]
+let square =
+  d [ ("type", Bson.str "Polygon");
+      ("coordinates", Bson.array [ Bson.array [ pt 0. 0.; pt 0. 1.; pt 1. 1.; pt 1. 0.; pt 0. 0. ] ]) ]
+
+let%test "$geoWithin $box" =
+  let q = d [ ("loc", d [ ("$geoWithin", d [ ("$box", Bson.array [ pt 0. 0.; pt 2. 2. ]) ]) ]) ] in
+  Matcher.doc_matches q (d [ ("loc", pt 1. 1.) ]) && not (Matcher.doc_matches q (d [ ("loc", pt 3. 3.) ]))
+let%test "$geoWithin polygon (point in polygon)" =
+  let q = d [ ("loc", d [ ("$geoWithin", d [ ("$geometry", square) ]) ]) ] in
+  Matcher.doc_matches q (d [ ("loc", pt 0.5 0.5) ]) && not (Matcher.doc_matches q (d [ ("loc", pt 2. 2.) ]))
+let%test "$geoWithin $centerSphere (angular radius)" =
+  let q r = d [ ("loc", d [ ("$geoWithin", d [ ("$centerSphere", Bson.array [ pt 0. 0.; Bson.float r ]) ]) ]) ] in
+  Matcher.doc_matches (q 0.02) (d [ ("loc", pt 1. 0.) ])
+  && not (Matcher.doc_matches (q 0.001) (d [ ("loc", pt 1. 0.) ]))
+let%test "$near distance filter (metres)" =
+  let near maxd =
+    d [ ("loc", d [ ("$near", d [ ("$geometry", geojson_pt 0. 0.); ("$maxDistance", Bson.float maxd) ]) ]) ]
+  in
+  (* a point at lng 1 is ~111 km from the origin on the equator *)
+  Matcher.doc_matches (near 200000.) (d [ ("loc", pt 1. 0.) ])
+  && not (Matcher.doc_matches (near 1000.) (d [ ("loc", pt 1. 0.) ]))
+let%test "$geoIntersects (polygon contains a GeoJSON point)" =
+  let q = d [ ("loc", d [ ("$geoIntersects", d [ ("$geometry", square) ]) ]) ] in
+  Matcher.doc_matches q (d [ ("loc", geojson_pt 0.5 0.5) ])
+
 (* ── Sorter ── *)
 let vals docs =
   List.filter_map (fun x -> match Bson.get x "v" with Some (Bson.Int n) -> Some n | _ -> None) docs

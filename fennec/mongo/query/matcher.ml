@@ -192,6 +192,10 @@ and matches_op (field_val : Bson.t option) op (v : Bson.t) : bool =
   | "$not" -> not (matches_cond field_val v)
   | "$all" | "$size" | "$elemMatch" -> (
       match field_val with Some fv -> op1 op v fv | None -> false)
+  | "$geoWithin" -> ( match field_val with Some fv -> Geo.within fv v | None -> false)
+  | "$geoIntersects" -> ( match field_val with Some fv -> Geo.intersects fv v | None -> false)
+  | "$near" -> ( match field_val with Some fv -> Geo.near ~force_sphere:false fv v | None -> false)
+  | "$nearSphere" -> ( match field_val with Some fv -> Geo.near ~force_sphere:true fv v | None -> false)
   | _ -> true (* unknown operator: never wrongly hide a document *)
 
 and matches_cond (field_val : Bson.t option) (cond : Bson.t) : bool =
