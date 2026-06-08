@@ -1,0 +1,13 @@
+; Browser DDP client (js_of_ocaml): dials the server's /websocket, runs the DDP handshake, and feeds
+; sub-tagged deltas into the live merge store; `find` is the reactive Fur query and `call` invokes a
+; server method. Browser-only (there is no server-side DDP *client*), so byte-only → jsoo bundles it.
+(library
+ (name fennec_live_client)
+ (public_name fennec.live.client)
+ (wrapped false)
+ (modes byte)
+ (libraries fennec.live fennec.ddp fennec.fur fennec-mongo.bson js_of_ocaml)
+ (preprocess
+  (pps js_of_ocaml-ppx))
+ (flags
+  (:standard -w -a)))
