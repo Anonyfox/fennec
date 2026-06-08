@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+BRIDGE="$ROOT/tools/agent/fennec-dev"
+ABOUT="$ROOT/examples/site/frontend/apps/web/about.mlx"
+SCSS="$ROOT/examples/site/frontend/apps/web/main.scss"
+PORT="${1:-9163}"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/fennec-agent-verify.XXXXXX")"
+STATE="$(mktemp -d "${TMPDIR:-/tmp}/fennec-agent-state.XXXXXX")"
+LOG="$STATE/dev.log"
+
+cleanup() {
+  set +e
+  FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" stop >/dev/null 2>&1
+  [[ -f "$TMP/about.mlx" ]] && cp "$TMP/about.mlx" "$ABOUT"
+  [[ -f "$TMP/main.scss" ]] && cp "$TMP/main.scss" "$SCSS"
+  rm -rf "$TMP" "$STATE"
+}
+trap cleanup EXIT INT TERM
+
+cp "$ABOUT" "$TMP/about.mlx"
+cp "$SCSS" "$TMP/main.scss"
+
+require_contains() {
+  local haystack="$1"
+  local needle="$2"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    printf 'expected output to contain %q, got:\n%s\n' "$needle" "$haystack" >&2
+    exit 1
+  fi
+}
+
+replace_in_file() {
+  local file="$1" from="$2" to="$3"
+  python3 - "$file" "$from" "$to" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+old = sys.argv[2]
+new = sys.argv[3]
+text = path.read_text(encoding="utf-8")
+if old not in text:
+    raise SystemExit(f"probe text not found in {path}: {old!r}")
+path.write_text(text.replace(old, new, 1), encoding="utf-8")
+PY
+}
+
+raw_wait_log() {
+  local start="$1" pattern="$2" timeout="$3"
+  python3 - "$LOG" "$start" "$pattern" "$timeout" <<'PY'
+import os
+import re
+import select
+import subprocess
+import sys
+import time
+
+log, start_s, pattern, timeout_s = sys.argv[1:5]
+deadline = time.monotonic() + float(timeout_s)
+proc = subprocess.Popen(
+    ["tail", "-c", f"+{int(start_s) + 1}", "-f", log],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+)
+data = bytearray()
+try:
+    fd = proc.stdout.fileno()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SystemExit(f"raw log wait timed out waiting for {pattern!r}")
+        readable, _, _ = select.select([fd], [], [], remaining)
+        if not readable:
+            raise SystemExit(f"raw log wait timed out waiting for {pattern!r}")
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            raise SystemExit("raw log stream ended")
+        data.extend(chunk)
+        if re.search(pattern, data.decode("utf-8", errors="replace")):
+            print(data.decode("utf-8", errors="replace"), end="")
+            break
+finally:
+    proc.terminate()
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+PY
+}
+
+cd "$ROOT"
+
+printf '== start bridge on port %s ==\n' "$PORT"
+FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" start --port "$PORT"
+ready="$(FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" wait --timeout 30)"
+printf '%s\n' "$ready"
+require_contains "$ready" "ready"
+
+printf '== one hook after rapid multifile edit batch ==\n'
+replace_in_file "$ABOUT" "the same components run in both places." "fastlane batch probe."
+replace_in_file "$SCSS" "--accent: #0b7285;" "--accent: #0c8599;"
+hook1="$(printf '{"hook_event_name":"PostToolUse"}' | FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" hook --timeout 30)"
+printf '%s\n' "$hook1"
+require_contains "$hook1" "hookSpecificOutput"
+require_contains "$hook1" "additionalContext"
+if [[ "$hook1" != *"reload"* && "$hook1" != *"css"* && "$hook1" != *"resolved"* ]]; then
+  printf 'expected hook output to contain a dev settle, got:\n%s\n' "$hook1" >&2
+  exit 1
+fi
+
+cp "$TMP/about.mlx" "$ABOUT"
+cp "$TMP/main.scss" "$SCSS"
+restore1="$(FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" wait --timeout 30)"
+printf '%s\n' "$restore1"
+
+printf '== settled-before-hook race ==\n'
+start_size="$(wc -c < "$LOG" | tr -d ' ')"
+replace_in_file "$ABOUT" "the same components run in both places." "fastlane race probe."
+raw_wait_log "$start_size" 'reload|css|resolved' 30 >/dev/null
+hook2="$(printf '{"hook_event_name":"PostToolUse"}' | FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" hook --timeout 30)"
+printf '%s\n' "$hook2"
+require_contains "$hook2" "hookSpecificOutput"
+if [[ "$hook2" != *"reload"* && "$hook2" != *"css"* && "$hook2" != *"resolved"* ]]; then
+  printf 'expected race hook to catch already-settled event, got:\n%s\n' "$hook2" >&2
+  exit 1
+fi
+
+cp "$TMP/about.mlx" "$ABOUT"
+restore2="$(FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" wait --timeout 30)"
+printf '%s\n' "$restore2"
+
+printf '== stop and assert no watcher remains ==\n'
+FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" stop
+if ps -ef | grep -E 'fennec-agent-dev-fennec|cli/fennec\.exe dev --port '"$PORT"'|dune build --watch examples/site' | grep -v grep; then
+  printf 'leftover dev/watch process found\n' >&2
+  exit 1
+fi
+
+printf 'fastlane verification passed\n'

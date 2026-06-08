@@ -15,8 +15,10 @@ tools/agent/fennec-dev stop
 ```
 
 `start` runs `fennec dev` in the background and captures plain append-only output
-in `.fennec/agent/dev.log`. Because stdout is not a TTY, the existing UI avoids
-cursor repainting and becomes suitable for hooks.
+under `${XDG_STATE_HOME:-~/.local/state}/fennec/agent/<repo-hash>/dev.log`.
+Because stdout is not a TTY, the existing UI avoids cursor repainting and
+becomes suitable for hooks. Set `FENNEC_AGENT_STATE_DIR` to override the state
+location.
 
 `wait` starts from the current log offset and blocks until the next semantic
 settle: ready, reload, css, resolved, build failed, watcher restart, or crash.

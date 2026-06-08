@@ -158,6 +158,22 @@ type request_error = Fennec_server.Server.request_error =
   | Handler_timeout of Http.request  (** the per-request deadline expired *)
   | No_route of Http.request  (** no endpoint matched the Host header (and no ["*"] default) *)
 
+(** {1 HTTPS} *)
+
+(** In-process TLS termination — load a certificate + key and pass it to {!serve} as [~tls] to serve
+    HTTPS directly, no reverse proxy. *)
+module Tls : sig
+  (** A loaded server TLS configuration. *)
+  type t = Fennec_server.Tls_termination.t
+
+  (** [of_files ~cert ~key] loads a PEM certificate chain + private key from the given file paths.
+      @raise Failure on a malformed certificate, key, or configuration. *)
+  val of_files : cert:string -> key:string -> t
+
+  (** [of_pem ~cert ~key] is {!of_files} from in-memory PEM strings. *)
+  val of_pem : cert:string -> key:string -> t
+end
+
 (** {1 Entry point} *)
 
 (** Start the server with the given endpoints, blocking. In dev mode, livereload is
@@ -174,11 +190,14 @@ type request_error = Fennec_server.Server.request_error =
     is where an app creates resources that need the runtime, e.g. a real-mongo backend's collections
     and their observe loops (which fork into [sw]); the in-memory backend needs nothing here.
 
+    [~tls] terminates HTTPS in-process (no reverse proxy) — see {!Tls}.
+
     This is the single place that starts the server — a second call is a runtime error.
     The CLI's discovery ({!Discover}) finds this call site automatically. *)
 val serve :
   ?timeout:float ->
   ?max_conns:int ->
+  ?tls:Tls.t ->
   ?on_error:(request_error -> Http.response) ->
   ?on_start:(sw:Eio.Switch.t -> sleep:(float -> unit) -> unit) ->
   Endpoint.t list ->

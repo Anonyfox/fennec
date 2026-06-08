@@ -28,15 +28,27 @@ repo_root() {
 }
 
 ROOT="$(repo_root)"
-STATE_DIR="${FENNEC_AGENT_STATE_DIR:-$ROOT/.fennec/agent}"
+ROOT_KEY="$(printf '%s' "$ROOT" | shasum | awk '{print $1}')"
+STATE_DIR="${FENNEC_AGENT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/fennec/agent/$ROOT_KEY}"
 LOG="$STATE_DIR/dev.log"
 PIDFILE="$STATE_DIR/dev.pid"
+CHILDPIDFILE="$STATE_DIR/dev-child.pid"
+OFFSETFILE="$STATE_DIR/dev.offset"
+RUNNER="$STATE_DIR/run-dev.sh"
+CLI_EXE="$ROOT/_build/default/cli/fennec.exe"
+SESSION="fennec-agent-dev-$(basename "$ROOT" | tr -cd 'A-Za-z0-9_')"
 
 mkdir -p "$STATE_DIR"
 
 is_alive() {
   local pid="${1:-}"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  if [[ "$pid" == screen:* ]]; then
+    local listing
+    listing="$(screen -ls 2>/dev/null || true)"
+    grep -Eq "[0-9]+\\.${pid#screen:}[[:space:]]" <<< "$listing"
+  else
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  fi
 }
 
 current_pid() {
@@ -45,6 +57,19 @@ current_pid() {
 
 log_size() {
   [[ -f "$LOG" ]] && wc -c < "$LOG" | tr -d ' ' || printf '0'
+}
+
+read_offset() {
+  local size offset
+  size="$(log_size)"
+  if [[ -f "$OFFSETFILE" ]]; then
+    offset="$(cat "$OFFSETFILE" 2>/dev/null || printf '0')"
+    if [[ "$offset" =~ ^[0-9]+$ ]] && (( offset <= size )); then
+      printf '%s' "$offset"
+      return
+    fi
+  fi
+  printf '0'
 }
 
 start_dev() {
@@ -56,31 +81,68 @@ start_dev() {
     return 0
   fi
 
+  if [[ ! -x "$CLI_EXE" ]]; then
+    (cd "$ROOT" && dune build cli/fennec.exe)
+  fi
+
   : > "$LOG"
-  (
-    cd "$ROOT"
-    exec nohup dune exec -- fennec dev "$@" </dev/null
-  ) >> "$LOG" 2>&1 &
-  pid=$!
+  printf '0\n' > "$OFFSETFILE"
+  rm -f "$CHILDPIDFILE"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cd %q\n' "$ROOT"
+    printf 'exec >> %q 2>&1\n' "$LOG"
+    printf "printf 'fennec agent bridge: starting dev loop\\n'\n"
+    printf '%q dev' "$CLI_EXE"
+    for arg in "$@"; do
+      printf ' %q' "$arg"
+    done
+    printf ' &\n'
+    printf 'child=$!\n'
+    printf 'printf "%%s\\n" "$child" > %q\n' "$CHILDPIDFILE"
+    printf 'wait "$child"\n'
+    printf 'code=$?\n'
+    printf "printf 'fennec agent bridge: dev loop exited with status %%s\\n' \"\$code\"\n"
+    printf 'exit "$code"\n'
+  } > "$RUNNER"
+  chmod +x "$RUNNER"
+
+  if command -v screen >/dev/null 2>&1; then
+    screen -S "$SESSION" -dm "$RUNNER" >> "$LOG" 2>&1
+    pid="screen:$SESSION"
+  else
+    nohup "$RUNNER" >> "$LOG" 2>&1 </dev/null &
+    pid=$!
+  fi
   printf '%s\n' "$pid" > "$PIDFILE"
   printf 'started fennec dev: pid %s\n' "$pid"
   printf 'log: %s\n' "$LOG"
 }
 
 stop_dev() {
-  local pid
+  local pid child
   pid="$(current_pid)"
+  child="$(cat "$CHILDPIDFILE" 2>/dev/null || true)"
   if is_alive "$pid"; then
-    kill "$pid" 2>/dev/null || true
-    sleep 0.2
-    if is_alive "$pid"; then
-      kill -TERM "$pid" 2>/dev/null || true
+    if [[ "$pid" == screen:* ]]; then
+      screen -S "${pid#screen:}" -X quit 2>/dev/null || true
+      if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; fi
+    else
+      kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      if is_alive "$pid"; then
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
     fi
     printf 'stopped fennec dev: pid %s\n' "$pid"
   else
     printf 'fennec dev is not running\n'
   fi
-  rm -f "$PIDFILE"
+  if [[ -n "$child" ]] && kill -0 "$child" 2>/dev/null; then
+    sleep 0.2
+    kill -TERM "$child" 2>/dev/null || true
+  fi
+  rm -f "$PIDFILE" "$CHILDPIDFILE"
 }
 
 status_dev() {
@@ -97,85 +159,111 @@ status_dev() {
   fi
 }
 
-summarize_chunk() {
-  python3 - "$1" <<'PY'
-import re
-import sys
-
-path = sys.argv[1]
-data = open(path, "r", encoding="utf-8", errors="replace").read()
-lines = [ln.rstrip() for ln in data.splitlines() if ln.strip()]
-
-def interesting(ln):
-    s = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ln)
-    needles = [
-        "build failed",
-        "last good build still serving",
-        "server not running",
-        "Error:",
-        "ready",
-        " reload",
-        " css",
-        "resolved",
-        "tests ",
-        "dune watcher exited",
-        "server kept crashing",
-        "port",
-    ]
-    return any(n in s for n in needles)
-
-picked = []
-for ln in lines:
-    s = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ln)
-    if interesting(s):
-        picked.append(s)
-
-if not picked:
-    sys.exit(1)
-
-# Keep the context lean but include enough of a compile error to act.
-for ln in picked[-24:]:
-    print(ln)
-PY
-}
-
-chunk_has_settle() {
-  local chunk="$1"
-  grep -Eq 'build failed| reload| css|resolved|ready|server kept crashing|dune watcher exited' "$chunk"
-}
-
 wait_next() {
   local timeout="${1:-${FENNEC_AGENT_TIMEOUT:-12}}"
-  local start size chunk tmp deadline
+  local start
   if [[ ! -f "$LOG" ]]; then
     printf 'fennec dev log not found: %s\n' "$LOG" >&2
     return 2
   fi
 
-  start="$(log_size)"
-  tmp="$(mktemp "${TMPDIR:-/tmp}/fennec-agent-wait.XXXXXX")"
-  deadline=$(( $(date +%s) + timeout ))
+  start="$(read_offset)"
+  python3 - "$LOG" "$OFFSETFILE" "$start" "$timeout" <<'PY'
+import os
+import re
+import select
+import subprocess
+import sys
+import time
 
-  while (( $(date +%s) <= deadline )); do
-    size="$(log_size)"
-    if (( size > start )); then
-      tail -c +"$((start + 1))" "$LOG" > "$tmp"
-      if chunk_has_settle "$tmp"; then
-        # Give test-runner output a short chance to land after the build event.
-        sleep 0.4
-        size="$(log_size)"
-        tail -c +"$((start + 1))" "$LOG" > "$tmp"
-        summarize_chunk "$tmp" || cat "$tmp"
-        rm -f "$tmp"
-        return 0
-      fi
-    fi
-    sleep 0.1
-  done
+log, offset_path, start_s, timeout_s = sys.argv[1:5]
+start = int(start_s)
+timeout = float(timeout_s)
+deadline = time.monotonic() + timeout
+ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+settle = re.compile(r"build failed| reload| css|resolved|ready|server kept crashing|dune watcher exited")
+needles = [
+    "build failed",
+    "last good build still serving",
+    "server not running",
+    "server exited",
+    "Fatal error:",
+    "Reason:",
+    "Error:",
+    "ready",
+    " reload",
+    " css",
+    "resolved",
+    "tests ",
+    "dune watcher exited",
+    "server kept crashing",
+    "port",
+]
 
-  rm -f "$tmp"
-  printf 'no fennec dev settle within %ss\n' "$timeout" >&2
-  return 1
+def clean(s):
+    return ansi.sub("", s)
+
+def summarize(data):
+    lines = [clean(ln.rstrip()) for ln in data.splitlines() if ln.strip()]
+    picked = [ln for ln in lines if any(n in ln for n in needles)]
+    return "\n".join((picked or lines)[-24:])
+
+proc = subprocess.Popen(
+    ["tail", "-c", f"+{start + 1}", "-f", log],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+)
+
+data = bytearray()
+found = False
+try:
+    fd = proc.stdout.fileno()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print(f"no fennec dev settle within {timeout_s}s", file=sys.stderr)
+            sys.exit(1)
+        readable, _, _ = select.select([fd], [], [], remaining)
+        if not readable:
+            print(f"no fennec dev settle within {timeout_s}s", file=sys.stderr)
+            sys.exit(1)
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            print("fennec dev event stream ended", file=sys.stderr)
+            sys.exit(1)
+        data.extend(chunk)
+        if settle.search(clean(data.decode("utf-8", errors="replace"))):
+            found = True
+            break
+
+    # Drain the immediate tail of the event burst without polling. This captures
+    # test details and crash reasons that land just after the settle line.
+    grace_deadline = time.monotonic() + 0.4
+    while time.monotonic() < grace_deadline:
+        readable, _, _ = select.select([fd], [], [], max(0.0, grace_deadline - time.monotonic()))
+        if not readable:
+            break
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        data.extend(chunk)
+
+    text = data.decode("utf-8", errors="replace")
+    summary = summarize(text)
+    if summary:
+        print(summary)
+    else:
+        print(text, end="")
+    with open(offset_path, "w", encoding="utf-8") as f:
+        f.write(str(os.path.getsize(log)) + "\n")
+finally:
+    proc.terminate()
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+PY
 }
 
 json_escape() {

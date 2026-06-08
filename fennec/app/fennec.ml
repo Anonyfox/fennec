@@ -10,6 +10,7 @@
 
 module Conn = Fennec_paw.Conn
 module Endpoint = Fennec_server.Endpoint
+module Tls = Fennec_server.Tls_termination (* in-process HTTPS termination: load a cert+key, pass to serve ~tls *)
 module Livereload = Fennec_server.Livereload
 module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
@@ -111,7 +112,7 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?on_error ?on_start (endpoints : Endpoint.t list) : unit =
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?on_error ?on_start (endpoints : Endpoint.t list) : unit =
   if not (Atomic.compare_and_set started false true) then
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
@@ -168,7 +169,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?on_error ?on_start (endpoints
     Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Fennec_server.Host_router.describe_errors errs);
     exit 1
   | Ok router -> (
-    match Fennec_server.Server.run ~timeout ~max_conns ?on_error ~dev:is_dev ~on_listen:announce ~env router with
+    match Fennec_server.Server.run ~timeout ~max_conns ?tls ?on_error ~dev:is_dev ~on_listen:announce ~env router with
     | Ok () -> ()
     | Error (`Port_in_use port) ->
       Printf.eprintf "%s\n%!" (Dev_proto.port_busy_line port);

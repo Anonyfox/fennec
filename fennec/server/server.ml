@@ -469,7 +469,7 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : 
    @param max_conns       concurrent-connection cap (default 10_000).
    @param parallelism     worker domains (per-core); auto by default, or FENNEC_PARALLELISM.
    @param on_listen       called post-bind with the (endpoint name, url) pairs for the banner. *)
-let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
+let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
   let dev = match dev with Some d -> d | None -> ( try Sys.getenv Fennec_core.Dev_proto.env_mode <> "production" with Not_found -> true) in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
@@ -525,9 +525,18 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
         try Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env) (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
         with Unix.Unix_error (Unix.EADDRINUSE, _, _) -> raise (Port_in_use port)
       in
+      let serve_conn flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~resolve flow addr in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
-        Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () -> handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~resolve flow addr)
+        Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () ->
+            match tls with
+            | None -> serve_conn flow addr
+            | Some cfg -> (
+              (* terminate TLS for this connection; a failed handshake (a non-TLS client, an SNI
+                 mismatch) drops the connection rather than erroring the whole server *)
+              match (try Some (Tls_eio.server_of_flow cfg flow) with _ -> None) with
+              | Some tls_flow -> serve_conn tls_flow addr
+              | None -> ()))
       in
       let on_error e =
         (* a client going away mid-request (reset / broken pipe / EOF) is normal (a reload abandons
