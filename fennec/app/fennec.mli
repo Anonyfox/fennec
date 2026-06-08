@@ -67,6 +67,26 @@ module Paw : sig
     val make : ?status:int -> ?hsts:int -> unit -> t
   end
 
+  module Cors : sig
+    (** Which origins to allow: [Any], or an explicit allowlist (reflected when matched). *)
+    type origin = Fennec_server.Cors.origin = Any | These of string list
+
+    val make :
+      ?origins:origin ->
+      ?methods:string list ->
+      ?headers:string list ->
+      ?expose:string list ->
+      ?credentials:bool ->
+      ?max_age:int ->
+      unit ->
+      t
+  end
+
+  module Rate_limit : sig
+    val make :
+      ?key:(Conn.t -> string) -> ?capacity:int -> ?per_second:float -> ?now:(unit -> float) -> unit -> t
+  end
+
   module Metrics : sig
     val make : (meth:string -> path:string -> status:int -> duration_ms:float -> unit) -> t
   end
