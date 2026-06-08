@@ -7,6 +7,8 @@ fennec agent dev bridge
 
 Usage:
   tools/agent/fennec-dev start [fennec-dev-args...]
+  tools/agent/fennec-dev ensure [fennec-dev-args...]
+  tools/agent/fennec-dev restart [fennec-dev-args...]
   tools/agent/fennec-dev stop
   tools/agent/fennec-dev status
   tools/agent/fennec-dev wait [--timeout SECONDS]
@@ -19,7 +21,8 @@ Environment:
 The bridge runs `fennec dev` in the background with stdout/stderr redirected to
 an append-only log. `wait` blocks until the next dev-loop settle after it starts.
 `hook` is intended for agent PostToolUse/PostToolBatch hooks: it waits, then emits
-JSON additionalContext for harnesses that understand it.
+JSON additionalContext for harnesses that understand it. `ensure` starts the
+loop only when it is missing or stale.
 EOF
 }
 
@@ -34,6 +37,7 @@ LOG="$STATE_DIR/dev.log"
 PIDFILE="$STATE_DIR/dev.pid"
 CHILDPIDFILE="$STATE_DIR/dev-child.pid"
 OFFSETFILE="$STATE_DIR/dev.offset"
+ARGFILE="$STATE_DIR/dev.args"
 RUNNER="$STATE_DIR/run-dev.sh"
 CLI_EXE="$ROOT/_build/default/cli/fennec.exe"
 SESSION="fennec-agent-dev-$(basename "$ROOT" | tr -cd 'A-Za-z0-9_')"
@@ -72,6 +76,23 @@ log_size() {
   [[ -f "$LOG" ]] && wc -c < "$LOG" | tr -d ' ' || printf '0'
 }
 
+save_args() {
+  : > "$ARGFILE"
+  local arg
+  for arg in "$@"; do
+    printf '%q\n' "$arg" >> "$ARGFILE"
+  done
+}
+
+load_saved_args() {
+  [[ -f "$ARGFILE" ]] || return 0
+  local quoted
+  while IFS= read -r quoted; do
+    [[ -n "$quoted" ]] || continue
+    eval "SAVED_ARGS+=( $quoted )"
+  done < "$ARGFILE"
+}
+
 read_offset() {
   local size offset
   size="$(log_size)"
@@ -94,6 +115,7 @@ start_dev() {
     return 0
   fi
 
+  save_args "$@"
   if [[ ! -x "$CLI_EXE" ]]; then
     (cd "$ROOT" && dune build cli/fennec.exe)
   fi
@@ -156,12 +178,48 @@ status_dev() {
   pid="$(current_pid)"
   if is_alive "$pid"; then
     printf 'running: pid %s\n' "$pid"
+    if [[ "$pid" == screen:* ]]; then
+      printf 'attach: screen -r %s\n' "${pid#screen:}"
+    fi
   else
     printf 'not running\n'
   fi
   printf 'log: %s\n' "$LOG"
+  if [[ -s "$ARGFILE" ]]; then
+    printf 'args:'
+    sed 's/^/ /' "$ARGFILE" | tr '\n' ' '
+    printf '\n'
+  fi
   if [[ -f "$LOG" ]]; then
     tail -n 20 "$LOG"
+  fi
+}
+
+ensure_dev() {
+  local pid
+  pid="$(current_pid)"
+  if is_alive "$pid"; then
+    printf 'fennec dev already running: pid %s\n' "$pid"
+    printf 'log: %s\n' "$LOG"
+    return 0
+  fi
+  if (($# == 0)); then
+    SAVED_ARGS=()
+    load_saved_args
+    start_dev "${SAVED_ARGS[@]}"
+  else
+    start_dev "$@"
+  fi
+}
+
+restart_dev() {
+  stop_dev >/dev/null 2>&1 || true
+  if (($# == 0)); then
+    SAVED_ARGS=()
+    load_saved_args
+    start_dev "${SAVED_ARGS[@]}"
+  else
+    start_dev "$@"
   fi
 }
 
@@ -291,9 +349,11 @@ except Exception:
 PY
 )"
 
-  if ! summary="$(wait_next "$timeout")"; then
+  ensure_dev >/dev/null
+
+  if ! summary="$(wait_next "$timeout" 2>&1)"; then
     rm -f "$tmp"
-    exit 0
+    summary="Fennec dev did not produce a settle within ${timeout}s. Run tools/agent/fennec-dev status before trusting the current edit."
   fi
   rm -f "$tmp"
 
@@ -316,6 +376,14 @@ case "$cmd" in
   start)
     shift
     start_dev "$@"
+    ;;
+  ensure)
+    shift
+    ensure_dev "$@"
+    ;;
+  restart)
+    shift
+    restart_dev "$@"
     ;;
   stop)
     stop_dev

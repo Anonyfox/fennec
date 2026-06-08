@@ -117,6 +117,17 @@ ready="$(FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" wait --timeout 30)"
 printf '%s\n' "$ready"
 require_contains "$ready" "ready"
 
+printf '== ensure preserves prior dev args after stop ==\n'
+FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" stop
+FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" ensure
+status="$(FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" status)"
+printf '%s\n' "$status"
+require_contains "$status" "--port"
+require_contains "$status" "$PORT"
+ready_again="$(FENNEC_AGENT_STATE_DIR="$STATE" "$BRIDGE" wait --timeout 30)"
+printf '%s\n' "$ready_again"
+require_contains "$ready_again" "ready"
+
 printf '== one hook after rapid multifile edit batch ==\n'
 replace_in_file "$ABOUT" "the same components run in both places." "fastlane batch probe."
 regex_replace_in_file "$SCSS" '--accent: #[0-9a-fA-F]{6};' '--accent: #0c8599;'

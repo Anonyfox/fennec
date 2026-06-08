@@ -34,6 +34,12 @@ let rec mkdir_p dir =
     (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
   end
 
+let rec project_root dir =
+  if Sys.file_exists (Filename.concat dir "dune-project") then dir
+  else
+    let parent = Filename.dirname dir in
+    if parent = dir then Sys.getcwd () else project_root parent
+
 let human_size n =
   if n < 1024 then Printf.sprintf "%d B" n
   else if n < 1024 * 1024 then Printf.sprintf "%.1f KB" (float_of_int n /. 1024.)
@@ -336,7 +342,21 @@ let dev_cmd =
     in
     Arg.(value & flag & info [ "mongo" ] ~doc)
   in
-  let go target exe assets dry clean port mongo =
+  let agent_arg =
+    let doc =
+      "Emit a machine-readable agent event journal alongside the human dev UI. Agents can then \
+       call $(b,fennec agent wait) or $(b,fennec agent hook) instead of parsing terminal output."
+    in
+    Arg.(value & flag & info [ "agent" ] ~doc)
+  in
+  let agent_dir_arg =
+    let doc =
+      "Directory for the agent event journal. Implies $(b,--agent). Default uses \
+       $(b,FENNEC_AGENT_DIR), then XDG state, scoped by project root."
+    in
+    Arg.(value & opt (some string) None & info [ "agent-dir" ] ~docv:"DIR" ~doc)
+  in
+  let go target exe assets dry clean port mongo agent agent_dir =
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -376,6 +396,11 @@ let dev_cmd =
          lifecycle's at_exit reaps it when dev exits (Ctrl-C → graceful shutdown → exit → stop +
          clean the ephemeral data dir); an absent mongod degrades to the in-memory backend. *)
       if mongo then ignore (Fennec_dev.Mongo_rs.launch ());
+      let agent_dir =
+        match agent_dir with
+        | Some d -> Some d
+        | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root:(project_root (Sys.getcwd ())) ) else None
+      in
       match exe with
       | Some exe_path ->
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
@@ -383,7 +408,7 @@ let dev_cmd =
            discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
            needed, but it's CORRECT: @@default includes the web root, so frontend livereload still
            works. Pass --target to scope it. (Supervisor.run blocks until killed; 0 is for the type.) *)
-        Fennec_dev.Supervisor.run ?port ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
+        Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
         0
       | None -> (
         match Discover.find () with
@@ -393,7 +418,8 @@ let dev_cmd =
         | Ok d ->
           (* Supervisor expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
-          Fennec_dev.Supervisor.run ?port ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
+          let agent_dir = match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root:d.Discover.root) else None in
+          Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
           0)
     end
   in
@@ -418,11 +444,60 @@ let dev_cmd =
          restart and CSS hot-swap.";
       `S Manpage.s_examples;
       `Pre "  fennec dev                 # discover the server and run it";
+      `Pre "  fennec dev --agent         # same, plus an agent event journal";
       `Pre "  fennec dev --dry-run       # show what would run";
       `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
-  Cmd.v (Cmd.info "dev" ~doc ~man) Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg)
+  Cmd.v (Cmd.info "dev" ~doc ~man)
+    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ agent_dir_arg)
+
+let agent_cmd =
+  let dir_arg =
+    let doc = "Agent state directory. Default uses FENNEC_AGENT_DIR, then XDG state, scoped by project root." in
+    Arg.(value & opt (some string) None & info [ "dir" ] ~docv:"DIR" ~doc)
+  in
+  let timeout_arg =
+    let doc = "Maximum seconds to wait for the next dev event." in
+    Arg.(value & opt float 12.0 & info [ "timeout" ] ~docv:"SECONDS" ~doc)
+  in
+  let state_dir dir =
+    match dir with
+    | Some d -> d
+    | None -> Fennec_dev.Agent_event.default_dir ~root:(project_root (Sys.getcwd ()))
+  in
+  let status =
+    let go dir =
+      print_string (Fennec_dev.Agent_event.status ~dir:(state_dir dir));
+      0
+    in
+    Cmd.v (Cmd.info "status" ~doc:"Print the current agent attachment state") Term.(const go $ dir_arg)
+  in
+  let wait =
+    let go dir timeout =
+      match Fennec_dev.Agent_event.wait_next ~dir:(state_dir dir) ~timeout with
+      | Ok s -> print_endline s; 0
+      | Error msg -> prerr_endline msg; 1
+    in
+    Cmd.v (Cmd.info "wait" ~doc:"Wait for the next fennec dev agent event") Term.(const go $ dir_arg $ timeout_arg)
+  in
+  let hook =
+    let go dir timeout =
+      let event =
+        try
+          let input = In_channel.input_all stdin in
+          match Fennec_dev.Agent_event.find_string_field input "hook_event_name" with
+          | Some s -> Fennec_dev.Agent_event.unescape_json_string s
+          | None -> "PostToolUse"
+        with _ -> "PostToolUse"
+      in
+      print_endline (Fennec_dev.Agent_event.hook_json ~dir:(state_dir dir) ~timeout ~event);
+      0
+    in
+    Cmd.v (Cmd.info "hook" ~doc:"Wait and emit hookSpecificOutput.additionalContext JSON") Term.(const go $ dir_arg $ timeout_arg)
+  in
+  let doc = "Agent-facing attachment and wait helpers for fennec dev --agent" in
+  Cmd.group (Cmd.info "agent" ~doc) [ status; wait; hook ]
 
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =
@@ -549,6 +624,6 @@ let main_cmd =
       `P "Invoked by dune rules or by $(b,fennec dev) itself — not run by hand." ]
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
-  Cmd.group info [ build_cmd; dev_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
+  Cmd.group info [ build_cmd; dev_cmd; agent_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

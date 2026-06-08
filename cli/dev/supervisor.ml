@@ -52,10 +52,23 @@ let ping control_path frame =
         ignore (Unix.write_substring fd msg 0 (String.length msg)))
   with _ -> ()
 
-let run ?port ~targets ~exe ~assets =
+let run ?port ?agent_dir ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
+  let agent =
+    match agent_dir with
+    | None -> None
+    | Some dir -> Some (Agent_event.start ~dir ~root:(Sys.getcwd ()) ())
+  in
+  let emit kind ?summary ?trigger ?ms ?fields () =
+    match agent with None -> () | Some a -> Agent_event.emit a ~kind ?summary ?trigger ?ms ?fields ()
+  in
+  let trigger_label = function
+    | [] -> "filesystem change"
+    | [ x ] -> x
+    | x :: xs -> Printf.sprintf "%s +%d" x (List.length xs)
+  in
   Stublibs.ensure ();
 
   (* warm esbuild worker BEFORE dune, so even the first build delegates to it *)
@@ -119,7 +132,10 @@ let run ?port ~targets ~exe ~assets =
   let on_line : Server_proc.parsed -> unit = function
     | Server_proc.Urls urls ->
       (match !server with Up up -> up.busy_port <- None (* it bound — any earlier "port busy" is stale *) | Down -> ());
-      Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url
+      Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url;
+      emit "ready"
+        ~summary:(Printf.sprintf "ready · %s · watching %s" gateway_url (match targets with t :: _ -> Filename.dirname t | [] -> "."))
+        ~fields:[ ("url", gateway_url) ] ()
     | Server_proc.Port_busy p -> ( match !server with Up up -> up.busy_port <- Some p | Down -> ())
     | Server_proc.Chatter -> ()
     | Server_proc.App_log line -> Ui.app ui line
@@ -159,6 +175,7 @@ let run ?port ~targets ~exe ~assets =
     shutting_down := true;
     (match !server with Up up -> Server_proc.stop up.proc | Down -> ()); (* frees the port before we go *)
     Ui.stopped ui;
+    emit "stopped" ~summary:"stopped" ();
     kill (Dune_watch.pid !dw);
     kill worker_pid;
     (try Sys.remove control_path with _ -> ());
@@ -185,14 +202,25 @@ let run ?port ~targets ~exe ~assets =
            server's port report, not here *)
         if Sys.file_exists exe then start_or_restart (fun () -> ()) else Ui.notice ui Ui.Info "built — waiting for the server binary…"
       | Up up ->
-        if mtime exe > up.last_exe then start_or_restart (fun () -> Ui.rebuilt ui ~trigger:triggers ~ms:dur)
+        if mtime exe > up.last_exe then
+          start_or_restart (fun () ->
+            Ui.rebuilt ui ~trigger:triggers ~ms:dur;
+            emit "reload" ~summary:(Printf.sprintf "%s reload" (trigger_label triggers)) ~trigger:triggers ~ms:dur ())
         else (
           match Assets.poll assets with
-          | Assets.Reload -> ping control_path "reload"; Ui.reloaded ui ~trigger:triggers ~ms:dur
-          | Assets.Css_only -> ping control_path "css"; Ui.restyled ui ~trigger:triggers ~ms:dur
+          | Assets.Reload ->
+            ping control_path "reload";
+            Ui.reloaded ui ~trigger:triggers ~ms:dur;
+            emit "reload" ~summary:(Printf.sprintf "%s reload" (trigger_label triggers)) ~trigger:triggers ~ms:dur ()
+          | Assets.Css_only ->
+            ping control_path "css";
+            Ui.restyled ui ~trigger:triggers ~ms:dur;
+            emit "css" ~summary:(Printf.sprintf "%s css" (trigger_label triggers)) ~trigger:triggers ~ms:dur ()
           (* nothing the server cares about changed — but if this green build FIXED a prior error
              (a revert to identical bytes), clear the stuck panel; otherwise stay silent *)
-          | Assets.Nothing -> Ui.resolved ui ~ms:dur);
+          | Assets.Nothing ->
+            Ui.resolved ui ~ms:dur;
+            emit "resolved" ~summary:"resolved" ~ms:dur ());
       (* after the first successful settle, wire inline test runner targets into the watch so
          dune rebuilds them on every change. Only restart the watcher once (idempotent). *)
       if not !tests_wired then begin
@@ -212,13 +240,28 @@ let run ?port ~targets ~exe ~assets =
        | Some s ->
          Ui.tested ui ~passed:s.Dev_tests.total_passed ~failed:s.Dev_tests.total_failed
            ~libs:(List.length s.Dev_tests.results) ~ms:s.Dev_tests.ms;
+         emit "tests"
+           ~summary:
+             (Printf.sprintf "tests %d passed, %d failed · %d lib%s" s.Dev_tests.total_passed
+                s.Dev_tests.total_failed (List.length s.Dev_tests.results)
+                (if List.length s.Dev_tests.results = 1 then "" else "s"))
+           ~fields:
+             [ ("passed", string_of_int s.Dev_tests.total_passed);
+               ("failed", string_of_int s.Dev_tests.total_failed);
+               ("libs", string_of_int (List.length s.Dev_tests.results)) ]
+           ();
          List.iter (fun (r : Dev_tests.result) ->
            if r.Dev_tests.failed > 0 then
              Ui.notice ui Ui.Warn (Printf.sprintf "test failures in %s:\n%s" r.Dev_tests.lib (String.trim r.Dev_tests.output)))
            s.Dev_tests.results)
   in
 
-  let on_build_failed _n triggers messages = Ui.failed ui ~raw:messages ~trigger:triggers ~serving:(serving ()) in
+  let on_build_failed _n triggers messages =
+    Ui.failed ui ~raw:messages ~trigger:triggers ~serving:(serving ());
+    emit "build_failed"
+      ~summary:(Printf.sprintf "build failed · %s%s" (trigger_label triggers) (if serving () then " · last good build still serving" else " · server not running"))
+      ~trigger:triggers ~fields:[ ("serving", string_of_bool (serving ())) ] ()
+  in
 
   let on_dune_exit () =
     incr dune_exits;
@@ -226,9 +269,11 @@ let run ?port ~targets ~exe ~assets =
        broken and respawning every 0.5s would just spin and spam. Give up cleanly after a few. *)
     if !dune_exits > 5 then (
       Ui.notice ui Ui.Error "dune --watch keeps exiting — fix the build environment, then restart `fennec dev`";
+      emit "watcher_exit" ~summary:"dune --watch keeps exiting — restart `fennec dev`" ();
       shutdown Sys.sigterm)
     else (
       Ui.notice ui Ui.Warn "dune watcher exited — restarting";
+      emit "watcher_restart" ~summary:"dune watcher exited — restarting" ();
       Unix.sleepf 0.5;
       dw := Dune_watch.start (targets @ (if !tests_wired then Dev_tests.targets dev_tests else []));
       record_pids ())
@@ -237,8 +282,14 @@ let run ?port ~targets ~exe ~assets =
   (* a code crash (not a port conflict): rate-limit restarts so a crash-loop doesn't spin *)
   let on_code_crash () =
     match Crash_limiter.record limiter ~now:(now ()) () with
-    | Crash_limiter.Give_up -> Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry"
-    | Crash_limiter.Retry backoff -> Unix.sleepf backoff; start_or_restart (fun () -> Ui.notice ui Ui.Warn "server exited — restarted")
+    | Crash_limiter.Give_up ->
+      Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry";
+      emit "server_crash" ~summary:"server kept crashing — fix the error and save to retry" ()
+    | Crash_limiter.Retry backoff ->
+      Unix.sleepf backoff;
+      start_or_restart (fun () ->
+        Ui.notice ui Ui.Warn "server exited — restarted";
+        emit "server_restart" ~summary:"server exited — restarted" ())
   in
   let on_server_crash up status =
     let port_busy = status = Unix.WEXITED Dev_proto.port_in_use_exit in
