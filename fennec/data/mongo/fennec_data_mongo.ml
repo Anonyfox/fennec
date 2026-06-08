@@ -139,6 +139,19 @@ module Dynamic = struct
 
   let mem m = Mem m
   let real ?poll ~sw ~sleep conn ~db ~name = Real (collection ?poll ~sw ~sleep conn ~db ~name)
+
+  (* The convention the fennec CLI speaks: `fennec dev --mongo` / `fennec test --mongo` launch a
+     managed mongod and export its URL as MONGO_URL. [from_env] is the whole app-side story — real
+     mongo when it's set, a fresh in-memory engine otherwise — so an app carries no config branch of
+     its own. Build it in [Fennec.serve ~on_start] so the [sw]/[sleep] it captures drive the
+     observe_changes polling loop. *)
+  let mongo_url_env = "MONGO_URL"
+
+  let from_env ?poll ~sw ~sleep ~db ~name () =
+    match Sys.getenv_opt mongo_url_env with
+    | Some url when String.trim url <> "" -> real ?poll ~sw ~sleep (connect url) ~db ~name
+    | _ -> mem (Minimongo.create ())
+
   let insert c d = match c with Mem m -> Mini.insert m d | Real r -> insert r d
   let update c ~multi ~upsert s m = match c with Mem mm -> Mini.update mm ~multi ~upsert s m | Real r -> update r ~multi ~upsert s m
   let remove c s = match c with Mem m -> Mini.remove m s | Real r -> remove r s

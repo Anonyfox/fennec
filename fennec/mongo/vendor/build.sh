@@ -27,15 +27,19 @@ URL="https://github.com/mongodb/mongo-c-driver/releases/download/${VERSION}/mong
 
 # --- pick the native TLS backend for this OS ----------------------------------
 os="$(uname -s)"
+arch="$(uname -m)"
 case "$os" in
-  Darwin) backend="darwin"; ssl="DARWIN" ;;
-  Linux)  backend="openssl"; ssl="OPENSSL" ;;
+  Darwin) backend="darwin"; ssl="DARWIN"; libc="darwin" ;;
+  Linux)  backend="openssl"; ssl="OPENSSL"; libc="$(ldd --version 2>&1 | grep -qi musl && echo musl || echo glibc)" ;;
   *) echo "build.sh: unsupported OS '$os' (native mongo driver — :memory: still works)" >&2; exit 1 ;;
 esac
 
 # --- cache layout (survives dune clean) ---------------------------------------
+# The key includes arch + libc, not just OS: x86_64 vs aarch64, and glibc vs musl, produce
+# ABI-incompatible archives that both report os=Linux. Without these a shared/mounted $HOME/.cache
+# across an arch or libc switch would serve the wrong binaries (link failure or a crashing binary).
 cache_root="${FENNEC_MONGO_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/fennec-mongo-c}"
-prefix="${cache_root}/${VERSION}-${os}-${backend}"
+prefix="${cache_root}/${VERSION}-${os}-${arch}-${libc}-${backend}"
 stamp="${prefix}/.fennec-mongo-built"
 
 # Fast path: already built. Emit the prefix and stop.
@@ -43,6 +47,10 @@ if [ -f "$stamp" ]; then
   printf '%s\n' "$prefix"
   exit 0
 fi
+
+# A prior build killed mid-install leaves a partial $prefix with NO stamp — never reuse it (a
+# truncated .a links cryptically with no degrade). Start clean.
+[ -d "$prefix" ] && rm -rf "$prefix"
 
 # Everything below only runs on the first build for this triple.
 echo "build.sh: building mongo-c-driver ${VERSION} (${os}/${ssl}) -> ${prefix}" >&2

@@ -56,13 +56,11 @@ module RT = Fennec_realtime.Make (RData)
 
 let realtime_ddp = RT.paw ~path:"/ddp" ()
 
-(* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method *)
+(* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method.
+   [Dynamic.from_env] is the whole backend choice — real mongo when the CLI's --mongo flag exported
+   MONGO_URL, else the in-memory engine — no config branch here. *)
 let setup_realtime ~sw ~sleep =
-  let backend =
-    match Sys.getenv_opt "MONGO_URL" with
-    | Some url when String.trim url <> "" -> D.real ~sw ~sleep (Fennec_data_mongo.connect url) ~db:"fennec_example" ~name:"tasks"
-    | _ -> D.mem (Minimongo.create ())
-  in
+  let backend = D.from_env ~sw ~sleep ~db:"fennec_example" ~name:"tasks" () in
   let tasks = RData.Collection.create ~name:"tasks" backend in
   List.iter
     (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))

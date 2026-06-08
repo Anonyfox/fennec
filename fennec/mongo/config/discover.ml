@@ -58,13 +58,19 @@ let () =
           (* -L dirs from the link line + the cache lib dir + standard system dirs: where we hunt for
              static archives to replace dynamic -l (OpenSSL's libssl.a/libcrypto.a on Linux live in a
              multiarch path the .pc never -L's, so without these they'd stay dynamic). *)
+          (* also ask pkg-config where OpenSSL's libdir is — Fedora/Arch keep the static archives in
+             /usr/lib64 (and a custom prefix anywhere), neither of which the multiarch list covers;
+             without this libssl.a/libcrypto.a aren't found and silently link DYNAMIC. *)
+          let openssl_libdir = try words (pkg_config [ "--variable=libdir"; "openssl" ]) with _ -> [] in
           let lib_dirs =
             dedup
               ((Filename.concat prefix "lib"
                 :: List.filter_map
                      (fun s -> if String.length s > 2 && String.sub s 0 2 = "-L" then Some (String.sub s 2 (String.length s - 2)) else None)
                      raw_libs)
-              @ [ "/usr/lib"; "/usr/local/lib"; "/usr/lib/x86_64-linux-gnu"; "/usr/lib/aarch64-linux-gnu" ])
+              @ openssl_libdir
+              @ [ "/usr/lib"; "/usr/local/lib"; "/usr/lib64"; "/usr/local/lib64";
+                  "/usr/lib/x86_64-linux-gnu"; "/usr/lib/aarch64-linux-gnu" ])
             |> List.filter (fun d -> try Sys.is_directory d with _ -> false)
           in
           let archive_of name =

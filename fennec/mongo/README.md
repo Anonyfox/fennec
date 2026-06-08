@@ -21,9 +21,18 @@ need the storage engine itself, not its query features.
 
 ## Status
 
-Ships the **pure trio**: `Bson` + the `Query` engine + in-memory `Minimongo`. A native,
-libmongoc-backed driver (same wire features, real persistence) is a planned addition to this
-package. The pure trio's API is stable.
+Ships the **pure trio** — `Bson` + the `Query` engine + in-memory `Minimongo` (stable API) — plus a
+native, **statically-linked libmongoc driver** (`fennec-mongo.ffi`), a managed `mongod` lifecycle
+(`fennec-mongo.mongod`), and an extended-JSON codec (`fennec-mongo.bson_json`). The driver is
+**native-only** and **degrade-safe**: if libmongoc can't be built at install time (no cmake, an
+unsupported platform), the FFI compiles to stubs and apps fall back to the in-memory engine. The
+framework side (`fennec.data.mongo`) exposes the driver as a `Fennec_data.Backend.S` plus a
+runtime-selectable `Dynamic` backend, so `Reactive.Make (Fennec_data_mongo.Dynamic)` runs the whole
+reactive/DDP/realtime stack over either engine with no type change. `fennec dev --mongo` /
+`fennec test --mongo` launch a managed mongod and wire it in via `MONGO_URL`.
+
+Installing the package attempts the one-time libmongoc build (cached); the pure trio does **not**
+link the native archive, so a BSON-only consumer never pays for it at link time.
 
 ## Install
 
@@ -34,8 +43,10 @@ opam install fennec-mongo
 In your `dune`:
 
 ```lisp
-(libraries fennec-mongo.bson fennec-mongo.minimongo)   ; the common case
-; add fennec-mongo.query only to use the engine (Matcher/Aggregate/…) directly
+(libraries fennec-mongo.bson fennec-mongo.minimongo)   ; the common case (pure, in-memory)
+; add fennec-mongo.query     to use the engine (Matcher/Aggregate/…) directly
+; add fennec-mongo.bson_json for the libmongoc / wire extended-JSON bridge
+; for a REAL mongod: use fennec.data.mongo (the Backend.S + Dynamic) from the framework side
 ```
 
 ## Quickstart
