@@ -370,14 +370,23 @@ it stays a clean standalone package.
      `config/discover.ml` (`Configurator.V1`: build, then `mongoc2-static`/`bson2-static` pkg-config
      → flags, rewriting `-lfoo` → full `.a` path for static inclusion; a portability guard asserts
      "only system libraries ship").
-   NEXT, in order: (a) port `bson_json` → `fennec-mongo` (`Bson.t ↔ extended JSON`), swapping the old
-   Yojson backing for fennec's own pure JSON (fennec forbids yojson in shipped binaries); round-trip
-   tested. (b) port `ffi/mongoc_stubs.c` + `config/discover.ml` + `vendor/` (the buildkit), with a
-   graceful "no libmongoc → :memory: only" degrade so CI without it stays green. (c) port the Eio
-   layer (`client`/`collection`/`database`/`change_stream`) and expose it as a `Backend.S` impl
-   (insert/update/remove/find/find_one/count + `observe_changes` via change streams) so
-   `Reactive.Make` runs over real mongo unchanged. (d) differential correctness tests — every op
-   through Minimongo AND real mongo (gated by the lifecycle manager), results asserted equal.
+   Progress:
+   - (a) ✓ **`bson_json` DONE** — `fennec-mongo.bson_json` (+ `fennec-mongo.json`, a self-contained
+     pure JSON), `Bson.t ↔ canonical extended JSON`, round-trip tested, jsoo-compiles.
+   - (b) ✓ **buildkit + FFI DONE** — `fennec/mongo/{vendor,config,ffi,portability}`: `vendor/build.sh`
+     (builds mongo-c-driver 2.3.0 from the vendored tarball as static archives, native TLS, per-OS
+     cache), `config/discover.ml` (`Configurator.V1` → static flags, full `.a` paths, degrades to
+     `HAVE_MONGOC=0` where it can't build so the matrix stays green — verified the stub branch
+     compiles), `ffi/mongoc_stubs.c` + `mongo_ffi.ml` (the raw binding, extended-JSON across the
+     boundary, runtime-lock released per call, GC-managed pool/change-stream handles, `available`
+     flag). Proven end to end: connect + ping + insert + find against a lifecycle-launched mongod,
+     and the test binary depends on **OS libraries only** (otool/ldd guard `portability/check.sh`,
+     run on `dune test`) — self-contained + statically linked, the downstream-binary guarantee.
+   NEXT: (c) port the Eio layer (`client`/`collection`/`database`/`change_stream`) wrapping the raw
+   FFI in Eio systhreads, exposed as a `Backend.S` impl (insert/update/remove/find/find_one/count +
+   `observe_changes` via change streams) so `Reactive.Make` runs over real mongo unchanged.
+   (d) differential correctness tests — every op through Minimongo AND real mongo (gated by the
+   lifecycle manager), results asserted equal.
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,

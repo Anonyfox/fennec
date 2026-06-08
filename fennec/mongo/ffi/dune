@@ -1,0 +1,26 @@
+; The thin, unsafe binding over the statically-linked libmongoc. The C boundary speaks extended-JSON
+; strings in both directions (Bson_json does Bson.t <-> JSON on the OCaml side), every call releases
+; the OCaml runtime lock so the safe layer can run it in an Eio systhread, and the compiler/linker
+; flags are produced by config/discover.ml — which builds the vendored mongo-c-driver as static
+; archives (so the final binary is self-contained), or degrades to stubs (HAVE_MONGOC=0) where it
+; can't, keeping the build matrix green.
+(library
+ (name fennec_mongo_ffi)
+ (public_name fennec-mongo.ffi)
+ (foreign_stubs
+  (language c)
+  (names mongoc_stubs)
+  (flags
+   (:include c_flags.sexp)))
+ (c_library_flags
+  (:include c_library_flags.sexp)))
+
+(rule
+ (targets c_flags.sexp c_library_flags.sexp)
+ (deps
+  (:gen ../config/discover.exe)
+  (:build_sh ../vendor/build.sh)
+  ../vendor/mcd.tar.gz)
+ (action
+  (setenv FENNEC_MONGO_BUILD_SH %{build_sh}
+   (run %{gen}))))

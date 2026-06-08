@@ -1,0 +1,12 @@
+; Lock in the "self-contained binary" guarantee: on `dune test` this inspects a real linked artifact
+; (the ffi test executable, which pulls in fennec-mongo.ffi and therefore the full static C link
+; line) and fails if it depends on any non-system shared library. Runs everywhere dune does — no
+; mongod or network needed. When the driver degraded (HAVE_MONGOC=0) the binary links no libmongoc
+; at all, so it trivially passes too.
+(rule
+ (alias runtest)
+ (deps
+  check.sh
+  ../ffi/test/test_ffi.exe)
+ (action
+  (run bash check.sh %{dep:../ffi/test/test_ffi.exe})))

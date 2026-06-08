@@ -144,7 +144,7 @@
  (name fennec-mongo)
  (synopsis "Pure-OCaml BSON, a MongoDB query/update engine, and in-memory Minimongo")
  (description
-  "A standalone data layer: a BSON value type, a pure MongoDB query/update/projection/sort engine\nwith geospatial and aggregation support, and an in-memory Minimongo collection with a reactive\nobserve engine. Pure OCaml (only `re` beyond Stdlib), so the same source runs native and in the\nbrowser via js_of_ocaml. A native libmongoc-backed driver is a planned addition to this package.")
+  "A standalone data layer: a BSON value type, a pure MongoDB query/update/projection/sort engine\nwith geospatial and aggregation support, an in-memory Minimongo collection with a reactive observe\nengine, and an extended-JSON codec. The pure core is OCaml-only (just `re` beyond Stdlib), so the\nsame source runs native and in the browser via js_of_ocaml. It also ships an optional native driver\n(fennec-mongo.ffi) that statically vendors libmongoc — built from source as static archives with a\nnative TLS backend, so a downstream binary is self-contained — plus a mongod lifecycle helper\n(fennec-mongo.mongod). The native driver degrades gracefully (in-memory only) where it cannot be\nbuilt, so this package builds across the matrix.")
  (tags
   ("mongodb" "bson" "minimongo" "database" "query" "javascript" "jsoo"))
  (depends
@@ -152,4 +152,6 @@
    (>= 4.14))
   (dune
    (>= 3.16))
-  re))
+  re
+  dune-configurator
+  (conf-pkg-config :build)))
