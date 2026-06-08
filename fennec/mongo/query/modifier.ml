@@ -134,12 +134,16 @@ let apply_op (d : Bson.t) (op : string) (arg : Bson.t) : Bson.t =
           let cur = as_array (get_path acc path) in
           let to_add = each_values v in
           (* $each modifiers: $position (insert index), $sort, $slice *)
+          let num_opt = function
+            | Some v -> ( match Bson.as_float v with Some f when Float.is_finite f -> Some (int_of_float f) | _ -> None)
+            | None -> None
+          in
           let pos, sort_spec, slice_n =
             match v with
             | Document kvs when List.mem_assoc "$each" kvs ->
-                ( (match List.assoc_opt "$position" kvs with Some (Int n) -> Some n | _ -> None),
+                ( num_opt (List.assoc_opt "$position" kvs),
                   List.assoc_opt "$sort" kvs,
-                  match List.assoc_opt "$slice" kvs with Some (Int n) -> Some n | _ -> None )
+                  num_opt (List.assoc_opt "$slice" kvs) )
             | _ -> (None, None, None)
           in
           let combined =

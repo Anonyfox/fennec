@@ -1,7 +1,10 @@
 (** Aggregation expression evaluator — evaluates a MongoDB aggregation expression against a document
     to a {!Bson.t}. Pure. Supports field paths ([$a.b]), system variables ([$$ROOT]/[$$CURRENT]) and
     user variables ([$$x], bound by [$map]/[$filter]), literals, and a broad subset of the operator
-    expressions, plus the [$group] accumulators. *)
+    expressions, plus the [$group] accumulators.
+
+    Normally reached through {!Aggregate.run} (pipeline stages call it for computed fields); call
+    [eval] directly only to evaluate an expression standalone. *)
 
 (** Aggregation truthiness: [false], [0], [Null] (and a missing value) are falsy; all else truthy. *)
 val truthy : Bson.t -> bool

@@ -8,11 +8,22 @@ open Bson
 let starts_with2 s = String.length s >= 2 && s.[0] = '$' && s.[1] = '$'
 
 (* aggregation truthiness: false / 0 / null / missing are falsy *)
-let truthy = function Bool false | Null | Int 0 -> false | Float f when f = 0. -> false | _ -> true
+let truthy = function
+  | Bool false | Null | Int 0 | Int64 0L -> false
+  | Float f when f = 0. -> false
+  | _ -> true
 
 let all_int xs = List.for_all (function Int _ -> true | _ -> false) xs
 let nums xs = List.filter_map Bson.as_float xs
-let numify ints f = if ints && Float.is_integer f then Int (int_of_float f) else Float f
+
+(* a SAFE float→int: only for finite values within the exactly-representable integer range, so a
+   nan/inf/overflowing float never fabricates a garbage integer (int_of_float doesn't raise) *)
+let to_int_opt f = if Float.is_finite f && Float.abs f < 9.0e15 then Some (int_of_float f) else None
+let intify f = match to_int_opt f with Some n -> Int n | None -> Float f
+
+let numify ints f =
+  if ints && Float.is_integer f then ( match to_int_opt f with Some n -> Int n | None -> Float f)
+  else Float f
 
 let to_str = function
   | String s -> s
@@ -71,9 +82,9 @@ and eval_op ~vars op arg doc : Bson.t =
   | "$divide" -> ( match args () with [ a; b ] when num b <> 0. -> Float (num a /. num b) | _ -> Null)
   | "$mod" -> ( match args () with [ a; b ] when num b <> 0. -> numify (all_int [ a; b ]) (Float.rem (num a) (num b)) | _ -> Null)
   | "$abs" -> ( match args () with [ a ] -> numify (all_int [ a ]) (Float.abs (num a)) | _ -> Null)
-  | "$ceil" -> ( match args () with [ a ] -> Int (int_of_float (Float.ceil (num a))) | _ -> Null)
-  | "$floor" -> ( match args () with [ a ] -> Int (int_of_float (Float.floor (num a))) | _ -> Null)
-  | "$round" -> ( match args () with a :: _ -> Int (int_of_float (Float.round (num a))) | _ -> Null)
+  | "$ceil" -> ( match args () with [ a ] -> intify (Float.ceil (num a)) | _ -> Null)
+  | "$floor" -> ( match args () with [ a ] -> intify (Float.floor (num a)) | _ -> Null)
+  | "$round" -> ( match args () with a :: _ -> intify (Float.round (num a)) | _ -> Null)
   (* comparison *)
   | "$eq" -> ( match args () with [ a; b ] -> Bool (Bson.equal a b) | _ -> Bool false)
   | "$ne" -> ( match args () with [ a; b ] -> Bool (not (Bson.equal a b)) | _ -> Bool false)
@@ -88,10 +99,9 @@ and eval_op ~vars op arg doc : Bson.t =
   | "$not" -> ( match args () with [ a ] -> Bool (not (truthy a)) | _ -> Bool true)
   (* conditional *)
   | "$cond" -> (
+      let g k = match arg with Document kvs -> ( match List.assoc_opt k kvs with Some e -> e | None -> Null) | _ -> Null in
       match arg with
-      | Document kvs ->
-          if truthy (ev (try List.assoc "if" kvs with Not_found -> Null)) then ev (List.assoc "then" kvs)
-          else ev (List.assoc "else" kvs)
+      | Document _ -> if truthy (ev (g "if")) then ev (g "then") else ev (g "else")
       | Array [ c; t; e ] -> if truthy (ev c) then ev t else ev e
       | _ -> Null)
   | "$ifNull" -> ( match args () with a :: fallback :: _ -> ( match a with Null -> fallback | v -> v) | _ -> Null)
@@ -101,8 +111,8 @@ and eval_op ~vars op arg doc : Bson.t =
           let branches = match List.assoc_opt "branches" kvs with Some (Array bs) -> bs | _ -> [] in
           let rec go = function
             | Document b :: tl ->
-                if truthy (ev (try List.assoc "case" b with Not_found -> Null)) then ev (List.assoc "then" b)
-                else go tl
+                let bg k = match List.assoc_opt k b with Some e -> e | None -> Null in
+                if truthy (ev (bg "case")) then ev (bg "then") else go tl
             | _ -> ( match List.assoc_opt "default" kvs with Some d -> ev d | None -> Null)
           in
           go branches
@@ -116,7 +126,9 @@ and eval_op ~vars op arg doc : Bson.t =
   | "$substr" | "$substrBytes" -> (
       match args () with
       | [ s; start; len ] -> (
-          let str = to_str s and i = int_of_float (num start) and l = int_of_float (num len) in
+          let str = to_str s in
+          let i = match to_int_opt (num start) with Some n -> n | None -> 0 in
+          let l = match to_int_opt (num len) with Some n -> n | None -> 0 in
           let n = String.length str in
           let i = max 0 (min i n) in
           let l = max 0 (min l (n - i)) in
@@ -128,9 +140,9 @@ and eval_op ~vars op arg doc : Bson.t =
   | "$arrayElemAt" -> (
       match args () with
       | [ Array xs; idx ] ->
-          let i = int_of_float (num idx) in
+          let i = match to_int_opt (num idx) with Some n -> n | None -> -1 in
           let i = if i < 0 then List.length xs + i else i in
-          ( match List.nth_opt xs i with Some v -> v | None -> Null)
+          if i >= 0 then ( match List.nth_opt xs i with Some v -> v | None -> Null) else Null
       | _ -> Null)
   | "$concatArrays" -> Array (List.concat_map (function Array xs -> xs | _ -> []) (args ()))
   | "$reverseArray" -> ( match args () with [ Array xs ] -> Array (List.rev xs) | _ -> Null)
@@ -158,7 +170,7 @@ and eval_op ~vars op arg doc : Bson.t =
   (* type / conversion *)
   | "$type" -> ( match args () with [ a ] -> String (Matcher.type_name a) | _ -> String "missing")
   | "$toString" -> ( match args () with a :: _ -> String (to_str a) | _ -> Null)
-  | "$toInt" -> ( match args () with a :: _ -> Int (int_of_float (num a)) | _ -> Null)
+  | "$toInt" -> ( match args () with a :: _ -> ( match to_int_opt (num a) with Some n -> Int n | None -> Null) | _ -> Null)
   | "$toDouble" -> ( match args () with a :: _ -> Float (num a) | _ -> Null)
   | "$toBool" -> ( match args () with a :: _ -> Bool (truthy a) | _ -> Null)
   | _ -> Null

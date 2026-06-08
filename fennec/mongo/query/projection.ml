@@ -56,6 +56,7 @@ and set_node tree k node =
 let leaf_of v =
   match v with
   | Document [ ("$slice", Int n) ] -> Slice (None, n)
+  | Document [ ("$slice", Float f) ] -> Slice (None, int_of_float f)
   | Document [ ("$slice", Array [ Int sk; Int lim ]) ] -> Slice (Some sk, lim)
   | Document kvs when List.mem_assoc "$elemMatch" kvs -> Elem (List.assoc "$elemMatch" kvs)
   | _ -> if truthy v then Keep else Drop

@@ -60,7 +60,7 @@ let type_matches (name : string) (fv : Bson.t) : bool =
 
 (* MongoDB existence truthiness: false / 0 / null mean "must not exist" *)
 let truthy : Bson.t -> bool = function
-  | Bool false | Null | Int 0 -> false
+  | Bool false | Null | Int 0 | Int64 0L -> false
   | Float f when f = 0. -> false
   | _ -> true
 
@@ -73,14 +73,16 @@ let is_array_op = function "$size" | "$all" | "$elemMatch" -> true | _ -> false
 (* integer view of a field value for bitwise tests *)
 let int_value = function Int n -> Some n | Int64 n -> Some (Int64.to_int n) | _ -> None
 
-(* a bitmask from a $bits* operand: an int mask, or an array of bit positions *)
+(* a bitmask from a $bits* operand: an int mask, or an array of bit positions. Bit positions are
+   capped at 0..30 so the masking is identical on native (63-bit int) and js_of_ocaml (32-bit int);
+   higher positions are not supported. *)
 let bit_mask = function
   | Int n -> Some n
   | Int64 n -> Some (Int64.to_int n)
   | Array positions ->
       Some
         (List.fold_left
-           (fun m p -> match p with Int b when b >= 0 && b < 62 -> m lor (1 lsl b) | _ -> m)
+           (fun m p -> match p with Int b when b >= 0 && b < 31 -> m lor (1 lsl b) | _ -> m)
            0 positions)
   | _ -> None
 

@@ -51,7 +51,43 @@ let central_angle (lng1, lat1) (lng2, lat2) =
     (sin (dlat /. 2.) ** 2.)
     +. (cos (deg2rad lat1) *. cos (deg2rad lat2) *. (sin (dlng /. 2.) ** 2.))
   in
+  (* clamp: rounding can push [a] just past 1.0 for near-antipodal points, which would make
+     [sqrt (1. -. a)] nan and silently drop the match *)
+  let a = Float.min 1.0 (Float.max 0.0 a) in
   2. *. atan2 (sqrt a) (sqrt (1. -. a))
+
+(* parse cache for the (constant) query geometry — the matcher re-enters per document with the same
+   operand, so without this the same polygon would be re-parsed once per document scanned *)
+let parse_cache : (string, geom option) Hashtbl.t = Hashtbl.create 16
+
+let parse_memo v =
+  let k = Bson.to_string v in
+  match Hashtbl.find_opt parse_cache k with
+  | Some r -> r
+  | None ->
+      let r = parse v in
+      Hashtbl.replace parse_cache k r;
+      r
+
+let rec all_points = function
+  | Pt p -> [ p ]
+  | Line ps -> ps
+  | Poly (ext :: _) -> ext
+  | Poly [] -> []
+  | Multi gs -> List.concat_map all_points gs
+
+let envelope = function
+  | [] -> None
+  | (x0, y0) :: _ as pts ->
+      Some (List.fold_left (fun (a, b, c, d) (x, y) -> (min a x, min b y, max c x, max d y)) (x0, y0, x0, y0) pts)
+
+(* cheap axis-aligned bounding-box overlap test, to reject obviously-disjoint geometries before the
+   O(edges²) segment-intersection work *)
+let bbox_overlap a b =
+  match (envelope (all_points a), envelope (all_points b)) with
+  | Some (ax0, ay0, ax1, ay1), Some (bx0, by0, bx1, by1) ->
+      not (ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0)
+  | _ -> true
 
 let haversine_m p q = earth_radius_m *. central_angle p q
 
@@ -112,10 +148,11 @@ let rec geom_intersects a b =
   | Multi gs, _ -> List.exists (fun g -> geom_intersects g b) gs
   | _, Multi gs -> List.exists (geom_intersects a) gs
   | _ ->
-      let ea = edges_of a and eb = edges_of b in
-      List.exists (fun s1 -> List.exists (fun s2 -> seg_cross s1 s2) eb) ea
-      || List.exists (fun v -> point_in_geom v b) (vertices_of a)
-      || List.exists (fun v -> point_in_geom v a) (vertices_of b)
+      bbox_overlap a b
+      && (let ea = edges_of a and eb = edges_of b in
+          List.exists (fun s1 -> List.exists (fun s2 -> seg_cross s1 s2) eb) ea
+          || List.exists (fun v -> point_in_geom v b) (vertices_of a)
+          || List.exists (fun v -> point_in_geom v a) (vertices_of b))
 
 (* ---- the operators ---- *)
 
@@ -126,7 +163,7 @@ let within (fv : Bson.t) (operand : Bson.t) : bool =
       let get k = List.assoc_opt k kvs in
       let circle r kind cp = match Bson.as_float r with Some rad -> kind pt cp <= rad | None -> false in
       match get "$geometry" with
-      | Some g -> ( match parse g with Some geom -> point_in_geom pt geom | None -> false)
+      | Some g -> ( match parse_memo g with Some geom -> point_in_geom pt geom | None -> false)
       | None -> (
           match get "$box" with
           | Some (Array [ a; b ]) -> (
@@ -154,7 +191,7 @@ let intersects (fv : Bson.t) (operand : Bson.t) : bool =
   | Document kvs -> (
       match List.assoc_opt "$geometry" kvs with
       | Some g -> (
-          match (parse g, parse fv) with Some qg, Some fg -> geom_intersects fg qg | _ -> false)
+          match (parse_memo g, parse fv) with Some qg, Some fg -> geom_intersects fg qg | _ -> false)
       | None -> false)
   | _ -> false
 

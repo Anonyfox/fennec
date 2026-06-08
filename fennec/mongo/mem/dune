@@ -5,5 +5,5 @@
 ; default backend for dev and test. Inline tests live in ../test (this library stays dep-free).
 (library
  (name minimongo)
- (public_name fennec-mongo.mem)
+ (public_name fennec-mongo.minimongo)
  (libraries bson query))

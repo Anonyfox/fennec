@@ -4,6 +4,11 @@
     matcher/diff core. No Eio, no polling, no systhreads. Pure, so it cross-compiles to JavaScript —
     and it is the default backend for dev and test.
 
+    This module is the {b front door}: build selectors, update documents, and projections as plain
+    {!Bson.t} values and pass them to [find]/[update]/[aggregate]. The [Query.*] modules
+    ([Matcher]/[Modifier]/[Projection]/[Sorter]/[Aggregate]/[Expr]/[Geo]) are the underlying engine
+    and are only needed for advanced or standalone (collection-less) use.
+
     Insert is O(1) and store lookups are total, so a re-entrant observer that mutates the collection
     during a notification can never raise. *)
 

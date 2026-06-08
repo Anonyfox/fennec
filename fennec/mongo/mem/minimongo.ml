@@ -174,7 +174,7 @@ let find_one t ?(selector = Document []) ?(sort = Document []) ?(skip = 0)
 (* run an aggregation pipeline over the collection's documents (insertion order). [lookup] supplies
    a foreign collection's documents for $lookup/$unionWith. *)
 let aggregate ?(lookup = fun _ -> []) t (pipeline : Bson.t list) : doc list =
-  Query.Aggregate.run ~resolve:lookup pipeline (all_docs t)
+  Query.Aggregate.run ~lookup pipeline (all_docs t)
 
 (* observeChanges — field-level, unordered membership routing. Honors selector + projection on live
    deltas; skip/limit affect only the initial snapshot. *)

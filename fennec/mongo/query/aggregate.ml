@@ -8,39 +8,46 @@ open Bson
 let kvs_of = function Document kvs -> kvs | _ -> []
 let strip_dollar s = if String.length s > 0 && s.[0] = '$' then String.sub s 1 (String.length s - 1) else s
 
-(* dotted set/unset, reusing the modifier engine *)
-let set_field doc path v = Modifier.apply doc (Document [ ("$set", Document [ (path, v) ]) ])
-let unset_field doc path = Modifier.apply doc (Document [ ("$unset", Document [ (path, Int 1) ]) ])
+(* dotted set/unset, straight through the modifier (no operator-document round-trip) *)
+let set_field doc path v = Modifier.set doc path v
+let unset_field doc path = Modifier.unset doc path
 let rec take n = function x :: tl when n > 0 -> x :: take (n - 1) tl | _ -> []
 let rec drop n = function _ :: tl when n > 0 -> drop (n - 1) tl | l -> l
 
-(* group documents by an aggregation expression, preserving first-seen key order, and apply the
-   accumulator fields *)
+(* Group documents by a key string, preserving first-seen order. The key is rendered with
+   {!Bson.to_string} so it is hashable and stable for any value (incl. nan, which {!Bson.equal}
+   would never match — this also avoids the O(n·groups) assoc scan). Returns [(key_value, docs)]
+   pairs in first-seen order. *)
+let group_by (key_of : Bson.t -> Bson.t) (docs : Bson.t list) : (Bson.t * Bson.t list) list =
+  let tbl : (string, Bson.t * Bson.t list ref) Hashtbl.t = Hashtbl.create 64 in
+  let order = ref [] in
+  List.iter
+    (fun d ->
+      let key = key_of d in
+      let ks = Bson.to_string key in
+      match Hashtbl.find_opt tbl ks with
+      | Some (_, lst) -> lst := d :: !lst
+      | None ->
+          Hashtbl.replace tbl ks (key, ref [ d ]);
+          order := ks :: !order)
+    docs;
+  List.filter_map
+    (fun ks -> match Hashtbl.find_opt tbl ks with Some (key, lst) -> Some (key, List.rev !lst) | None -> None)
+    (List.rev !order)
+
+(* the $group stage: group by the _id expression and apply the accumulator fields *)
 let group spec docs =
   let id_expr = match List.assoc_opt "_id" (kvs_of spec) with Some e -> e | None -> Null in
   let accs = List.filter (fun (k, _) -> k <> "_id") (kvs_of spec) in
-  let order = ref [] (* keys in first-seen order *) in
-  let tbl : (Bson.t * Bson.t list ref) list ref = ref [] in
-  List.iter
-    (fun d ->
-      let key = Expr.eval id_expr d in
-      match List.find_opt (fun (k, _) -> Bson.equal k key) !tbl with
-      | Some (_, lst) -> lst := d :: !lst
-      | None ->
-          order := key :: !order;
-          tbl := (key, ref [ d ]) :: !tbl)
-    docs;
-  List.rev_map
-    (fun key ->
-      let _, lst = List.find (fun (k, _) -> Bson.equal k key) !tbl in
-      let gdocs = List.rev !lst in
+  List.map
+    (fun (key, gdocs) ->
       Document (("_id", key) :: List.map (fun (field, acc) -> (field, Expr.accumulate acc gdocs)) accs))
-    !order
+    (group_by (Expr.eval id_expr) docs)
 
-let rec run ?(resolve = fun _ -> []) (stages : Bson.t list) (docs : Bson.t list) : Bson.t list =
-  List.fold_left (fun docs stage -> apply_stage resolve stage docs) docs stages
+let rec run ?(lookup = fun _ -> []) (stages : Bson.t list) (docs : Bson.t list) : Bson.t list =
+  List.fold_left (fun docs stage -> apply_stage lookup stage docs) docs stages
 
-and apply_stage resolve (stage : Bson.t) (docs : Bson.t list) : Bson.t list =
+and apply_stage lookup (stage : Bson.t) (docs : Bson.t list) : Bson.t list =
   match stage with
   | Document [ (name, spec) ] -> (
       match name with
@@ -74,7 +81,7 @@ and apply_stage resolve (stage : Bson.t) (docs : Bson.t list) : Bson.t list =
           let e = match List.assoc_opt "newRoot" (kvs_of spec) with Some e -> e | None -> Null in
           List.map (fun d -> match Expr.eval e d with Document _ as r -> r | _ -> Document []) docs
       | "$replaceWith" -> List.map (fun d -> match Expr.eval spec d with Document _ as r -> r | _ -> Document []) docs
-      | "$lookup" -> lookup resolve spec docs
+      | "$lookup" -> lookup_stage lookup spec docs
       | "$unionWith" ->
           let coll, pipe =
             match spec with
@@ -84,9 +91,9 @@ and apply_stage resolve (stage : Bson.t) (docs : Bson.t list) : Bson.t list =
                   match List.assoc_opt "pipeline" kvs with Some (Array p) -> p | _ -> [] )
             | _ -> ("", [])
           in
-          docs @ run ~resolve pipe (resolve coll)
+          docs @ run ~lookup pipe (lookup coll)
       | "$facet" ->
-          [ Document (List.map (fun (k, p) -> (k, Array (run ~resolve (match p with Array xs -> xs | _ -> []) docs))) (kvs_of spec)) ]
+          [ Document (List.map (fun (k, p) -> (k, Array (run ~lookup (match p with Array xs -> xs | _ -> []) docs))) (kvs_of spec)) ]
       | "$bucket" -> bucket spec docs
       | _ -> docs (* unknown stage: pass through unchanged *))
   | _ -> docs
@@ -113,37 +120,51 @@ and project spec doc =
     Document (List.filter (fun (k, _) -> not (List.mem k excluded)) (kvs_of doc))
 
 and unwind spec docs =
-  let path =
+  let path, preserve =
     match spec with
-    | String s -> strip_dollar s
-    | Document kvs -> ( match List.assoc_opt "path" kvs with Some (String s) -> strip_dollar s | _ -> "")
-    | _ -> ""
+    | String s -> (strip_dollar s, false)
+    | Document kvs ->
+        ( (match List.assoc_opt "path" kvs with Some (String s) -> strip_dollar s | _ -> ""),
+          match List.assoc_opt "preserveNullAndEmptyArrays" kvs with Some (Bool b) -> b | _ -> false )
+    | _ -> ("", false)
   in
   List.concat_map
     (fun d ->
       match Matcher.get_path d path with
-      | Some (Array xs) -> List.map (fun e -> set_field d path e) xs
-      | Some _ -> [ d ]
-      | None -> [])
+      | Some (Array (_ :: _ as xs)) -> List.map (fun e -> set_field d path e) xs
+      | Some (Array []) | Some Null | None -> if preserve then [ d ] else []
+      | Some _ -> [ d ])
     docs
 
-and lookup resolve spec docs =
+and lookup_stage lookup spec docs =
   let kvs = kvs_of spec in
   let s k = match List.assoc_opt k kvs with Some (String v) -> v | _ -> "" in
   let from = s "from" and lf = s "localField" and ff = s "foreignField" and as_ = s "as" in
-  let foreign = resolve from in
+  (* index the foreign collection by its join field once (value-equality via the to_string key,
+     which collapses Int/Int64/Float of equal value just like Bson.equal) — O(n+m), not O(n·m) *)
+  let idx : (string, Bson.t list) Hashtbl.t = Hashtbl.create 64 in
+  List.iter
+    (fun fd ->
+      match Matcher.get_path fd ff with
+      | Some v ->
+          let k = Bson.to_string v in
+          let cur = match Hashtbl.find_opt idx k with Some l -> l | None -> [] in
+          Hashtbl.replace idx k (fd :: cur)
+      | None -> ())
+    (lookup from);
   List.map
     (fun d ->
-      let lv = match Matcher.get_path d lf with Some v -> v | None -> Null in
       let matches =
-        List.filter (fun fd -> match Matcher.get_path fd ff with Some fv -> Bson.equal fv lv | None -> false) foreign
+        match Matcher.get_path d lf with
+        | Some v -> ( match Hashtbl.find_opt idx (Bson.to_string v) with Some l -> List.rev l | None -> [])
+        | None -> []
       in
       set_field d as_ (Array matches))
     docs
 
 and bucket spec docs =
   let kvs = kvs_of spec in
-  let group_by = match List.assoc_opt "groupBy" kvs with Some e -> e | None -> Null in
+  let group_expr = match List.assoc_opt "groupBy" kvs with Some e -> e | None -> Null in
   let boundaries = match List.assoc_opt "boundaries" kvs with Some (Array b) -> b | _ -> [] in
   let default = List.assoc_opt "default" kvs in
   let output = match List.assoc_opt "output" kvs with Some (Document o) -> o | _ -> [ ("count", Document [ ("$sum", Int 1) ]) ] in
@@ -160,21 +181,14 @@ and bucket spec docs =
       find 0
     end
   in
-  (* assign each doc to a bucket, group, then sort by bucket key *)
-  let assigned = List.filter_map (fun d -> match bucket_key (Expr.eval group_by d) with Some k -> Some (k, d) | None -> None) docs in
-  let order = ref [] and tbl : (Bson.t * Bson.t list ref) list ref = ref [] in
-  List.iter
-    (fun (k, d) ->
-      match List.find_opt (fun (key, _) -> Bson.equal key k) !tbl with
-      | Some (_, lst) -> lst := d :: !lst
-      | None -> order := k :: !order; tbl := (k, ref [ d ]) :: !tbl)
-    assigned;
+  (* assign each doc to a bucket, group via the shared NaN-safe grouping, then sort by _id *)
+  let in_bucket d = bucket_key (Expr.eval group_expr d) in
+  let assigned = List.filter (fun d -> in_bucket d <> None) docs in
+  let key_of d = match in_bucket d with Some k -> k | None -> Null in
   let buckets =
-    List.rev_map
-      (fun k ->
-        let _, lst = List.find (fun (key, _) -> Bson.equal key k) !tbl in
-        let gdocs = List.rev !lst in
-        Document (("_id", k) :: List.map (fun (field, acc) -> (field, Expr.accumulate acc gdocs)) output))
-      !order
+    List.map
+      (fun (key, gdocs) ->
+        Document (("_id", key) :: List.map (fun (field, acc) -> (field, Expr.accumulate acc gdocs)) output))
+      (group_by key_of assigned)
   in
   Sorter.sort (Document [ ("_id", Int 1) ]) buckets

@@ -24,3 +24,10 @@ val apply : ?insert:bool -> Bson.t -> Bson.t -> Bson.t
     [$]-prefixed key) as opposed to a replacement document. Useful to a caller deciding how to treat
     an update before applying it. *)
 val is_operator_doc : Bson.t -> bool
+
+(** [set doc "a.b" v] sets the (possibly dotted) path to [v], creating intermediate documents — the
+    direct, single-field form of [$set] (no operator-document round-trip). *)
+val set : Bson.t -> string -> Bson.t -> Bson.t
+
+(** [unset doc "a.b"] removes the (possibly dotted) path — the direct form of [$unset]. *)
+val unset : Bson.t -> string -> Bson.t

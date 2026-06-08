@@ -1,7 +1,10 @@
 (** Geospatial predicates for the geo query operators ([$geoWithin], [$geoIntersects], [$near],
     [$nearSphere]). Pure computational geometry over GeoJSON and legacy coordinate pairs — no index
     is needed because Minimongo scans in memory (the 2dsphere index in real MongoDB is only a
-    performance structure). Coordinates are [\[longitude, latitude\]] (GeoJSON order). *)
+    performance structure). Coordinates are [\[longitude, latitude\]] (GeoJSON order).
+
+    Normally reached through the geo selector operators in {!Minimongo.find} (put [$geoWithin] etc.
+    in a selector); call these functions directly only for standalone geometry tests. *)
 
 (** A coordinate pair, [(longitude, latitude)] (a.k.a. [(x, y)]). *)
 type point = float * float

@@ -347,9 +347,9 @@ let%test "$unwind deconstructs an array" =
 let%test "$lookup joins a foreign collection" =
   let orders = [ d [ ("_id", i 1); ("cust", i 7) ] ] in
   let customers = [ d [ ("_id", i 7); ("name", Bson.str "Ada") ] ] in
-  let resolve = function "customers" -> customers | _ -> [] in
+  let lookup = function "customers" -> customers | _ -> [] in
   match
-    Aggregate.run ~resolve
+    Aggregate.run ~lookup
       [ d [ ("$lookup", d [ ("from", Bson.str "customers"); ("localField", Bson.str "cust"); ("foreignField", Bson.str "_id"); ("as", Bson.str "c") ]) ] ]
       orders
   with
@@ -360,5 +360,27 @@ let%test "Minimongo.aggregate over a collection" =
   List.iter (fun doc -> ignore (C.insert c doc)) sales;
   C.aggregate c [ d [ ("$group", d [ ("_id", Bson.str "$cat"); ("n", d [ ("$sum", i 1) ]) ]) ] ]
   = [ d [ ("_id", Bson.str "a"); ("n", i 2) ]; d [ ("_id", Bson.str "b"); ("n", i 1) ] ]
+
+(* ── Aggregation: robustness regressions (audit findings) ── *)
+let%test "$group on a NaN _id does not crash (groups NaN together)" =
+  let docs = [ d [ ("x", Bson.float nan) ]; d [ ("x", Bson.float nan) ] ] in
+  match Aggregate.run [ d [ ("$group", d [ ("_id", Bson.str "$x"); ("n", d [ ("$sum", i 1) ]) ]) ] ] docs with
+  | [ g ] -> Bson.get g "n" = Some (Bson.Int 2)
+  | _ -> false
+let%test "$arrayElemAt out-of-range is Null, never raises" =
+  Expr.eval (d [ ("$arrayElemAt", Bson.array [ Bson.array [ i 1; i 2 ]; i (-100) ]) ]) (d []) = Bson.Null
+  && Expr.eval (d [ ("$arrayElemAt", Bson.array [ Bson.array [ i 1; i 2 ]; i 9 ]) ]) (d []) = Bson.Null
+let%test "$cond with a missing branch is Null, never raises" =
+  Expr.eval (d [ ("$cond", d [ ("if", Bson.bool true); ("then", i 5) ]) ]) (d []) = Bson.Int 5
+  && Expr.eval (d [ ("$cond", d [ ("if", Bson.bool false); ("then", i 5) ]) ]) (d []) = Bson.Null
+let%test "$toInt of a non-finite number is Null" =
+  Expr.eval (d [ ("$toInt", Bson.array [ Bson.float infinity ]) ]) (d []) = Bson.Null
+let%test "$unwind preserveNullAndEmptyArrays keeps empty/missing" =
+  let docs = [ d [ ("_id", i 1); ("tags", Bson.array []) ]; d [ ("_id", i 2) ] ] in
+  List.length
+    (Aggregate.run
+       [ d [ ("$unwind", d [ ("path", Bson.str "$tags"); ("preserveNullAndEmptyArrays", Bson.bool true) ]) ] ]
+       docs)
+  = 2
 
 let () = exit (Fennec_hunt_unit.run ())

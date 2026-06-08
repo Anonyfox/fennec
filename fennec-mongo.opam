@@ -3,16 +3,14 @@ opam-version: "2.0"
 synopsis:
   "Pure-OCaml BSON, a MongoDB query/update engine, and in-memory Minimongo"
 description: """
-A standalone data layer: a dependency-free BSON value type, a pure MongoDB
-query/update/projection/sort engine, and an in-memory Minimongo collection with a
-reactive observe engine. All pure (Stdlib only), so the same source compiles to
-native OCaml and to JavaScript. The native libmongoc-backed driver is a later
-addition to this package; the `fennec` framework builds its reactive data layer on
-top. See DATAFLOW.md."""
+A standalone data layer: a BSON value type, a pure MongoDB query/update/projection/sort engine
+with geospatial and aggregation support, and an in-memory Minimongo collection with a reactive
+observe engine. Pure OCaml (only `re` beyond Stdlib), so the same source runs native and in the
+browser via js_of_ocaml. A native libmongoc-backed driver is a planned addition to this package."""
 maintainer: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 authors: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 license: "MIT"
-tags: ["mongodb" "bson" "minimongo" "database" "query"]
+tags: ["mongodb" "bson" "minimongo" "database" "query" "javascript" "jsoo"]
 homepage: "https://github.com/Anonyfox/fennec"
 bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [

@@ -3,5 +3,5 @@
 ; cross-compile cleanly to JavaScript (the test deps — fennec-hunt.unit/.prop — are native-only).
 (test
  (name test_mongo)
- (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.mem fennec-hunt.unit fennec-hunt.prop)
+ (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo fennec-hunt.unit fennec-hunt.prop)
  (preprocess (pps fennec-hunt.ppx)))
