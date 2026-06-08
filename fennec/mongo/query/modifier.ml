@@ -1,14 +1,18 @@
 (* Update-modifier engine — applies a Mongo update document to an in-memory BSON document. Pure.
 
-   Supported: $set, $unset, $inc, $mul, $min, $max, $rename, $setOnInsert (insert-time only), $push
-   (+ $each), $addToSet (+ $each), $pull (value or sub-selector), $pullAll, $pop. Dotted paths are
-   supported for $set/$unset and for the field targeted by every operator. A modifier document with
-   no $-operators is treated as a full replacement (preserving _id). *)
+   Supported: $set, $unset, $inc, $mul, $min, $max, $rename, $setOnInsert (insert-time only),
+   $push (+ $each), $addToSet (+ $each), $pull (value or operator predicate), $pullAll, $pop. Dotted
+   paths are supported for $set/$unset and for the field targeted by every operator. A modifier
+   document with no $-operators is treated as a full replacement (preserving _id).
+
+   Numeric ops ($inc/$mul) promote across Int/Int64/Float like MongoDB and NEVER clobber a
+   non-numeric current value (they leave it unchanged). $min/$max use the total {!Bson.compare}, so
+   they work across BSON types. An unknown $-operator is ignored. *)
 
 open Bson
 
 let is_operator_doc = function
-  | Document kvs -> List.exists (fun (k, _) -> String.length k > 0 && k.[0] = '$') kvs
+  | Document kvs -> List.exists (fun (k, _) -> Bson.is_operator_key k) kvs
   | _ -> false
 
 let split_path p = String.split_on_char '.' p
@@ -43,23 +47,44 @@ let get_path d path = Matcher.get_path d path
 let set d path v = set_path d (split_path path) v
 let unset d path = unset_path d (split_path path)
 
-(* numeric helpers: keep ints when both sides are ints, else float *)
-let num_binop f_int f_flt cur operand =
-  match (cur, operand) with
-  | Some (Int a), Int b -> Int (f_int a b)
-  | Some (Int a), Float b -> Float (f_flt (float_of_int a) b)
-  | Some (Float a), Int b -> Float (f_flt a (float_of_int b))
-  | Some (Float a), Float b -> Float (f_flt a b)
-  | None, (Int _ as b) -> b
-  | None, (Float _ as b) -> b
-  | _ -> ( match operand with x -> x)
+(* MongoDB-style numeric promotion for $inc/$mul. [absent] is used when the field is missing; a
+   present-but-NON-numeric current value is returned unchanged (never overwritten). *)
+let combine f_int f_i64 f_flt (cur : Bson.t option) (operand : Bson.t) ~absent : Bson.t =
+  let fnum a = match Bson.as_float a with Some x -> x | None -> 0. in
+  match cur with
+  | None -> absent
+  | Some (Int a) -> (
+      match operand with
+      | Int b -> Int (f_int a b)
+      | Int64 b -> Int64 (f_i64 (Int64.of_int a) b)
+      | Float b -> Float (f_flt (float_of_int a) b)
+      | _ -> Int a)
+  | Some (Int64 a) -> (
+      match operand with
+      | Int b -> Int64 (f_i64 a (Int64.of_int b))
+      | Int64 b -> Int64 (f_i64 a b)
+      | Float b -> Float (f_flt (Int64.to_float a) b)
+      | _ -> Int64 a)
+  | Some (Float a) -> (
+      match operand with
+      | Int _ | Int64 _ | Float _ -> Float (f_flt a (fnum operand))
+      | _ -> Float a)
+  | Some other -> other (* present but non-numeric: leave unchanged, never clobber *)
 
+let zero_like = function Int _ -> Int 0 | Int64 _ -> Int64 0L | Float _ -> Float 0. | x -> x
 let as_array = function Some (Array xs) -> xs | _ -> []
 
 let each_values = function
   | Document kvs when List.mem_assoc "$each" kvs -> (
       match List.assoc "$each" kvs with Array xs -> xs | x -> [ x ])
   | v -> [ v ]
+
+(* keep an array element under $pull: operator-document condition → predicate per element;
+   anything else → structural equality *)
+let pull_matches cond e =
+  if is_operator_doc cond then
+    Matcher.doc_matches (Document [ ("v", cond) ]) (Document [ ("v", e) ])
+  else Bson.equal e cond
 
 let apply_op (d : Bson.t) (op : string) (arg : Bson.t) : Bson.t =
   let fields = kvs_of arg in
@@ -70,25 +95,20 @@ let apply_op (d : Bson.t) (op : string) (arg : Bson.t) : Bson.t =
   | "$unset" -> List.fold_left (fun acc (path, _) -> unset acc path) d fields
   | "$inc" ->
       over (fun acc path v ->
-          set acc path (num_binop ( + ) ( +. ) (get_path acc path) v))
+          set acc path (combine ( + ) Int64.add ( +. ) (get_path acc path) v ~absent:v))
   | "$mul" ->
       over (fun acc path v ->
-          set acc path (num_binop ( * ) ( *. ) (get_path acc path) v))
+          set acc path
+            (combine ( * ) Int64.mul ( *. ) (get_path acc path) v ~absent:(zero_like v)))
   | "$min" ->
       over (fun acc path v ->
           match get_path acc path with
-          | Some cur ->
-              if (match Matcher.bson_cmp v cur with Some c -> c < 0 | None -> false)
-              then set acc path v
-              else acc
+          | Some cur -> if Bson.compare v cur < 0 then set acc path v else acc
           | None -> set acc path v)
   | "$max" ->
       over (fun acc path v ->
           match get_path acc path with
-          | Some cur ->
-              if (match Matcher.bson_cmp v cur with Some c -> c > 0 | None -> false)
-              then set acc path v
-              else acc
+          | Some cur -> if Bson.compare v cur > 0 then set acc path v else acc
           | None -> set acc path v)
   | "$rename" ->
       List.fold_left
@@ -105,25 +125,23 @@ let apply_op (d : Bson.t) (op : string) (arg : Bson.t) : Bson.t =
       over (fun acc path v ->
           let cur = as_array (get_path acc path) in
           let adds = each_values v in
+          (* prepend-then-reverse keeps order while avoiding the O(n) append per element *)
           let merged =
-            List.fold_left
-              (fun xs x -> if List.exists (fun e -> e = x) xs then xs else xs @ [ x ])
-              cur adds
+            List.rev
+              (List.fold_left
+                 (fun xs x -> if List.exists (Bson.equal x) xs then xs else x :: xs)
+                 (List.rev cur) adds)
           in
           set acc path (Array merged))
   | "$pull" ->
       over (fun acc path cond ->
           let cur = as_array (get_path acc path) in
-          let keep e =
-            if Matcher.is_selector_like cond then not (Matcher.doc_matches cond e)
-            else e <> cond
-          in
-          set acc path (Array (List.filter keep cur)))
+          set acc path (Array (List.filter (fun e -> not (pull_matches cond e)) cur)))
   | "$pullAll" ->
       over (fun acc path v ->
           let cur = as_array (get_path acc path) in
-          let bad = (match v with Array xs -> xs | _ -> []) in
-          set acc path (Array (List.filter (fun e -> not (List.mem e bad)) cur)))
+          let bad = match v with Array xs -> xs | _ -> [] in
+          set acc path (Array (List.filter (fun e -> not (List.exists (Bson.equal e) bad)) cur)))
   | "$pop" ->
       over (fun acc path v ->
           let cur = as_array (get_path acc path) in
@@ -136,17 +154,17 @@ let apply_op (d : Bson.t) (op : string) (arg : Bson.t) : Bson.t =
           set acc path (Array cur'))
   | _ -> d (* unknown operator: ignore *)
 
-(* Apply [modifier] to [doc]. [insert] = true applies $setOnInsert too. A
-   non-operator modifier replaces the document wholesale, preserving _id. *)
+(* Apply [modifier] to [doc]. [insert] = true applies $setOnInsert too. A non-operator modifier
+   replaces the document wholesale, preserving _id. *)
 let apply ?(insert = false) (doc : Bson.t) (modifier : Bson.t) : Bson.t =
   if not (is_operator_doc modifier) then
     match get doc "_id" with
-    | Some id -> Document (("_id", id) :: List.filter (fun (k, _) -> k <> "_id") (kvs_of modifier))
+    | Some id ->
+        Document (("_id", id) :: List.filter (fun (k, _) -> k <> "_id") (kvs_of modifier))
     | None -> modifier
   else
     List.fold_left
       (fun acc (op, arg) ->
-        if op = "$setOnInsert" then
-          if insert then apply_op acc "$set" arg else acc
+        if op = "$setOnInsert" then if insert then apply_op acc "$set" arg else acc
         else apply_op acc op arg)
       doc (kvs_of modifier)

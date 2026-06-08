@@ -1,18 +1,43 @@
 (* Tests for the fennec-mongo pure trio — BSON values, the query engine, and Minimongo — using
-   fennec's inline test tooling. [let%test] for examples and edge cases; [let%prop] for the laws
-   (sort orders + permutes, $set-then-read, insert-then-find, diff/merge identities). The libraries
-   themselves stay dependency-free; the tooling lives here. *)
+   fennec's inline test tooling. [let%test] for examples, edge cases, and regressions; [let%prop]
+   for the laws (sort orders + permutes, $set-then-read, insert-then-find, diff/merge identities).
+   Many cases here are regressions for bugs an audit surfaced (array-aware matching, numeric
+   equality, $inc on Int64/non-numeric, $mod, $elemMatch operators, $pull by value, upsert seeds,
+   re-entrant-observer safety, insertion-order/clear). The libraries stay dependency-free; the
+   tooling lives here. *)
 
-module C = Minimongo.Collection
+module C = Minimongo
 open Query
 
 let d = Bson.doc
 let i = Bson.int
 
-(* ── Bson ── *)
+(* ── Bson: access + new DX ── *)
 let%test "get reads a top-level field" = Bson.get (d [ ("a", i 1) ]) "a" = Some (Bson.Int 1)
 let%test "get of a missing field is None" = Bson.get (d [ ("a", i 1) ]) "b" = None
 let%test "get of a non-document is None" = Bson.get (Bson.str "x") "a" = None
+let%test "fields returns the field list" = Bson.fields (d [ ("a", i 1) ]) = [ ("a", Bson.Int 1) ]
+let%test "typed accessors" =
+  let r = d [ ("s", Bson.str "x"); ("n", i 3); ("f", Bson.float 1.5); ("b", Bson.bool true); ("l", Bson.array [ i 1 ]) ] in
+  Bson.get_string r "s" = Some "x"
+  && Bson.get_int r "n" = Some 3
+  && Bson.get_float r "f" = Some 1.5
+  && Bson.get_bool r "b" = Some true
+  && Bson.get_list r "l" = Some [ Bson.Int 1 ]
+let%test "object_id_of_string validates 24 hex" =
+  Bson.object_id_of_string (String.make 24 'a') = Some (Bson.Object_id (String.make 24 'a'))
+  && Bson.object_id_of_string "too-short" = None
+  && Bson.object_id_of_string (String.make 24 'z') = None
+let%test "to_string renders a document" = Bson.to_string (d [ ("a", i 1) ]) = "{a: 1}"
+
+(* ── Bson: equality & ordering ── *)
+let%test "equal across numeric types" =
+  Bson.equal (Bson.int 1) (Bson.float 1.0) && Bson.equal (Bson.int 1) (Bson.int64 1L)
+let%test "document equality is order-sensitive" =
+  not (Bson.equal (d [ ("a", i 1); ("b", i 2) ]) (d [ ("b", i 2); ("a", i 1) ]))
+let%test "nan is not equal to itself" = not (Bson.equal (Bson.float nan) (Bson.float nan))
+let%test "compare orders by BSON type precedence (number before string)" =
+  Bson.compare (i 1) (Bson.str "a") < 0 && Bson.compare (Bson.str "a") (i 1) > 0
 
 (* ── Id ── *)
 let%test "object_id is 24 hex chars" =
@@ -32,17 +57,37 @@ let%test "empty selector matches any document" = Matcher.doc_matches (d []) (d [
 let%test "equality selector matches" = Matcher.doc_matches (d [ ("a", i 1) ]) (d [ ("a", i 1) ])
 let%test "equality selector rejects a mismatch" =
   not (Matcher.doc_matches (d [ ("a", i 2) ]) (d [ ("a", i 1) ]))
+let%test "equality matches across numeric types" =
+  Matcher.doc_matches (d [ ("n", i 1) ]) (d [ ("n", Bson.int64 1L) ])
+  && Matcher.doc_matches (d [ ("n", Bson.float 1.0) ]) (d [ ("n", i 1) ])
 let%test "$gt operator" = Matcher.doc_matches (d [ ("n", d [ ("$gt", i 5) ]) ]) (d [ ("n", i 7) ])
+let%test "range query is type-scoped (number query never matches a string)" =
+  not (Matcher.doc_matches (d [ ("n", d [ ("$gt", i 5) ]) ]) (d [ ("n", Bson.str "9") ]))
 let%test "$or operator" =
   Matcher.doc_matches
     (d [ ("$or", Bson.Array [ d [ ("a", i 1) ]; d [ ("b", i 2) ] ]) ])
     (d [ ("b", i 2) ])
 let%test "get_path walks nested documents" =
   Matcher.get_path (d [ ("a", d [ ("b", i 5) ]) ]) "a.b" = Some (Bson.Int 5)
+let%test "scalar selector matches an array field element" =
+  Matcher.doc_matches (d [ ("tags", Bson.str "a") ]) (d [ ("tags", Bson.array [ Bson.str "a"; Bson.str "b" ]) ])
+let%test "$in is array-aware" =
+  Matcher.doc_matches
+    (d [ ("tags", d [ ("$in", Bson.array [ Bson.str "x" ]) ]) ])
+    (d [ ("tags", Bson.array [ Bson.str "x"; Bson.str "y" ]) ])
+let%test "$elemMatch with an operator predicate" =
+  Matcher.doc_matches (d [ ("arr", d [ ("$elemMatch", d [ ("$gt", i 5) ]) ]) ]) (d [ ("arr", Bson.array [ i 1; i 7 ]) ])
+let%test "$type understands the number umbrella and long" =
+  Matcher.doc_matches (d [ ("n", d [ ("$type", Bson.str "number") ]) ]) (d [ ("n", i 5) ])
+  && Matcher.doc_matches (d [ ("n", d [ ("$type", Bson.str "long") ]) ]) (d [ ("n", Bson.int64 5L) ])
+let%test "$exists false matches a missing field" =
+  Matcher.doc_matches (d [ ("a", d [ ("$exists", Bson.bool false) ]) ]) (d [ ("b", i 1) ])
+  && not (Matcher.doc_matches (d [ ("a", d [ ("$exists", Bson.bool false) ]) ]) (d [ ("a", i 1) ]))
+let%test "$mod uses the numeric value" =
+  Matcher.doc_matches (d [ ("n", d [ ("$mod", Bson.array [ i 3; i 1 ]) ]) ]) (d [ ("n", i 7) ])
+  && not (Matcher.doc_matches (d [ ("n", d [ ("$mod", Bson.array [ i 3; i 1 ]) ]) ]) (d [ ("n", i 8) ]))
 let%prop "a document matches its own equality selector" = fun (n : int) ->
   Matcher.doc_matches (d [ ("v", i n) ]) (d [ ("v", i n) ])
-let%prop "$in matches a contained value" = fun (n : int) (m : int) ->
-  Matcher.doc_matches (d [ ("v", d [ ("$in", Bson.Array [ i n; i m ]) ]) ]) (d [ ("v", i n) ])
 
 (* ── Modifier ── *)
 let%prop "$set then read returns the value" = fun (n : int) ->
@@ -51,8 +96,23 @@ let%prop "$set then read returns the value" = fun (n : int) ->
 let%prop "$inc from absent yields the increment" = fun (n : int) ->
   let r = Modifier.apply (d []) (d [ ("$inc", d [ ("c", i n) ]) ]) in
   Bson.get r "c" = Some (Bson.Int n)
+let%test "$inc preserves Int64 and adds numerically" =
+  match Bson.get (Modifier.apply (d [ ("x", Bson.int64 10L) ]) (d [ ("$inc", d [ ("x", i 5) ]) ])) "x" with
+  | Some (Bson.Int64 n) -> n = 15L
+  | _ -> false
+let%test "$inc leaves a non-numeric field unchanged (no clobber)" =
+  Bson.get (Modifier.apply (d [ ("x", Bson.str "hi") ]) (d [ ("$inc", d [ ("x", i 5) ]) ])) "x"
+  = Some (Bson.String "hi")
+let%test "$mul of a missing field yields zero" =
+  Bson.get (Modifier.apply (d []) (d [ ("$mul", d [ ("x", i 5) ]) ])) "x" = Some (Bson.Int 0)
 let%test "$unset removes a field" =
   Bson.get (Modifier.apply (d [ ("a", i 1) ]) (d [ ("$unset", d [ ("a", i 1) ]) ])) "a" = None
+let%test "$pull removes array elements equal to a document" =
+  let r = Modifier.apply (d [ ("a", Bson.array [ d [ ("x", i 1) ]; d [ ("x", i 2) ] ]) ]) (d [ ("$pull", d [ ("a", d [ ("x", i 1) ]) ]) ]) in
+  Bson.get r "a" = Some (Bson.array [ d [ ("x", i 2) ] ])
+let%test "$pull removes array elements matching an operator predicate" =
+  let r = Modifier.apply (d [ ("a", Bson.array [ i 1; i 5; i 10 ]) ]) (d [ ("$pull", d [ ("a", d [ ("$gt", i 4) ]) ]) ]) in
+  Bson.get r "a" = Some (Bson.array [ i 1 ])
 let%test "a non-operator modifier replaces, preserving _id" =
   let r = Modifier.apply (d [ ("_id", Bson.str "k"); ("a", i 1) ]) (d [ ("b", i 2) ]) in
   Bson.get r "_id" = Some (Bson.String "k")
@@ -72,6 +132,11 @@ let%test "exclude drops the listed fields" =
 let vals docs =
   List.filter_map (fun x -> match Bson.get x "v" with Some (Bson.Int n) -> Some n | _ -> None) docs
 
+let%test "cross-type sort follows BSON type precedence (number before string)" =
+  let docs = [ d [ ("v", Bson.str "a") ]; d [ ("v", i 1) ] ] in
+  match Sorter.sort (d [ ("v", i 1) ]) docs with
+  | first :: _ -> Bson.get first "v" = Some (Bson.Int 1)
+  | [] -> false
 let%prop "sort preserves length (it is a permutation)" = fun (xs : int list) ->
   let docs = List.map (fun n -> d [ ("v", i n) ]) xs in
   List.length (Sorter.sort (d [ ("v", i 1) ]) docs) = List.length docs
@@ -88,9 +153,7 @@ let%prop "descending sort yields reverse-ordered values" = fun (xs : int list) -
 let%test "transition classifies membership" =
   Diff.transition ~was:false ~now:true = Diff.Entered
   && Diff.transition ~was:true ~now:false = Diff.Left
-(* build a WELL-FORMED document (unique top-level keys) — duplicate keys aren't valid BSON, and
-   diff/merge are only meaningful over well-formed docs (a property run surfaced that a naive
-   key-colliding generator produces duplicate keys with differing values). *)
+(* a WELL-FORMED document (unique top-level keys); duplicate keys aren't valid BSON. *)
 let doc_of_keys keys =
   d
     (List.fold_left
@@ -98,7 +161,6 @@ let doc_of_keys keys =
          let k = string_of_int n in
          if List.mem_assoc k acc then acc else acc @ [ (k, i n) ])
        [] keys)
-
 let%prop "diff of a document against itself is empty" = fun (keys : int list) ->
   let doc = doc_of_keys keys in
   Diff.diff_fields ~old_doc:doc ~new_doc:doc = ([], [])
@@ -115,12 +177,33 @@ let%prop "insert then remove leaves the collection empty" = fun (n : int) ->
   let c = C.create () in
   let _ = C.insert c (d [ ("v", i n) ]) in
   C.remove c (d [ ("v", i n) ]) = 1 && C.count (C.find c ()) = 0
+let%test "insertion order is preserved across many inserts" =
+  let c = C.create () in
+  List.iter (fun n -> ignore (C.insert c (d [ ("v", i n) ]))) [ 0; 1; 2; 3; 4 ];
+  vals (C.fetch (C.find c ())) = [ 0; 1; 2; 3; 4 ]
+let%test "remove of an empty selector clears the collection" =
+  let c = C.create () in
+  List.iter (fun n -> ignore (C.insert c (d [ ("v", i n) ]))) [ 1; 2; 3 ];
+  C.remove c (d []) = 3 && C.count (C.find c ()) = 0
+let%test "find_one and is_empty" =
+  let c = C.create () in
+  C.is_empty (C.find c ())
+  &&
+  (let _ = C.insert c (d [ ("v", i 1) ]) in
+   (not (C.is_empty (C.find c ())))
+   && match C.find_one c ~selector:(d [ ("v", i 1) ]) () with Some _ -> true | None -> false)
 let%test "update $set mutates the stored document" =
   let c = C.create () in
   let id = C.insert c (d [ ("v", i 1) ]) in
   let _ = C.update c (d [ ("_id", Bson.str id) ]) (d [ ("$set", d [ ("v", i 2) ]) ]) in
-  (match C.find_one (C.find c ~selector:(d [ ("_id", Bson.str id) ]) ()) with
+  (match C.find_one c ~selector:(d [ ("_id", Bson.str id) ]) () with
    | Some doc -> Bson.get doc "v" = Some (Bson.Int 2)
+   | None -> false)
+let%test "upsert seeds embedded-document equality fields" =
+  let c = C.create () in
+  let _ = C.update c ~upsert:true (d [ ("profile", d [ ("name", Bson.str "x") ]) ]) (d [ ("$set", d [ ("ok", i 1) ]) ]) in
+  (match C.find_one c ~selector:(d [ ("profile", d [ ("name", Bson.str "x") ]) ]) () with
+   | Some doc -> Bson.get doc "ok" = Some (Bson.Int 1)
    | None -> false)
 let%test "observe_changes fires added on insert" =
   let c = C.create () in
@@ -129,5 +212,18 @@ let%test "observe_changes fires added on insert" =
   let _ = C.insert c (d [ ("v", i 1) ]) in
   h.C.stop ();
   !added = 1
+let%test "re-entrant removal during a notification is failsafe (no exception)" =
+  let c = C.create () in
+  let a = C.insert c (d [ ("k", i 1) ]) in
+  let _b = C.insert c (d [ ("k", i 1) ]) in
+  (* when a is removed, the observer cascades a removal of a sibling that is still in the outer
+     remove's snapshot — the old code raised Not_found here; total lookups make it safe. *)
+  let h =
+    C.watch c (fun ch ->
+        if ch.C.op = C.Remove && ch.C.id = a then ignore (C.remove c (d [ ("k", i 1) ])))
+  in
+  let ok = try ignore (C.remove c (d [ ("k", i 1) ])); true with _ -> false in
+  h.C.stop ();
+  ok && C.count (C.find c ()) = 0
 
 let () = exit (Fennec_hunt_unit.run ())

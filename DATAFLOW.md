@@ -86,7 +86,7 @@ A self-contained MongoDB story, useful outside fennec, published as one opam pac
 |---|---|---|---|
 | `fennec-mongo.bson` | `Bson` | native + **js** | the value type (closed variant: Null/Bool/Int/Int64/Float/String/Document/Array/ObjectId/Date/Binary/Regex/Decimal128/…); pure, dep-free |
 | `fennec-mongo.query` | `Matcher` `Modifier` `Projection` `Sorter` `Diff` `Id` | native + **js** | the pure query engine: selector ops ($eq/$ne/$gt/$in/$or/$elemMatch/…), update ops ($set/$inc/$push/…), projection, stable sort, doc diffing + LCS for ordered observe, id generation |
-| `fennec-mongo.mem` (**Minimongo**) | `Minimongo.Collection` | native + **js** | in-memory Mongo: find/insert/update/remove/count + `observe_changes`/`observe` (simulated events off mutations). Pure. **The default backend.** |
+| `fennec-mongo.mem` (**Minimongo**) | `Minimongo` | native + **js** | in-memory Mongo: find/insert/update/remove/count + `observe_changes`/`observe` (simulated events off mutations). Pure. **The default backend.** |
 | `fennec-mongo.json` | `Bson_json` | native only | Bson ⇄ MongoDB extended-JSON (Yojson-backed), the C-boundary format |
 | `fennec-mongo.driver` | `Client` `Database` `Collection` `Change_stream` `Live` `Server` | native only | the real driver: libmongoc FFI; CRUD/find/aggregate/count/distinct/indexes/command; change streams → field-level `observe_changes`; single-node replica-set fixture for tests |
 
@@ -177,7 +177,7 @@ end
 ```
 
 The framework provides one `Unified` implementation whose `collection` is
-`[ `Mem of Minimongo.Collection.t | `Native of Driver.Collection.t ]` and dispatches per op — the
+`[ `Mem of Minimongo.t | `Native of Driver.Collection.t ]` and dispatches per op — the
 sqlite-style `:memory:` ⇄ `mongodb://…` flip lives entirely here.
 
 ---
