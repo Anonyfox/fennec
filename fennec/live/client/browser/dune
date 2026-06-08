@@ -1,0 +1,12 @@
+; Browser implementation of the DDP client: a real Js_of_ocaml WebSocket dialing /websocket, feeding
+; sub-tagged deltas into the live merge store. Linked into the JS bundle.
+(library
+ (name fennec_live_client_browser)
+ (public_name fennec.live.client.browser)
+ (implements fennec.live.client)
+ (modes byte)
+ (libraries fennec.live fennec.ddp fennec.fur fennec-mongo.bson js_of_ocaml)
+ (preprocess
+  (pps js_of_ocaml-ppx))
+ (flags
+  (:standard -w -a)))

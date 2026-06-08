@@ -1,13 +1,14 @@
-; Browser DDP client (js_of_ocaml): dials the server's /websocket, runs the DDP handshake, and feeds
-; sub-tagged deltas into the live merge store; `find` is the reactive Fur query and `call` invokes a
-; server method. Browser-only (there is no server-side DDP *client*), so byte-only → jsoo bundles it.
+; The browser DDP client, isomorphic via a virtual module (the fur.platform pattern): the SSR build
+; links the native stub (an empty store → `find` renders []), the JS bundle links the browser impl
+; (a real Js_of_ocaml WebSocket). So an SSR'd page can use Ddp_client unchanged and it "just works"
+; in both modes — empty on the server, live after hydration. ddp_client.mli here is the contract.
 (library
  (name fennec_live_client)
  (public_name fennec.live.client)
  (wrapped false)
- (modes byte)
- (libraries fennec.live fennec.ddp fennec.fur fennec-mongo.bson js_of_ocaml)
- (preprocess
-  (pps js_of_ocaml-ppx))
+ (virtual_modules ddp_client)
+ (default_implementation fennec.live.client.native)
+ (modes byte native)
+ (libraries fennec.fur fennec-mongo.bson)
  (flags
   (:standard -w -a)))
