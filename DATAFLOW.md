@@ -357,7 +357,9 @@ it stays a clean standalone package.
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
    ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
    compiles to JS.
-4. **DDP codec + session** — pure, unit-tested; re-prove the Meteor interop captures.
+4. **DDP codec + session** — pure, unit-tested. ✓ **DONE** — `fennec/ddp` (`fennec.ddp`): `Json`
+   + `Ejson` + `Message` + `Session` (extended sub-tagged mode) + `Sockjs`, 9 tests, compiles to
+   JS. (Re-proving captured real-Meteor frames rides along with the server wiring in Phase 5.)
 5. **DDP on fennec's server** — `Paw.Websocket.make "/websocket"` + `/sockjs` shim; server↔server DDP
    round-trip under `fennec test` (a new `realtime` system scenario).
 6. **Client** — merge box + ddp ws client + the Fur `subscribe`/`find` binding; SSR seed + hydrate;
