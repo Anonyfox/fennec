@@ -10,6 +10,9 @@ let env_array (extra : (string * string) list) =
   Array.append (Unix.environment ()) (Array.of_list (List.map (fun (k, v) -> k ^ "=" ^ v) extra))
 
 let spawn ~exe ~(env : (string * string) list) : t =
+  (* post-build: put the project's C-stub dll dirs on CAML_LD_LIBRARY_PATH so the bytecode server
+     can dlopen them (e.g. the mongo driver) — inherited by the spawned child via [env_array] *)
+  Fennec_dev.Stublibs.ensure ();
   let log_path = Filename.temp_file "fennec_test_" ".log" in
   let fd = Unix.openfile log_path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
   let pid = Unix.create_process_env exe [| exe |] (env_array env) Unix.stdin fd fd in

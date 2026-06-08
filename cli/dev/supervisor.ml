@@ -15,45 +15,8 @@ let ef = Printf.eprintf (* last-resort raw stderr (preflight + the total-loop gu
 let now () = Unix.gettimeofday ()
 let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
 
-(* ---- the OCaml stublibs dir, so a directly-spawned bytecode server can dlopen its C stubs
-   regardless of the parent shell (what `dune exec` / `opam env` would provide) ---- *)
-let stublibs_dir () =
-  match Sys.getenv_opt "OPAM_SWITCH_PREFIX" with
-  | Some p when p <> "" -> Some (Filename.concat p "lib/stublibs")
-  | _ -> (
-    match (try Some (String.trim (input_line (Unix.open_process_in "opam var lib 2>/dev/null"))) with _ -> None) with
-    | Some lib when lib <> "" -> Some (Filename.concat lib "stublibs")
-    | _ -> None)
-
-(* dune stages every PROJECT-LOCAL C-stub dll (e.g. the in-repo / vendored mongo driver) under the
-   build root, as a symlink into the per-lib build dir. The opam switch's stublibs (above) only has
-   INSTALLED deps' stubs, so a project's own driver needs this dir too. The build root is the
-   dune-project dir — usually the cwd, but when the runner is invoked from a subdir (e.g. an example
-   inside a monorepo) dune's _build is at the ANCESTOR holding dune-project, so search upward. *)
-let project_stublibs () =
-  let mk base = Filename.concat base "_build/install/default/lib/stublibs" in
-  let cwd = Sys.getcwd () in
-  let root =
-    let rec up d =
-      if Sys.file_exists (Filename.concat d "dune-project") then Some d
-      else
-        let p = Filename.dirname d in
-        if p = d then None else up p
-    in
-    up cwd
-  in
-  List.sort_uniq compare (mk cwd :: (match root with Some r -> [ mk r ] | None -> []))
-
-let ensure_stublibs () =
-  let add dir =
-    let cur = try Sys.getenv "CAML_LD_LIBRARY_PATH" with Not_found -> "" in
-    if not (List.mem dir (String.split_on_char ':' cur)) then
-      Unix.putenv "CAML_LD_LIBRARY_PATH" (if cur = "" then dir else dir ^ ":" ^ cur)
-  in
-  (* project-local staged stubs (added even if not yet built — the dir appears after the build,
-     before the bytecode server runs), then the opam switch's stubs for installed deps *)
-  List.iter add (project_stublibs ());
-  match stublibs_dir () with Some d -> add d | None -> ()
+(* C-stub loading for directly-spawned bytecode servers (CAML_LD_LIBRARY_PATH) lives in {!Stublibs};
+   it is called at SPAWN time (post-build) so the per-lib dll dirs exist to be found. *)
 
 (* ---- child processes ---- *)
 (* the server child (spawn, drain, reap, graceful stop) lives in {!Server_proc}; here we only need
@@ -93,7 +56,7 @@ let run ?port ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
-  ensure_stublibs ();
+  Stublibs.ensure ();
 
   (* warm esbuild worker BEFORE dune, so even the first build delegates to it *)
   let worker_socket = tmp_socket "fennec-esb" in

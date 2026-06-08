@@ -296,7 +296,7 @@ let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~(args : string list) : i
   ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned dev watcher → no lock clash *)
   (* the per-suite instance is the bytecode server, which must dlopen its C stubs — `opam env`
      doesn't put them on CAML_LD_LIBRARY_PATH. Reuse fennec dev's fix (same as the system cut). *)
-  Fennec_dev.Supervisor.ensure_stublibs ();
+  Fennec_dev.Stublibs.ensure ();
   match Discover.find () with
   | Error msg -> Printf.eprintf "fennec test: %s\n%!" msg; 1
   | Ok d ->
@@ -405,7 +405,7 @@ let orchestrate_system ~(args : string list) : int =
   (* a suite may spawn the bytecode server DIRECTLY (the leftover-reclaim scenario), and a .bc must
      dlopen its C stubs — which `opam env` does NOT put on CAML_LD_LIBRARY_PATH. Reuse fennec dev's
      own fix so the runner inherits it and propagates it to anything it spawns. *)
-  Fennec_dev.Supervisor.ensure_stublibs ();
+  Fennec_dev.Stublibs.ensure ();
   match Discover.find () with
   | Error msg -> Printf.eprintf "fennec test: %s\n%!" msg; 1
   | Ok d ->
@@ -478,7 +478,7 @@ let run (opts : options) : int =
      e.g. the mongo driver's libmongoc stub) on CAML_LD_LIBRARY_PATH so the bytecode can dlopen it.
      Same fix the dev loop (Supervisor.run) and the system cut already use; doing it once here covers
      http/browser too. Idempotent. Keeps the dev/test loop fast (bytecode + a prebuilt dll), no native. *)
-  Fennec_dev.Supervisor.ensure_stublibs ();
+  Fennec_dev.Stublibs.ensure ();
   (* --mongo launches a managed mongod + exports MONGO_URL for every spawned instance; stopped on
      teardown (and reaped on Ctrl-C / at_exit). Off → the in-memory backend, unchanged. *)
   let mongo = if opts.mongo then start_mongo () else None in

@@ -50,6 +50,9 @@ let%test "leading/trailing space on a urls line still parses" =
 
 let start ~exe ~env =
   try
+    (* now (post-build) the project's C-stub dll dirs exist — put them on CAML_LD_LIBRARY_PATH so a
+       bytecode server can dlopen them (e.g. the mongo driver); inherited by the spawned child *)
+    Stublibs.ensure ();
     let rd, wr = Unix.pipe () in
     let pid = Unix.create_process_env exe [| exe |] (Array.append (Unix.environment ()) env) Unix.stdin wr wr in
     Unix.close wr;
