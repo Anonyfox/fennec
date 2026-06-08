@@ -1,22 +1,32 @@
 (* The browser DDP client. Opens a WebSocket to the server's /websocket, sends [connect], and on
-   each frame feeds the sub-tagged data deltas into a live merge store ({!Fennec_live}). [find] is
-   the reactive Fur query over the merged collection; [call] invokes a server method. The data a
-   method changes returns through the open subscription as a normal delta — no request/response
-   plumbing for live data. Browser-only (Js_of_ocaml WebSocket). *)
+   each frame feeds the sub-tagged data deltas into a live merge store ({!Fennec_live}). [subscribe]
+   dedups + refcounts by (name, params) and tracks readiness; [find] is the reactive Fur query over
+   the merged collection; [call] invokes a server method. The data a method changes returns through
+   the open subscription as a normal delta — no request/response plumbing. Browser-only. *)
 
 open Js_of_ocaml
 module Msg = Fennec_ddp.Message
 module MS = Fennec_live.Merge_store
 module Live = Fennec_live.Live
+module Subkey = Fennec_live.Subkey
+
+(* one deduped subscription: identical (name, params) share this state (and its [ready] signal),
+   refcounted so the server sub is torn down only when the last holder stops *)
+type sub_state = { id : string; mutable refcount : int; ready_sig : bool Fur.signal }
+type subscription = { ready : bool Fur.signal; stop : unit -> unit }
 
 type t = {
   live : Live.t;
   send : string -> unit;
+  subs : (string, sub_state) Hashtbl.t; (* Subkey.key (name,params) → state *)
+  by_id : (string, sub_state) Hashtbl.t; (* sub id → state, for ready/nosub *)
   mutable subc : int;
   mutable methodc : int;
 }
 
-(* route one decoded message: data deltas → merge store; ping → pong; rest is currently informational *)
+let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set st.ready_sig true | None -> ()
+
+(* route one decoded message: data deltas → merge store; ready/nosub → flip readiness; ping → pong *)
 let handle t raw =
   match try Some (Msg.decode raw) with _ -> None with
   | None -> ()
@@ -25,9 +35,10 @@ let handle t raw =
       let s = function Some s -> s | None -> "" in
       (match m with
       | Msg.Added { collection; id; fields; sub } -> MS.added box ~sub:(s sub) ~collection ~id ~fields
-      | Msg.Changed { collection; id; fields; cleared; sub } ->
-          MS.changed box ~sub:(s sub) ~collection ~id ~fields ~cleared
+      | Msg.Changed { collection; id; fields; cleared; sub } -> MS.changed box ~sub:(s sub) ~collection ~id ~fields ~cleared
       | Msg.Removed { collection; id; sub } -> MS.removed box ~sub:(s sub) ~collection ~id
+      | Msg.Ready { subs } -> List.iter (mark_ready t) subs
+      | Msg.Nosub { id; _ } -> mark_ready t id (* the sub ended/failed — stop "loading" rather than hang *)
       | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
       | _ -> ())
 
@@ -39,11 +50,11 @@ let connect ?(path = "/websocket") () : t =
   let url = scheme ^ host ^ path in
   let ws = Js.Unsafe.new_obj (Js.Unsafe.pure_js_expr "WebSocket") [| Js.Unsafe.inject (Js.string url) |] in
   let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
-  (* queue sends until the socket is open — subscribe/call can fire (on_mount) before [onopen] *)
+  (* queue sends until the socket is open — subscribe/call can fire (component setup) before [onopen] *)
   let is_open = ref false in
   let pending = Queue.create () in
   let send str = if !is_open then raw str else Queue.add str pending in
-  let t = { live = Live.create (); send; subc = 0; methodc = 0 } in
+  let t = { live = Live.create (); send; subs = Hashtbl.create 16; by_id = Hashtbl.create 16; subc = 0; methodc = 0 } in
   Js.Unsafe.set ws (Js.string "onopen")
     (Dom.handler (fun _ ->
          is_open := true;
@@ -57,9 +68,38 @@ let connect ?(path = "/websocket") () : t =
          Js._true));
   t
 
-let subscribe t ~name ?(params = []) () =
-  t.subc <- t.subc + 1;
-  t.send (Msg.encode (Msg.Sub { id = "s" ^ string_of_int t.subc; name; params }))
+let subscribe t ~name ?(params = []) () : subscription =
+  let key = Subkey.key name params in
+  let st =
+    match Hashtbl.find_opt t.subs key with
+    | Some st -> st.refcount <- st.refcount + 1; st
+    | None ->
+        t.subc <- t.subc + 1;
+        let st = { id = "s" ^ string_of_int t.subc; refcount = 1; ready_sig = Fur.signal false } in
+        Hashtbl.replace t.subs key st;
+        Hashtbl.replace t.by_id st.id st;
+        t.send (Msg.encode (Msg.Sub { id = st.id; name; params }));
+        st
+  in
+  let stopped = ref false in
+  let stop () =
+    if not !stopped then begin
+      stopped := true;
+      st.refcount <- st.refcount - 1;
+      if st.refcount <= 0 then begin
+        Hashtbl.remove t.subs key;
+        Hashtbl.remove t.by_id st.id;
+        t.send (Msg.encode (Msg.Unsub { id = st.id }));
+        MS.sub_stopped (Live.store t.live) st.id
+      end
+    end
+  in
+  { ready = st.ready_sig; stop }
+
+let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
+  let sub = subscribe t ~name ~params () in
+  Fur.on_cleanup sub.stop;
+  sub.ready
 
 let call t ~name ?(params = []) () =
   t.methodc <- t.methodc + 1;

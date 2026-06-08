@@ -22,7 +22,10 @@ let id_of doc =
   match Bson.get doc "_id" with Some (Bson.String s) -> s | Some (Bson.Object_id s) -> s | _ -> ""
 
 let make () =
-  on_mount (fun () -> Ddp_client.subscribe client ~name:"tasks" ());
+  (* [use_subscribe] subscribes for this component's lifetime (auto-unsubscribes on cleanup) and
+     returns a [ready] signal — false until the server confirms the subscription, so we render a
+     loading line until the live data is present. *)
+  let ready = Ddp_client.use_subscribe client ~name:"tasks" () in
   let tasks = Ddp_client.find client "tasks" () in
   let add_task () =
     incr added;
@@ -31,8 +34,10 @@ let make () =
   fun () ->
     <div className="tasks">
       <h2>"Live tasks"</h2>
-      <ul className="task-items">
-        (frag (each (Array.to_list (get tasks)) (fun doc -> <li key=(id_of doc)>(node (title_of doc))</li>)))
-      </ul>
+      (if get ready then
+         <ul className="task-items">
+           (frag (each (Array.to_list (get tasks)) (fun doc -> <li key=(id_of doc)>(node (title_of doc))</li>)))
+         </ul>
+       else <p className="loading">"Loading tasks…"</p>)
       <button className="add-task" onClick=(add_task ())>"Add task"</button>
     </div>
