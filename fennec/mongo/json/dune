@@ -1,0 +1,7 @@
+; A tiny, pure JSON value + parser + serializer (Stdlib only) — the canonical JSON primitive for the
+; fennec-mongo package, kept self-contained (no framework dep). Used by bson_json (the extended-JSON
+; bridge to the C driver) and safe both native and in the browser via js_of_ocaml. Audited/hardened:
+; bounded nesting, lenient \u surrogates, non-finite → null, trailing-garbage rejection.
+(library
+ (name fennec_mongo_json)
+ (public_name fennec-mongo.json))

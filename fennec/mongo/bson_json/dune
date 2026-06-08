@@ -1,0 +1,9 @@
+; Extended-JSON codec for Bson.t — the bridge to the C driver (libmongoc speaks MongoDB canonical/
+; relaxed extended JSON). Emits CANONICAL extended JSON (every typed number wrapped as a string, so
+; the codec is precise regardless of the JSON number representation, and Decimal128 is just a
+; string libbson interprets) and parses both canonical and relaxed forms back. Pure (Bson + the
+; fennec-mongo JSON primitive) — native and browser.
+(library
+ (name fennec_mongo_bson_json)
+ (public_name fennec-mongo.bson_json)
+ (libraries fennec-mongo.bson fennec-mongo.json))
