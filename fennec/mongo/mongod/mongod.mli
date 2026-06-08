@@ -47,8 +47,16 @@ val logpath : t -> string
 val uri : t -> string
 
 (** [stop t] stops the instance: SIGTERM, wait up to ~10s, then SIGKILL; an ephemeral instance's
-    data directory is removed. Safe to rely on for cleanup. *)
+    data directory is removed. Idempotent and thread-safe — safe to call more than once and from
+    more than one thread (only the first call does the work). *)
 val stop : t -> unit
+
+(** [stop_all ()] stops every still-running instance. It is registered as an [at_exit] hook on the
+    first {!start}, so a normal process exit — or an uncaught exception that unwinds to exit — never
+    leaves a mongod behind. The CLI also tracks each pid in its signal reaper, so SIGINT/SIGTERM are
+    covered too. (Only an uncatchable SIGKILL of the launcher can leak an instance, and because every
+    instance uses a free port + a private data dir, a leaked one never collides with the next run.) *)
+val stop_all : unit -> unit
 
 (** [with_ephemeral ?mongod ?timeout f] starts a fresh ephemeral instance, runs [f] on it, and stops
     it (removing its data dir) even if [f] raises — the right tool for a test. *)

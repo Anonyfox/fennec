@@ -1,8 +1,16 @@
-; Lifecycle test against a REAL mongod when one is installed (it launches an ephemeral instance,
-; connects, and stops it); it skips — and passes — where no mongod is present, so CI without MongoDB
-; stays green.
+; Lifecycle tests against a REAL mongod when one is installed; they skip — and pass — where no
+; mongod is present, so CI without MongoDB stays green. The no-dangling test runs a helper process
+; (reap_child) that starts a mongod and exits WITHOUT stopping it, then asserts the at_exit reaper
+; killed it — proving the "no dangling processes" guarantee.
+(executable
+ (name reap_child)
+ (modules reap_child)
+ (libraries fennec-mongo.mongod unix))
+
 (test
  (name test_mongod)
+ (modules test_mongod)
  (libraries fennec-mongo.mongod unix fennec-hunt.unit)
  (preprocess
-  (pps fennec-hunt.ppx)))
+  (pps fennec-hunt.ppx))
+ (deps reap_child.exe))

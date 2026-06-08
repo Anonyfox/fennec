@@ -9,7 +9,31 @@
 exception Not_installed of string
 exception Launch_failed of string
 
-type t = { port : int; dbpath : string; pid : int; ephemeral : bool; logpath : string }
+type t = {
+  port : int;
+  dbpath : string;
+  pid : int;
+  ephemeral : bool;
+  logpath : string;
+  mutable stopped : bool; (* idempotency gate: only the first stop does the work *)
+}
+
+(* ---- the live-instance registry: every started instance is reaped on process exit ------------ *)
+(* No dangling mongods. A thread-safe registry (the test orchestrator runs suites on worker threads,
+   each possibly starting its own instance) plus a single at_exit that stops them all. at_exit runs
+   on normal exit AND on an uncaught exception that unwinds to exit; for signals, the CLI tracks the
+   pid in its reaper (SIGINT/SIGTERM → kill + exit → this at_exit cleans the data dirs). Only a
+   SIGKILL of the launcher can leak an instance — and since instances use a free port + a private
+   temp dir, a leaked one never collides with the next run. *)
+let registry_mutex = Mutex.create ()
+let live : t list ref = ref []
+let at_exit_installed = ref false
+
+let with_lock f =
+  Mutex.lock registry_mutex;
+  Fun.protect ~finally:(fun () -> Mutex.unlock registry_mutex) f
+
+let register t = with_lock (fun () -> live := t :: !live)
 
 (* ---- locating the binary ------------------------------------------------- *)
 
@@ -96,6 +120,37 @@ let wait_ready ~timeout port pid logpath =
   in
   loop ()
 
+(* idempotent: only the first stop does the work + unregisters (at_exit and an explicit stop can
+   both reach here, possibly on different threads) *)
+let stop t =
+  let proceed =
+    with_lock (fun () ->
+        if t.stopped then false else (t.stopped <- true; live := List.filter (fun x -> x != t) !live; true))
+  in
+  if proceed then begin
+    (try Unix.kill t.pid Sys.sigterm with _ -> ());
+    let deadline = Unix.gettimeofday () +. 10. in
+    let rec wait () =
+      match exited t.pid with
+      | Some _ -> ()
+      | None ->
+          if Unix.gettimeofday () > deadline then (
+            (try Unix.kill t.pid Sys.sigkill with _ -> ());
+            try ignore (Unix.waitpid [] t.pid) with _ -> ())
+          else (sleep 0.1; wait ())
+    in
+    wait ();
+    if t.ephemeral then rm_rf t.dbpath
+  end
+
+(* reap every still-live instance — registered once as an at_exit, so a normal exit or an uncaught
+   exception that unwinds to exit never leaves a mongod behind *)
+let stop_all () = List.iter (fun t -> try stop t with _ -> ()) (with_lock (fun () -> !live))
+
+let ensure_at_exit () =
+  let fresh = with_lock (fun () -> if !at_exit_installed then false else (at_exit_installed := true; true)) in
+  if fresh then at_exit stop_all
+
 let start ?mongod ?port ?dbpath ?(timeout = 30.) () =
   let bin = match mongod with Some b -> b | None -> ( match find () with Some b -> b | None -> raise (Not_installed (install_hint ()))) in
   let port = match port with Some p -> p | None -> free_port () in
@@ -117,25 +172,11 @@ let start ?mongod ?port ?dbpath ?(timeout = 30.) () =
   in
   (try Unix.close devnull with _ -> ());
   (try Unix.close log_fd with _ -> ());
-  let t = { port; dbpath; pid; ephemeral; logpath } in
-  (try wait_ready ~timeout port pid logpath
-   with e -> if ephemeral then rm_rf dbpath; raise e);
+  let t = { port; dbpath; pid; ephemeral; logpath; stopped = false } in
+  register t (* registered BEFORE the readiness wait, so even a wait that hangs-then-fails is reaped *);
+  ensure_at_exit ();
+  (try wait_ready ~timeout port pid logpath with e -> stop t (* kill + clean + unregister *); raise e);
   t
-
-let stop t =
-  (try Unix.kill t.pid Sys.sigterm with _ -> ());
-  let deadline = Unix.gettimeofday () +. 10. in
-  let rec wait () =
-    match exited t.pid with
-    | Some _ -> ()
-    | None ->
-        if Unix.gettimeofday () > deadline then (
-          (try Unix.kill t.pid Sys.sigkill with _ -> ());
-          try ignore (Unix.waitpid [] t.pid) with _ -> ())
-        else (sleep 0.1; wait ())
-  in
-  wait ();
-  if t.ephemeral then rm_rf t.dbpath
 
 let with_ephemeral ?mongod ?timeout f =
   let t = start ?mongod ?timeout () in
