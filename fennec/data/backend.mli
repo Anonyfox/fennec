@@ -45,6 +45,11 @@ module type S = sig
   (** The number of documents matching the selector. *)
   val count : collection -> Bson.t -> int
 
+  (** [aggregate c pipeline] runs the aggregation pipeline (a list of stage documents, e.g.
+      [[doc [ "$match", … ]; doc [ "$group", … ]]]) and returns the result documents. One-shot, not
+      reactive — the output rows are computed, not stored collection documents. *)
+  val aggregate : collection -> Bson.t list -> Bson.t list
+
   (** Field-level live observation: [added id fields], [changed id changed_fields cleared_names],
       [removed id], honoring the query's selector and projection. *)
   val observe_changes :

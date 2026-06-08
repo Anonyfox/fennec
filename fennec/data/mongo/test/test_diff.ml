@@ -71,6 +71,15 @@ let%test "insert/find/update/remove/count agree between Minimongo and a real mon
             let rsel = B.doc [ ("name", B.str "bob") ] in
             let nr_m = Mongo.remove mc rsel and nr_i = Mini.remove mini rsel in
             let remove_ok = nr_m = nr_i && eq_docs (Mongo.find mc (q (B.doc []))) (Mini.find mini (q (B.doc []))) in
-            find_ok && count_ok && update_ok && remove_ok)
+            (* aggregation: a real pipeline ($match → $sort → $project) must agree across backends,
+               in RESULT ORDER (the $sort) and shape (the $project), not just as a set *)
+            let agg_pipeline =
+              [ B.doc [ ("$match", B.doc [ ("age", B.int 30) ]) ];
+                B.doc [ ("$sort", B.doc [ ("name", B.int 1) ]) ];
+                B.doc [ ("$project", B.doc [ ("name", B.int 1) ]) ] ]
+            in
+            let am = Mongo.aggregate mc agg_pipeline and ai = Mini.aggregate mini agg_pipeline in
+            let agg_ok = List.length am = List.length ai && List.for_all2 (fun x y -> B.equal (norm x) (norm y)) am ai in
+            find_ok && count_ok && update_ok && remove_ok && agg_ok)
 
 let () = exit (Fennec_hunt_unit.run ())

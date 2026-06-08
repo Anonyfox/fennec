@@ -108,6 +108,11 @@ module type REACTIVE = sig
     (** The number of documents matching the selector. *)
     val count : t -> ?selector:doc -> unit -> int
 
+    (** [aggregate c pipeline] runs the aggregation pipeline (a list of stage documents) and returns
+        the result documents. One-shot, not a reactive cursor; rows are computed, so the collection
+        transform is NOT applied. *)
+    val aggregate : t -> doc list -> doc list
+
     (** [update c ?multi ?upsert selector modifier] — the number affected. *)
     val update : t -> ?multi:bool -> ?upsert:bool -> doc -> doc -> int
 

@@ -87,6 +87,10 @@ let find c (q : Backend.query) =
 let find_one c (q : Backend.query) = match find c { q with Backend.limit = 1 } with x :: _ -> Some x | [] -> None
 let count c sel = int_field (command c (B.doc [ ("count", B.str c.name); ("query", sel) ])) "n"
 
+(* the pipeline is a JSON array of stage docs; the C side wraps it as {pipeline: …} for the driver *)
+let aggregate c (pipeline : B.t list) =
+  BJ.list_of_string (run (fun () -> Ffi.aggregate c.pool c.db c.name (BJ.to_string (B.Array pipeline)) "{}"))
+
 (* observe via polling: initial snapshot, then re-find + per-id field diff each tick *)
 let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.handle =
   let snap () = find c { q with Backend.skip = 0; limit = 0; sort = B.Document [] } in
@@ -158,6 +162,7 @@ module Dynamic = struct
   let find c q = match c with Mem m -> Mini.find m q | Real r -> find r q
   let find_one c q = match c with Mem m -> Mini.find_one m q | Real r -> find_one r q
   let count c s = match c with Mem m -> Mini.count m s | Real r -> count r s
+  let aggregate c p = match c with Mem m -> Mini.aggregate m p | Real r -> aggregate r p
 
   let observe_changes c q ~added ~changed ~removed =
     match c with
