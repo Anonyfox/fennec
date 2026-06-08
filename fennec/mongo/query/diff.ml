@@ -1,0 +1,117 @@
+(* Pure document helpers + the diff/LCS machinery shared by the observe engines. No Eio, no Unix,
+   no Yojson — so it cross-compiles to JavaScript unchanged. *)
+
+open Bson
+
+let kvs_of = function Document kvs -> kvs | _ -> []
+
+let id_to_string = function
+  | String s -> s
+  | Object_id s -> s
+  | Int n -> string_of_int n
+  | Int64 n -> Int64.to_string n
+  | _ -> ""
+
+(* The _id of a document, as a string (minimongo ids are strings by default). *)
+let doc_id (d : Bson.t) =
+  match get d "_id" with Some v -> id_to_string v | None -> ""
+
+let fields_without_id (d : Bson.t) : Bson.t =
+  Document (List.filter (fun (k, _) -> k <> "_id") (kvs_of d))
+
+(* Merge a partial update (changed fields + cleared field names) into a base
+   document. Top-level keys only; order is preserved for stable output. *)
+let merge_doc (base : Bson.t) ~(updated : (string * Bson.t) list)
+    ~(removed : string list) : Bson.t =
+  let kvs = kvs_of base in
+  let kvs = List.filter (fun (k, _) -> not (List.mem k removed)) kvs in
+  let kvs =
+    List.fold_left
+      (fun acc (k, v) ->
+        if List.mem_assoc k acc then
+          List.map (fun (k2, v2) -> if k2 = k then (k2, v) else (k2, v2)) acc
+        else acc @ [ (k, v) ])
+      kvs updated
+  in
+  Document kvs
+
+(* Fields set/added going old -> new, and the names of fields that vanished. *)
+let diff_fields ~(old_doc : Bson.t) ~(new_doc : Bson.t) :
+    (string * Bson.t) list * string list =
+  let o = kvs_of old_doc and n = kvs_of new_doc in
+  let changed =
+    List.filter
+      (fun (k, v) ->
+        k <> "_id"
+        && match List.assoc_opt k o with Some ov -> ov <> v | None -> true)
+      n
+  in
+  let cleared =
+    List.filter_map
+      (fun (k, _) -> if k <> "_id" && not (List.mem_assoc k n) then Some k else None)
+      o
+  in
+  (changed, cleared)
+
+(* A document's membership transition across one mutation — a closed variant so
+   every case is handled exactly once. *)
+type transition = Entered | Stayed | Left | Outside
+
+let transition ~was ~now =
+  match (was, now) with
+  | false, true -> Entered
+  | true, true -> Stayed
+  | true, false -> Left
+  | false, false -> Outside
+
+(* Longest common subsequence of two id lists (for minimal ordered moves). *)
+let lcs_ids (a : string list) (b : string list) : string list =
+  let na = Array.of_list a and nb = Array.of_list b in
+  let la = Array.length na and lb = Array.length nb in
+  let dp = Array.make_matrix (la + 1) (lb + 1) 0 in
+  for i = la - 1 downto 0 do
+    for j = lb - 1 downto 0 do
+      dp.(i).(j) <-
+        (if na.(i) = nb.(j) then dp.(i + 1).(j + 1) + 1
+         else max dp.(i + 1).(j) dp.(i).(j + 1))
+    done
+  done;
+  let rec build i j acc =
+    if i >= la || j >= lb then List.rev acc
+    else if na.(i) = nb.(j) then build (i + 1) (j + 1) (na.(i) :: acc)
+    else if dp.(i + 1).(j) >= dp.(i).(j + 1) then build (i + 1) j acc
+    else build i (j + 1) acc
+  in
+  build 0 0 []
+
+(* Emit observeChanges-ordered operations that transform [old_list] into
+   [new_list] (both id->doc associations in order). Processed right-to-left so
+   every `before` reference is already placed. *)
+let diff_ordered ~(old_list : (string * Bson.t) list)
+    ~(new_list : (string * Bson.t) list) ~added_before ~changed ~moved_before
+    ~removed =
+  let in_new id = List.mem_assoc id new_list in
+  let in_old id = List.mem_assoc id old_list in
+  List.iter (fun (id, _) -> if not (in_new id) then removed id) old_list;
+  let survivors_old =
+    List.filter_map (fun (id, _) -> if in_new id then Some id else None) old_list
+  in
+  let survivors_new =
+    List.filter_map (fun (id, _) -> if in_old id then Some id else None) new_list
+  in
+  let keep = lcs_ids survivors_old survivors_new in
+  let is_kept id = List.mem id keep in
+  let new_arr = Array.of_list (List.map fst new_list) in
+  let n = Array.length new_arr in
+  let before_of i = if i + 1 < n then Some new_arr.(i + 1) else None in
+  for i = n - 1 downto 0 do
+    let id = new_arr.(i) in
+    let nd = List.assoc id new_list in
+    if not (in_old id) then added_before id (fields_without_id nd) (before_of i)
+    else begin
+      let od = List.assoc id old_list in
+      let chg, cleared = diff_fields ~old_doc:od ~new_doc:nd in
+      if chg <> [] || cleared <> [] then changed id (Document chg) cleared;
+      if not (is_kept id) then moved_before id (before_of i)
+    end
+  done

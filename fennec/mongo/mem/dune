@@ -1,0 +1,9 @@
+; The in-memory MongoDB (Minimongo) — a collection store with mutations, cursors, and a reactive
+; observe engine. Mutations synchronously emit change events (the "simulated change stream");
+; observe/observeChanges recompute off them via the pure matcher/diff core — no Eio, no polling, a
+; mutation IS the event. Pure (Bson + query), so it cross-compiles to JavaScript. This is the
+; default backend for dev and test. Inline tests live in ../test (this library stays dep-free).
+(library
+ (name minimongo)
+ (public_name fennec-mongo.mem)
+ (libraries bson query))

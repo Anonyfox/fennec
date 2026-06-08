@@ -1,0 +1,7 @@
+; The BSON value type — the canonical in-memory value shared by the query engine, Minimongo,
+; and (later) the native driver. Deliberately dependency-free (Stdlib only — no Eio/Unix/Yojson)
+; so the SAME source compiles to native OCaml and, via js_of_ocaml, to JavaScript for the npm
+; bundle. Inline tests live in ../test (this library stays dep-free so it cross-compiles cleanly).
+(library
+ (name bson)
+ (public_name fennec-mongo.bson))

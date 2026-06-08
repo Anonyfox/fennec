@@ -133,3 +133,21 @@
   fennec-hunt
   (mlx
    (>= 0.11))))
+
+; The data layer: a standalone MongoDB story — a pure BSON value + query/update
+; engine + in-memory Minimongo (this trio also compiles to JS for an npm bundle),
+; and (later) a native driver statically linking libmongoc. Useful on its own; the
+; `fennec` framework depends on it and bolts the Meteor-style reactive API on top.
+; See DATAFLOW.md. This pass ships the PURE trio only; the native driver follows.
+(package
+ (name fennec-mongo)
+ (synopsis "Pure-OCaml BSON, a MongoDB query/update engine, and in-memory Minimongo")
+ (description
+  "A standalone data layer: a dependency-free BSON value type, a pure MongoDB\nquery/update/projection/sort engine, and an in-memory Minimongo collection with a\nreactive observe engine. All pure (Stdlib only), so the same source compiles to\nnative OCaml and to JavaScript. The native libmongoc-backed driver is a later\naddition to this package; the `fennec` framework builds its reactive data layer on\ntop. See DATAFLOW.md.")
+ (tags
+  ("mongodb" "bson" "minimongo" "database" "query"))
+ (depends
+  (ocaml
+   (>= 4.14))
+  (dune
+   (>= 3.16))))
