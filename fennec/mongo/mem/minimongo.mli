@@ -95,6 +95,11 @@ val first : cursor -> doc option
 val find_one :
   t -> ?selector:doc -> ?sort:doc -> ?skip:int -> ?fields:doc -> unit -> doc option
 
+(** [aggregate ?lookup t pipeline] runs an aggregation {!Query.Aggregate} pipeline over the
+    collection's documents (in insertion order). [lookup name] supplies a foreign collection's
+    documents for the [$lookup] / [$unionWith] stages (default: none). *)
+val aggregate : ?lookup:(string -> doc list) -> t -> Bson.t list -> doc list
+
 (** {2 Reactive observation} *)
 
 (** [observe_changes cur ?added ?changed ?removed ()] — field-level, unordered membership tracking.

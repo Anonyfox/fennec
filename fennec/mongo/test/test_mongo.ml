@@ -303,4 +303,62 @@ let%test "re-entrant removal during a notification is failsafe (no exception)" =
   h.C.stop ();
   ok && C.count (C.find c ()) = 0
 
+(* ── Aggregation: expressions ── *)
+let%test "Expr arithmetic over field paths" =
+  Expr.eval (d [ ("$add", Bson.array [ i 1; i 2; Bson.str "$x" ]) ]) (d [ ("x", i 3) ]) = Bson.Int 6
+let%test "Expr $cond" =
+  Expr.eval
+    (d [ ("$cond", Bson.array [ d [ ("$gt", Bson.array [ Bson.str "$x"; i 1 ]) ]; Bson.str "big"; Bson.str "small" ]) ])
+    (d [ ("x", i 5) ])
+  = Bson.String "big"
+let%test "Expr $map binds $$this" =
+  Expr.eval
+    (d [ ("$map", d [ ("input", Bson.str "$xs"); ("in", d [ ("$multiply", Bson.array [ Bson.str "$$this"; i 2 ]) ]) ]) ])
+    (d [ ("xs", Bson.array [ i 1; i 2; i 3 ]) ])
+  = Bson.array [ i 2; i 4; i 6 ]
+
+(* ── Aggregation: pipeline ── *)
+let sales =
+  [ d [ ("_id", i 1); ("cat", Bson.str "a"); ("qty", i 2) ];
+    d [ ("_id", i 2); ("cat", Bson.str "a"); ("qty", i 3) ];
+    d [ ("_id", i 3); ("cat", Bson.str "b"); ("qty", i 5) ] ]
+
+let%test "$match + $project" =
+  Aggregate.run
+    [ d [ ("$match", d [ ("cat", Bson.str "a") ]) ]; d [ ("$project", d [ ("qty", i 1); ("_id", i 0) ]) ] ]
+    sales
+  = [ d [ ("qty", i 2) ]; d [ ("qty", i 3) ] ]
+let%test "$group with $sum" =
+  Aggregate.run [ d [ ("$group", d [ ("_id", Bson.str "$cat"); ("total", d [ ("$sum", Bson.str "$qty") ]) ]) ] ] sales
+  = [ d [ ("_id", Bson.str "a"); ("total", i 5) ]; d [ ("_id", Bson.str "b"); ("total", i 5) ] ]
+let%test "$sort + $limit" =
+  match Aggregate.run [ d [ ("$sort", d [ ("qty", i (-1)) ]) ]; d [ ("$limit", i 1) ] ] sales with
+  | [ top ] -> Bson.get top "qty" = Some (Bson.Int 5)
+  | _ -> false
+let%test "$addFields computes a field" =
+  match Aggregate.run [ d [ ("$addFields", d [ ("doubled", d [ ("$multiply", Bson.array [ Bson.str "$qty"; i 2 ]) ]) ]) ] ] [ List.hd sales ] with
+  | [ x ] -> Bson.get x "doubled" = Some (Bson.Int 4)
+  | _ -> false
+let%test "$count" = Aggregate.run [ d [ ("$count", Bson.str "n") ] ] sales = [ d [ ("n", i 3) ] ]
+let%test "$unwind deconstructs an array" =
+  let docs = [ d [ ("_id", i 1); ("tags", Bson.array [ Bson.str "x"; Bson.str "y" ]) ] ] in
+  Aggregate.run [ d [ ("$unwind", Bson.str "$tags") ] ] docs
+  = [ d [ ("_id", i 1); ("tags", Bson.str "x") ]; d [ ("_id", i 1); ("tags", Bson.str "y") ] ]
+let%test "$lookup joins a foreign collection" =
+  let orders = [ d [ ("_id", i 1); ("cust", i 7) ] ] in
+  let customers = [ d [ ("_id", i 7); ("name", Bson.str "Ada") ] ] in
+  let resolve = function "customers" -> customers | _ -> [] in
+  match
+    Aggregate.run ~resolve
+      [ d [ ("$lookup", d [ ("from", Bson.str "customers"); ("localField", Bson.str "cust"); ("foreignField", Bson.str "_id"); ("as", Bson.str "c") ]) ] ]
+      orders
+  with
+  | [ o ] -> Bson.get o "c" = Some (Bson.array [ d [ ("_id", i 7); ("name", Bson.str "Ada") ] ])
+  | _ -> false
+let%test "Minimongo.aggregate over a collection" =
+  let c = C.create () in
+  List.iter (fun doc -> ignore (C.insert c doc)) sales;
+  C.aggregate c [ d [ ("$group", d [ ("_id", Bson.str "$cat"); ("n", d [ ("$sum", i 1) ]) ]) ] ]
+  = [ d [ ("_id", Bson.str "a"); ("n", i 2) ]; d [ ("_id", Bson.str "b"); ("n", i 1) ] ]
+
 let () = exit (Fennec_hunt_unit.run ())

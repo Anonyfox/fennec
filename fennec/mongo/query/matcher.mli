@@ -16,6 +16,10 @@
     an intermediate value is not a document. *)
 val get_path : Bson.t -> string -> Bson.t option
 
+(** The MongoDB type name of a value — ["int"], ["long"], ["double"], ["string"], ["object"],
+    ["array"], ["bool"], ["date"], ["objectId"], etc. (used by [$type] and aggregation's [$type]). *)
+val type_name : Bson.t -> string
+
 (** [doc_matches selector d] — does document [d] satisfy [selector]? Handles top-level
     [$and]/[$or]/[$nor], dotted-path field conditions, operator documents, and implicit equality,
     with an implicit AND over all field conditions. An unknown operator never hides a document. *)
