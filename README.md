@@ -50,6 +50,7 @@ Concurrency is **Eio-only**, by design.
 - **HTTP core** — request/response, MIME, HTTP-date and semantics, a WebSocket channel; RFC-correct, with colocated unit tests.
 - **Paw** — an Elixir/Plug-style `conn -> conn` primitive: typed assigns, pipelines, routes, halting. Middleware, static, the websocket, and the SSR app are all paws.
 - **Server** — a compact Eio HTTP + WebSocket server: static serving with strong ETag / 304 / Range / HEAD, gzip + deflate negotiation (in-process zlib), WebSocket permessage-deflate, multi-app routing by Host, and a dev livereload relay.
+- **HTTPS, in-process** — terminate TLS with your own certificate (`serve ~tls`) or obtain + auto-renew Let's Encrypt certificates with zero-downtime hot-reload (`serve ~acme`) — no nginx, no reverse proxy, pure-OCaml TLS, no Lwt. Pluggable cert storage (file / memory / external) for any deployment ([`docs/HTTPS.md`](./docs/HTTPS.md)).
 - **Fur** — the isomorphic UI runtime: signals, a vdom + reconciler, SSR, js_of_ocaml hydration, a typed router, a `<Head>` manager, and data resources with fast-render seeds. No React, no Melange, no preact runtime.
 
 ### `fennec-cli` — tooling

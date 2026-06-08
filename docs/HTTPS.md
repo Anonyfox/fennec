@@ -1,0 +1,117 @@
+# HTTPS — in-process TLS termination + automatic ACME certificates
+
+Fennec terminates HTTPS **in-process** — no nginx, no reverse proxy. Two modes, one parameter each
+on `Fennec.serve`:
+
+| You have… | Use | What happens |
+|---|---|---|
+| a certificate (certbot, cloud, corporate CA, self-signed dev) | `~tls` | terminate TLS with it |
+| just a domain + an email | `~acme` | obtain + auto-renew Let's Encrypt certs |
+
+Both ride the pure-OCaml TLS stack (`tls` / `x509` / `mirage-crypto`) — no OpenSSL, no Lwt. See the
+[build-matrix note](#build-matrix--static-binaries) for the one native dependency this pulls in.
+
+## Bring your own certificate — `~tls`
+
+```ocaml
+let () =
+  Fennec.serve
+    ~tls:(Fennec.Tls.of_files ~cert:"/etc/ssl/site.pem" ~key:"/etc/ssl/site.key")
+    [ web; admin ]
+```
+
+`Fennec.Tls.of_files` loads a PEM certificate chain + private key; `of_pem` takes the PEM strings
+directly. A failed TLS handshake (a plain-HTTP client, an SNI mismatch) drops that one connection —
+it never errors the server.
+
+## Automatic certificates — `~acme`
+
+```ocaml
+let () =
+  Fennec.serve
+    ~acme:(Fennec.Acme.auto ~email:"ops@example.com" ())
+    [ web; admin ]
+```
+
+That's the whole setup. On boot Fennec:
+
+1. **derives the domains** from your endpoints' host patterns (every concrete host — see below),
+2. forks a tiny **`:80` listener** that answers the ACME HTTP-01 challenge (nothing else),
+3. **obtains** a certificate (or loads a cached one), blocking until it's ready *before* `:443`
+   serves its first connection — so there's no "no-cert" window after the first issuance,
+4. forks a **renewal loop** that re-issues under 30 days to expiry and **hot-reloads** the live
+   certificate with no restart and no dropped connections.
+
+Override the derived domains with `~domains`, and use Let's Encrypt **staging** while testing
+(`~staging:true`) so a misconfiguration never burns the production rate limit.
+
+### Which domains get certificates
+
+The ACME challenge type is forced by the endpoint's host pattern, so only some are auto-certifiable:
+
+| Host pattern | Example | Auto-cert |
+|---|---|---|
+| concrete host | `example.com`, `admin.example.com` | ✅ HTTP-01 |
+| wildcard | `*.example.com` | ❌ needs DNS-01 (not yet supported — use `~tls` with a wildcard cert) |
+| catch-all | `*` | ❌ needs on-demand TLS (not yet supported) |
+
+Fennec certifies every **concrete** host automatically (one SAN certificate) and prints a clear note
+for wildcard / catch-all endpoints rather than failing.
+
+## Certificate storage (Ops)
+
+Where the account key + certificate live depends on the deployment — so it's pluggable
+(`Fennec.Cert_store`). The default is a **file** store; override `~store` when that doesn't fit:
+
+| Deployment | Store | Why |
+|---|---|---|
+| VM / bare metal / docker volume / k8s **PVC** | `Cert_store.file ~dir` (default) | survives restarts |
+| ephemeral container (k8s **without** a PVC) | **external** (k8s Secret / S3 / Redis / DB) | else every restart re-issues → rate-limit |
+| multi-replica / HA | **shared external** + the lease | one replica issues, the rest read |
+| dev / test | `Cert_store.memory ()` | no disk |
+
+The default file store writes atomically (`0600`) under `$FENNEC_ACME_DIR` (else
+`$XDG_STATE_HOME/fennec/acme`). An external backend is just a value — implement the four-function
+record (`get` / `put` / `delete` / `with_lease`) over your store; no cloud SDKs are baked into Fennec:
+
+```ocaml
+let redis_store : Fennec.Cert_store.t = {
+  get        = (fun key -> Redis.get key);
+  put        = (fun key v -> Redis.set key v);
+  delete     = (fun key -> Redis.del key);
+  with_lease = (fun key f -> if Redis.setnx key then (Fun.protect ~finally:(fun () -> Redis.del key) f; true) else false);
+}
+let () = Fennec.serve ~acme:(Fennec.Acme.auto ~email:"ops@example.com" ~store:redis_store ()) [ web ]
+```
+
+### Multi-instance (the thundering herd)
+
+If N replicas boot at once and all see "no certificate", they'd all order at once — and Let's
+Encrypt's *duplicate-certificate* limit is low (5/week). `with_lease` is the fix: only the lease
+holder issues; the others wait for the certificate to appear in the shared store. The `file` store's
+lease is an `O_EXCL` lockfile (fine on a shared POSIX volume); an external store implements a real
+distributed lock (Redis `SETNX`, etc.).
+
+## Renewal + hot-reload
+
+The renewal loop checks every ~12 h and re-issues under 30 days to expiry. The server reads the
+certificate from a live source **per connection**, so a renewal swaps it instantly — new connections
+get the new cert, in-flight ones finish on the old, nothing restarts.
+
+## Build matrix / static binaries
+
+The TLS stack is pure OCaml, but `mirage-crypto`'s RSA/DH math uses `zarith`, which links
+**`libgmp`** — the one external C library HTTPS pulls in (the digestif / mirage-crypto / fiat-crypto
+C *stubs* are baked into the binary and need nothing external). For a self-contained, statically
+linked binary across the mac + linux (incl. musl) matrix, `libgmp` must be **statically linked**, not
+left as a dynamic dependency:
+
+- **Alpine / musl (fully static):** install `gmp-dev` (provides `libgmp.a`) and link with
+  `-ccopt -static`; the linker then bakes in `libgmp.a` along with musl.
+- **glibc Linux:** link `libgmp.a` (from `libgmp-dev`) statically, or ship `libgmp.so` alongside.
+- **macOS:** fully-static isn't possible (libSystem is always dynamic), but `libgmp.a` (from
+  `brew install gmp`) is linked in; only OS libraries remain dynamic.
+
+Verify the result links only OS libraries (no `libgmp.*.dylib` / `libgmp.so`): `otool -L` on macOS,
+`ldd` on Linux. This is the same "self-contained binary" guarantee the vendored libmongoc already
+upholds; the portability check enforces it for the Mongo driver and the same allowlist applies here.
