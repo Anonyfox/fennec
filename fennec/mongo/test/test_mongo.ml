@@ -127,6 +127,38 @@ let%test "include keeps the listed fields and _id" =
 let%test "exclude drops the listed fields" =
   let p = Projection.of_fields (d [ ("b", i 0) ]) in
   Projection.apply p (d [ ("a", i 1); ("b", i 2) ]) = d [ ("a", i 1) ]
+let%test "nested projection keeps only the dotted path" =
+  let p = Projection.of_fields (d [ ("a.b", i 1) ]) in
+  Projection.apply p (d [ ("_id", Bson.str "x"); ("a", d [ ("b", i 1); ("c", i 2) ]); ("e", i 3) ])
+  = d [ ("_id", Bson.str "x"); ("a", d [ ("b", i 1) ]) ]
+let%test "nested exclusion drops only the dotted path" =
+  let p = Projection.of_fields (d [ ("a.b", i 0) ]) in
+  Projection.apply p (d [ ("a", d [ ("b", i 1); ("c", i 2) ]) ]) = d [ ("a", d [ ("c", i 2) ]) ]
+let%test "$slice limits an array projection" =
+  let p = Projection.of_fields (d [ ("arr", d [ ("$slice", i 2) ]) ]) in
+  Projection.apply p (d [ ("arr", Bson.array [ i 1; i 2; i 3 ]) ]) = d [ ("arr", Bson.array [ i 1; i 2 ]) ]
+let%test "$elemMatch projects the first matching element" =
+  let p = Projection.of_fields (d [ ("arr", d [ ("$elemMatch", d [ ("x", d [ ("$gt", i 1) ]) ]) ]) ]) in
+  Projection.apply p (d [ ("arr", Bson.array [ d [ ("x", i 1) ]; d [ ("x", i 2) ] ]) ])
+  = d [ ("arr", Bson.array [ d [ ("x", i 2) ] ]) ]
+
+(* ── Bitwise query operators ── *)
+let%test "$bitsAllSet by bit positions" =
+  Matcher.doc_matches (d [ ("n", d [ ("$bitsAllSet", Bson.array [ i 1; i 2 ]) ]) ]) (d [ ("n", i 6) ])
+let%test "$bitsAnyClear by bit positions" =
+  Matcher.doc_matches (d [ ("n", d [ ("$bitsAnyClear", Bson.array [ i 0; i 1 ]) ]) ]) (d [ ("n", i 6) ])
+let%test "$bitsAllSet by mask" =
+  Matcher.doc_matches (d [ ("n", d [ ("$bitsAllSet", i 6) ]) ]) (d [ ("n", i 6) ])
+  && not (Matcher.doc_matches (d [ ("n", d [ ("$bitsAllSet", i 8) ]) ]) (d [ ("n", i 6) ]))
+
+(* ── $regex ── *)
+let%test "$regex matches a pattern (anchored)" =
+  Matcher.doc_matches (d [ ("name", d [ ("$regex", Bson.str "^foo") ]) ]) (d [ ("name", Bson.str "foobar") ])
+  && not (Matcher.doc_matches (d [ ("name", d [ ("$regex", Bson.str "^foo") ]) ]) (d [ ("name", Bson.str "barfoo") ]))
+let%test "$regex honors the case-insensitive option" =
+  Matcher.doc_matches
+    (d [ ("name", d [ ("$regex", Bson.str "FOO"); ("$options", Bson.str "i") ]) ])
+    (d [ ("name", Bson.str "foobar") ])
 
 (* ── Sorter ── *)
 let vals docs =

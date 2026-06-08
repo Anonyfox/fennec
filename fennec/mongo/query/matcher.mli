@@ -1,8 +1,9 @@
 (** Selector matching — the pure heart of Minimongo. Supports the comparison, membership, array,
-    and element operators ([$eq] [$ne] [$exists] [$in] [$nin] [$gt] [$gte] [$lt] [$lte] [$all]
-    [$size] [$elemMatch] [$not] [$type] [$mod]) and top-level [$and]/[$or]/[$nor], over dotted
-    paths. [$regex] and [$where] are intentionally omitted so the module stays Stdlib-only (and
-    JavaScript-safe).
+    element, evaluation, and bitwise operators ([$eq] [$ne] [$exists] [$in] [$nin] [$gt] [$gte]
+    [$lt] [$lte] [$all] [$size] [$elemMatch] [$not] [$type] [$mod] [$regex] [$bitsAllSet]
+    [$bitsAllClear] [$bitsAnySet] [$bitsAnyClear]) and top-level [$and]/[$or]/[$nor], over dotted
+    paths. [$regex] is backed by the pure [Re] library (PCRE-ish, with [$options] [i]/[m]/[s]);
+    [$where] (arbitrary JavaScript) and [$jsonSchema] are intentionally omitted.
 
     Two rules follow MongoDB/minimongo: equality and range comparison are {e type-scoped} — a
     number query never matches a string (range ops compare same-type only; equality uses

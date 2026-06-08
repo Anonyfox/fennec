@@ -1,8 +1,9 @@
-; Pure MongoDB query/update semantics over Bson: selector matching, update modifiers, projection,
-; sort, document diffing (+ LCS for ordered observe), and id generation. Used by Minimongo and
-; (later) the native Live engine; bundled into the npm artifact. Dependency-free beyond Bson, so it
-; cross-compiles to JavaScript. Inline tests live in ../test (this library stays dep-free).
+; Pure MongoDB query/update semantics over Bson: selector matching (incl. geo, $regex, bitwise),
+; update modifiers, projection, sort, document diffing (+ LCS for ordered observe), and id
+; generation. Used by Minimongo and (later) the native Live engine. Pure OCaml — `re` is the only
+; dependency beyond Bson and is itself pure, so the library still cross-compiles to JavaScript.
+; Inline tests live in ../test.
 (library
  (name query)
  (public_name fennec-mongo.query)
- (libraries bson))
+ (libraries bson re))

@@ -70,6 +70,61 @@ let cmp_op op c =
 (* operators that act on the array value AS A WHOLE rather than per element *)
 let is_array_op = function "$size" | "$all" | "$elemMatch" -> true | _ -> false
 
+(* integer view of a field value for bitwise tests *)
+let int_value = function Int n -> Some n | Int64 n -> Some (Int64.to_int n) | _ -> None
+
+(* a bitmask from a $bits* operand: an int mask, or an array of bit positions *)
+let bit_mask = function
+  | Int n -> Some n
+  | Int64 n -> Some (Int64.to_int n)
+  | Array positions ->
+      Some
+        (List.fold_left
+           (fun m p -> match p with Int b when b >= 0 && b < 62 -> m lor (1 lsl b) | _ -> m)
+           0 positions)
+  | _ -> None
+
+(* $regex via the pure [Re] library (PCRE-ish), compiled once per (options,pattern) and cached *)
+let re_cache : (string, Re.re) Hashtbl.t = Hashtbl.create 16
+
+let compile_re pattern opts =
+  let key = opts ^ "\x00" ^ pattern in
+  match Hashtbl.find_opt re_cache key with
+  | Some r -> Some r
+  | None -> (
+      try
+        let flags =
+          String.fold_left
+            (fun acc c ->
+              match c with
+              | 'i' -> `CASELESS :: acc
+              | 'm' -> `MULTILINE :: acc
+              | 's' -> `DOTALL :: acc
+              | _ -> acc)
+            [] opts
+        in
+        let r = Re.compile (Re.Pcre.re ~flags pattern) in
+        Hashtbl.replace re_cache key r;
+        Some r
+      with _ -> None)
+
+let regex_matches pattern opts s =
+  match compile_re pattern opts with Some r -> Re.execp r s | None -> false
+
+(* test a field value against a $regex operand (a string pattern or a [Regex]); array-aware *)
+let regex_field field_val pat opts =
+  let pattern, opts =
+    match pat with
+    | String s -> (s, opts)
+    | Regex r -> (r.pattern, r.options ^ opts)
+    | _ -> ("", opts)
+  in
+  let test = function String s -> regex_matches pattern opts s | _ -> false in
+  match field_val with
+  | Some (Array elems) -> List.exists test elems
+  | Some fv -> test fv
+  | None -> false
+
 (* one operator against one CONCRETE value (no array fan-out) *)
 let rec op1 op (v : Bson.t) (fv : Bson.t) : bool =
   match op with
@@ -101,6 +156,15 @@ let rec op1 op (v : Bson.t) (fv : Bson.t) : bool =
       | _ -> false)
   | "$elemMatch" -> (
       match fv with Array elems -> List.exists (fun e -> matches_cond (Some e) v) elems | _ -> false)
+  | "$bitsAllSet" | "$bitsAllClear" | "$bitsAnySet" | "$bitsAnyClear" -> (
+      match (int_value fv, bit_mask v) with
+      | Some f, Some m -> (
+          match op with
+          | "$bitsAllSet" -> f land m = m
+          | "$bitsAllClear" -> f land m = 0
+          | "$bitsAnySet" -> f land m <> 0
+          | _ -> f land m <> m (* $bitsAnyClear *))
+      | _ -> false)
   | _ -> true (* unknown operator: never wrongly hide a document *)
 
 (* a single-value operator fanned over a field value: array fields match if the array as a whole
@@ -114,7 +178,9 @@ and field_pos op v field_val =
 
 and matches_op (field_val : Bson.t option) op (v : Bson.t) : bool =
   match op with
-  | "$eq" | "$gt" | "$gte" | "$lt" | "$lte" | "$type" | "$mod" -> field_pos op v field_val
+  | "$eq" | "$gt" | "$gte" | "$lt" | "$lte" | "$type" | "$mod" | "$bitsAllSet" | "$bitsAllClear"
+  | "$bitsAnySet" | "$bitsAnyClear" ->
+      field_pos op v field_val
   | "$ne" -> not (field_pos "$eq" v field_val)
   | "$in" -> (
       match v with Array xs -> List.exists (fun x -> field_pos "$eq" x field_val) xs | _ -> false)
@@ -131,7 +197,14 @@ and matches_op (field_val : Bson.t option) op (v : Bson.t) : bool =
 and matches_cond (field_val : Bson.t option) (cond : Bson.t) : bool =
   match cond with
   | Document kvs when List.exists (fun (k, _) -> Bson.is_operator_key k) kvs ->
-      List.for_all (fun (op, v) -> matches_op field_val op v) kvs
+      let opts = match List.assoc_opt "$options" kvs with Some (String s) -> s | _ -> "" in
+      List.for_all
+        (fun (op, v) ->
+          match op with
+          | "$options" -> true (* consumed by $regex *)
+          | "$regex" -> regex_field field_val v opts
+          | _ -> matches_op field_val op v)
+        kvs
   | _ -> (
       match field_val with
       | Some (Array elems as arr) ->

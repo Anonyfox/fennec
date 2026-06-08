@@ -18,6 +18,7 @@ bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [
   "ocaml" {>= "4.14"}
   "dune" {>= "3.16" & >= "3.16"}
+  "re"
   "odoc" {with-doc}
 ]
 build: [
