@@ -62,6 +62,13 @@ let%test "insert/find/update/remove/count agree between Minimongo and a real mon
             in
             let find_ok = List.for_all (fun s -> eq_docs (Mongo.find mc (q s)) (Mini.find mini (q s))) selectors in
             let count_ok = List.for_all (fun s -> Mongo.count mc s = Mini.count mini s) selectors in
+            (* distinct must agree as a SET (mongo's distinct order is unspecified); "tags" exercises
+               array-value unwrapping *)
+            let set vs = List.sort compare (List.map norm vs) in
+            let distinct_ok =
+              set (Mongo.distinct mc "age" (B.doc [])) = set (Mini.distinct mini "age" (B.doc []))
+              && set (Mongo.distinct mc "tags" (B.doc [])) = set (Mini.distinct mini "tags" (B.doc []))
+            in
             (* multi $set, then compare the whole collection *)
             let usel = B.doc [ ("age", B.int 30) ] and umod = B.doc [ ("$set", B.doc [ ("active", B.bool true) ]) ] in
             let nu_m = Mongo.update mc ~multi:true ~upsert:false usel umod in
@@ -80,6 +87,6 @@ let%test "insert/find/update/remove/count agree between Minimongo and a real mon
             in
             let am = Mongo.aggregate mc agg_pipeline and ai = Mini.aggregate mini agg_pipeline in
             let agg_ok = List.length am = List.length ai && List.for_all2 (fun x y -> B.equal (norm x) (norm y)) am ai in
-            find_ok && count_ok && update_ok && remove_ok && agg_ok)
+            find_ok && count_ok && distinct_ok && update_ok && remove_ok && agg_ok)
 
 let () = exit (Fennec_hunt_unit.run ())

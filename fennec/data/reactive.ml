@@ -66,6 +66,7 @@ module type REACTIVE = sig
     val find_one : t -> ?selector:doc -> ?sort:doc -> ?fields:doc -> unit -> doc option
     val count : t -> ?selector:doc -> unit -> int
     val aggregate : t -> doc list -> doc list
+    val distinct : t -> key:string -> ?selector:doc -> unit -> doc list
     val update : t -> ?multi:bool -> ?upsert:bool -> doc -> doc -> int
 
     type upsert_result = { number_affected : int; inserted_id : string option }
@@ -280,6 +281,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
     (* one-shot aggregation; rows are computed, so the collection transform is NOT applied *)
     let aggregate c pipeline = B.aggregate c.backend pipeline
+    let distinct c ~key ?(selector = Bson.Document []) () = B.distinct c.backend key selector
 
     let update c ?(multi = false) ?(upsert = false) sel m =
       B.update c.backend ~multi ~upsert sel m

@@ -176,6 +176,18 @@ let find_one t ?(selector = Document []) ?(sort = Document []) ?(skip = 0)
 let aggregate ?(lookup = fun _ -> []) t (pipeline : Bson.t list) : doc list =
   Query.Aggregate.run ~lookup pipeline (all_docs t)
 
+(* distinct values of [key] over the documents matching [selector]; MongoDB unwraps array values
+   (distinct over an array field yields its distinct elements), deduped by BSON equality *)
+let distinct t ~key ?(selector = Document []) () : doc list =
+  let push acc v = if List.exists (Bson.equal v) acc then acc else v :: acc in
+  let add acc d =
+    match Query.Matcher.get_path d key with
+    | None -> acc
+    | Some (Array xs) -> List.fold_left push acc xs
+    | Some v -> push acc v
+  in
+  List.rev (List.fold_left add [] (fetch (find t ~selector ())))
+
 (* observeChanges — field-level, unordered membership routing. Honors selector + projection on live
    deltas; skip/limit affect only the initial snapshot. *)
 let observe_changes cur ?(added = fun _ _ -> ()) ?(changed = fun _ _ _ -> ())

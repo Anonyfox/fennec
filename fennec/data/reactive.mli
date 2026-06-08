@@ -113,6 +113,10 @@ module type REACTIVE = sig
         transform is NOT applied. *)
     val aggregate : t -> doc list -> doc list
 
+    (** [distinct c ~key ?selector ()] — the distinct values of [key] across documents matching
+        [selector] (array values unwrapped, deduped). Untransformed. *)
+    val distinct : t -> key:string -> ?selector:doc -> unit -> doc list
+
     (** [update c ?multi ?upsert selector modifier] — the number affected. *)
     val update : t -> ?multi:bool -> ?upsert:bool -> doc -> doc -> int
 

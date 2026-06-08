@@ -105,6 +105,11 @@ val find_one :
     documents for the [$lookup] / [$unionWith] stages (default: none). *)
 val aggregate : ?lookup:(string -> doc list) -> t -> Bson.t list -> doc list
 
+(** [distinct t ~key ?selector ()] — the distinct values of [key] across documents matching
+    [selector]. Array values are unwrapped (distinct over an array field yields its elements);
+    results are deduped by BSON equality, in first-seen order. *)
+val distinct : t -> key:string -> ?selector:doc -> unit -> doc list
+
 (** {2 Reactive observation} *)
 
 (** [observe_changes cur ?added ?changed ?removed ()] — field-level, unordered membership tracking.

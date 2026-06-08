@@ -71,6 +71,7 @@ let find c (q : Backend.query) = Coll.find c ~filter:q.Backend.selector ~opts:(n
 let find_one c (q : Backend.query) = match find c { q with Backend.limit = 1 } with x :: _ -> Some x | [] -> None
 let count c sel = Coll.count c ~filter:sel ()
 let aggregate c (pipeline : B.t list) = Coll.aggregate c ~pipeline:(B.Array pipeline) ()
+let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
 
 (* real change streams: Live keeps ONE stream per collection, replays the initial set synchronously
    (ready-after-data), then routes per-query field-level deltas *)
@@ -112,6 +113,7 @@ module Dynamic = struct
   let find_one c q = match c with Mem m -> Mini.find_one m q | Native r -> find_one r q
   let count c s = match c with Mem m -> Mini.count m s | Native r -> count r s
   let aggregate c p = match c with Mem m -> Mini.aggregate m p | Native r -> aggregate r p
+  let distinct c k s = match c with Mem m -> Mini.distinct m k s | Native r -> distinct r k s
 
   let observe_changes c q ~added ~changed ~removed =
     match c with

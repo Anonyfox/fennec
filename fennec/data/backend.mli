@@ -50,6 +50,10 @@ module type S = sig
       reactive — the output rows are computed, not stored collection documents. *)
   val aggregate : collection -> Bson.t list -> Bson.t list
 
+  (** [distinct c key selector] — the distinct values of [key] across documents matching [selector]
+      (array values unwrapped, deduped). *)
+  val distinct : collection -> string -> Bson.t -> Bson.t list
+
   (** Field-level live observation: [added id fields], [changed id changed_fields cleared_names],
       [removed id], honoring the query's selector and projection. *)
   val observe_changes :
