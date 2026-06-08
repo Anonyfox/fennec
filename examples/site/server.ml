@@ -40,6 +40,32 @@ let powered_by : Fennec.Paw.t =
   Conn.before_send c (fun r ->
       { r with Fennec.Http.headers = ("X-Powered-By", "fennec") :: r.Fennec.Http.headers })
 
+(* the realtime backend: a published "tasks" collection + an addTask method, served as DDP over a
+   websocket at /ddp by fennec.realtime over the in-memory reactive engine. The browser (Task_list)
+   subscribes and renders it live; addTask inserts and the new doc is pushed back through the open
+   subscription — server→client push, no refetch. *)
+module RData = Fennec_data.Reactive.Mini
+module RT = Fennec_realtime.Make (RData)
+
+let tasks = RData.Collection.create ~name:"tasks" (Minimongo.create ())
+
+let () =
+  List.iter
+    (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))
+    [ "Buy milk"; "Walk the dog" ]
+
+let () = RData.publish "tasks" (fun () -> RData.Cursor (RData.cursor tasks ()))
+
+let () =
+  RData.methods
+    [ ( "addTask",
+        fun _ args ->
+          match args with
+          | [ Bson.String t ] -> Bson.String (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ]))
+          | _ -> Bson.Null ) ]
+
+let realtime_ddp = RT.paw ~path:"/ddp" ()
+
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)
 let common =
@@ -48,7 +74,7 @@ let common =
 
 let web =
   Endpoint.make ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
-  |> Endpoint.pipe common
+  |> Endpoint.pipe (realtime_ddp :: common)
   |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true,"app":"web"}|})
   |> Endpoint.get "/api/greeting" (fun c -> Conn.text c greeting)
   |> Endpoint.get "/api/browser-only" (fun c -> Conn.text c browser_only)

@@ -1,0 +1,38 @@
+(* Realtime task list — the whole DDP loop in one component. On the SERVER it renders an empty list
+   (the native Ddp_client stub: no socket); in the BROWSER `connect` opens a real WebSocket to /ddp,
+   `on_mount` subscribes, and `find` is a Fur signal that recomputes as the server pushes deltas — so
+   the list fills in after hydration and grows live. Clicking "Add task" calls the addTask method;
+   the server inserts and the new doc returns through the open subscription (no refetch). Proof of
+   the server→client push, end to end, in the browser. *)
+[%%style {scss|
+.tasks { margin: 1rem 0; padding: .7rem 1rem; border: 1px solid #e3e3e3; border-radius: 8px }
+.tasks h2 { margin: 0 0 .5rem; font-size: 1.05rem }
+.task-items { margin: 0 0 .6rem; padding-left: 1.2rem }
+.task-items li { margin: .15rem 0 }
+.add-task { cursor: pointer; border: 1px solid var(--brand); background: var(--brand); color: #fff; border-radius: 6px; padding: .25rem .8rem; font: inherit }
+.add-task:hover { opacity: .9 }
+|scss}]
+
+let client = Ddp_client.connect ~path:"/ddp" ()
+let added = ref 0
+
+let title_of doc = match Bson.get doc "title" with Some (Bson.String s) -> s | _ -> "(untitled)"
+
+let id_of doc =
+  match Bson.get doc "_id" with Some (Bson.String s) -> s | Some (Bson.Object_id s) -> s | _ -> ""
+
+let make () =
+  on_mount (fun () -> Ddp_client.subscribe client ~name:"tasks" ());
+  let tasks = Ddp_client.find client "tasks" () in
+  let add_task () =
+    incr added;
+    Ddp_client.call client ~name:"addTask" ~params:[ Bson.str ("Task " ^ string_of_int !added) ] ()
+  in
+  fun () ->
+    <div className="tasks">
+      <h2>"Live tasks"</h2>
+      <ul className="task-items">
+        (frag (each (Array.to_list (get tasks)) (fun doc -> <li key=(id_of doc)>(node (title_of doc))</li>)))
+      </ul>
+      <button className="add-task" onClick=(add_task ())>"Add task"</button>
+    </div>

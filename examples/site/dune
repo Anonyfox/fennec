@@ -61,7 +61,8 @@
  (name server)
  (modes byte exe)
  (modules server assets)
- (libraries fennec fennec.fur.server web_app admin_app site_styles))
+ (libraries fennec fennec.fur.server web_app admin_app site_styles fennec.realtime fennec.data
+   fennec.ddp fennec-mongo.bson fennec-mongo.minimongo))
 
 ; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test
 ; machinery or its yojson dep. A pure-OCaml guard reads the native server.exe and fails if

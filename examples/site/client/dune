@@ -12,7 +12,9 @@
  (action
   (run %{project_root}/fennec/fur/tools/route_gen.exe --boots
    %{project_root}/examples/site/frontend/apps .)))
+; the bundles link fennec.live.client.browser — the real-WebSocket implementation of the virtual
+; fennec.live.client (the SSR binary uses the native stub); this is how Task_list goes live in-browser
 (executable (name web) (modules web) (modes js)
- (libraries web_app fennec.fur.client) (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
+ (libraries web_app fennec.fur.client fennec.live.client.browser) (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
 (executable (name admin) (modules admin) (modes js)
- (libraries admin_app fennec.fur.client) (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
+ (libraries admin_app fennec.fur.client fennec.live.client.browser) (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
