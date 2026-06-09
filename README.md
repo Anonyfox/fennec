@@ -30,16 +30,28 @@ The `[%%style]` block is extracted and scoped to this component (a `data-fur` ha
 external `.scss`, no className collisions. The same file is linked natively into the server
 for SSR and compiled to JS for the client. That's the whole model.
 
+## Get started
+
+```sh
+git clone https://github.com/Anonyfox/fennec && cd fennec
+dune build && export PATH="$PWD/_build/default/cli:$PATH"
+cd examples/site && fennec dev        # → http://localhost:4000, hot-reloading
+```
+
+**New to OCaml?** You don't need to be an expert — the docs open with a 5-minute orientation for
+JS/Rails/Phoenix devs, then a zero-to-running quickstart. **Full docs index:
+[`docs/README.md`](./docs/README.md)** (start here → guide per building block → reference).
+
 ## The monorepo
 
 One root `dune-project`, several independently-publishable packages:
 
 | Package | What it is | Status |
 | --- | --- | --- |
-| **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, automatic HTTPS, and the `Fur` UI runtime | ✅ working |
+| **`fennec`** | The runtime: HTTP core, Paw middleware, Eio HTTP/WS server, automatic HTTPS, the `Fur` UI runtime, and the reactive **data + realtime** layer (DDP, live queries, SSR-with-live-data) | ✅ working |
 | **`fennec-cli`** | The `fennec` binary — a native JS/CSS bundler plus the dev + test CLI, one self-contained binary | ✅ working |
 | **`fennec-hunt`** | Pure-OCaml app testing — inline unit + property tests, HTTP assertions, real-browser (CDP), and system/dev-loop checks; standalone or via `fennec test` | ✅ working |
-| `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
+| **`fennec-mongo`** | BSON, a pure Mongo query/update/projection/sort/aggregate engine, in-memory minimongo with reactive observe, extended-JSON, and an optional native libmongoc driver (change streams) | ✅ working |
 
 Concurrency is **Eio-only**, by design.
 
@@ -52,6 +64,7 @@ Concurrency is **Eio-only**, by design.
 - **Server** — a compact Eio HTTP + WebSocket server: static serving with strong ETag / 304 / Range / HEAD, gzip + deflate negotiation (in-process zlib), WebSocket permessage-deflate, multi-app routing by Host, and a dev livereload relay.
 - **Automatic HTTPS, in-process** — `serve ~acme:(Acme.auto ())` obtains and auto-renews Let's Encrypt certificates (zero-downtime hot-reload) for **every domain and subdomain your endpoints declare**, one line — no nginx, no reverse proxy; pure-OCaml TLS, no Lwt. **Multi-tenant**: wildcard certs via a pluggable DNS provider (DNS-01) and on-demand issuance for runtime customer domains. Bring your own cert with `serve ~tls`; behind a proxy or PaaS it just serves plain HTTP on `$PORT`. Pluggable cert storage — file (default), memory, or a custom store (k8s Secret / S3 / Redis) ([`docs/HTTPS.md`](./docs/HTTPS.md)).
 - **Fur** — the isomorphic UI runtime: signals, a vdom + reconciler, SSR, js_of_ocaml hydration, a typed router, a `<Head>` manager, and data resources with fast-render seeds. No React, no Melange, no preact runtime.
+- **Reactive data + realtime** — Meteor-style sync: DDP publications/subscriptions over WebSocket, a Mongo/minimongo query + observe engine with change-stream-backed **live queries**, and **SSR-with-live-data** — the server renders live data into the first paint, the browser hydrates it flicker-free, then the subscription streams updates. In-memory by default; an optional native Mongo driver for production ([`fennec/mongo/README.md`](./fennec/mongo/README.md)).
 
 ### `fennec-cli` — tooling
 
@@ -73,13 +86,13 @@ Concurrency is **Eio-only**, by design.
 
 ## Status & roadmap
 
-The server, routing, isomorphic SSR + hydration, multi-app endpoints, the asset pipeline,
-the dev loop, and real-browser e2e are working and tested end to end (see
-[`examples/site`](./examples/site), the living DX benchmark). **Not yet built:** the
-Meteor-style reactive data layer — DDP over WebSocket and a mongo/minimongo client. That is
-the next major chapter.
+Working and tested end to end (see [`examples/site`](./examples/site), the living DX benchmark):
+the server, routing, isomorphic SSR + hydration, multi-app endpoints, the asset pipeline, the dev
+loop, real-browser e2e, **automatic multi-tenant HTTPS**, and the **reactive data + realtime layer**
+(DDP, Mongo/minimongo, change-stream live queries, SSR-with-live-data). **Next:** a `fennec new`
+project scaffold and a guided first-app tutorial, then prebuilt per-platform CLI binaries.
 
-## Build
+## Build from source (contributors)
 
 ```sh
 dune build            # build everything
@@ -88,14 +101,11 @@ dune exec -- fennec --help
 ```
 
 Building the CLI binary needs Go and Rust toolchains (only for the native bundlers); the
-framework library itself needs neither. End users install a prebuilt `fennec` binary per
-platform from GitHub Releases.
+framework library itself needs neither. (Prebuilt per-platform `fennec` binaries are planned, so
+app authors won't need the toolchains — see the [quickstart](./docs/QUICKSTART.md).)
 
-Deeper docs: [`examples/site/README.md`](./examples/site/README.md) ·
-[`examples/CLI-INTEROP.md`](./examples/CLI-INTEROP.md) ·
-[`fennec/fur/README.md`](./fennec/fur/README.md) ·
-[`fennec/hunt/README.md`](./fennec/hunt/README.md) ·
-[`docs/TEST-CLI.md`](./docs/TEST-CLI.md).
+**Docs: [`docs/README.md`](./docs/README.md)** — a 5-minute orientation + zero-to-running quickstart,
+a guide per building block (Fur, Paw, HTTPS, data/realtime, testing, the CLI), and the package reference.
 
 ## License
 
