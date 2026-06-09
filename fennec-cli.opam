@@ -7,7 +7,9 @@ The `fennec` command-line tool bundles JavaScript (esbuild) and compiles and
 optimizes CSS and SCSS (Lightning CSS + grass) from one statically-linked binary.
 No Node, no separate toolchain: download the binary and build. `fennec build`
 drives both engines in a single pass, routing each input to the right tool by its
-file extension."""
+file extension. Distributed as a prebuilt per-platform binary (GitHub Releases, and
+Homebrew later) — its build links Go + Rust archives, so it is not an opam-install-
+from-source package; the .opam exists only so dune knows the package locally."""
 maintainer: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 authors: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 license: "MIT"

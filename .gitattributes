@@ -1,0 +1,3 @@
+# Keep the published source tarball (git archive / GitHub release) lean: these are repo-internal
+# design/decision records, not needed to build or use any package.
+docs/internal/ export-ignore

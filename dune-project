@@ -105,7 +105,7 @@
  (name fennec-cli)
  (synopsis "Native JavaScript and CSS build tooling in a single self-contained binary")
  (description
-  "The `fennec` command-line tool bundles JavaScript (esbuild) and compiles and\noptimizes CSS and SCSS (Lightning CSS + grass) from one statically-linked binary.\nNo Node, no separate toolchain: download the binary and build. `fennec build`\ndrives both engines in a single pass, routing each input to the right tool by its\nfile extension.")
+  "The `fennec` command-line tool bundles JavaScript (esbuild) and compiles and\noptimizes CSS and SCSS (Lightning CSS + grass) from one statically-linked binary.\nNo Node, no separate toolchain: download the binary and build. `fennec build`\ndrives both engines in a single pass, routing each input to the right tool by its\nfile extension. Distributed as a prebuilt per-platform binary (GitHub Releases, and\nHomebrew later) — its build links Go + Rust archives, so it is not an opam-install-\nfrom-source package; the .opam exists only so dune knows the package locally.")
  (tags
   ("build" "javascript" "css" "esbuild" "bundler" "cli"))
  (depends
