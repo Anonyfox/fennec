@@ -29,21 +29,38 @@ it never errors the server.
 ```ocaml
 let () =
   Fennec.serve
-    ~acme:(Fennec.Acme.auto ~email:"ops@example.com" ())
+    ~acme:(Fennec.Acme.auto ())   (* email from FENNEC_ACME_EMAIL *)
     [ web; admin ]
 ```
 
-That's the whole setup. On boot Fennec:
+That one line is the whole setup, and it's **dev-safe** — it does nothing in development (plain HTTP)
+and turns into real HTTPS in production:
 
-1. **derives the domains** from your endpoints' host patterns (every concrete host — see below),
-2. forks a tiny **`:80` listener** that answers the ACME HTTP-01 challenge (nothing else),
-3. **obtains** a certificate (or loads a cached one), blocking until it's ready *before* `:443`
-   serves its first connection — so there's no "no-cert" window after the first issuance,
-4. forks a **renewal loop** that re-issues under 30 days to expiry and **hot-reloads** the live
-   certificate with no restart and no dropped connections.
+| Environment | Binds | Behavior |
+|---|---|---|
+| **dev** | `:4000` | plain HTTP — `~acme` no-ops, so a dev build never touches Let's Encrypt |
+| **prod** (`FENNEC_ENV=production`) | **`:443`** (app) + **`:80`** | auto-HTTPS: `:80` serves the HTTP-01 challenge and `301`-redirects everything else to `https://` |
 
-Override the derived domains with `~domains`, and use Let's Encrypt **staging** while testing
-(`~staging:true`) so a misconfiguration never burns the production rate limit.
+In production on boot Fennec **derives the domains** from your endpoints' concrete hosts, **obtains**
+a certificate (or loads the cached one) *before* `:443` accepts a connection, and runs a **renewal
+loop** that re-issues under 30 days and **hot-reloads** the live cert with no restart. The single
+`:80` listener does double duty — ACME challenge *and* HTTP→HTTPS redirect — so there's no port
+conflict and no manual redirect wiring.
+
+### Configuration — sane defaults, env-overridable
+
+Everything has a default; nothing is required in code beyond opting in. Env overrides code, so ops
+can tune a build without recompiling:
+
+| Knob | Default | Purpose |
+|---|---|---|
+| `FENNEC_ACME_EMAIL` | — (or `~email`) | ACME account email; absent ⇒ HTTPS stays off (logged) |
+| `FENNEC_ACME` | prod-only | `1`/`0` to force ACME on/off regardless of env |
+| `FENNEC_ACME_STAGING` | `0` | `1` ⇒ Let's Encrypt staging (untrusted, no rate limits — for testing) |
+| `FENNEC_ACME_DIR` | `$XDG_STATE_HOME/fennec/acme` | the file cert store directory |
+| `FENNEC_PORT` | dev `4000` / prod `443` (TLS) or `80` | override the base port |
+
+In code, `~domains` overrides the derived set and `~store` swaps the cert store (below).
 
 ### Which domains get certificates
 
