@@ -24,6 +24,9 @@ let connect ?path () =
   ignore path;
   { live = Live.create () }
 
+(* SSR has no socket / reconnect loop, so tearing down is a no-op *)
+let close (_ : t) = ()
+
 let subscribe t ~name ?(params = []) () : subscription =
   let ready =
     match Hashtbl.find_opt _pubs name with

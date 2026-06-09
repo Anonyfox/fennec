@@ -41,6 +41,8 @@ type t = {
   (* in-flight method calls awaiting their Result: id → a signal that resolves to Ok value /
      Error (code, reason). [None] = still pending. *)
   methods_pending : (string, (Bson.t, string * string) result option Fur.signal) Hashtbl.t;
+  mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
+  mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
 
 let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set st.ready_sig true | None -> ()
@@ -88,7 +90,7 @@ let connect ?(path = "/websocket") () : t =
   let url = scheme ^ host ^ path in
   let t =
     { live = Live.create (); send = (fun _ -> ()); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
-      subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16 }
+      subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; closed = false; ws = None }
   in
   (* sends before the socket is open (component setup fires subscribe/call before onopen) queue up *)
   let is_open = ref false in
@@ -102,6 +104,7 @@ let connect ?(path = "/websocket") () : t =
   let rec open_socket () =
     is_open := false;
     let ws = Js.Unsafe.new_obj (Js.Unsafe.pure_js_expr "WebSocket") [| Js.Unsafe.inject (Js.string url) |] in
+    t.ws <- Some (Js.Unsafe.inject ws);
     let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
     t.send <- (fun str -> if !is_open then raw str else Queue.add str pending);
     Js.Unsafe.set ws (Js.string "onopen")
@@ -127,13 +130,23 @@ let connect ?(path = "/websocket") () : t =
     Js.Unsafe.set ws (Js.string "onclose")
       (Dom.handler (fun _ ->
            is_open := false;
-           let delay = !backoff_ms in
-           backoff_ms := min (delay * 2) 30_000;
-           set_timeout open_socket delay;
+           (* don't reconnect once [close] was called; a timer scheduled just before [close] also
+              re-checks the flag when it fires, so a finished client never reopens a socket *)
+           if not t.closed then begin
+             let delay = !backoff_ms in
+             backoff_ms := min (delay * 2) 30_000;
+             set_timeout (fun () -> if not t.closed then open_socket ()) delay
+           end;
            Js._true))
   in
   open_socket ();
   t
+
+(* tear the client down: stop reconnecting and shut the live socket. After this the client is inert
+   (no timer keeps firing). Idempotent. *)
+let close t =
+  t.closed <- true;
+  match t.ws with Some ws -> (try ignore (Js.Unsafe.meth_call ws "close" [||]) with _ -> ()) | None -> ()
 
 let subscribe t ~name ?(params = []) () : subscription =
   let key = Subkey.key name params in

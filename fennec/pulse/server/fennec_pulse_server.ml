@@ -50,7 +50,11 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
   (* raw /websocket: exactly one DDP JSON message per text frame *)
   let serve ?session_id (ch : Ws.t) : unit =
     let session = new_session ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Msg.encode m)) in
-    ch.Ws.on_text <- (fun raw -> match Msg.decode raw with m -> Session.dispatch session m | exception _ -> ());
+    (* the DECODE is broadly guarded — a malformed frame is dropped, the connection kept. DISPATCH is
+       NOT guarded here: it already handles app-level failures internally (a method exception → a 500
+       Result, a failing publication → Nosub), so anything that still escapes it is a genuine
+       transport/logic bug and should surface (close the connection) rather than vanish silently. *)
+    ch.Ws.on_text <- (fun raw -> match (try Some (Msg.decode raw) with _ -> None) with None -> () | Some m -> Session.dispatch session m);
     ch.Ws.on_close <- (fun () -> Session.close session)
 
   (* /sockjs: DDP messages are wrapped in SockJS array frames (for the stock Meteor browser client) *)
@@ -62,7 +66,7 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     ch.Ws.on_text <-
       (fun frame ->
         List.iter
-          (fun raw -> match Msg.decode raw with m -> Session.dispatch session m | exception _ -> ())
+          (fun raw -> match (try Some (Msg.decode raw) with _ -> None) with None -> () | Some m -> Session.dispatch session m)
           (Sockjs.unwrap frame));
     ch.Ws.on_close <- (fun () -> Session.close session)
 

@@ -18,6 +18,11 @@ type subscription = { ready : bool Fur.signal; stop : unit -> unit }
     sends [connect]. Returns immediately; data arrives asynchronously into {!find}. *)
 val connect : ?path:string -> unit -> t
 
+(** [close t] tears the client down: it stops the auto-reconnect loop and shuts the live socket, so a
+    finished client (page teardown, a throwaway SPA-route client) doesn't keep a reconnect timer
+    firing forever. Idempotent. On the SSR/native client there is no socket, so it is a no-op. *)
+val close : t -> unit
+
 (** [publish ~name f] registers, for SERVER-SIDE SSR only (the browser ignores it), a publication's
     initial-document fetcher. [f params] returns the documents GROUPED BY collection —
     [[ (collection, docs); … ]] — so a publication that feeds several collections seeds them all
