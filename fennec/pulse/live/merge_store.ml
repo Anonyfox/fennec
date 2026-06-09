@@ -196,6 +196,15 @@ let fetch t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array =
   let cv = ensure_collection t name in
   Array.of_list (C.fetch (C.find cv.store ?selector ?sort ?skip ?limit ?fields ()))
 
+(* aggregation over a collection, with $lookup / $unionWith foreign collections resolved across the
+   client's OTHER collections — the same multi-collection joins the server does, now on the client *)
+let aggregate t name (pipeline : Bson.t list) : Bson.t array =
+  let cv = ensure_collection t name in
+  let lookup other =
+    match Hashtbl.find_opt t.collections other with Some o -> C.fetch (C.find o.store ()) | None -> []
+  in
+  Array.of_list (C.aggregate cv.store ~lookup pipeline)
+
 (* SSR / hydration seed: install docs into a collection as if from one sub *)
 let seed t ~sub ~collection (docs : Bson.t list) =
   List.iter

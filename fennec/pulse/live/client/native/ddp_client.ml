@@ -45,3 +45,4 @@ let subscribe t ~name ?(params = []) () : subscription =
 let use_subscribe t ~name ?(params = []) () = (subscribe t ~name ~params ()).ready
 let call _ ~name ?(params = []) () = ignore (name, params)
 let find t = Live.find t.live
+let aggregate t = Live.aggregate t.live

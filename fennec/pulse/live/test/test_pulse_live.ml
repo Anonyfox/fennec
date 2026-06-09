@@ -101,4 +101,25 @@ let%test "seed: the collection travels independently of the publication name (na
 let%test "seed: a malformed / legacy payload decodes to None (no crash)" =
   Seed.decode "not json" = None && Seed.decode "[1,2,3]" = None
 
+(* ── client-side aggregation across the cache's many collections ── *)
+let%test "client aggregate: $lookup joins across the client's collections" =
+  let s = MS.create () in
+  MS.added s ~sub:"x" ~collection:"customers" ~id:"c7" ~fields:[ ("name", B.str "Ada") ];
+  MS.added s ~sub:"x" ~collection:"orders" ~id:"o1" ~fields:[ ("cust", B.str "c7") ];
+  match
+    Array.to_list
+      (MS.aggregate s "orders"
+         [ B.doc [ ("$lookup", B.doc [ ("from", B.str "customers"); ("localField", B.str "cust");
+                                       ("foreignField", B.str "_id"); ("as", B.str "c") ]) ] ])
+  with
+  | [ row ] -> (match B.get row "c" with Some (B.Array [ cust ]) -> B.get cust "name" = Some (B.String "Ada") | _ -> false)
+  | _ -> false
+
+let%test "Live.aggregate recomputes reactively as the primary collection changes" =
+  let lv = Live.create () in
+  let r = Live.aggregate lv "nums" [ B.doc [ ("$match", B.doc []) ] ] in
+  let before = Array.length (Fur.peek r) in
+  MS.added (Live.store lv) ~sub:"a" ~collection:"nums" ~id:"1" ~fields:[ ("v", B.int 1) ];
+  before = 0 && Array.length (Fur.peek r) = 1
+
 let () = exit (Fennec_hunt_unit.run ())

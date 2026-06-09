@@ -55,3 +55,9 @@ val find :
   ?fields:Bson.t ->
   unit ->
   Bson.t array Fur.signal
+
+(** [aggregate t name pipeline] is a Fur signal of the aggregation result over collection [name],
+    recomputing as the server pushes changes; [$lookup] / [$unionWith] join across the client's other
+    subscribed collections (the local cache is a real multi-collection store). Read it with
+    {!Fur.get} inside a component. *)
+val aggregate : t -> string -> Bson.t list -> Bson.t array Fur.signal

@@ -60,6 +60,11 @@ val fetch :
   unit ->
   Bson.t array
 
+(** [aggregate t name pipeline] runs an aggregation pipeline over collection [name]; [$lookup] /
+    [$unionWith] foreign collections resolve across the client's OTHER collections, so joins span the
+    local cache exactly as they do on the server. *)
+val aggregate : t -> string -> Bson.t list -> Bson.t array
+
 (** [seed t ~sub ~collection docs] installs [docs] as if delivered by one subscription — for SSR
     hydration (the inline payload becomes the client's initial cache). *)
 val seed : t -> sub:string -> collection:string -> Bson.t list -> unit

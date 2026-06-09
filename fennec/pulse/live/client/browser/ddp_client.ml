@@ -124,3 +124,4 @@ let call t ~name ?(params = []) () =
 let publish ~name ?collection (_ : Bson.t list -> Bson.t list) = ignore (name, collection)
 
 let find t = Live.find t.live
+let aggregate t = Live.aggregate t.live

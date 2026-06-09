@@ -29,3 +29,12 @@ let find t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array Fur.signa
   let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
   Fur.on_cleanup stop;
   result
+
+let aggregate t name (pipeline : Bson.t list) : Bson.t array Fur.signal =
+  let v = version_signal t name in
+  let snap () = Merge_store.aggregate t.store name pipeline in
+  let result = Fur.signal [||] in
+  (* recompute when the PRIMARY collection changes; $lookup reads foreign collections at that moment *)
+  let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
+  Fur.on_cleanup stop;
+  result

@@ -25,3 +25,9 @@ val find :
   ?fields:Bson.t ->
   unit ->
   Bson.t array Fur.signal
+
+(** [aggregate t name pipeline] is a Fur signal of the aggregation result over collection [name]
+    ([$lookup] / [$unionWith] join across the client's other collections), recomputing when [name]
+    changes. (It is keyed on the primary collection's version — a change to only a foreign $lookup
+    collection does not retrigger it.) *)
+val aggregate : t -> string -> Bson.t list -> Bson.t array Fur.signal
