@@ -38,7 +38,7 @@ let uniq xs =
 let component_name path =
   let prefix = "examples/site/frontend/components/" in
   if starts_with path prefix && Filename.extension path = ".mlx" then
-    Some (Filename.basename path |> drop_suffix ".mlx")
+    Some (drop_suffix (Filename.basename path) ".mlx")
   else None
 
 let app_name path =
@@ -51,11 +51,17 @@ let app_name path =
 
 let route_name path =
   let prefix = "examples/site/frontend/apps/" in
+  let route_segment file =
+    let base = drop_suffix file ".mlx" in
+    if String.length base > 0 && base.[String.length base - 1] = '_' then
+      ":" ^ String.sub base 0 (String.length base - 1)
+    else String.map (function '_' -> '-' | c -> c) base
+  in
   if starts_with path prefix && Filename.extension path = ".mlx" then
     match String.split_on_char '/' (String.sub path (String.length prefix) (String.length path - String.length prefix)) with
     | _app :: "index.mlx" :: [] -> Some "/"
     | _app :: parts ->
-      let parts = List.map (fun p -> drop_suffix p ".mlx" |> String.map (function '_' -> ':' | c -> c)) parts in
+      let parts = List.map route_segment parts in
       Some ("/" ^ String.concat "/" parts)
     | _ -> None
   else None
@@ -95,18 +101,17 @@ let classify ?(backend = false) triggers =
   { paths; components; apps; routes; styles; assets; tests; backend; config }
 
 let short t =
-  let parts =
-    []
-    |> fun xs -> if t.backend then "backend" :: xs else xs
-    |> fun xs -> if t.components <> [] then ("component " ^ String.concat ", " t.components) :: xs else xs
-    |> fun xs -> if t.routes <> [] then ("route " ^ String.concat ", " t.routes) :: xs else xs
-    |> fun xs -> if t.apps <> [] then ("app " ^ String.concat ", " t.apps) :: xs else xs
-    |> fun xs -> if t.styles then "styles" :: xs else xs
-    |> fun xs -> if t.assets then "assets" :: xs else xs
-    |> fun xs -> if t.tests <> [] then "tests" :: xs else xs
-    |> fun xs -> if t.config then "config" :: xs else xs
-    |> List.rev
-  in
+  let parts = ref [] in
+  let add s = parts := s :: !parts in
+  if t.backend then add "backend";
+  if t.components <> [] then add ("component " ^ String.concat ", " t.components);
+  if t.routes <> [] then add ("route " ^ String.concat ", " t.routes);
+  if t.apps <> [] then add ("app " ^ String.concat ", " t.apps);
+  if t.styles then add "styles";
+  if t.assets then add "assets";
+  if t.tests <> [] then add "tests";
+  if t.config then add "config";
+  let parts = List.rev !parts in
   match parts with
   | [] -> ""
   | _ -> String.concat "; " parts
@@ -117,7 +122,7 @@ let%test "classifies component path" =
 
 let%test "classifies app route" =
   let a = classify [ "examples/site/frontend/apps/web/products/id_.mlx changed" ] in
-  a.apps = [ "web" ] && a.routes = [ "/products/id:" ]
+  a.apps = [ "web" ] && a.routes = [ "/products/:id" ]
 
 let%test "short is compact" =
   let a = classify ~backend:true [ "examples/site/frontend/components/nav.mlx changed"; "examples/site/frontend/apps/web/index.mlx changed" ] in

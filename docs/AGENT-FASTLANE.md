@@ -28,6 +28,13 @@ When tests ran, the event summary includes both the served-change verdict and
 the test verdict. There is no hook knob for this: the default agent contract is
 the complete dev verdict for the edit, not the earliest partial signal.
 
+Agent output is rendered from the same internal dev verdict each cycle. The
+summary stays compact, but it includes the changed surface when Fennec can infer
+one, such as affected components, routes, apps, styles, assets, tests, config, or
+backend restarts. Build failures include the focused diagnostic location and
+code frame parsed from Dune output, while the full human terminal UI remains
+unchanged.
+
 Events carry monotonic ids. `fennec agent wait --after ID` ignores old events and
 returns only an event with `id > ID`; before tailing, it scans already-written
 events, so it catches the race where the dev settle lands just before the hook
