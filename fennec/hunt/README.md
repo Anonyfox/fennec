@@ -38,8 +38,7 @@ Each cut dir is a `-linkall` library (so dropping a file auto-registers it) plus
 its own server instance. See the [`fennec-cli` README](../../cli/README.md) for the `fennec test` cuts.
 
 **Standalone** (no Fennec app): a suite is still just an executable — register blocks and call the
-runner yourself; run the **built binary**, not `dune exec`, if it spawns a server that shells out
-to dune (the workspace lock would deadlock — see [How it works](#how-it-works)).
+runner yourself (see [How it works](#how-it-works) for the spawn / URL / dune-lock details).
 
 ## Http tests
 
