@@ -138,4 +138,29 @@ let%test "publish preserves the Object_id _id type for a MONGO collection" =
   sub.R.stop ();
   ok
 
+(* ── multi-collection aggregation: $lookup resolves a foreign collection from the instance's
+   named-collection registry, so in-memory joins span collections like a real database ── *)
+let%test "$lookup joins a foreign collection from the registry (in-memory multi-collection)" =
+  let orders = coll "orders_lk" and customers = coll "customers_lk" in
+  let _ = C.insert customers (doc [ ("_id", B.String "c7"); ("name", B.String "Ada") ]) in
+  let _ = C.insert orders (doc [ ("_id", B.String "o1"); ("cust", B.String "c7") ]) in
+  match
+    C.aggregate orders
+      [ doc [ ("$lookup", doc [ ("from", B.String "customers_lk"); ("localField", B.String "cust");
+                                ("foreignField", B.String "_id"); ("as", B.String "c") ]) ] ]
+  with
+  | [ row ] -> (match B.get row "c" with Some (B.Array [ cust ]) -> B.get cust "name" = Some (B.String "Ada") | _ -> false)
+  | _ -> false
+
+let%test "$lookup against an unregistered collection yields an empty join (no crash)" =
+  let orders = coll "orders_lk2" in
+  let _ = C.insert orders (doc [ ("_id", B.String "o1"); ("cust", B.String "x") ]) in
+  match
+    C.aggregate orders
+      [ doc [ ("$lookup", doc [ ("from", B.String "nope_missing"); ("localField", B.String "cust");
+                                ("foreignField", B.String "_id"); ("as", B.String "c") ]) ] ]
+  with
+  | [ row ] -> B.get row "c" = Some (B.Array [])
+  | _ -> false
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -228,7 +228,14 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       cur_transform : (doc -> doc) option option;
     }
 
+    (* This reactive instance's named-collection registry: [create ~name] records the backend here,
+       and [aggregate] resolves $lookup / $unionWith foreign collections from it — so in-memory joins
+       span collections like a real database (one Reactive instance = one database of named
+       collections). Unnamed collections are not registered (they can't be a join target). *)
+    let _collections : (string, B.collection) Hashtbl.t = Hashtbl.create 16
+
     let create ?(id_generation = STRING) ?transform ?(name = "") backend =
+      if name <> "" then Hashtbl.replace _collections name backend;
       {
         backend;
         name;
@@ -287,8 +294,14 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
     let count c ?(selector = Bson.Document []) () = B.count c.backend selector
 
-    (* one-shot aggregation; rows are computed, so the collection transform is NOT applied *)
-    let aggregate c pipeline = B.aggregate c.backend pipeline
+    (* one-shot aggregation; rows are computed, so the collection transform is NOT applied. $lookup /
+       $unionWith foreign collections resolve (by name) from this instance's registry, so in-memory
+       joins span collections — and a native (mongod) backend ignores the resolver and joins itself. *)
+    let aggregate c pipeline =
+      let lookup from =
+        match Hashtbl.find_opt _collections from with Some bk -> B.find bk (Backend.query ()) | None -> []
+      in
+      B.aggregate c.backend ~lookup pipeline
     let distinct c ~key ?(selector = Bson.Document []) () = B.distinct c.backend key selector
 
     let update c ?(multi = false) ?(upsert = false) sel m =

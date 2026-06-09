@@ -70,7 +70,9 @@ let remove c sel = int_field (Coll.delete_many c ~filter:sel) "n"
 let find c (q : Backend.query) = Coll.find c ~filter:q.Backend.selector ~opts:(native_opts q) ()
 let find_one c (q : Backend.query) = match find c { q with Backend.limit = 1 } with x :: _ -> Some x | [] -> None
 let count c sel = Coll.count c ~filter:sel ()
-let aggregate c (pipeline : B.t list) = Coll.aggregate c ~pipeline:(B.Array pipeline) ()
+let aggregate c ?lookup (pipeline : B.t list) =
+  ignore lookup (* a real mongod resolves $lookup itself; the in-memory resolver is not needed here *);
+  Coll.aggregate c ~pipeline:(B.Array pipeline) ()
 let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
 
 (* real change streams: Live keeps ONE stream per collection, replays the initial set synchronously
@@ -112,7 +114,8 @@ module Dynamic = struct
   let find c q = match c with Mem m -> Mini.find m q | Native r -> find r q
   let find_one c q = match c with Mem m -> Mini.find_one m q | Native r -> find_one r q
   let count c s = match c with Mem m -> Mini.count m s | Native r -> count r s
-  let aggregate c p = match c with Mem m -> Mini.aggregate m p | Native r -> aggregate r p
+  let aggregate c ?(lookup = fun _ -> []) p =
+    match c with Mem m -> Mini.aggregate m ~lookup p | Native r -> aggregate r ~lookup p
   let distinct c k s = match c with Mem m -> Mini.distinct m k s | Native r -> distinct r k s
 
   let observe_changes c q ~added ~changed ~removed =

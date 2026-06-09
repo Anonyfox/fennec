@@ -45,10 +45,13 @@ module type S = sig
   (** The number of documents matching the selector. *)
   val count : collection -> Bson.t -> int
 
-  (** [aggregate c pipeline] runs the aggregation pipeline (a list of stage documents, e.g.
+  (** [aggregate c ?lookup pipeline] runs the aggregation pipeline (a list of stage documents, e.g.
       [[doc [ "$match", … ]; doc [ "$group", … ]]]) and returns the result documents. One-shot, not
-      reactive — the output rows are computed, not stored collection documents. *)
-  val aggregate : collection -> Bson.t list -> Bson.t list
+      reactive — the output rows are computed, not stored collection documents. [lookup name] supplies
+      a foreign collection's documents for the [$lookup] / [$unionWith] stages: the in-memory backend
+      resolves it from the reactive instance's named-collection registry (so joins span collections),
+      while a native (mongod) backend ignores it and resolves joins itself. *)
+  val aggregate : collection -> ?lookup:(string -> Bson.t list) -> Bson.t list -> Bson.t list
 
   (** [distinct c key selector] — the distinct values of [key] across documents matching [selector]
       (array values unwrapped, deduped). *)

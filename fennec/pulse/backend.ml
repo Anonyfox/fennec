@@ -27,7 +27,7 @@ module type S = sig
   val find : collection -> query -> Bson.t list
   val find_one : collection -> query -> Bson.t option
   val count : collection -> Bson.t -> int
-  val aggregate : collection -> Bson.t list -> Bson.t list
+  val aggregate : collection -> ?lookup:(string -> Bson.t list) -> Bson.t list -> Bson.t list
   val distinct : collection -> string -> Bson.t -> Bson.t list
 
   val observe_changes :
@@ -53,7 +53,7 @@ module Mini : S with type collection = Minimongo.t = struct
   let find c q = Minimongo.fetch (cur c q)
   let find_one c q = Minimongo.first (cur c q)
   let count c sel = Minimongo.count (Minimongo.find c ~selector:sel ())
-  let aggregate c pipeline = Minimongo.aggregate c pipeline
+  let aggregate c ?(lookup = fun _ -> []) pipeline = Minimongo.aggregate ~lookup c pipeline
   let distinct c key sel = Minimongo.distinct c ~key ~selector:sel ()
 
   let observe_changes c q ~added ~changed ~removed =
