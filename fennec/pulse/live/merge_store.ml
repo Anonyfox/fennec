@@ -221,17 +221,20 @@ let added t ~sub ~collection ~id ~fields =
 
 (* changed: this sub updated [fields] / unset [cleared] of an existing doc *)
 let changed t ~sub ~collection ~id ~fields ~cleared =
-  match Hashtbl.find_opt t.collections collection with
-  | None -> ()
-  | Some cv -> (
-      match Hashtbl.find_opt cv.docs id with
-      | None -> ()
-      | Some dv ->
-          let prec = sub_prec t sub in
-          List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
-          List.iter (fun f -> clear_field dv f sub) cleared;
-          recompute t cv id dv;
-          confirm t sub collection id)
+  let _ = ensure_sub t sub in
+  let cv = ensure_collection t collection in
+  let dv = doc_of cv id in
+  let prec = sub_prec t sub in
+  (* tolerate a [changed] for a doc this sub hasn't [added] yet — an out-of-order frame, or a real
+     Meteor server re-confirming a doc via [changed] (e.g. after another sub had dropped it locally).
+     Ensure this sub's membership + track it, so the row isn't lost and a following [quiesce] won't
+     drop a still-live doc. For an already-present doc this is idempotent (same sub, same prec). *)
+  Hashtbl.replace dv.exists_in sub prec;
+  List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
+  List.iter (fun f -> clear_field dv f sub) cleared;
+  track t sub collection id;
+  recompute t cv id dv;
+  confirm t sub collection id
 
 (* removed: this sub no longer includes [id] *)
 let removed t ~sub ~collection ~id =

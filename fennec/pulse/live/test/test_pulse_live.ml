@@ -216,6 +216,11 @@ let%test "seed: a duplicate _id within one group resolves to a single row (union
   | [| row |] -> B.get row "x" = Some (B.Int 1) && B.get row "y" = Some (B.Int 2)
   | _ -> false
 
+let%test "changed: a changed for a doc this sub never added creates it (Meteor-tolerant, not dropped)" =
+  let s = MS.create () in
+  MS.changed s ~sub:"a" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ] ~cleared:[];
+  match MS.fetch s "c" () with [| d |] -> B.get d "v" = Some (B.Int 1) | _ -> false
+
 let%test "Live.aggregate recomputes when a FOREIGN $lookup collection changes (not just the primary)" =
   let lv = Live.create () in
   MS.added (Live.store lv) ~sub:"a" ~collection:"orders" ~id:"o1" ~fields:[ ("cust", B.str "c1") ];
