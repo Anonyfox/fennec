@@ -56,14 +56,6 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
-  let agent =
-    match agent_dir with
-    | None -> None
-    | Some dir -> Some (Agent_event.start ~dir ~root:(Sys.getcwd ()) ())
-  in
-  let emit kind ?summary ?trigger ?ms ?fields () =
-    match agent with None -> () | Some a -> Agent_event.emit a ~kind ?summary ?trigger ?ms ?fields ()
-  in
   let trigger_label = function
     | [] -> "filesystem change"
     | [ x ] -> x
@@ -96,6 +88,14 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
      explicitly so the supervisor and server agree, and so the banner can show the gateway URL. *)
   let dev_base = Option.value port ~default:4000 in
+  let agent =
+    match agent_dir with
+    | None -> None
+    | Some dir -> Some (Agent_event.start ~dir ~port:dev_base ~root:(Sys.getcwd ()) ())
+  in
+  let emit kind ?summary ?trigger ?ms ?fields () =
+    match agent with None -> () | Some a -> Agent_event.emit a ~kind ?summary ?trigger ?ms ?fields ()
+  in
   let gateway_url = Printf.sprintf "http://localhost:%d" dev_base in
   (* FENNEC_DEV_PARENT lets the server watch THIS supervisor and self-exit if we die (even on
      SIGKILL), so it can never be left holding the dev port. FENNEC_DEV_UI asks the server to
@@ -220,7 +220,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
              (a revert to identical bytes), clear the stuck panel; otherwise stay silent *)
           | Assets.Nothing ->
             Ui.resolved ui ~ms:dur;
-            emit "resolved" ~summary:"resolved" ~ms:dur ());
+            emit "idle" ~summary:"build ok · no served change" ~trigger:triggers ~ms:dur ());
       (* after the first successful settle, wire inline test runner targets into the watch so
          dune rebuilds them on every change. Only restart the watcher once (idempotent). *)
       if not !tests_wired then begin

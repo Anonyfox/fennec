@@ -6,6 +6,9 @@
 
 module Json = Fennec_mongo_json.Json
 
+(* opt-in wire tracing (FENNEC_ACME_DEBUG=1) — invaluable when an ACME server misbehaves *)
+let dbg fmt = if Sys.getenv_opt "FENNEC_ACME_DEBUG" <> None then Printf.eprintf ("[acme] " ^^ fmt ^^ "\n%!") else Printf.ifprintf stderr fmt
+
 (* ---- base64url (no padding) + SHA-256 ---- *)
 let b64url s = Base64.encode_string ~pad:false ~alphabet:Base64.uri_safe_alphabet s
 let sha256 s = Digestif.SHA256.(to_raw_string (digest_string s))
@@ -84,11 +87,17 @@ let obtain ~net ~clock ?authenticator ~directory ~account_key ~email ~domains ~p
   let the_kid () = match !kid with Some k -> `Kid k | None -> failwith "acme: no account yet" in
   let post_get url = post ~url (the_kid ()) (* POST-as-GET: empty payload, kid-authenticated *) in
   try
-    let dir = parse (req ~meth:"GET" directory).body in
+    dbg "GET directory %s" directory;
+    let dir_resp = req ~meth:"GET" directory in
+    dbg "directory status=%d body=%d bytes: %s" dir_resp.status (String.length dir_resp.body) dir_resp.body;
+    let dir = parse dir_resp.body in
     let new_nonce = must dir "newNonce" and new_account = must dir "newAccount" and new_order = must dir "newOrder" in
+    dbg "directory ok; HEAD nonce";
     refresh (req ~meth:"HEAD" new_nonce);
+    dbg "nonce=%s" !nonce;
     (* account *)
     let acct = post ~url:new_account ~payload:(Printf.sprintf {|{"termsOfServiceAgreed":true,"contact":["mailto:%s"]}|} email) `Jwk in
+    dbg "newAccount status=%d" acct.status;
     if acct.status >= 400 then failwith ("acme: newAccount — " ^ acct.body);
     kid := (match Https_client.header_get acct.headers "location" with Some u -> Some u | None -> failwith "acme: no account URL");
     (* order *)
@@ -99,6 +108,7 @@ let obtain ~net ~clock ?authenticator ~directory ~account_key ~email ~domains ~p
     let order = parse oresp.body in
     let finalize = must order "finalize" in
     let authzs = List.filter_map Json.to_string_opt (list order "authorizations") in
+    dbg "newOrder status=%d finalize=%s authzs=%d" oresp.status finalize (List.length authzs);
     (* each authorization: solve the http-01 challenge *)
     List.iter
       (fun authz_url ->
@@ -108,6 +118,7 @@ let obtain ~net ~clock ?authenticator ~directory ~account_key ~email ~domains ~p
         | None -> failwith "acme: no http-01 challenge offered"
         | Some c ->
           let token = must c "token" and chal_url = must c "url" in
+          dbg "authz %s: http-01 token=%s; provisioning + triggering" authz_url token;
           provision ~token ~key_auth:(token ^ "." ^ thumbprint account_key);
           Fun.protect
             ~finally:(fun () -> cleanup ~token)
@@ -121,7 +132,9 @@ let obtain ~net ~clock ?authenticator ~directory ~account_key ~email ~domains ~p
     (* finalize with the CSR, then download the issued chain *)
     let server_key = X509.Private_key.generate ~bits:2048 `RSA in
     let csr_der = X509.Signing_request.encode_der (make_csr server_key domains) in
+    dbg "authz validated; finalizing";
     let fin = post ~url:finalize ~payload:(Printf.sprintf {|{"csr":"%s"}|} (b64url csr_der)) (the_kid ()) in
+    dbg "finalize status=%d" fin.status;
     if fin.status >= 400 then failwith ("acme: finalize — " ^ fin.body);
     let cert_url =
       poll ~clock ~what:"order" (fun () ->

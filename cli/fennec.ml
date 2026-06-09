@@ -461,6 +461,10 @@ let agent_cmd =
     let doc = "Maximum seconds to wait for the next dev event." in
     Arg.(value & opt float 12.0 & info [ "timeout" ] ~docv:"SECONDS" ~doc)
   in
+  let after_arg =
+    let doc = "Wait only for an event whose id is greater than $(docv)." in
+    Arg.(value & opt (some int) None & info [ "after" ] ~docv:"ID" ~doc)
+  in
   let state_dir dir =
     match dir with
     | Some d -> d
@@ -474,30 +478,44 @@ let agent_cmd =
     Cmd.v (Cmd.info "status" ~doc:"Print the current agent attachment state") Term.(const go $ dir_arg)
   in
   let wait =
-    let go dir timeout =
-      match Fennec_dev.Agent_event.wait_next ~dir:(state_dir dir) ~timeout with
-      | Ok s -> print_endline s; 0
+    let go dir timeout after =
+      match Fennec_dev.Agent_event.wait_next ?after ~dir:(state_dir dir) ~timeout () with
+      | Ok (_id, s) -> print_endline s; 0
       | Error msg -> prerr_endline msg; 1
     in
-    Cmd.v (Cmd.info "wait" ~doc:"Wait for the next fennec dev agent event") Term.(const go $ dir_arg $ timeout_arg)
+    Cmd.v (Cmd.info "wait" ~doc:"Wait for the next fennec dev agent event") Term.(const go $ dir_arg $ timeout_arg $ after_arg)
+  in
+  let mark =
+    let go dir =
+      let input = try In_channel.input_all stdin with _ -> "" in
+      let id = Fennec_dev.Agent_event.mark ~dir:(state_dir dir) ~input in
+      Printf.printf "%d\n" id;
+      0
+    in
+    Cmd.v (Cmd.info "mark" ~doc:"Snapshot the latest event id for a future post-tool hook") Term.(const go $ dir_arg)
   in
   let hook =
     let go dir timeout =
+      let input = try In_channel.input_all stdin with _ -> "" in
       let event =
         try
-          let input = In_channel.input_all stdin in
-          match Fennec_dev.Agent_event.find_string_field input "hook_event_name" with
+          let name =
+            match Fennec_dev.Agent_event.find_string_field input "hook_event_name" with
+            | Some _ as v -> v
+            | None -> Fennec_dev.Agent_event.find_string_field input "hookEventName"
+          in
+          match name with
           | Some s -> Fennec_dev.Agent_event.unescape_json_string s
           | None -> "PostToolUse"
         with _ -> "PostToolUse"
       in
-      print_endline (Fennec_dev.Agent_event.hook_json ~dir:(state_dir dir) ~timeout ~event);
+      print_endline (Fennec_dev.Agent_event.hook_json ~dir:(state_dir dir) ~timeout ~event ~input);
       0
     in
     Cmd.v (Cmd.info "hook" ~doc:"Wait and emit hookSpecificOutput.additionalContext JSON") Term.(const go $ dir_arg $ timeout_arg)
   in
   let doc = "Agent-facing attachment and wait helpers for fennec dev --agent" in
-  Cmd.group (Cmd.info "agent" ~doc) [ status; wait; hook ]
+  Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook ]
 
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =

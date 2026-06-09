@@ -10,7 +10,9 @@ The native path is:
 ```sh
 fennec dev --agent --port 9123
 fennec agent status
+fennec agent mark
 fennec agent wait --timeout 12
+fennec agent wait --after 42 --timeout 12
 fennec agent hook --timeout 12
 ```
 
@@ -18,7 +20,19 @@ fennec agent hook --timeout 12
 machine-readable event journal under the agent state directory. `fennec agent
 wait` and `fennec agent hook` follow that journal with a blocking event stream,
 so hooks do not parse terminal text and do not need an extra build/test command
-after edits.
+after edits. Every wait has a hard timeout.
+
+Events carry monotonic ids. `fennec agent wait --after ID` ignores old events and
+returns only an event with `id > ID`; before tailing, it scans already-written
+events, so it catches the race where the dev settle lands just before the hook
+starts. `fennec agent mark` snapshots the latest id and stores it under a loose
+session/tool key when the harness provides one on stdin; `fennec agent hook`
+uses that marker when present, otherwise it snapshots the latest id at hook
+start.
+
+`fennec agent status` is the cheap recovery command. It reports pid/root/events,
+the latest id and summary, the configured port when known, and whether the
+recorded dev pid is still alive.
 
 The older shell bridge remains useful while dogfooding:
 
@@ -66,6 +80,21 @@ Temporary local harness configs can point at:
 fennec agent hook --timeout 12
 ```
 
+If the harness supports pre-tool hooks, wire pre-tool to:
+
+```sh
+fennec agent mark
+```
+
+and post-tool/batch to:
+
+```sh
+fennec agent hook --timeout 12
+```
+
+That gives the post hook an exact pre-edit event id. Without pre-tool support,
+the post hook still works with a hook-start snapshot and a bounded timeout.
+
 After testing, remove those local configs again. Hook trust is local harness
 state, not Fennec source.
 
@@ -106,7 +135,8 @@ without committing personal automation:
 
 Use `PostToolBatch` when the harness can run parallel edits, because it coalesces
 feedback once before the next model call. Use `PostToolUse` when tool batches are
-not available or when immediate per-tool feedback is preferred.
+not available or when immediate per-tool feedback is preferred. If Claude Code
+pre-tool hooks are available, add `fennec agent mark` there for exact causality.
 
 If a shell command edits files, run `fennec agent wait --timeout 12`
 once after the shell batch. Do not attach the hook to every `Bash` call by
@@ -149,7 +179,9 @@ statusMessage = "Waiting for Fennec dev feedback"
 
 Start Codex with hooks enabled and review/trust the hook. In automation or
 throwaway smoke tests, `--dangerously-bypass-hook-trust` can bypass the trust
-prompt for that invocation.
+prompt for that invocation. If Codex exposes reliable pre-tool hooks in the
+active mode, point them at `fennec agent mark`; interactive Codex TUI 0.137.0
+was verified for post-tool `apply_patch` hooks, while `codex exec` was not.
 
 If a Codex build or mode does not fire hooks for file edits, the fallback
 instruction is: after a native file-editing tool call, run exactly one wait
@@ -166,8 +198,10 @@ ad-hoc build/test/curl probes.
 ## Native Future
 
 The current native path is intentionally conservative: an append-only JSONL
-journal plus a blocking `fennec agent wait`/`hook` reader. A later richer
-version can move from file-following to a socket API:
+journal with monotonic event ids plus a blocking `fennec agent wait`/`hook`
+reader. It already emits an `idle` event for green no-op settles, so hooks do
+not hang just because the edit produced no served change. A later richer version
+can move from file-following to a socket API:
 
 - `--agent-socket PATH` for `status`, `wait_idle`, and `wait_next`.
 - Monotonic event IDs and causal waits such as `wait_idle_since <timestamp>`.

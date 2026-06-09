@@ -1,0 +1,5 @@
+; End-to-end ACME proof against a local pebble server — a standalone exe, gated on
+; FENNEC_ACME_TEST_DIR (skips otherwise), run manually / in CI with pebble up. Not an inline test.
+(executable
+ (name acme_pebble_test)
+ (libraries fennec.server eio eio_main eio.unix x509 mirage-crypto-rng.unix))

@@ -33,12 +33,16 @@ let request ~net ?authenticator ~meth ?(headers = []) ?(body = "") url : respons
     | Ok d -> ( match Domain_name.host d with Ok h -> h | Error (`Msg m) -> failwith ("https_client: bad host — " ^ m))
     | Error (`Msg m) -> failwith ("https_client: bad host — " ^ m)
   in
+  (* the Host header must carry the non-default port, or the server (e.g. ACME) builds back-reference
+     URLs without it *)
+  let host_header = if port = 443 then host else Printf.sprintf "%s:%d" host port in
   Eio.Switch.run @@ fun sw ->
   let addr = match Eio.Net.getaddrinfo_stream ~service:(string_of_int port) net host with a :: _ -> a | [] -> failwith ("https_client: cannot resolve " ^ host) in
   let raw = Eio.Net.connect ~sw net addr in
   let flow = Tls_eio.client_of_flow cfg ~host:host_dn raw in
   let req =
-    Printf.sprintf "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Length: %d\r\n%s\r\n%s" meth path host
+    (* a User-Agent is mandatory at Let's Encrypt (and pebble); Connection: close keeps it one-shot *)
+    Printf.sprintf "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: fennec-acme/0.0.1\r\nConnection: close\r\nContent-Length: %d\r\n%s\r\n%s" meth path host_header
       (String.length body)
       (String.concat "" (List.map (fun (k, v) -> k ^ ": " ^ v ^ "\r\n") headers))
       body
@@ -53,5 +57,14 @@ let request ~net ?authenticator ~meth ?(headers = []) ?(body = "") url : respons
     | exception End_of_file -> List.rev acc
   in
   let headers = hdrs [] in
-  let body = Eio.Buf_read.take_all r in
+  (* read the body by Content-Length (the server may keep the connection alive despite our
+     [Connection: close], so reading to EOF would hang); HEAD has no body; absent Content-Length,
+     fall back to read-to-EOF *)
+  let body =
+    if meth = "HEAD" then ""
+    else
+      match Option.bind (header_get headers "content-length") (fun s -> int_of_string_opt (String.trim s)) with
+      | Some len -> ( try Eio.Buf_read.take len r with _ -> "")
+      | None -> Eio.Buf_read.take_all r
+  in
   { status; headers; body }
