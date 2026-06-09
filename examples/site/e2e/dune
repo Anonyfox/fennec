@@ -26,12 +26,12 @@
  (libraries fennec-hunt))
 
 ; Realtime DDP e2e: a minimal RFC 6455 server (fennec.server's Ws codec) wires a DDP session
-; (fennec.realtime over fennec.data + fennec-mongo) and a fennec-hunt Cdp WebSocket client drives a
+; (fennec.pulse.server over fennec.pulse + fennec-mongo) and a fennec-hunt Cdp WebSocket client drives a
 ; full connect/subscribe/method round-trip, asserting the live server→client push. UNLIKE the
 ; manual fixtures above, this is self-contained (it runs its own server fiber and exits 0/1), so it
 ; is a real `(test)` — `dune runtest` (and CI) run it. Exits nonzero on any assertion failure.
 (test
  (name realtime_e2e)
  (modules realtime_e2e)
- (libraries eio eio_main fennec.core fennec.server fennec.realtime fennec.data fennec.ddp
+ (libraries eio eio_main fennec.core fennec.server fennec.pulse.server fennec.pulse fennec.ddp
    fennec-mongo.bson fennec-mongo.minimongo fennec-hunt))

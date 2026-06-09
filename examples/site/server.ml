@@ -41,7 +41,7 @@ let powered_by : Fennec.Paw.t =
       { r with Fennec.Http.headers = ("X-Powered-By", "fennec") :: r.Fennec.Http.headers })
 
 (* the realtime backend: a published "tasks" collection + an addTask method, served as DDP over a
-   websocket at /ddp by fennec.realtime over the in-memory reactive engine. The browser (Task_list)
+   websocket at /ddp by fennec.pulse.server over the in-memory reactive engine. The browser (Task_list)
    subscribes and renders it live; addTask inserts and the new doc is pushed back through the open
    subscription — server→client push, no refetch.
 
@@ -50,9 +50,9 @@ let powered_by : Fennec.Paw.t =
    hard dependency — the dev/test server still runs as fast bytecode: dune builds libmongoc + the C
    stub ONCE, and the dev/test harness puts that stub dir on CAML_LD_LIBRARY_PATH (so the bytecode
    dlopens it), so per-edit only OCaml recompiles — no native, no relink. *)
-module D = Fennec_data_mongo.Dynamic
-module RData = Fennec_data.Reactive.Make (D)
-module RT = Fennec_realtime.Make (RData)
+module D = Fennec_pulse_mongo.Dynamic
+module RData = Fennec_pulse.Reactive.Make (D)
+module RT = Fennec_pulse_server.Make (RData)
 
 let realtime_ddp = RT.paw ~path:"/ddp" ()
 

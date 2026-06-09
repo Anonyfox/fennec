@@ -1,0 +1,6 @@
+; Feature suite for the reactive core, run against the in-memory (Mini) instance with fennec's
+; inline test tooling. The same assertions will later run against the native backend to prove parity.
+(test
+ (name test_pulse)
+ (libraries fennec.pulse fennec-mongo.bson fennec-mongo.minimongo fennec-hunt.unit)
+ (preprocess (pps fennec-hunt.ppx)))

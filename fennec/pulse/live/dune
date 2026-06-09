@@ -1,0 +1,9 @@
+; The client live-data layer: the §5b merge store (DDP deltas → a per-collection Minimongo of
+; winning documents, with per-field subscription precedence) and the Fur binding (a reactive
+; `find` signal that recomputes as the store changes). Pure (fennec-mongo + Fur's isomorphic
+; signals), so it runs native (for tests/SSR) and compiles to JavaScript for the browser client.
+; The js_of_ocaml DDP WebSocket client + `subscribe` are a later addition. See DATAFLOW.md §7.
+(library
+ (name fennec_pulse_live)
+ (public_name fennec.pulse.live)
+ (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo fennec.fur))

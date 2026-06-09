@@ -1,8 +1,0 @@
-; The reactive data layer — the Meteor-style surface (Collection / publish / subscribe / methods /
-; ObjectID / EJSON) as a functor over a storage Backend, instantiated on fennec-mongo's in-memory
-; engine. Pure (bson + query + minimongo), so it also compiles to JavaScript for the client. The
-; native libmongoc-backed backend is a later addition behind the same Backend.S seam.
-(library
- (name fennec_data)
- (public_name fennec.data)
- (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo))

@@ -1,9 +1,0 @@
-; Native MongoDB backend: a thin Fennec_data.Backend.S adapter over the ported driver layer
-; (fennec-mongo.driver — Client/Collection/Live), so the whole reactive / DDP / realtime stack runs
-; over a real mongod UNCHANGED (same seam Minimongo implements in memory). observe_changes is real
-; change streams (Live), not polling. Native only (the driver links the C FFI + Eio) — the
-; browser/SSR use fennec.data with the in-memory backend instead.
-(library
- (name fennec_data_mongo)
- (public_name fennec.data.mongo)
- (libraries fennec.data fennec-mongo.driver fennec-mongo.ffi fennec-mongo.bson fennec-mongo.query eio))

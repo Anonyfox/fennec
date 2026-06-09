@@ -1,14 +1,14 @@
 (* End-to-end proof of the realtime stack over a REAL WebSocket — no browser, fully deterministic.
    In one Eio process: a minimal RFC 6455 server (fennec.server's Ws codec + accept_key) wires each
-   connection to a DDP session via fennec.realtime over a fennec.data reactive instance backed by
+   connection to a DDP session via fennec.pulse.server over a fennec.pulse reactive instance backed by
    fennec-mongo's in-memory engine; the client (fennec-hunt's Cdp WebSocket client) performs a full
    DDP handshake/subscribe/method round-trip and asserts the live server→client push.
 
    It exercises the whole server stack across a socket: RFC 6455 framing ↔ Ws_channel ↔ Session ↔
    Reactive ↔ Minimongo observe → sub-tagged delta → frame. Run with `dune exec`. Exits 0 on PASS. *)
 
-module R = Fennec_data.Reactive.Mini
-module D = Fennec_realtime.Make (R)
+module R = Fennec_pulse.Reactive.Mini
+module D = Fennec_pulse_server.Make (R)
 module Msg = Fennec_ddp.Message
 module Ws = Fennec_server.Ws
 module Wsc = Fennec_core.Ws_channel
