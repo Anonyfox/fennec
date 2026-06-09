@@ -115,6 +115,26 @@ The renewal loop checks every ~12 h and re-issues under 30 days to expiry. The s
 certificate from a live source **per connection**, so a renewal swaps it instantly — new connections
 get the new cert, in-flight ones finish on the old, nothing restarts.
 
+## Behind a reverse proxy or PaaS
+
+If something else terminates TLS — nginx, Caddy, a cloud load balancer, a k8s ingress, or a PaaS
+(Heroku / Render / Fly) — the app should serve **plain HTTP** on the port it's handed and let the
+edge do HTTPS. That's the default path: **don't** pass `~tls`/`~acme`, and either set `FENNEC_PORT`
+or let the platform's `$PORT` be picked up automatically.
+
+```sh
+# nginx/Caddy/ingress forwards to the app on a high port:
+FENNEC_PORT=8080 ./server
+# on a PaaS that injects $PORT, nothing at all — fennec binds it:
+./server
+```
+
+Port precedence is `FENNEC_PORT` › `$PORT` (prod) › `443` (when terminating TLS in-process) › `80`.
+The proxy nuances are handled: `Force_https` and the session's Secure-cookie logic honor
+`X-Forwarded-Proto`, and rate-limiting keys off `X-Forwarded-For` (so a client behind the proxy is
+identified correctly, not lumped under the proxy's IP). Do **not** combine a proxy with `~acme`/`~tls`
+— that makes the app *also* terminate TLS and bind `:80`, fighting the proxy.
+
 ## Build matrix / static binaries
 
 The TLS stack is pure OCaml, but `mirage-crypto`'s RSA/DH math uses `zarith`, which links
