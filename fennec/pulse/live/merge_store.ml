@@ -37,6 +37,8 @@ type collection_view = {
      bumps the primary's version but not a foreign's, so the foreign fetch is reused, not rebuilt on
      every aggregate recompute *)
   mutable agg_cache : (int * Bson.t list) option;
+  (* O(1) dirty-set membership during a [batch] — avoids an O(W) List.memq per touched view *)
+  mutable in_dirty : bool;
 }
 
 type sub_info = {
@@ -71,7 +73,7 @@ let ensure_collection t name : collection_view =
   | None ->
       let cv =
         { store = C.create (); docs = Hashtbl.create 64; listeners = Hashtbl.create 4; lc = 0; version = 0;
-          oid = false; agg_cache = None }
+          oid = false; agg_cache = None; in_dirty = false }
       in
       Hashtbl.replace t.collections name cv;
       cv
@@ -83,7 +85,7 @@ let fire cv = Hashtbl.iter (fun _ f -> f ()) cv.listeners
    batch end: an O(W) burst's O(W^2) re-snapshots collapse to O(W). *)
 let bump t cv =
   cv.version <- cv.version + 1;
-  if t.batch_depth > 0 then (if not (List.memq cv t.dirty) then t.dirty <- cv :: t.dirty) else fire cv
+  if t.batch_depth > 0 then (if not cv.in_dirty then (cv.in_dirty <- true; t.dirty <- cv :: t.dirty)) else fire cv
 
 (* run [f], coalescing every version bump inside it into one notify per touched view; re-entrant. *)
 let batch t f =
@@ -93,7 +95,7 @@ let batch t f =
     if t.batch_depth = 0 && t.dirty <> [] then (
       let d = t.dirty in
       t.dirty <- [];
-      List.iter fire d)
+      List.iter (fun cv -> cv.in_dirty <- false; fire cv) d)
   in
   match f () with
   | v -> finish (); v
@@ -163,10 +165,15 @@ let drop_sub_from_doc dv sub =
 let recompute t cv id dv =
   (* a MONGO collection keeps its Object_id _id (the wire/seed carry the hex as a string) *)
   let id_val = if cv.oid then Bson.Object_id id else Bson.String id in
-  (* keyed delete — an O(1) hash remove, not the O(n) selector scan [remove {_id}] would run *)
-  ignore (C.remove_id cv.store id);
-  if Hashtbl.length dv.exists_in = 0 then Hashtbl.remove cv.docs id
+  if Hashtbl.length dv.exists_in = 0 then begin
+    (* gone from every sub → keyed delete (O(1) hash remove, not an O(n) selector scan) *)
+    ignore (C.remove_id cv.store id);
+    Hashtbl.remove cv.docs id
+  end
   else begin
+    (* still present → INSERT overwrites the store entry with the full merged doc and leaves [rorder]
+       untouched when the id is already there (insert only conses a NEW id), so the common change/add
+       path no longer pays the O(n) rorder compaction a remove+insert would *)
     let kvs =
       Hashtbl.fold (fun f entries acc -> match entries with e :: _ -> (f, e.value) :: acc | [] -> acc) dv.fields []
     in
