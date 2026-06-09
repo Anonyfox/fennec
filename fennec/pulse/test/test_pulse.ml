@@ -195,4 +195,16 @@ let%test "Collection.forget removes a collection from the $lookup registry" =
   let empty_after = match lk () with [ row ] -> B.get row "c" = Some (B.Array []) | _ -> false in
   joined_before && empty_after
 
+(* ── RX9: the observe-multiplexer query key — same (collection, query) ⇒ same key ⇒ one shared
+   observe; key order widens sharing, distinct queries stay distinct ── *)
+let%test "query_key: a selector's key ORDER doesn't change the key (wider observe sharing)" =
+  let q sel = Query_key.of_query ~collection:"t" (Backend.query ~selector:sel ()) in
+  q (doc [ ("a", i 1); ("b", i 2) ]) = q (doc [ ("b", i 2); ("a", i 1) ])
+
+let%test "query_key: a different selector / collection / limit yields a different key" =
+  let q ?(coll = "t") ?(limit = 0) sel = Query_key.of_query ~collection:coll (Backend.query ~selector:sel ~limit ()) in
+  q (doc [ ("a", i 1) ]) <> q (doc [ ("a", i 2) ])
+  && q (doc []) <> q ~coll:"u" (doc [])
+  && q (doc []) <> q ~limit:5 (doc [])
+
 let () = exit (Fennec_hunt_unit.run ())
