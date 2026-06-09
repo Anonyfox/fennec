@@ -9,7 +9,7 @@
 let letsencrypt_prod = "https://acme-v02.api.letsencrypt.org/directory"
 let letsencrypt_staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
-type config = { email : string; store : Cert_store.t; staging : bool; domains : string list option; directory : string option }
+type config = { email : string option; store : Cert_store.t; staging : bool; domains : string list option; directory : string option }
 
 let default_dir () =
   match Sys.getenv_opt "FENNEC_ACME_DIR" with
@@ -18,7 +18,14 @@ let default_dir () =
     let state = match Sys.getenv_opt "XDG_STATE_HOME" with Some x -> x | None -> Filename.concat (Option.value (Sys.getenv_opt "HOME") ~default:".") ".local/state" in
     Filename.concat state "fennec/acme"
 
-let auto ~email ?store ?(staging = false) ?domains ?directory () =
+let env_true v = match Sys.getenv_opt v with Some ("1" | "on" | "true" | "yes") -> true | _ -> false
+
+(* [auto] never raises — a missing email just means HTTPS stays off (logged at run), so a dev build
+   with no FENNEC_ACME_EMAIL boots fine on plain HTTP. Env overrides code: FENNEC_ACME_EMAIL,
+   FENNEC_ACME_STAGING. *)
+let auto ?email ?store ?staging ?domains ?directory () =
+  let email = match email with Some _ -> email | None -> Sys.getenv_opt "FENNEC_ACME_EMAIL" in
+  let staging = match staging with Some s -> s | None -> env_true "FENNEC_ACME_STAGING" in
   { email; store = (match store with Some s -> s | None -> Cert_store.file ~dir:(default_dir ())); staging; domains; directory }
 
 let domains_override cfg = cfg.domains
@@ -53,24 +60,27 @@ let load_cert t =
   | Some cert, Some key -> ( try t.cert := Some (Tls_termination.of_pem ~cert ~key) with _ -> ())
   | _ -> ()
 
-(* the HTTP response for one challenge request line — pure, so it's unit-testable without binding :80 *)
-let challenge_response challenges request_line =
+(* the HTTP response for one :80 request — serve the ACME HTTP-01 token if the path matches a
+   provisioned one, else 301-redirect to HTTPS. Pure, so it's unit-testable without binding :80. *)
+let http_front_response ~challenges ~host request_line =
   let prefix = "/.well-known/acme-challenge/" in
-  let token =
-    match String.split_on_char ' ' request_line with
-    | _ :: path :: _ when String.length path > String.length prefix && String.sub path 0 (String.length prefix) = prefix ->
-      Some (String.sub path (String.length prefix) (String.length path - String.length prefix))
-    | _ -> None
-  in
-  match Option.bind token (Hashtbl.find_opt challenges) with
-  | Some ka -> Printf.sprintf "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" (String.length ka) ka
-  | None -> "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+  match String.split_on_char ' ' request_line with
+  | _ :: path :: _ when String.length path > String.length prefix && String.sub path 0 (String.length prefix) = prefix -> (
+    match Hashtbl.find_opt challenges (String.sub path (String.length prefix) (String.length path - String.length prefix)) with
+    | Some ka -> Printf.sprintf "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" (String.length ka) ka
+    | None -> "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+  | _ :: path :: _ ->
+    let host = match String.index_opt host ':' with Some i -> String.sub host 0 i | None -> host (* drop any :port; redirect to standard :443 *) in
+    Printf.sprintf "HTTP/1.1 301 Moved Permanently\r\nLocation: https://%s%s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" host path
+  | _ -> "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
-(* the dedicated :80 HTTP-01 challenge listener (always on, for issuance + renewals); independent of
-   the app's :443 so app routing can't shadow it *)
-let serve_challenges ~sw ~net t =
+(* the dedicated :80 front (HTTP-01 challenge + HTTP→HTTPS redirect), owned by {!Fennec.serve} in
+   TLS-mode prod. Independent of the app's :443, so it serves challenges during issuance and renewal
+   and redirects plain-HTTP visitors. [challenges] is shared with the ACME issuer (empty for BYO-cert,
+   making it redirect-only). *)
+let serve_http_front ~sw ~net ~challenges =
   match (try Some (Eio.Net.listen ~sw ~reuse_addr:true ~backlog:64 net (`Tcp (Eio.Net.Ipaddr.V4.any, 80))) with _ -> None) with
-  | None -> Printf.eprintf "fennec acme: could not bind :80 for HTTP-01 (need privilege / port free) — issuance will fail\n%!"
+  | None -> Printf.eprintf "fennec: could not bind :80 (need privilege / port free) — no HTTP->HTTPS redirect or ACME HTTP-01\n%!"
   | Some sock ->
     Eio.Fiber.fork ~sw (fun () ->
         let rec loop () =
@@ -78,7 +88,13 @@ let serve_challenges ~sw ~net t =
              Eio.Net.accept_fork ~sw sock ~on_error:(fun _ -> ()) (fun flow _ ->
                  let r = Eio.Buf_read.of_flow flow ~max_size:8192 in
                  let line = try Eio.Buf_read.line r with _ -> "" in
-                 try Eio.Flow.copy_string (challenge_response t.challenges line) flow with _ -> ())
+                 let rec host_of () =
+                   match Eio.Buf_read.line r with
+                   | "" -> "localhost"
+                   | h -> ( match String.index_opt h ':' with Some i when String.lowercase_ascii (String.trim (String.sub h 0 i)) = "host" -> String.trim (String.sub h (i + 1) (String.length h - i - 1)) | _ -> host_of ())
+                   | exception _ -> "localhost"
+                 in
+                 try Eio.Flow.copy_string (http_front_response ~challenges ~host:(host_of ()) line) flow with _ -> ())
            with _ -> ());
           loop ()
         in
@@ -92,7 +108,7 @@ let issue t ~clock ~net ~domains =
     Cert_store.(
       t.cfg.store.with_lease "acme-issue" (fun () ->
           match
-            Acme_client.obtain ~net ~clock ~directory ~account_key:key ~email:t.cfg.email ~domains
+            Acme_client.obtain ~net ~clock ~directory ~account_key:key ~email:(Option.value t.cfg.email ~default:"") ~domains
               ~provision:(fun ~token ~key_auth -> Hashtbl.replace t.challenges token key_auth)
               ~cleanup:(fun ~token -> Hashtbl.remove t.challenges token) ()
           with
@@ -110,12 +126,13 @@ let issue t ~clock ~net ~domains =
 
 (* the full lifecycle, called from {!Fennec.serve}'s on_start (which runs before the server binds).
    [cert_ref] is the live source the server's TLS wrap reads. *)
-let run ~sw ~clock ~net ~domains (cfg : config) (cert_ref : Tls.Config.server option ref) =
-  match domains with
-  | [] -> Printf.eprintf "fennec acme: no concrete (Exact) domain to certify — HTTPS disabled (wildcards need DNS-01; the catch-all needs on-demand TLS)\n%!"
-  | _ ->
-    let t = { cfg; challenges = Hashtbl.create 8; cert = cert_ref } in
-    serve_challenges ~sw ~net t;
+let run ~sw ~clock ~net ~domains ~challenges (cfg : config) (cert_ref : Tls.Config.server option ref) =
+  match (cfg.email, domains) with
+  | None, _ -> Printf.eprintf "fennec acme: no email (pass ~email or set FENNEC_ACME_EMAIL) — HTTPS disabled\n%!"
+  | _, [] -> Printf.eprintf "fennec acme: no concrete (Exact) domain — HTTPS disabled (wildcards need DNS-01; the catch-all needs on-demand TLS)\n%!"
+  | Some _, _ ->
+    (* the :80 front (challenge + redirect) is owned by serve; [challenges] is shared with it *)
+    let t = { cfg; challenges; cert = cert_ref } in
     (match cert_days_left cfg.store ~clock with Some d when d > 30 -> load_cert t | _ -> issue t ~clock ~net ~domains);
     Eio.Fiber.fork ~sw (fun () ->
         let rec loop () =
@@ -127,7 +144,7 @@ let run ~sw ~clock ~net ~domains (cfg : config) (cert_ref : Tls.Config.server op
 
 (* ──── acme manager tests ──── *)
 
-let%test "HTTP-01 listener serves a provisioned token, 404s everything else" =
+let%test ":80 front serves a provisioned HTTP-01 token; redirects everything else to https" =
   let has ~sub s =
     let n = String.length sub and m = String.length s in
     let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
@@ -135,7 +152,8 @@ let%test "HTTP-01 listener serves a provisioned token, 404s everything else" =
   in
   let c = Hashtbl.create 4 in
   Hashtbl.replace c "tokenAAA" "tokenAAA.keyauthZZZ";
-  let ok = challenge_response c "GET /.well-known/acme-challenge/tokenAAA HTTP/1.1" in
-  let miss = challenge_response c "GET /.well-known/acme-challenge/unknown HTTP/1.1" in
-  let other = challenge_response c "GET /index.html HTTP/1.1" in
-  has ~sub:"200 OK" ok && has ~sub:"tokenAAA.keyauthZZZ" ok && has ~sub:"404" miss && has ~sub:"404" other
+  let ok = http_front_response ~challenges:c ~host:"ex.com" "GET /.well-known/acme-challenge/tokenAAA HTTP/1.1" in
+  let miss = http_front_response ~challenges:c ~host:"ex.com" "GET /.well-known/acme-challenge/unknown HTTP/1.1" in
+  let redir = http_front_response ~challenges:c ~host:"ex.com:80" "GET /app/page HTTP/1.1" in
+  has ~sub:"200 OK" ok && has ~sub:"tokenAAA.keyauthZZZ" ok && has ~sub:"404" miss
+  && has ~sub:"301 Moved Permanently" redir && has ~sub:"Location: https://ex.com/app/page" redir

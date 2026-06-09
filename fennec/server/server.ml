@@ -486,8 +486,9 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) timeout in
   let slots = Eio.Semaphore.make max_conns in
   let entries = Host_router.entries router in
-  (* base port: FENNEC_PORT, else 4000 (dev) / 80 (prod) *)
-  let base = match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with Some p -> p | None -> if dev then 4000 else 80 in
+  (* base port: FENNEC_PORT, else dev 4000; prod 443 when terminating TLS (HTTPS on the standard
+     port, with :80 handling redirect + ACME challenge), else 80 (plain HTTP) *)
+  let base = match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with Some p -> p | None -> if dev then 4000 else if tls <> None then 443 else 80 in
   match Port_plan.of_base ~base ~count:(List.length entries) with
   | Error msg -> Error (`Bad_plan msg)
   | Ok plan ->

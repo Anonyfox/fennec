@@ -201,10 +201,12 @@ module Acme : sig
   (** ACME configuration. *)
   type config = Fennec_server.Acme.config
 
-  (** [auto ~email ?store ?staging ?domains ?directory ()] — automatic certificates. [store] defaults
-      to a file store under [$FENNEC_ACME_DIR] / [$XDG_STATE_HOME/fennec/acme]; [domains] overrides
-      the router-derived (Exact) set; [staging] uses Let's Encrypt staging (rate-limit-free testing). *)
-  val auto : email:string -> ?store:Cert_store.t -> ?staging:bool -> ?domains:string list -> ?directory:string -> unit -> config
+  (** [auto ?email ?store ?staging ?domains ?directory ()] — automatic certificates. Never raises;
+      a missing email leaves HTTPS off. Env overrides code: [FENNEC_ACME_EMAIL], [FENNEC_ACME_STAGING],
+      [FENNEC_ACME_DIR] (store). ACME runs in production only unless [FENNEC_ACME=1] forces it; in dev
+      it no-ops to plain HTTP. [store] defaults to a file store; [domains] overrides the router-derived
+      (Exact) set; [staging] uses Let's Encrypt staging (rate-limit-free testing). *)
+  val auto : ?email:string -> ?store:Cert_store.t -> ?staging:bool -> ?domains:string list -> ?directory:string -> unit -> config
 end
 
 (** {1 Entry point} *)

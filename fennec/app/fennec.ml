@@ -160,18 +160,32 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
      [cert_ref]. ~tls (BYO cert) is a constant source. The certifiable domains are the router's
      concrete (Exact) hosts unless overridden — wildcards/catch-all are reported by Acme.run. *)
   let cert_ref = ref None in
+  let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
+  (* ACME issues REAL certificates, so it runs only in production (FENNEC_ENV=production); FENNEC_ACME=1/0
+     force on/off. In dev, ~acme no-ops (plain HTTP) — a dev build never touches Let's Encrypt. ~tls (a
+     BYO cert) always applies, dev or prod. *)
+  let acme_active =
+    match (acme, Sys.getenv_opt "FENNEC_ACME") with
+    | _, Some ("0" | "off" | "false" | "no") -> false
+    | Some _, Some ("1" | "on" | "true" | "yes") -> true
+    | Some _, _ -> not is_dev (* ~acme given, FENNEC_ACME unset/unrecognized → production only *)
+    | None, _ -> false
+  in
   let tls_source =
-    match acme with
-    | Some cfg ->
+    if acme_active then (
+      let cfg = Option.get acme in
       let exact =
         List.concat_map (fun e -> List.filter_map (fun h -> match Fennec_server.Host_pattern.of_string h with Ok (Fennec_server.Host_pattern.Exact d) -> Some d | _ -> None) (Endpoint.hosts e)) endpoints
         |> List.sort_uniq compare
       in
       let domains = match Fennec_server.Acme.domains_override cfg with Some d -> d | None -> exact in
-      Fennec_server.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains cfg cert_ref;
-      Some (fun () -> !cert_ref)
-    | None -> ( match tls with Some t -> Some (fun () -> Some t) | None -> None)
+      Fennec_server.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg cert_ref;
+      Some (fun () -> !cert_ref))
+    else match tls with Some t -> Some (fun () -> Some t) | None -> None
   in
+  (* in TLS-mode production the app is on :443; a :80 front does the HTTP→HTTPS redirect (+ serves
+     the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
+  if Option.is_some tls_source && not is_dev then Fennec_server.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
   (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
