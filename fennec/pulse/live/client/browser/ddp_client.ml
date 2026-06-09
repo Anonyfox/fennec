@@ -40,7 +40,9 @@ let handle t raw =
          tested Wire_route; control frames are this client's concern (they touch subscription state) *)
       if not (Fennec_pulse_live.Wire_route.apply_delta box m) then
         (match m with
-        | Msg.Ready { subs } -> List.iter (mark_ready t) subs
+        | Msg.Ready { subs } ->
+            (* quiescence: drop SSR-seeded docs the live snapshot didn't re-confirm, then mark ready *)
+            List.iter (fun id -> MS.quiesce box id; mark_ready t id) subs
         | Msg.Nosub { id; _ } -> mark_ready t id (* the sub ended/failed — stop "loading" rather than hang *)
         | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
         | _ -> ())

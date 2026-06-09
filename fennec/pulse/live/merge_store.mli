@@ -66,5 +66,12 @@ val fetch :
 val aggregate : t -> string -> Bson.t list -> Bson.t array
 
 (** [seed t ~sub ~collection docs] installs [docs] as if delivered by one subscription — for SSR
-    hydration (the inline payload becomes the client's initial cache). *)
+    hydration (the inline payload becomes the client's initial cache). Seeded docs are {e tentative}
+    until {!quiesce}. *)
 val seed : t -> sub:string -> collection:string -> Bson.t list -> unit
+
+(** [quiesce t sub] runs the post-hydration reconciliation for [sub], called on its first live
+    [ready]: any document [sub] {!seed}ed but the live snapshot has not re-confirmed (via [added] /
+    [changed]) is dropped — so a row deleted server-side between SSR and the socket opening does not
+    linger as a stale fast-render artifact. A no-op for a sub that was never seeded. *)
+val quiesce : t -> string -> unit

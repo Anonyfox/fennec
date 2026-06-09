@@ -122,4 +122,25 @@ let%test "Live.aggregate recomputes reactively as the primary collection changes
   MS.added (Live.store lv) ~sub:"a" ~collection:"nums" ~id:"1" ~fields:[ ("v", B.int 1) ];
   before = 0 && Array.length (Fur.peek r) = 1
 
+(* ── seed↔live quiescence: SSR-seeded docs the live snapshot doesn't re-confirm are dropped ── *)
+let%test "quiesce: a seeded doc the live snapshot doesn't re-confirm is dropped on ready" =
+  let s = MS.create () in
+  MS.seed s ~sub:"s1" ~collection:"c"
+    [ B.doc [ ("_id", B.str "D"); ("n", B.int 1) ]; B.doc [ ("_id", B.str "E"); ("n", B.int 2) ] ];
+  let both = Array.length (MS.fetch s "c" ()) = 2 in
+  (* the live snapshot re-confirms only D; E was deleted server-side between SSR and the socket *)
+  MS.added s ~sub:"s1" ~collection:"c" ~id:"D" ~fields:[ ("n", B.int 1) ];
+  MS.quiesce s "s1";
+  let only_d =
+    match Array.to_list (MS.fetch s "c" ()) with [ d ] -> B.get d "_id" = Some (B.String "D") | _ -> false
+  in
+  both && only_d
+
+let%test "quiesce: a live `changed` also confirms a seeded doc (kept, not dropped)" =
+  let s = MS.create () in
+  MS.seed s ~sub:"s1" ~collection:"c" [ B.doc [ ("_id", B.str "D"); ("n", B.int 1) ] ];
+  MS.changed s ~sub:"s1" ~collection:"c" ~id:"D" ~fields:[ ("n", B.int 9) ] ~cleared:[];
+  MS.quiesce s "s1";
+  (match Array.to_list (MS.fetch s "c" ()) with [ d ] -> B.get d "n" = Some (B.Int 9) | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -37,10 +37,15 @@ type sub_info = {
 type t = {
   collections : (string, collection_view) Hashtbl.t;
   subs : (string, sub_info) Hashtbl.t;
+  (* per sub: docs it SEEDED (SSR) that the live snapshot hasn't re-confirmed yet — dropped on the
+     sub's first [ready] (quiescence), so a doc deleted between SSR and the socket opening doesn't
+     linger as a stale fast-render row *)
+  tentative : (string, (string * string, unit) Hashtbl.t) Hashtbl.t;
   mutable seq : int;
 }
 
-let create () = { collections = Hashtbl.create 8; subs = Hashtbl.create 16; seq = 0 }
+let create () =
+  { collections = Hashtbl.create 8; subs = Hashtbl.create 16; tentative = Hashtbl.create 16; seq = 0 }
 
 (* ---- collections --------------------------------------------------------- *)
 
@@ -141,6 +146,22 @@ let doc_of cv id =
 
 (* ---- the sub-tagged DDP data ops ----------------------------------------- *)
 
+(* quiescence bookkeeping: [seed] marks a doc tentative for its sub; a live [added]/[changed] confirms
+   (clears) it; [quiesce] (on the sub's first [ready]) drops whatever stayed tentative. *)
+let mark_tentative t sub collection id =
+  let set =
+    match Hashtbl.find_opt t.tentative sub with
+    | Some s -> s
+    | None ->
+        let s = Hashtbl.create 16 in
+        Hashtbl.replace t.tentative sub s;
+        s
+  in
+  Hashtbl.replace set (collection, id) ()
+
+let confirm t sub collection id =
+  match Hashtbl.find_opt t.tentative sub with Some s -> Hashtbl.remove s (collection, id) | None -> ()
+
 (* added: this sub now includes [id] in [collection] with [fields] *)
 let added t ~sub ~collection ~id ~fields =
   let _ = ensure_sub t sub in
@@ -150,7 +171,8 @@ let added t ~sub ~collection ~id ~fields =
   Hashtbl.replace dv.exists_in sub prec;
   List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
   track t sub collection id;
-  recompute cv id dv
+  recompute cv id dv;
+  confirm t sub collection id
 
 (* changed: this sub updated [fields] / unset [cleared] of an existing doc *)
 let changed t ~sub ~collection ~id ~fields ~cleared =
@@ -163,7 +185,8 @@ let changed t ~sub ~collection ~id ~fields ~cleared =
           let prec = sub_prec t sub in
           List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
           List.iter (fun f -> clear_field dv f sub) cleared;
-          recompute cv id dv)
+          recompute cv id dv;
+          confirm t sub collection id)
 
 (* removed: this sub no longer includes [id] *)
 let removed t ~sub ~collection ~id =
@@ -188,7 +211,8 @@ let sub_stopped t sub =
               | None -> ())
           | None -> ())
         info.contributed;
-      Hashtbl.remove t.subs sub
+      Hashtbl.remove t.subs sub;
+      Hashtbl.remove t.tentative sub
 
 (* ---- queries ------------------------------------------------------------- *)
 
@@ -213,6 +237,16 @@ let seed t ~sub ~collection (docs : Bson.t list) =
       | Bson.Document kvs ->
           let id = match List.assoc_opt "_id" kvs with Some (Bson.String s) -> s | _ -> "" in
           let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
-          added t ~sub ~collection ~id ~fields
+          added t ~sub ~collection ~id ~fields;
+          mark_tentative t sub collection id (* SSR seed: tentative until the live snapshot confirms *)
       | _ -> ())
     docs
+
+(* on a sub's first [ready], drop any doc it SEEDED but the live snapshot didn't re-confirm — the
+   quiescence pass that keeps SSR fast-render from leaving stale rows behind *)
+let quiesce t sub =
+  match Hashtbl.find_opt t.tentative sub with
+  | None -> ()
+  | Some set ->
+      Hashtbl.iter (fun (collection, id) () -> removed t ~sub ~collection ~id) set;
+      Hashtbl.remove t.tentative sub
