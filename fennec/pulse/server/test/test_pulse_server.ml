@@ -20,7 +20,7 @@ let emitted out = List.rev_map Msg.decode !out
 let%test "connect → connected, sub → sub-tagged added + ready (full stack)" =
   let feed = C.create ~name:"feed" (Minimongo.create ()) in
   let _ = C.insert feed (B.doc [ ("n", B.int 1) ]) in
-  R.publish "rt_feed" (fun () -> R.Cursor (R.cursor feed ()));
+  R.publish "rt_feed" (fun _ -> R.Cursor (R.cursor feed ()));
   let ch, out = fake_channel () in
   D.serve ~session_id:"S1" ch;
   ch.Ws.on_text (Msg.encode (Msg.Connect { session = None; version = "1"; support = [] }));
@@ -32,7 +32,7 @@ let%test "connect → connected, sub → sub-tagged added + ready (full stack)" 
 
 let%test "a live insert after subscribe pushes a sub-tagged added to the channel" =
   let feed = C.create ~name:"feed2" (Minimongo.create ()) in
-  R.publish "rt_feed2" (fun () -> R.Cursor (R.cursor feed ()));
+  R.publish "rt_feed2" (fun _ -> R.Cursor (R.cursor feed ()));
   let ch, out = fake_channel () in
   D.serve ~session_id:"S2" ch;
   ch.Ws.on_text (Msg.encode (Msg.Sub { id = "s2"; name = "rt_feed2"; params = [] }));

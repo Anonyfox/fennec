@@ -207,8 +207,10 @@ module type REACTIVE = sig
     unit ->
     Collection.cursor
 
-  (** [publish name f] registers a publication: [f ()] yields the cursor(s) to feed subscribers. *)
-  val publish : string -> (unit -> cursor_kind) -> unit
+  (** [publish name f] registers a publication: [f params] yields the cursor(s) to feed subscribers,
+      where [params] are the subscription's arguments (the client's [subscribe ~params]). Return a
+      cursor whose selector uses [params] for a parameterized publication. *)
+  val publish : string -> (doc list -> cursor_kind) -> unit
 
   (** A live subscription: read the merged documents (all, or per collection), the collection names,
       readiness, and a [stop]. *)
@@ -233,13 +235,13 @@ module type REACTIVE = sig
   (** The names of the registered methods. *)
   val method_names : unit -> string list
 
-  (** [run_publication name ~on] runs the named publication's cursors, delivering each field-level
-      observe delta to [on] as a {!beat} (the [collection] is per document), and returns a handle
-      that stops every cursor. This is the delta-driven entry a DDP session feeds its sink from —
-      unlike {!subscribe} it keeps no merge box; the caller emits [ready] after it returns
-      ([observe_changes] replays existing documents synchronously as [Added] beats). An unknown
-      publication yields a no-op handle. *)
-  val run_publication : string -> on:(beat -> unit) -> live_handle
+  (** [run_publication name ~params ~on] runs the named publication's cursors (built from [params] —
+      the subscription's arguments), delivering each field-level observe delta to [on] as a {!beat}
+      (the [collection] is per document), and returns a handle that stops every cursor. This is the
+      delta-driven entry a DDP session feeds its sink from — unlike {!subscribe} it keeps no merge
+      box; the caller emits [ready] after it returns ([observe_changes] replays existing documents
+      synchronously as [Added] beats). An unknown publication yields a no-op handle. *)
+  val run_publication : string -> params:doc list -> on:(beat -> unit) -> live_handle
 
   (** Pure EJSON structural operations. *)
   module EJSON : sig

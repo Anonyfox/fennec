@@ -65,7 +65,7 @@ let () =
   (* the realtime app: a published "tasks" collection (one initial doc) + an addTask method *)
   let tasks = R.Collection.create ~name:"tasks" (Minimongo.create ()) in
   let _ = R.Collection.insert tasks (B.doc [ ("title", B.str "first") ]) in
-  R.publish "tasks" (fun () -> R.Cursor (R.cursor tasks ()));
+  R.publish "tasks" (fun _ -> R.Cursor (R.cursor tasks ()));
   R.methods
     [ ("addTask", fun _ args ->
          match args with [ B.String t ] -> B.String (R.Collection.insert tasks (B.doc [ ("title", B.str t) ])) | _ -> B.Null) ];

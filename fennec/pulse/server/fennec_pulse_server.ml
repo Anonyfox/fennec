@@ -12,9 +12,9 @@ module Ws = Fennec_core.Ws_channel
 module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
   (* a publication in the session's sink-fed form, backed by the delta-driven run_publication *)
   let publication_of name : Session.publication =
-   fun ~params:_ sink ->
+   fun ~params sink ->
     let h =
-      R.run_publication name ~on:(function
+      R.run_publication name ~params ~on:(function
         | Rx.Added { collection; id; fields } -> sink.Session.added ~collection ~id ~fields
         | Rx.Changed { collection; id; fields; cleared } ->
             sink.Session.changed ~collection ~id ~fields ~cleared

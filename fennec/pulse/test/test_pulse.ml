@@ -82,7 +82,7 @@ let%test "observe_changes: added, changed, removed-on-move-out" =
 let%test "publish/subscribe merge box sees the live insert" =
   let feed = coll "feed" in
   let _ = C.insert feed (doc [ ("n", i 1) ]) in
-  R.publish "feed_pub" (fun () -> R.Cursor (R.cursor feed ()));
+  R.publish "feed_pub" (fun _ -> R.Cursor (R.cursor feed ()));
   let sub = R.subscribe "feed_pub" in
   let one = sub.R.is_ready () && List.length (sub.R.documents ()) = 1 in
   let _ = C.insert feed (doc [ ("n", i 2) ]) in
@@ -93,7 +93,7 @@ let%test "publish/subscribe merge box sees the live insert" =
 let%test "publish projection hides a field, including after a live update" =
   let pf = coll "pf" in
   let id = C.insert pf (doc [ ("n", i 1); ("hush", B.String "x") ]) in
-  R.publish "pf_pub" (fun () -> R.Cursor (R.cursor pf ~fields:(doc [ ("n", i 1) ]) ()));
+  R.publish "pf_pub" (fun _ -> R.Cursor (R.cursor pf ~fields:(doc [ ("n", i 1) ]) ()));
   let sub = R.subscribe "pf_pub" in
   let hidden () = List.for_all (fun (_, d) -> B.get d "hush" = None) (sub.R.documents ()) in
   let before = hidden () in
@@ -128,7 +128,7 @@ let%test "EJSON clone + key-order-insensitive equals" =
 let%test "publish preserves the Object_id _id type for a MONGO collection" =
   let c = coll ~id_generation:R.MONGO "mids" in
   let _ = C.insert c (doc [ ("n", i 1) ]) in
-  R.publish "mids_pub" (fun () -> R.Cursor (R.cursor c ()));
+  R.publish "mids_pub" (fun _ -> R.Cursor (R.cursor c ()));
   let sub = R.subscribe "mids_pub" in
   let ok =
     match sub.R.documents () with
@@ -162,5 +162,23 @@ let%test "$lookup against an unregistered collection yields an empty join (no cr
   with
   | [ row ] -> B.get row "c" = Some (B.Array [])
   | _ -> false
+
+(* ── parameterized publications: the publication closure receives the subscription's params ── *)
+let%test "a publication receives its subscription params (parameterized cursor)" =
+  let posts = coll "posts_param" in
+  let _ = C.insert posts (doc [ ("room", i 1); ("t", B.String "a") ]) in
+  let _ = C.insert posts (doc [ ("room", i 2); ("t", B.String "b") ]) in
+  R.publish "byroom" (fun params ->
+      match params with
+      | [ Bson.Document [ ("room", r) ] ] -> R.Cursor (R.cursor posts ~selector:(doc [ ("room", r) ]) ())
+      | _ -> R.Cursor (R.cursor posts ()));
+  (* run with room=1: only the room-1 doc is replayed as an Added beat *)
+  let seen = ref [] in
+  let h =
+    R.run_publication "byroom" ~params:[ Bson.Document [ ("room", i 1) ] ]
+      ~on:(function Reactive.Added { fields; _ } -> seen := fields :: !seen | _ -> ())
+  in
+  h.Reactive.stop ();
+  match !seen with [ fields ] -> List.assoc_opt "room" fields = Some (B.Int 1) | _ -> false
 
 let () = exit (Fennec_hunt_unit.run ())
