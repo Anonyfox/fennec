@@ -1,9 +1,11 @@
 # DATAFLOW — the database / realtime / client story (Meteor's heart, on fennec)
 
-Status: **spec & decision record** (implementation follows). This is the single plan for how
-data flows from MongoDB (or in-memory Minimongo) through publications, over DDP, into a browser's
-reactive cache, and onto the screen — and for how that work is sliced into packages and
-orchestrated by the CLI. It is grounded in the working prototype in the adjacent `ocaml-light`
+Status: **as-built (living record)** — the data line described here is shipped (phases 1–7, §12), as
+**Pulse** (see the Naming note below). This describes how data flows from MongoDB (or in-memory
+Minimongo) through publications, over DDP, into a browser's reactive cache, and onto the screen — and
+how that work is sliced into packages and orchestrated by the CLI. (Beyond the original plan, now
+also built: parameterized publications, in-memory cross-collection `$lookup`, the client `Beat` type,
+seed↔live + reconnect resync/quiescence, fiber-local SSR isolation, and client reconnect.) It is grounded in the working prototype in the adjacent `ocaml-light`
 repo (the `mongo/`, `meteor/core`, `meteor/ddp`, `meteor/client` trees) and in fennec's current
 architecture (Fur signals, the Eio HTTP/WS server, the `build`/`dev`/`test` CLI, `fennec_buildkit`).
 
@@ -195,12 +197,15 @@ Ports `ocaml-light/meteor/core` (transport-agnostic; depends only on the mongo p
   upsert/remove/find/find_one/count, with `id_generation` STRING|MONGO and per-collection/per-cursor
   `transform`, plus `allow`/`deny` + `insert_from_client`), `publish`, `subscribe`, `methods`,
   `ObjectID`, `EJSON`.
-- **Publications** are driven by `observe_changes`: `publish name (fun () -> cursor)` registers a
-  closure; `subscribe` runs each cursor's `observe_changes` into a per-collection merge box and emits
-  the deltas. **§5b decision:** on the hot path the server is *stateless per session* — it forwards
-  the shared observe delta **tagged with the sub id** (extended mode) rather than maintaining a
-  per-session document copy + diff. The full per-session merge box exists only as the compat shim for
-  stock Meteor clients (§6).
+- **Publications** are driven by `observe_changes`: `publish name (fun params -> cursor)` registers a
+  closure (`params` = the subscription's arguments). The DDP transport feeds a session's sink from
+  `run_publication`, which observes each cursor and emits field-level deltas as `beat`s — for BOTH the
+  raw `/websocket` and the sockjs paths. **§5b decision (as-built):** the server is *stateless per
+  session* — it forwards each observe delta **tagged with the sub id** (extended mode) rather than
+  keeping a per-session document copy + diff; the CLIENT merges (the per-`(coll,id)` merge box with
+  per-field precedence + refcounted removal). There is no server-side per-session merge box on the
+  wire path; `Reactive.subscribe` is a server-side SNAPSHOT / inspection helper (its own merge box,
+  `is_ready` always true), used by no transport.
 - **Methods**: a dispatch table `invocation -> Bson.t list -> Bson.t`. **v1 server-only** (no client
   stub, no `updated` barrier beyond the trivial "writes done" signal). Placeholder comments mark the
   latency-comp seam (§9).

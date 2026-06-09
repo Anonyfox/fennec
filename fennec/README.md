@@ -63,6 +63,11 @@ the first paint, the browser hydrates flicker-free, then the subscription stream
 change is a **Beat**; Pulse keeps every client in **Rhythm**. In-memory by default; an optional native
 Mongo driver (`fennec-mongo`) for production.
 
+Aggregation runs in-memory too, with cross-collection **`$lookup` / `$unionWith`** — the same joins on
+the server and (over its subscribed subset) on the client. The client **reconnects and resyncs** after
+a dropped socket; methods report success/failure via `Pulse.call_result`; publications are
+parameterized (`subscribe ~params`).
+
 **Coming from Meteor, your daily words don't change — only the namespace.** `Pulse.publish` /
 `subscribe` / `method` / `call`, `find`, `insert` / `update` / `remove`, and `Ddp` / `Mongo` /
 `Minimongo` all stay literal: Pulse rides on those honest, Meteor-compatible substrates, so the
