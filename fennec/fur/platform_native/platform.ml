@@ -21,7 +21,11 @@ let _data_key : _data_ctx Eio.Fiber.key = Eio.Fiber.create_key ()
 let _data_fallback = { seed = Hashtbl.create 16; source = (fun _ _ -> ()) }
 
 let _data_current () =
-  match (try Eio.Fiber.get _data_key with _ -> None) with Some c -> c | None -> _data_fallback
+  (* outside an Eio run (one-shot SSR / tests) Fiber.get's effect is unhandled — catch ONLY that and
+     fall back to the global; any other exception is a real bug and must propagate, not be hidden *)
+  match (try Eio.Fiber.get _data_key with Stdlib.Effect.Unhandled _ -> None) with
+  | Some c -> c
+  | None -> _data_fallback
 
 let with_data_context f =
   Eio.Fiber.with_binding _data_key { seed = Hashtbl.create 16; source = (fun _ _ -> ()) } f

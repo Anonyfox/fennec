@@ -49,7 +49,7 @@ let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set 
    are this client's concern (they touch session/subscription state) *)
 let handle t raw =
   match try Some (Msg.decode raw) with _ -> None with
-  | None -> ()
+  | None -> Firebug.console##warn (Js.string ("fennec/ddp: dropped an undecodable frame: " ^ raw))
   | Some m ->
       let box = Live.store t.live in
       if not (Fennec_pulse_live.Wire_route.apply_delta box m) then
