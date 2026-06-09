@@ -18,12 +18,15 @@ type subscription = { ready : bool Fur.signal; stop : unit -> unit }
     sends [connect]. Returns immediately; data arrives asynchronously into {!find}. *)
 val connect : ?path:string -> unit -> t
 
-(** [publish ~name f] registers, for SERVER-SIDE SSR only (the browser ignores it), a publication's
-    initial-document fetcher. During SSR a component's {!subscribe}/{!use_subscribe} runs it, renders
-    with the data, and embeds it via Fur's seed — so the browser hydrates flicker-free and the live
-    subscription then re-confirms + streams. Register it where the publication is set up (e.g. in
-    [Fennec.serve ~on_start]); a fetch that needs Eio (real mongo) degrades to a loading client. *)
-val publish : name:string -> (Bson.t list -> Bson.t list) -> unit
+(** [publish ~name ?collection f] registers, for SERVER-SIDE SSR only (the browser ignores it), a
+    publication's initial-document fetcher. During SSR a component's {!subscribe}/{!use_subscribe}
+    runs it, renders with the data, and embeds it via Fur's seed — so the browser hydrates
+    flicker-free and the live subscription then re-confirms + streams. [collection] is the collection
+    the documents belong to (and that {!find} queries); it defaults to [name] and travels in the seed
+    payload, so set it when a publication's name differs from its collection. Register it where the
+    publication is set up (e.g. in [Fennec.serve ~on_start]); a fetch that needs Eio (real mongo)
+    degrades to a loading client. *)
+val publish : name:string -> ?collection:string -> (Bson.t list -> Bson.t list) -> unit
 
 (** [subscribe t ~name ?params ()] starts (or, for an identical [name]+[params], joins) the named
     publication; its documents stream into the merge store and become visible through {!find}.

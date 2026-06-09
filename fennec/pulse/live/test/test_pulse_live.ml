@@ -81,4 +81,24 @@ let%test "wire: added/changed route through; a control frame (ready) does not" =
   let upd = match one (MS.fetch s "c" ()) with Some d -> B.get d "n" = Some (B.Int 2) | None -> false in
   a && c && upd && not (WR.apply_delta s (Msg.Ready { subs = [ "x" ] }))
 
+(* ── SSR seed payload: carries the COLLECTION so hydration is robust when a publication's name
+   differs from its collection (the browser can't re-derive it — publish is a no-op there) ── *)
+module Seed = Fennec_pulse_live.Seed
+
+let%test "seed: round-trips the documents AND their collection" =
+  let docs = [ B.doc [ ("_id", B.str "1"); ("n", B.int 1) ]; B.doc [ ("_id", B.str "2") ] ] in
+  match Seed.decode (Seed.encode ~collection:"messages" docs) with
+  | Some ("messages", got) -> List.length got = 2 && B.get (List.hd got) "n" = Some (B.Int 1)
+  | _ -> false
+
+let%test "seed: the collection travels independently of the publication name (name <> collection)" =
+  (* a publication named "inbox" feeding collection "messages" seeds under "messages", so the client
+     installs there and find/live (which use the real collection) line up *)
+  match Seed.decode (Seed.encode ~collection:"messages" [ B.doc [ ("_id", B.str "1") ] ]) with
+  | Some (c, _) -> c = "messages"
+  | None -> false
+
+let%test "seed: a malformed / legacy payload decodes to None (no crash)" =
+  Seed.decode "not json" = None && Seed.decode "[1,2,3]" = None
+
 let () = exit (Fennec_hunt_unit.run ())

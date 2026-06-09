@@ -9,15 +9,17 @@
 module MS = Fennec_pulse_live.Merge_store
 module Live = Fennec_pulse_live.Live
 module Subkey = Fennec_pulse_live.Subkey
-module BJ = Fennec_mongo_bson_json.Bson_json
+module Seed = Fennec_pulse_live.Seed
 
 type t = { live : Live.t }
 type subscription = { ready : bool Fur.signal; stop : unit -> unit }
 
 (* SSR publication registry: name → its current documents. Populated on the server by [publish],
    read during the SSR render by [subscribe]. *)
-let _pubs : (string, Bson.t list -> Bson.t list) Hashtbl.t = Hashtbl.create 8
-let publish ~name f = Hashtbl.replace _pubs name f
+let _pubs : (string, string * (Bson.t list -> Bson.t list)) Hashtbl.t = Hashtbl.create 8
+let publish ~name ?collection f =
+  let collection = match collection with Some c -> c | None -> Subkey.collection_of_name name in
+  Hashtbl.replace _pubs name (collection, f)
 let seed_key name params = "ddp:" ^ Subkey.key name params
 
 let connect ?path () =
@@ -28,14 +30,14 @@ let subscribe t ~name ?(params = []) () : subscription =
   let ready =
     match Hashtbl.find_opt _pubs name with
     | None -> false (* no SSR publication registered — the browser fills in after hydration *)
-    | Some f -> (
+    | Some (collection, f) -> (
       match (try Some (f params) with _ -> None) with
       | None -> false (* the fetch couldn't run synchronously (e.g. real mongo) — degrade to loading *)
       | Some docs ->
-        let collection = Subkey.collection_of_name name in
         MS.seed (Live.store t.live) ~sub:(Subkey.key name params) ~collection docs;
-        (* embed for the browser's flicker-free hydration — rides Fur's seed <script> *)
-        Fur.Data.put_seed (seed_key name params) (BJ.to_string (Bson.Array docs));
+        (* embed for the browser's flicker-free hydration — the collection rides with the docs (Seed),
+           so the client installs under the real collection regardless of the publication name *)
+        Fur.Data.put_seed (seed_key name params) (Seed.encode ~collection docs);
         true)
   in
   { ready = Fur.signal ready; stop = (fun () -> ()) }
