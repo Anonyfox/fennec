@@ -100,4 +100,46 @@ let%test "session: a method's Method_error is reported, not collapsed to 500" =
       | _ -> false)
     !out
 
+(* ── interop: REAL DDP frames captured off a live Meteor 3.x server (raw /websocket) must decode
+   losslessly — the proof the wire stays Meteor-compatible (V1 drop-in), pinning the quirks (numeric
+   error codes, nested number/array fields). Ported from the reference repo so fennec's own CI guards
+   it. ── *)
+let%test "interop: real Meteor connected frame" =
+  Message.decode {|{"msg":"connected","session":"bxdCChEZxQFERBpRk"}|}
+  = Message.Connected { session = "bxdCChEZxQFERBpRk" }
+let%test "interop: real Meteor ready frame" =
+  Message.decode {|{"msg":"ready","subs":["auto"]}|} = Message.Ready { subs = [ "auto" ] }
+let%test "interop: real Meteor added (simple fields) — untagged, sub=None" =
+  Message.decode
+    {|{"msg":"added","collection":"meteor_autoupdate_clientVersions","id":"version","fields":{"version":"outdated"}}|}
+  = Message.Added
+      { collection = "meteor_autoupdate_clientVersions"; id = "version";
+        fields = [ ("version", B.String "outdated") ]; sub = None }
+let%test "interop: real Meteor added with nested number + empty array fields" =
+  match
+    Message.decode
+      {|{"msg":"added","collection":"meteor_autoupdate_clientVersions","id":"web.browser","fields":{"version":"2a7399e79b7bf06e401b39cd9a52242e2d264dd7","versionHmr":1780169750118,"assets":[]}}|}
+  with
+  | Message.Added { id = "web.browser"; fields; _ } ->
+      List.assoc_opt "version" fields = Some (B.String "2a7399e79b7bf06e401b39cd9a52242e2d264dd7")
+      && List.assoc_opt "versionHmr" fields = Some (B.Int 1780169750118)
+      && List.assoc_opt "assets" fields = Some (B.Array [])
+  | _ -> false
+let%test "interop: real Meteor nosub with NUMERIC error code (404 coerced to string)" =
+  match
+    Message.decode
+      {|{"msg":"nosub","id":"bad","error":{"isClientSafe":true,"error":404,"reason":"Subscription '__no_such_pub__' not found","message":"Subscription '__no_such_pub__' not found [404]","errorType":"Meteor.Error"}}|}
+  with
+  | Message.Nosub { id = "bad"; error = Some e } ->
+      e.Message.code = "404"
+      && e.Message.reason = Some "Subscription '__no_such_pub__' not found"
+      && e.Message.error_type = "Meteor.Error"
+  | _ -> false
+let%test "interop: encode produces exact Meteor wire bytes (V1 byte-identity, sub omitted when None)" =
+  Message.encode (Message.Connect { session = None; version = "1"; support = [ "1" ] })
+  = {|{"msg":"connect","version":"1","support":["1"]}|}
+  && Message.encode
+       (Message.Added { collection = "tasks"; id = "1"; fields = [ ("title", B.str "hi") ]; sub = None })
+     = {|{"msg":"added","collection":"tasks","id":"1","fields":{"title":"hi"}}|}
+
 let () = exit (Fennec_hunt_unit.run ())
