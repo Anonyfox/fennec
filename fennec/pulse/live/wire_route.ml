@@ -12,6 +12,11 @@ module Msg = Fennec_ddp.Message
    delta (so a caller can fall through to control messages on [false]). The "" sub tag is the
    standard-DDP / ordered-delta default — Meteor ignores it and per-field precedence collapses to one. *)
 let apply_delta (box : Merge_store.t) (m : Msg.t) : bool =
+  (* Standard-DDP deltas carry no sub tag (a real Meteor server, or our ordered addedBefore): they
+     collapse to the "" sub. That is CORRECT, not a collision — in standard mode the SERVER runs the
+     per-connection merge box and sends ONE already-merged stream per collection, so "" is that single
+     authoritative view (there is no client-side refcount to defeat). fennec's own extended mode always
+     tags every delta with a real sub id, so tagged and untagged never mix on one connection. *)
   let s = function Some s -> s | None -> "" in
   match m with
   | Msg.Added { collection; id; fields; sub } ->

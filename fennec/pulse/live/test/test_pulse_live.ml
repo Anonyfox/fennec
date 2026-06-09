@@ -157,4 +157,21 @@ let%test "resync_begin + quiesce drops a doc the post-reconnect snapshot no long
   | [ d ] -> B.get d "_id" = Some (B.String "D")
   | _ -> false
 
+(* ── MONGO-idGeneration collections: the typed Object_id _id survives on the client ── *)
+let%test "MONGO collection: a seeded Object_id _id survives the merge + a live change (not coerced)" =
+  let s = MS.create () in
+  let oid = String.make 24 'a' in
+  MS.seed s ~sub:"s1" ~collection:"things" [ B.doc [ ("_id", B.Object_id oid); ("n", B.int 1) ] ];
+  let is_oid () =
+    match one (MS.fetch s "things" ()) with
+    | Some d -> ( match B.get d "_id" with Some (B.Object_id x) -> x = oid | _ -> false)
+    | None -> false
+  in
+  let seeded = is_oid () in
+  (* a live change carries the id as a hex STRING on the wire; the collection stays MONGO so the _id
+     is reconstructed as Object_id (so find/$lookup by _id keep matching the server) *)
+  MS.changed s ~sub:"s1" ~collection:"things" ~id:oid ~fields:[ ("n", B.int 2) ] ~cleared:[];
+  seeded && is_oid ()
+  && (match one (MS.fetch s "things" ()) with Some d -> B.get d "n" = Some (B.Int 2) | None -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

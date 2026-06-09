@@ -27,6 +27,12 @@ type collection_view = {
   listeners : (int, unit -> unit) Hashtbl.t;
   mutable lc : int;
   mutable version : int;
+  (* ids in this collection are Object_id (a MONGO-idGeneration collection), so [recompute]
+     reconstructs the typed [_id] — the DDP wire and the seed carry it as a hex string, but a MONGO
+     collection's documents must keep [Bson.Object_id] so [find]/[$lookup] by [_id] match the server.
+     Inferred from a seeded document's typed [_id]; a live-only MONGO collection (never seeded)
+     defaults to string ids. *)
+  mutable oid : bool;
 }
 
 type sub_info = {
@@ -54,7 +60,7 @@ let ensure_collection t name : collection_view =
   | Some cv -> cv
   | None ->
       let cv =
-        { store = C.create (); docs = Hashtbl.create 64; listeners = Hashtbl.create 4; lc = 0; version = 0 }
+        { store = C.create (); docs = Hashtbl.create 64; listeners = Hashtbl.create 4; lc = 0; version = 0; oid = false }
       in
       Hashtbl.replace t.collections name cv;
       cv
@@ -125,14 +131,16 @@ let drop_sub_from_doc dv sub =
 
 (* rebuild the winning document into minimongo (or remove it) and notify *)
 let recompute cv id dv =
-  let by_id = Bson.Document [ ("_id", Bson.String id) ] in
+  (* a MONGO collection keeps its Object_id _id (the wire/seed carry the hex as a string) *)
+  let id_val = if cv.oid then Bson.Object_id id else Bson.String id in
+  let by_id = Bson.Document [ ("_id", id_val) ] in
   ignore (C.remove cv.store by_id);
   if Hashtbl.length dv.exists_in = 0 then Hashtbl.remove cv.docs id
   else begin
     let kvs =
       Hashtbl.fold (fun f entries acc -> match entries with e :: _ -> (f, e.value) :: acc | [] -> acc) dv.fields []
     in
-    ignore (C.insert cv.store (Bson.Document (("_id", Bson.String id) :: kvs)))
+    ignore (C.insert cv.store (Bson.Document (("_id", id_val) :: kvs)))
   end;
   bump cv
 
@@ -235,15 +243,34 @@ let seed t ~sub ~collection (docs : Bson.t list) =
     (fun d ->
       match d with
       | Bson.Document kvs ->
-          let id = match List.assoc_opt "_id" kvs with Some (Bson.String s) -> s | _ -> "" in
-          let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
-          added t ~sub ~collection ~id ~fields;
-          mark_tentative t sub collection id (* SSR seed: tentative until the live snapshot confirms *)
+          (* accept a string OR Object_id _id; an Object_id marks the collection MONGO so live deltas
+             reconstruct the typed _id too. A doc with no usable _id is skipped (never collapsed to "") *)
+          let id =
+            match List.assoc_opt "_id" kvs with
+            | Some (Bson.String s) -> Some s
+            | Some (Bson.Object_id s) ->
+                (ensure_collection t collection).oid <- true;
+                Some s
+            | _ -> None
+          in
+          (match id with
+          | None -> ()
+          | Some id ->
+              let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
+              added t ~sub ~collection ~id ~fields;
+              mark_tentative t sub collection id (* SSR seed: tentative until the live snapshot confirms *))
       | _ -> ())
     docs
 
 (* on a sub's first [ready], drop any doc it SEEDED but the live snapshot didn't re-confirm — the
-   quiescence pass that keeps SSR fast-render from leaving stale rows behind *)
+   quiescence pass that keeps SSR fast-render from leaving stale rows behind.
+
+   Correctness rests on the DDP contract that the server sends ALL of a publication's initial documents
+   BEFORE [ready] (and the wire preserves order), so by the time the client handles [ready] it has
+   already applied every confirming [added]. fennec honors this by replaying the initial set
+   synchronously inside [run_publication] before emitting ready — for both the in-memory backend and
+   the native change-stream driver (ready-after-data). A backend that emitted [ready] before its
+   replay would violate the contract and could drop a valid seeded doc here. *)
 let quiesce t sub =
   match Hashtbl.find_opt t.tentative sub with
   | None -> ()
