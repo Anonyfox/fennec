@@ -99,8 +99,14 @@ module type REACTIVE = sig
     (** [insert c d] inserts [d] (minting an [_id] per [id_generation] if absent) and returns it. *)
     val insert : t -> doc -> string
 
+    (** A cursor's transform disposition: [Inherit] the collection's transform (the default),
+        [Disable] it for this cursor, or [Override f] with a per-cursor transform. (Replaces the old
+        [(doc -> doc) option option] triple-state.) *)
+    type cursor_transform = Inherit | Disable | Override of (doc -> doc)
+
     (** [find c ?selector ?sort ?skip ?limit ?fields ?transform ()] builds a cursor. [transform]
-        overrides the collection transform for this cursor ([Some None] disables it). *)
+        defaults to [Inherit]; pass [Disable] to turn the transform off for this cursor, or
+        [Override f] to set a per-cursor one. *)
     val find :
       t ->
       ?selector:doc ->
@@ -108,7 +114,7 @@ module type REACTIVE = sig
       ?skip:int ->
       ?limit:int ->
       ?fields:doc ->
-      ?transform:(doc -> doc) option ->
+      ?transform:cursor_transform ->
       unit ->
       cursor
 

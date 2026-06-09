@@ -52,6 +52,9 @@ module type REACTIVE = sig
     type t
     type cursor
 
+    (** a cursor's transform disposition: [Inherit] the collection's, [Disable] it, or [Override f] *)
+    type cursor_transform = Inherit | Disable | Override of (doc -> doc)
+
     val create :
       ?id_generation:id_generation ->
       ?transform:(doc -> doc) ->
@@ -70,7 +73,7 @@ module type REACTIVE = sig
       ?skip:int ->
       ?limit:int ->
       ?fields:doc ->
-      ?transform:(doc -> doc) option ->
+      ?transform:cursor_transform ->
       unit ->
       cursor
 
@@ -230,10 +233,13 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       rules : rules;
     }
 
+    (* a cursor's transform disposition — replaces a triple-state [(doc -> doc) option option] *)
+    type cursor_transform = Inherit | Disable | Override of (doc -> doc)
+
     type cursor = {
       coll : t;
       q : Backend.query;
-      cur_transform : (doc -> doc) option option;
+      cur_transform : cursor_transform;
     }
 
     (* The named-collection registry, scoped to THIS functor application (one [Reactive.Make (B)] =
@@ -290,13 +296,13 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       _id
 
     let effective_transform (cur : cursor) =
-      match cur.cur_transform with Some o -> o | None -> cur.coll.transform
+      match cur.cur_transform with Inherit -> cur.coll.transform | Disable -> None | Override f -> Some f
 
     let apply_tf cur d =
       match effective_transform cur with Some f -> f d | None -> d
 
     let find c ?(selector = Bson.Document []) ?(sort = Bson.Document [])
-        ?(skip = 0) ?(limit = 0) ?(fields = Bson.Document []) ?transform () : cursor =
+        ?(skip = 0) ?(limit = 0) ?(fields = Bson.Document []) ?(transform = Inherit) () : cursor =
       {
         coll = c;
         q = Backend.query ~selector ~sort ~skip ~limit ~fields ();

@@ -56,7 +56,7 @@ let%test "collection transform applies; per-cursor transform:None disables it" =
   let t = coll ~transform:tag "tc" in
   let _ = C.insert t (doc [ ("a", i 1) ]) in
   (match C.find_one t () with Some d -> B.get d "seen" = Some (B.Bool true) | None -> false)
-  && (match C.fetch (C.find t ~transform:None ()) with d :: _ -> B.get d "seen" = None | [] -> false)
+  && (match C.fetch (C.find t ~transform:C.Disable ()) with d :: _ -> B.get d "seen" = None | [] -> false)
 
 (* ── observe ── *)
 let%test "observe_changes: added, changed, removed-on-move-out" =
