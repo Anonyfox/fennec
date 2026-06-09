@@ -75,3 +75,10 @@ val seed : t -> sub:string -> collection:string -> Bson.t list -> unit
     [changed]) is dropped — so a row deleted server-side between SSR and the socket opening does not
     linger as a stale fast-render artifact. A no-op for a sub that was never seeded. *)
 val quiesce : t -> string -> unit
+
+(** [resync_begin t sub] re-marks every document [sub] currently holds as tentative — call it on
+    reconnect before resubscribing, so the resubscription's fresh snapshot re-confirms the docs that
+    still exist and the following {!quiesce} (on the new [ready]) drops the ones the server stopped
+    sending during the outage. Heals the cache after a dropped socket using the same machinery as the
+    SSR seed. *)
+val resync_begin : t -> string -> unit

@@ -1,8 +1,11 @@
-(* The browser DDP client. Opens a WebSocket to the server's /websocket, sends [connect], and on
-   each frame feeds the sub-tagged data deltas into a live merge store ({!Fennec_pulse_live}). [subscribe]
-   dedups + refcounts by (name, params) and tracks readiness; [find] is the reactive Fur query over
-   the merged collection; [call] invokes a server method. The data a method changes returns through
-   the open subscription as a normal delta — no request/response plumbing. Browser-only. *)
+(* The browser DDP client. Opens a WebSocket to the server's /websocket, runs the DDP handshake, and
+   feeds sub-tagged data deltas into a live merge store ({!Fennec_pulse_live}). [subscribe] dedups +
+   refcounts by (name, params) and tracks readiness; [find]/[aggregate] are the reactive Fur queries
+   over the merged cache; [call] invokes a server method (its data change returns via the open
+   subscription as a normal delta). RESILIENT: on a dropped socket it reconnects with exponential
+   backoff, replays the handshake (with the saved session id), resubscribes every live subscription,
+   and RESYNCS the cache — the resubscription's fresh snapshot re-confirms surviving docs and the
+   [ready] quiescence drops whatever the server stopped sending during the outage. Browser-only. *)
 
 open Js_of_ocaml
 module Msg = Fennec_ddp.Message
@@ -15,37 +18,52 @@ module Seed = Fennec_pulse_live.Seed
 let seed_key name params = "ddp:" ^ Subkey.key name params
 
 (* one deduped subscription: identical (name, params) share this state (and its [ready] signal),
-   refcounted so the server sub is torn down only when the last holder stops *)
-type sub_state = { id : string; mutable refcount : int; ready_sig : bool Fur.signal }
+   refcounted so the server sub is torn down only when the last holder stops. [name]/[params] are
+   kept so the subscription can be replayed verbatim on reconnect. *)
+type sub_state = {
+  id : string;
+  name : string;
+  params : Bson.t list;
+  mutable refcount : int;
+  ready_sig : bool Fur.signal;
+}
+
 type subscription = { ready : bool Fur.signal; stop : unit -> unit }
 
 type t = {
   live : Live.t;
-  send : string -> unit;
+  mutable send : string -> unit; (* rebound to the live socket on each (re)connect *)
   subs : (string, sub_state) Hashtbl.t; (* Subkey.key (name,params) → state *)
   by_id : (string, sub_state) Hashtbl.t; (* sub id → state, for ready/nosub *)
   mutable subc : int;
   mutable methodc : int;
+  mutable session_id : string option; (* captured from Connected; replayed for DDP session resume *)
 }
 
 let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set st.ready_sig true | None -> ()
 
-(* route one decoded message: data deltas → merge store; ready/nosub → flip readiness; ping → pong *)
+(* route one decoded message: data deltas → merge store (via the shared Wire_route); control frames
+   are this client's concern (they touch session/subscription state) *)
 let handle t raw =
   match try Some (Msg.decode raw) with _ -> None with
   | None -> ()
   | Some m ->
       let box = Live.store t.live in
-      (* data deltas (incl. the ordered addedBefore/movedBefore) route through the shared, native-
-         tested Wire_route; control frames are this client's concern (they touch subscription state) *)
       if not (Fennec_pulse_live.Wire_route.apply_delta box m) then
-        (match m with
+        match m with
+        | Msg.Connected { session } -> t.session_id <- Some session (* for session resume on reconnect *)
         | Msg.Ready { subs } ->
-            (* quiescence: drop SSR-seeded docs the live snapshot didn't re-confirm, then mark ready *)
+            (* quiescence: drop seeded/stale docs the live snapshot didn't re-confirm, then mark ready *)
             List.iter (fun id -> MS.quiesce box id; mark_ready t id) subs
-        | Msg.Nosub { id; _ } -> mark_ready t id (* the sub ended/failed — stop "loading" rather than hang *)
+        | Msg.Nosub { id; error } ->
+            (* a FAILED sub (error=Some) — GC the docs it contributed so they don't linger; an
+               error=None nosub is the server's Unsub ack (already cleaned on stop). Either way, stop
+               "loading" rather than hang. *)
+            (match error with Some _ -> MS.sub_stopped box id | None -> ());
+            mark_ready t id
         | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
-        | _ -> ())
+        | Msg.Failed _ -> () (* DDP version mismatch — nothing to renegotiate; proceed best-effort *)
+        | _ -> ()
 
 let connect ?(path = "/websocket") () : t =
   let loc = Js.Unsafe.get Dom_html.window (Js.string "location") in
@@ -53,34 +71,65 @@ let connect ?(path = "/websocket") () : t =
   let host = Js.to_string (Js.Unsafe.get loc (Js.string "host")) in
   let scheme = if protocol = "https:" then "wss://" else "ws://" in
   let url = scheme ^ host ^ path in
-  let ws = Js.Unsafe.new_obj (Js.Unsafe.pure_js_expr "WebSocket") [| Js.Unsafe.inject (Js.string url) |] in
-  let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
-  (* queue sends until the socket is open — subscribe/call can fire (component setup) before [onopen] *)
+  let t =
+    { live = Live.create (); send = (fun _ -> ()); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
+      subc = 0; methodc = 0; session_id = None }
+  in
+  (* sends before the socket is open (component setup fires subscribe/call before onopen) queue up *)
   let is_open = ref false in
   let pending = Queue.create () in
-  let send str = if !is_open then raw str else Queue.add str pending in
-  let t = { live = Live.create (); send; subs = Hashtbl.create 16; by_id = Hashtbl.create 16; subc = 0; methodc = 0 } in
-  Js.Unsafe.set ws (Js.string "onopen")
-    (Dom.handler (fun _ ->
-         is_open := true;
-         raw (Msg.encode (Msg.Connect { session = None; version = "1"; support = [ "1" ] }));
-         Queue.iter raw pending;
-         Queue.clear pending;
-         Js._true));
-  Js.Unsafe.set ws (Js.string "onmessage")
-    (Dom.handler (fun ev ->
-         handle t (Js.to_string (Js.Unsafe.get ev (Js.string "data")));
-         Js._true));
+  let backoff_ms = ref 500 in (* exponential, capped at 30s; reset on a clean open *)
+  let set_timeout cb ms =
+    ignore
+      (Js.Unsafe.fun_call (Js.Unsafe.pure_js_expr "setTimeout")
+         [| Js.Unsafe.inject (Js.wrap_callback cb); Js.Unsafe.inject ms |])
+  in
+  let rec open_socket () =
+    is_open := false;
+    let ws = Js.Unsafe.new_obj (Js.Unsafe.pure_js_expr "WebSocket") [| Js.Unsafe.inject (Js.string url) |] in
+    let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
+    t.send <- (fun str -> if !is_open then raw str else Queue.add str pending);
+    Js.Unsafe.set ws (Js.string "onopen")
+      (Dom.handler (fun _ ->
+           is_open := true;
+           backoff_ms := 500; (* connected — reset the backoff *)
+           raw (Msg.encode (Msg.Connect { session = t.session_id; version = "1"; support = [ "1" ] }));
+           (* resubscribe + resync every live subscription: re-mark its docs tentative so the fresh
+              snapshot re-confirms survivors and the [ready] quiesce drops what the server dropped *)
+           Hashtbl.iter
+             (fun _ (st : sub_state) ->
+               MS.resync_begin (Live.store t.live) st.id;
+               raw (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params })))
+             t.subs;
+           Queue.iter raw pending;
+           Queue.clear pending;
+           Js._true));
+    Js.Unsafe.set ws (Js.string "onmessage")
+      (Dom.handler (fun ev ->
+           handle t (Js.to_string (Js.Unsafe.get ev (Js.string "data")));
+           Js._true));
+    (* a dropped socket → reconnect with backoff (the browser fires onclose after an error too) *)
+    Js.Unsafe.set ws (Js.string "onclose")
+      (Dom.handler (fun _ ->
+           is_open := false;
+           let delay = !backoff_ms in
+           backoff_ms := min (delay * 2) 30_000;
+           set_timeout open_socket delay;
+           Js._true))
+  in
+  open_socket ();
   t
 
 let subscribe t ~name ?(params = []) () : subscription =
   let key = Subkey.key name params in
   let st =
     match Hashtbl.find_opt t.subs key with
-    | Some st -> st.refcount <- st.refcount + 1; st
+    | Some st ->
+        st.refcount <- st.refcount + 1;
+        st
     | None ->
         t.subc <- t.subc + 1;
-        let st = { id = "s" ^ string_of_int t.subc; refcount = 1; ready_sig = Fur.signal false } in
+        let st = { id = "s" ^ string_of_int t.subc; name; params; refcount = 1; ready_sig = Fur.signal false } in
         Hashtbl.replace t.subs key st;
         Hashtbl.replace t.by_id st.id st;
         (* flicker-free hydration: if the SSR embedded this sub's docs (Fur's seed table), install

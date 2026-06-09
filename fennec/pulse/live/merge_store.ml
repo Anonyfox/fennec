@@ -250,3 +250,12 @@ let quiesce t sub =
   | Some set ->
       Hashtbl.iter (fun (collection, id) () -> removed t ~sub ~collection ~id) set;
       Hashtbl.remove t.tentative sub
+
+(* on reconnect: re-mark everything [sub] currently holds as tentative, so the resubscription's fresh
+   snapshot (which re-adds the still-present docs, confirming them) plus the [ready] {!quiesce} drops
+   whatever the server stopped sending during the outage — the same quiescence pass that heals the
+   SSR seed, reused to heal the cache after a dropped socket. *)
+let resync_begin t sub =
+  match Hashtbl.find_opt t.subs sub with
+  | None -> ()
+  | Some info -> Hashtbl.iter (fun _ (collection, id) -> mark_tentative t sub collection id) info.contributed

@@ -143,4 +143,18 @@ let%test "quiesce: a live `changed` also confirms a seeded doc (kept, not droppe
   MS.quiesce s "s1";
   (match Array.to_list (MS.fetch s "c" ()) with [ d ] -> B.get d "n" = Some (B.Int 9) | _ -> false)
 
+(* ── reconnect resync: resync_begin + quiesce heals the cache (drops docs the server no longer sends) ── *)
+let%test "resync_begin + quiesce drops a doc the post-reconnect snapshot no longer includes" =
+  let s = MS.create () in
+  MS.added s ~sub:"s1" ~collection:"c" ~id:"D" ~fields:[ ("n", B.int 1) ];
+  MS.added s ~sub:"s1" ~collection:"c" ~id:"E" ~fields:[ ("n", B.int 2) ];
+  (* reconnect: re-mark all of s1's docs tentative; the resubscription re-adds only D (E was deleted
+     during the outage), then quiesce on the new ready *)
+  MS.resync_begin s "s1";
+  MS.added s ~sub:"s1" ~collection:"c" ~id:"D" ~fields:[ ("n", B.int 1) ];
+  MS.quiesce s "s1";
+  match Array.to_list (MS.fetch s "c" ()) with
+  | [ d ] -> B.get d "_id" = Some (B.String "D")
+  | _ -> false
+
 let () = exit (Fennec_hunt_unit.run ())
