@@ -8,18 +8,22 @@ that dev-loop verdict and inject it into the next model step.
 The normal path is intentionally small:
 
 ```sh
-fennec dev --agent --port 9123
+fennec dev --agent --attach --port 9123
 ```
 
-Then configure the coding harness once so its post-tool or post-edit hook runs:
+`--attach` asks Fennec to install one guarded user-level hook for the active
+coding harness. The hook is cwd/root guarded, so it does not run for unrelated
+repositories. Internally the installed hook runs:
 
 ```sh
 fennec agent hook --timeout 12
 ```
 
-After that, the agent edits normally. It should not run manual `dune build`,
-`dune runtest`, or explicit wait commands after every edit. The hook verdict is
-the feedback loop.
+After that, the agent edits normally. The first edit that reaches the hook
+injects a post-edit model block starting with
+`Fennec dev feedback after this tool`. Agents should consume that block as the
+dev verdict and should not tail logs, run `dune build`, run `dune runtest`, or
+use explicit wait commands after every edit.
 
 ## Hook Contract
 
@@ -74,6 +78,21 @@ fennec agent status
 when known, and whether the recorded dev pid is alive. It is for inspection and
 recovery, not the normal feedback loop.
 
+## Dynamic Attach
+
+`--attach` is the product surface for dynamic attach from a running chat. It
+must not create repo-local instruction or hook files. It installs user-level
+harness config with a Fennec marker and a root guard, and should dedupe previous
+Fennec hooks for the same root.
+
+Dynamic attach has two observable states:
+
+- installed: Fennec wrote the harness hook config
+- live: a subsequent edit injected `Fennec dev feedback after this tool`
+
+Only the live state saves model calls. Installation output is setup status; the
+post-edit feedback block is the useful fastlane signal.
+
 ## Claude Code
 
 Claude Code command hooks can point `PostToolUse` or `PostToolBatch` at:
@@ -86,23 +105,48 @@ Use batch hooks when available, because they coalesce multifile edits into one
 feedback verdict before the next model call. Use per-tool post hooks when batch
 hooks are unavailable.
 
-Do not teach Claude to run explicit waits after edits. If the hook cannot be
-installed in the active harness, the correct report is that Fennec fastlane is
-not attached.
+Do not teach Claude to run explicit waits after edits.
+
+Observed local result on 2026-06-09: Claude Code 2.1.81 in a fresh
+`claude -p --model haiku` session did pick up the `~/.claude/settings.json`
+change made by `fennec dev --agent --attach` while the session was already
+running. The next Edit tool fired the PostToolUse hook and injected:
+
+```text
+Fennec dev feedback after this tool:
+examples/site/frontend/components/stats.mlx changed backend restart
+affected: backend; component stats
+tests 15 passed, 0 failed · 1 lib
+```
 
 ## Codex
 
-Codex hook support varies by harness release and mode. When command hooks are
-available for file-editing tools, wire the post-tool hook to:
+Codex command hooks support the same Fennec bridge. Fennec writes
+`~/.codex/hooks.json` and the matching trusted hash in `~/.codex/config.toml`,
+guarded to the project root.
+
+When command hooks are available for file-editing tools, wire the post-tool hook
+to:
 
 ```sh
 fennec agent hook --timeout 12
 ```
 
-Interactive hook-capable harnesses get true evented feedback. Modes that do not
-fire hooks for native file edits cannot provide the full fastlane contract; do
-not paper over that by making agents run ad-hoc build/test probes after every
-edit.
+Interactive hook-capable sessions then get true evented feedback for native
+edits. Agents should treat that injected feedback as the normal compile/test
+signal, not add ad-hoc build/test probes after every edit.
+
+Compatibility note from local verification on 2026-06-09:
+
+- Codex CLI 0.138.0 fresh interactive sessions fired the trusted PostToolUse
+  hook after `apply_patch` and injected model-visible Fennec feedback.
+- Codex CLI 0.138.0 did not hot-load a hook installed by
+  `fennec dev --agent --attach` in the same already-running chat before the
+  next `apply_patch`. The edit changed the file and the Fennec journal recorded
+  the verdict, but no Codex `PostToolUse hook` event appeared in the transcript.
+- `codex exec` is not a reliable proof path for this feature; use an
+  interactive session transcript that shows `PostToolUse hook` and the Fennec
+  feedback block.
 
 ## Native Future
 
@@ -111,8 +155,8 @@ blocking hook reader with a persisted cursor. A later version can replace the
 file-following process with a socket API, but the product contract should stay
 the same:
 
-- start `fennec dev --agent`
-- configure one post-tool hook
+- start `fennec dev --agent --attach`
+- prove the post-tool hook is live
 - edit normally
 - consume stable dev verdicts, not terminal output
 
@@ -126,8 +170,8 @@ dune runtest cli/dev
 
 Useful live checks:
 
-- start `fennec dev --agent` on an isolated port
-- make an app edit and run one post-tool `fennec agent hook --timeout 12`
-- verify the hook catches feedback that settled before the hook process started
+- start `fennec dev --agent --attach` on an isolated port
+- make one normal app edit and verify live attach injects `Fennec dev feedback after this tool`
+- separately verify the hook catches feedback that settled before the hook process started
 - make a unit-test-only edit and verify the verdict reports `affected: tests`
 - restore the files and confirm the devserver stops cleanly

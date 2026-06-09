@@ -350,6 +350,14 @@ let dev_cmd =
     in
     Arg.(value & flag & info [ "agent" ] ~doc)
   in
+  let attach_arg =
+    let doc =
+      "With $(b,--agent), try to attach the current coding harness dynamically by installing one \
+       guarded post-tool hook that runs $(b,fennec agent hook --timeout 12). This writes \
+       user-level harness config, never repo files."
+    in
+    Arg.(value & flag & info [ "attach" ] ~doc)
+  in
   let agent_dir_arg =
     let doc =
       "Directory for the agent event journal. Implies $(b,--agent). Default uses \
@@ -357,7 +365,7 @@ let dev_cmd =
     in
     Arg.(value & opt (some string) None & info [ "agent-dir" ] ~docv:"DIR" ~doc)
   in
-  let go target exe assets dry clean port mongo agent agent_dir =
+  let go target exe assets dry clean port mongo agent attach agent_dir =
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -397,13 +405,21 @@ let dev_cmd =
          lifecycle's at_exit reaps it when dev exits (Ctrl-C → graceful shutdown → exit → stop +
          clean the ephemeral data dir); an absent mongod degrades to the in-memory backend. *)
       if mongo then ignore (Fennec_dev.Mongo_rs.launch ());
-      let agent_dir =
-        match agent_dir with
-        | Some d -> Some d
-        | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root:(project_root (Sys.getcwd ())) ) else None
+      let agent = agent || attach in
+      let attach_agent ~root agent_dir =
+        if attach then (
+          let results = Fennec_dev.Agent_attach.install ~root ~agent_dir () in
+          Printf.printf "%s\n%!" (Fennec_dev.Agent_attach.report results))
       in
       match exe with
       | Some exe_path ->
+        let root = project_root (Sys.getcwd ()) in
+        let agent_dir =
+          match agent_dir with
+          | Some d -> Some d
+          | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root) else None
+        in
+        (match agent_dir with Some dir -> attach_agent ~root dir | None -> ());
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
            server's precise build targets. With no --target we watch [@@default] — broader than the
            discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
@@ -419,7 +435,10 @@ let dev_cmd =
         | Ok d ->
           (* Supervisor expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
-          let agent_dir = match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root:d.Discover.root) else None in
+          let agent_dir =
+            match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root:d.Discover.root) else None
+          in
+          (match agent_dir with Some dir -> attach_agent ~root:d.Discover.root dir | None -> ());
           Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
           0)
     end
@@ -446,12 +465,13 @@ let dev_cmd =
       `S Manpage.s_examples;
       `Pre "  fennec dev                 # discover the server and run it";
       `Pre "  fennec dev --agent         # same, plus an agent event journal";
+      `Pre "  fennec dev --agent --attach # same, and attach the current coding harness";
       `Pre "  fennec dev --dry-run       # show what would run";
       `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
   Cmd.v (Cmd.info "dev" ~doc ~man)
-    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ agent_dir_arg)
+    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ attach_arg $ agent_dir_arg)
 
 let agent_cmd =
   let dir_arg =

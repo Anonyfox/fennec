@@ -115,6 +115,8 @@
    (>= 3.16))
   (cmdliner
    (>= 1.1.0))
+  (yojson
+   (>= 2.0))
   fennec
   fennec-mongo
   fennec-hunt
