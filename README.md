@@ -57,8 +57,8 @@ modules in terse, incremental sections; the precise API is inline in the `.mli`s
 | --- | --- |
 | **[`fennec`](./fennec/README.md)** | The runtime: HTTP core, Paw middleware, the Eio HTTP/WS server, automatic HTTPS, the `Fur` isomorphic UI, and the reactive **data + realtime** layer |
 | **[`fennec-cli`](./cli/README.md)** | The `fennec` binary — a JS/CSS bundler plus the dev & test CLI, one self-contained binary |
-| **[`fennec-hunt`](./fennec/hunt/README.md)** | Pure-OCaml app testing — unit + property + HTTP + real-browser (CDP) + system checks |
-| **[`fennec-mongo`](./fennec/mongo/README.md)** | BSON + a pure Mongo query/update/aggregate engine, in-memory minimongo, extended-JSON, an optional native libmongoc driver |
+| **[`fennec-hunt`](./hunt/README.md)** | Pure-OCaml app testing — unit + property + HTTP + real-browser (CDP) + system checks |
+| **[`fennec-mongo`](./mongo/README.md)** | BSON + a pure Mongo query/update/aggregate engine, in-memory minimongo, extended-JSON, an optional native libmongoc driver |
 
 Everything is **Eio-only**, by design.
 

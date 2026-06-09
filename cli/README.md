@@ -32,7 +32,7 @@ deterministic. Authoring is a bare block — no `main`, no wiring:
 | `docs` | — | doc-coverage gate (`--strict` to fail; `--promote` moves `.ml` docs to `.mli`) |
 
 `fennec test all` runs them fast-to-slow. The testing *library* underneath is `fennec-hunt`
-([`../fennec/hunt/README.md`](../fennec/hunt/README.md)) — usable standalone too.
+([`../hunt/README.md`](../hunt/README.md)) — usable standalone too.
 
 ---
 

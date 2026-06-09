@@ -2,8 +2,8 @@
 
 The HTTP server, middleware, isomorphic UI, and reactive data layer. One package, several libs; the
 precise API lives inline in each module's `.mli`. `Fennec` (the `app` lib) is the facade you call.
-(`fennec/hunt/` and `fennec/mongo/` alongside are the sibling `fennec-hunt` / `fennec-mongo` packages
-— their own READMEs.)
+(The standalone [`fennec-hunt`](../hunt/README.md) and [`fennec-mongo`](../mongo/README.md) packages
+live at the repo root, not under here.)
 
 ## HTTP core — `fennec.core`
 

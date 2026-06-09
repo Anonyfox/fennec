@@ -24,7 +24,7 @@ let resolve ~explicit ~from_env =
 let resolve_url ~explicit = resolve ~explicit ~from_env:(target_url ())
 
 (* ── System cut: the harness contract `fennec test system` sets, a System suite reads. MIRROR of
-   Fennec_core.Dev_proto.env_test_* (the CLI side); equality guarded by a test in fennec/hunt/test.
+   Fennec_core.Dev_proto.env_test_* (the CLI side); equality guarded by a test in hunt/test.
    Typed accessors so a suite never hand-rolls getenv for these — see Fennec_hunt.System. *)
 let env_bin = "FENNEC_BIN"
 let env_app_dir = "FENNEC_APP_DIR"

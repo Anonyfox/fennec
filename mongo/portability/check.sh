@@ -53,7 +53,7 @@ esac
 if [ "${#bad[@]}" -gt 0 ]; then
   echo "PORTABILITY FAILURE: $bin depends on non-system libraries:" >&2
   printf '  %s\n' "${bad[@]}" >&2
-  echo "These must be statically linked (see fennec/mongo/config/discover.ml)." >&2
+  echo "These must be statically linked (see mongo/config/discover.ml)." >&2
   exit 1
 fi
 

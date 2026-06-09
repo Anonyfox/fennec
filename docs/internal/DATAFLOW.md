@@ -373,7 +373,7 @@ it stays a clean standalone package.
    Progress:
    - (a) ✓ **`bson_json` DONE** — `fennec-mongo.bson_json` (+ `fennec-mongo.json`, a self-contained
      pure JSON), `Bson.t ↔ canonical extended JSON`, round-trip tested, jsoo-compiles.
-   - (b) ✓ **buildkit + FFI DONE** — `fennec/mongo/{vendor,config,ffi,portability}`: `vendor/build.sh`
+   - (b) ✓ **buildkit + FFI DONE** — `mongo/{vendor,config,ffi,portability}`: `vendor/build.sh`
      (builds mongo-c-driver 2.3.0 from the vendored tarball as static archives, native TLS, per-OS
      cache), `config/discover.ml` (`Configurator.V1` → static flags, full `.a` paths, degrades to
      `HAVE_MONGOC=0` where it can't build so the matrix stays green — verified the stub branch
@@ -382,7 +382,7 @@ it stays a clean standalone package.
      flag). Proven end to end: connect + ping + insert + find against a lifecycle-launched mongod,
      and the test binary depends on **OS libraries only** (otool/ldd guard `portability/check.sh`,
      run on `dune test`) — self-contained + statically linked, the downstream-binary guarantee.
-   - (c) ✓ **the driver layer DONE** — `fennec/mongo/driver` (`fennec-mongo.driver`, native): the
+   - (c) ✓ **the driver layer DONE** — `mongo/driver` (`fennec-mongo.driver`, native): the
      full `mongo/lib` ported from comet — `Client`/`Collection`/`Database` (CRUD + aggregate +
      distinct + indexes + reset helpers), `Change_stream` (typed events parsed from `operationType`),
      `Live` (the change-stream live-query engine: ONE stream per collection fanned out in-process to
@@ -426,7 +426,7 @@ it stays a clean standalone package.
    **proven in a real headless Chrome** (`test/browser`): subscribe renders the seeded docs, and
    addTask pushes a new doc back through the open subscription into the DOM — the whole loop,
    fennec-mongo → reactive → DDP → realtime server → jsoo client → merge store → Fur signal → DOM.
-7. **CLI mongod helper** — ✓ **DONE**. `fennec/mongo/mongod` (`fennec-mongo.mongod`, native/Unix) is
+7. **CLI mongod helper** — ✓ **DONE**. `mongo/mongod` (`fennec-mongo.mongod`, native/Unix) is
    the pure spawn+reap lifecycle (`find`/`install_hint`/`start ?replset`/`stop`/`with_ephemeral`;
    no-dangling via a process registry + at_exit backstop). `fennec dev --mongo` / `fennec test
    --mongo` (no new verb) launch a managed single-node **replica set** — `Mongo_rs`: `mongod

@@ -24,13 +24,13 @@ let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) 
 (* the per-suite target URL `fennec test` sets so each suite hits its own isolated instance.
    MIRROR of Fennec_hunt.Test_proto.env_url (the suite side) — the two live in independent
    packages (hunt has no framework dep; the CLI doesn't link hunt), and their equality is
-   guarded by a test in fennec/hunt/test so drift can never ship. *)
+   guarded by a test in hunt/test so drift can never ship. *)
 let env_test_url = "FENNEC_TEST_URL"
 
 (* the System-cut harness contract: `fennec test system` SETS these, a System suite READS them
    (via Fennec_hunt.System / Test_proto) so a suite never hand-rolls getenv for the fennec binary,
    the app dir to run `fennec dev` in, the built server (leftover-reclaim), or the workspace root.
-   MIRRORED in Fennec_hunt.Test_proto (suite side); equality guarded by a test in fennec/hunt/test. *)
+   MIRRORED in Fennec_hunt.Test_proto (suite side); equality guarded by a test in hunt/test. *)
 let env_test_bin = "FENNEC_BIN"             (* the fennec under test (the orchestrating binary) *)
 let env_test_app_dir = "FENNEC_APP_DIR"     (* the project to run `fennec dev` in *)
 let env_test_server_bc = "FENNEC_SERVER_BC" (* the built server bytecode *)
