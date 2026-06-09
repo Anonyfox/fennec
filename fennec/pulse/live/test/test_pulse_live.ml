@@ -197,6 +197,25 @@ let%test "MONGO collection: a String-_id doc seeded BEFORE an Object_id doc is s
   let found = MS.fetch s "things" ~selector:(B.doc [ ("_id", B.Object_id a) ]) () in
   all_typed && Array.length found = 1
 
+(* ── edge cases proven covered ── *)
+let%test "merge store: removed of an unknown id (and a double-remove) is a safe no-op" =
+  let s = MS.create () in
+  MS.removed s ~sub:"a" ~collection:"c" ~id:"ghost";
+  (* never added *)
+  MS.added s ~sub:"a" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ];
+  MS.removed s ~sub:"a" ~collection:"c" ~id:"x";
+  MS.removed s ~sub:"a" ~collection:"c" ~id:"x";
+  (* double remove *)
+  Array.length (MS.fetch s "c" ()) = 0
+
+let%test "seed: a duplicate _id within one group resolves to a single row (union of fields)" =
+  let s = MS.create () in
+  MS.seed s ~sub:"a" ~collection:"c"
+    [ B.doc [ ("_id", B.str "d"); ("x", B.int 1) ]; B.doc [ ("_id", B.str "d"); ("y", B.int 2) ] ];
+  match MS.fetch s "c" () with
+  | [| row |] -> B.get row "x" = Some (B.Int 1) && B.get row "y" = Some (B.Int 2)
+  | _ -> false
+
 let%test "Live.aggregate recomputes when a FOREIGN $lookup collection changes (not just the primary)" =
   let lv = Live.create () in
   MS.added (Live.store lv) ~sub:"a" ~collection:"orders" ~id:"o1" ~fields:[ ("cust", B.str "c1") ];

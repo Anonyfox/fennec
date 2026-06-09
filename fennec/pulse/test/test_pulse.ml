@@ -257,4 +257,13 @@ let%test "mux: a stale double-stop is idempotent — it cannot evict a fresh sam
   s2.stop ();
   ok && R.live_query_count () = before
 
+let%test "mux: a publication feeding Cursors [] is a no-op stream (ready, zero beats, no observe)" =
+  R.publish "mux_empty_p" (fun _ -> R.Cursors []);
+  let before = R.live_query_count () in
+  let n = ref 0 in
+  let s = R.run_publication "mux_empty_p" ~params:[] ~on:(fun _ -> incr n) in
+  let ok = !n = 0 && R.live_query_count () = before in
+  s.stop ();
+  ok && R.live_query_count () = before
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -124,7 +124,7 @@ module type REACTIVE = sig
     (** The first document matching the selector (after sort), or [None]. *)
     val find_one : t -> ?selector:doc -> ?sort:doc -> ?fields:doc -> unit -> doc option
 
-    (** The number of documents matching the selector. *)
+    (** The number of documents matching the selector (ignores skip/limit). *)
     val count : t -> ?selector:doc -> unit -> int
 
     (** [aggregate c pipeline] runs the aggregation pipeline (a list of stage documents) and returns
@@ -227,11 +227,14 @@ module type REACTIVE = sig
     stop : unit -> unit;
   }
 
-  (** [subscribe name] starts the named publication and returns a {!subscription} — a server-side,
-      per-collection merge box fed by the publication's cursors. [documents]/[documents_of] are
-      {e snapshot} getters (the current merged state) and [is_ready] is always [true]; live
-      per-document reactivity is via {!Collection.observe_changes}, {e not} via polling this. (To
-      drive a DDP session, feed a sink from [observe_changes] directly — DATAFLOW.md §6.) *)
+  (** [subscribe name] is a server-side {e snapshot / inspection} helper, NOT the live transport.
+      It runs the named publication with EMPTY params into a per-collection merge box and returns a
+      {!subscription} whose [documents]/[documents_of] are snapshot getters (current merged state) and
+      whose [is_ready] is always [true]. It does not stream and cannot carry subscription arguments.
+      For anything real — parameterized subscriptions, live per-document deltas, the DDP session —
+      use {!run_publication} ([~params], delta-driven, multiplexer-shared); that is what a session
+      feeds its sink from (DATAFLOW.md §5b). Reach for [subscribe] only to snapshot a no-arg
+      publication in-process (e.g. a test or an admin inspector). *)
   val subscribe : string -> subscription
 
   (** The names of the registered publications (e.g. to wire a transport). *)
