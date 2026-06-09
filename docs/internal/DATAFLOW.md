@@ -7,6 +7,11 @@ orchestrated by the CLI. It is grounded in the working prototype in the adjacent
 repo (the `mongo/`, `meteor/core`, `meteor/ddp`, `meteor/client` trees) and in fennec's current
 architecture (Fur signals, the Eio HTTP/WS server, the `build`/`dev`/`test` CLI, `fennec_buildkit`).
 
+**Naming:** this reactive layer ships as **Pulse** — `fennec.pulse` (core), `.server` (the DDP
+session), `.live` (client), `.mongo` (backend), riding on the literal `fennec.ddp` wire. Each store
+change is a **Beat**; Pulse keeps every client in **Rhythm**. The Meteor-compatible daily API
+(publish / subscribe / method / find, Mongo / Minimongo / DDP) is unchanged — only the namespace.
+
 Read alongside: `CLI-INTEROP.md` (the dune↔CLI boundary this extends) and
 `../TEST-CLI.md` (the `:memory:` default that keeps tests mongod-free).
 
@@ -389,10 +394,10 @@ it stays a clean standalone package.
      per-query views with caches + transition routing; interval polling only as an overflow guard
      above a stream budget), and `Server` (the single-node replica-set lifecycle). Blocking calls run
      in an Eio systhread.
-   - (d) ✓ **Backend.S over real mongo DONE** — `fennec/data/mongo` (`fennec.data.mongo`, native): a
-     thin `Fennec_data.Backend.S` adapter over the driver. `observe_changes` is REAL CHANGE STREAMS
+   - (d) ✓ **Backend.S over real mongo DONE** — `fennec/pulse/mongo` (`fennec.pulse.mongo`, native): a
+     thin `Fennec_pulse.Backend.S` adapter over the driver. `observe_changes` is REAL CHANGE STREAMS
      via `Live` (not polling) — the existing set replayed synchronously (ready-after-data), then
-     field-level deltas off the stream. `Reactive.Make (Fennec_data_mongo)` compiles, so the whole
+     field-level deltas off the stream. `Reactive.Make (Fennec_pulse_mongo)` compiles, so the whole
      reactive/DDP/realtime stack runs over real mongo unchanged.
    - (e) ✓ **correctness DONE** — `test_diff`: insert / find ($eq/$gte/array/$in/$or) / multi-$set /
      remove / count / **aggregate** ($match→$sort→$project) agree between `Backend.Mini` and a real
@@ -402,13 +407,13 @@ it stays a clean standalone package.
    Minimongo does.**
 3. **Backend.S + Reactive core** in `fennec` — Collection/publish/subscribe/methods over the
    backend seam; runs on `:memory:` now (native backend slots in behind `Backend.S` later).
-   ✓ **DONE** — `fennec/data` (`fennec.data`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
+   ✓ **DONE** — `fennec/pulse` (`fennec.pulse`): `Backend` + `Reactive.Make` + `Mini`, 15 tests,
    compiles to JS.
 4. **DDP codec + session** — pure, unit-tested. ✓ **DONE** — `fennec/ddp` (`fennec.ddp`): `Json`
    + `Ejson` + `Message` + `Session` (extended sub-tagged mode) + `Sockjs`, 9 tests, compiles to
    JS. (Re-proving captured real-Meteor frames rides along with the server wiring in Phase 5.)
 5. **DDP on fennec's server** — `Paw.Websocket.make "/websocket"` + `/sockjs` shim. ✓ **DONE** —
-   `fennec/realtime` (`fennec.realtime`): `Make(R)` bridges a reactive instance to a DDP session
+   `fennec/pulse/server` (`fennec.pulse.server`): `Make(R)` bridges a reactive instance to a DDP session
    (delta-driven — publications feed the session sink from `run_publication`/`observe_changes`, not
    the merge box; methods route through `R.call`), with `serve`/`serve_sockjs`/`paw`. Proven end to
    end over a fake `Ws_channel` (connect/sub→tagged-added+ready, live delta push, method result,
@@ -417,10 +422,10 @@ it stays a clean standalone package.
    `Ws` codec) wires a DDP session, and a `Cdp` WebSocket client does a full connect/subscribe/method
    round-trip asserting the live server→client push (the method's insert → `observe_changes` →
    sub-tagged `added` → frame). The whole server stack across a socket, deterministic, no browser.
-6. **Client** — ✓ **DONE**. `fennec/live` (`fennec.live`): the §5b `Merge_store` (precedence +
+6. **Client** — ✓ **DONE**. `fennec/pulse/live` (`fennec.pulse.live`): the §5b `Merge_store` (precedence +
    refcount + progressive enrichment), `Subkey`, the Fur `Live.find` binding (a signal that
-   recomputes as the store changes), `seed` for SSR hydration. `fennec/live/client`
-   (`fennec.live.client`): the DDP WebSocket client, isomorphic via a virtual module (browser impl =
+   recomputes as the store changes), `seed` for SSR hydration. `fennec/pulse/live/client`
+   (`fennec.pulse.live.client`): the DDP WebSocket client, isomorphic via a virtual module (browser impl =
    a real Js_of_ocaml WebSocket; native stub for SSR), with `connect`/`subscribe`/`call`/`find`.
    Wired into `examples/site` as a live task list (`task_list.mlx` + the `/ddp` endpoint), and
    **proven in a real headless Chrome** (`test/browser`): subscribe renders the seeded docs, and

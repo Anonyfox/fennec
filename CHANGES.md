@@ -14,7 +14,8 @@ The fennec packages are versioned together from this monorepo.
 - Automatic HTTPS, in-process: TLS termination with your own cert (`~tls`); automatic, multi-tenant
   Let's Encrypt (`~acme` — HTTP-01, DNS-01 wildcards, on-demand per-customer domains) with
   zero-downtime renewal and a pluggable cert store (file / memory / external).
-- Reactive data + realtime: DDP over WebSocket, change-stream-backed live queries, SSR-with-live-data.
+- **Pulse** — reactive data, end to end: DDP publish/subscribe over WebSocket, change-stream-backed
+  live queries (each change a *Beat*), SSR-with-live-data. The daily API stays Meteor-compatible.
 
 ### `fennec-mongo`
 - Pure BSON + a MongoDB query / update / projection / sort / aggregation engine + in-memory

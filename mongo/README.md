@@ -57,8 +57,9 @@ let () =
 A native, statically-linked **libmongoc driver** (`fennec-mongo.ffi`), a managed `mongod` lifecycle
 (`fennec-mongo.mongod`), and an extended-JSON codec (`fennec-mongo.bson_json`). The driver is
 native-only and **degrade-safe** — if libmongoc can't be built, it falls back to the in-memory
-engine. The framework's `fennec.data.mongo` exposes both behind one `Backend.S` / `Dynamic`, so the
-reactive / DDP / realtime stack runs over either with no type change; `fennec dev --mongo` /
+engine. The framework's `fennec.pulse.mongo` exposes both behind one `Backend.S` / `Dynamic`, so
+**Pulse** (the framework's reactive data layer — collections, DDP, live queries) runs over either
+with no type change; `fennec dev --mongo` /
 `fennec test --mongo` launch a managed mongod and wire it via `MONGO_URL`.
 
 ## Native + browser

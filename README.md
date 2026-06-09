@@ -63,7 +63,7 @@ modules in terse, incremental sections; the precise API is inline in the `.mli`s
 
 | Package | What it is |
 | --- | --- |
-| **[`fennec`](./fennec/README.md)** | The runtime: HTTP core, Paw middleware, the Eio HTTP/WS server, automatic HTTPS, the `Fur` isomorphic UI, and the reactive **data + realtime** layer |
+| **[`fennec`](./fennec/README.md)** | The runtime: HTTP core, Paw middleware, the Eio HTTP/WS server, automatic HTTPS, the `Fur` isomorphic UI, and **Pulse** — the reactive data + realtime layer |
 | **[`fennec-cli`](./cli/README.md)** | The `fennec` binary — a JS/CSS bundler plus the dev & test CLI, one self-contained binary |
 | **[`fennec-hunt`](./hunt/README.md)** | Pure-OCaml app testing — unit + property + HTTP + real-browser (CDP) + system checks |
 | **[`fennec-mongo`](./mongo/README.md)** | BSON + a pure Mongo query/update/aggregate engine, in-memory minimongo, extended-JSON, an optional native libmongoc driver |
@@ -81,7 +81,7 @@ Everything is **Eio-only**, by design.
 
 Working and tested end to end (see [`examples/site`](./examples/site), the living DX benchmark):
 the server, routing, isomorphic SSR + hydration, multi-app endpoints, the asset pipeline, the dev
-loop, real-browser e2e, **automatic multi-tenant HTTPS**, and the **reactive data + realtime layer**
+loop, real-browser e2e, **automatic multi-tenant HTTPS**, and **Pulse** — the **reactive data + realtime layer**
 (DDP, Mongo/minimongo, change-stream live queries, SSR-with-live-data). The CLI ships as a prebuilt,
 self-contained binary (Linux x64, macOS Apple Silicon) on every release. **Next:** a `fennec new`
 project scaffold and a guided first-app tutorial; more release platforms and package managers (Homebrew).

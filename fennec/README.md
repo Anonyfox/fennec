@@ -1,6 +1,6 @@
 # fennec — the runtime
 
-The HTTP server, middleware, isomorphic UI, and reactive data layer. One package, several libs; the
+The HTTP server, middleware, isomorphic UI, and the Pulse reactive data layer. One package, several libs; the
 precise API lives inline in each module's `.mli`. `Fennec` (the `app` lib) is the facade you call.
 (The standalone [`fennec-hunt`](../hunt/README.md) and [`fennec-mongo`](../mongo/README.md) packages
 live at the repo root, not under here.)
@@ -54,12 +54,19 @@ Signals (`signal` / `get` / `set`), a vdom + reconciler, a typed file-tree route
 and data resources with fast-render seeds. No React / Melange / preact runtime — the client is a
 js_of_ocaml bundle.
 
-## Reactive data + realtime — `fennec.data` · `.ddp` · `.live` · `.realtime`
+## Pulse — reactive data, end to end — `fennec.pulse` (+ `.mongo` · `.server` · `.live`, over `fennec.ddp`)
 
-Meteor-style sync: DDP publications/subscriptions over WebSocket, a Mongo/minimongo query + observe
-engine with change-stream-backed **live queries**, and **SSR-with-live-data** — the server renders
-live data into the first paint, the browser hydrates it flicker-free, then the subscription streams
-deltas. In-memory by default; an optional native Mongo driver (`fennec-mongo`) for production.
+**Pulse** is the live heartbeat of your data — the data-side counterpart to Fur. Meteor-style sync:
+DDP publications/subscriptions over WebSocket, a Mongo/minimongo query + observe engine with
+change-stream-backed **live queries**, and **SSR-with-live-data** (the server renders live data into
+the first paint, the browser hydrates flicker-free, then the subscription streams deltas). Every
+change is a **Beat**; Pulse keeps every client in **Rhythm**. In-memory by default; an optional native
+Mongo driver (`fennec-mongo`) for production.
+
+**Coming from Meteor, your daily words don't change — only the namespace.** `Pulse.publish` /
+`subscribe` / `method` / `call`, `find`, `insert` / `update` / `remove`, and `Ddp` / `Mongo` /
+`Minimongo` all stay literal: Pulse rides on those honest, Meteor-compatible substrates, so the
+brand lives in the namespace, not the verbs you type.
 
 ---
 
