@@ -91,6 +91,11 @@ module type REACTIVE = sig
     (** The collection's name. *)
     val name : t -> string
 
+    (** [forget name] drops a named collection from this instance's [$lookup] registry — reclaim it
+        for a dynamically-named (e.g. per-tenant) collection so it isn't pinned for the process
+        lifetime. A no-op for an unregistered name. *)
+    val forget : string -> unit
+
     (** [insert c d] inserts [d] (minting an [_id] per [id_generation] if absent) and returns it. *)
     val insert : t -> doc -> string
 

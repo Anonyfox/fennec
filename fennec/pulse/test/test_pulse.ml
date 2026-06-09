@@ -181,4 +181,18 @@ let%test "a publication receives its subscription params (parameterized cursor)"
   h.Reactive.stop ();
   match !seen with [ fields ] -> List.assoc_opt "room" fields = Some (B.Int 1) | _ -> false
 
+let%test "Collection.forget removes a collection from the $lookup registry" =
+  let orders = coll "orders_fg" and customers = coll "customers_fg" in
+  let _ = C.insert customers (doc [ ("_id", B.String "c1"); ("name", B.String "Zed") ]) in
+  let _ = C.insert orders (doc [ ("_id", B.String "o1"); ("cust", B.String "c1") ]) in
+  let lk () =
+    C.aggregate orders
+      [ doc [ ("$lookup", doc [ ("from", B.String "customers_fg"); ("localField", B.String "cust");
+                                ("foreignField", B.String "_id"); ("as", B.String "c") ]) ] ]
+  in
+  let joined_before = match lk () with [ row ] -> (match B.get row "c" with Some (B.Array [ _ ]) -> true | _ -> false) | _ -> false in
+  C.forget "customers_fg";
+  let empty_after = match lk () with [ row ] -> B.get row "c" = Some (B.Array []) | _ -> false in
+  joined_before && empty_after
+
 let () = exit (Fennec_hunt_unit.run ())

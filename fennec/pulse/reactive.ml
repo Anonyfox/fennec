@@ -60,6 +60,7 @@ module type REACTIVE = sig
       t
 
     val name : t -> string
+    val forget : string -> unit
     val insert : t -> doc -> string
 
     val find :
@@ -228,10 +229,12 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       cur_transform : (doc -> doc) option option;
     }
 
-    (* This reactive instance's named-collection registry: [create ~name] records the backend here,
-       and [aggregate] resolves $lookup / $unionWith foreign collections from it — so in-memory joins
-       span collections like a real database (one Reactive instance = one database of named
-       collections). Unnamed collections are not registered (they can't be a join target). *)
+    (* The named-collection registry, scoped to THIS functor application (one [Reactive.Make (B)] =
+       one database): [create ~name] records the backend here and [aggregate] resolves $lookup /
+       $unionWith foreign collections from it, so in-memory joins span collections. For two independent
+       databases, apply [Make] twice. Unnamed collections are NOT registered — a transient collection
+       you don't name neither accumulates here nor becomes a join target; re-using a name is last-wins;
+       a dynamically-named collection can be reclaimed with {!forget}. *)
     let _collections : (string, B.collection) Hashtbl.t = Hashtbl.create 16
 
     let create ?(id_generation = STRING) ?transform ?(name = "") backend =
@@ -250,6 +253,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       }
 
     let name c = c.name
+
+    (* drop a named collection from the registry — for a long-running server that creates dynamically
+       named collections (e.g. per-tenant), so they (and their $lookup-resolvability) are reclaimed
+       rather than pinned for the process lifetime *)
+    let forget nm = Hashtbl.remove _collections nm
 
     let mint_id c (d : doc) : string * doc =
       let kvs = Query.Diff.kvs_of d in
