@@ -29,9 +29,9 @@
 
 (package
  (name fennec)
- (synopsis "A lean isomorphic web framework for OCaml — native Eio server, Fur UI runtime")
+ (synopsis "A lean isomorphic web framework for OCaml — Eio server, Fur UI, Pulse reactive data")
  (description
-  "Fennec is the runtime of the fennec fullstack framework: a portable HTTP core\n(Plug-style middleware, a shared route table), a compact Eio HTTP + WebSocket\nserver with built-in dev livereload, and Fennec.Fur — an isomorphic UI runtime\n(signals + SSR + js_of_ocaml hydration; no Melange, no React). No cohttp, no Lwt —\nEio only. Pairs with the `fennec` CLI for the dev/build lifecycle, but a project\nstays a plain dune project.")
+  "Fennec is the runtime of the fennec fullstack framework: a portable HTTP core\n(Plug-style middleware, a shared route table), a compact Eio HTTP + WebSocket\nserver with built-in dev livereload, Fennec.Fur — an isomorphic UI runtime\n(signals + SSR + js_of_ocaml hydration; no Melange, no React), and Fennec.Pulse —\na Meteor-style reactive data layer (publish/subscribe over DDP, live queries,\nSSR-with-live-data). No cohttp, no Lwt — Eio only. Pairs with the `fennec` CLI\nfor the dev/build lifecycle, but a project stays a plain dune project.")
  (tags
   ("web" "framework" "eio" "isomorphic" "ssr" "websocket"))
  (depends
