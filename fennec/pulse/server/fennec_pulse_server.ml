@@ -14,11 +14,11 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
   let publication_of name : Session.publication =
    fun ~params:_ sink ->
     let h =
-      R.run_publication name
-        ~added:(fun ~collection ~id ~fields -> sink.Session.added ~collection ~id ~fields)
-        ~changed:(fun ~collection ~id ~fields ~cleared ->
-          sink.Session.changed ~collection ~id ~fields ~cleared)
-        ~removed:(fun ~collection ~id -> sink.Session.removed ~collection ~id)
+      R.run_publication name ~on:(function
+        | Rx.Added { collection; id; fields } -> sink.Session.added ~collection ~id ~fields
+        | Rx.Changed { collection; id; fields; cleared } ->
+            sink.Session.changed ~collection ~id ~fields ~cleared
+        | Rx.Removed { collection; id } -> sink.Session.removed ~collection ~id)
     in
     (* observe_changes replayed existing docs as [added] during run_publication; signal ready now *)
     sink.Session.ready ();

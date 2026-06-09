@@ -11,6 +11,20 @@ type doc = Bson.t
 (** A live-observation handle; call [stop] to detach. *)
 type live_handle = { stop : unit -> unit }
 
+(** One field-level change emitted by a publication's live query — the fennec-internal {e Beat} of
+    the Pulse. A DDP session lowers each beat onto the wire ([Fennec_ddp.Message]). This is distinct
+    from the Meteor-compatible {!Collection.observe_changes} callbacks, which stay
+    [added]/[changed]/[removed]; a beat is the same change reified as a value. *)
+type beat =
+  | Added of { collection : string; id : string; fields : (string * doc) list }
+  | Changed of {
+      collection : string;
+      id : string;
+      fields : (string * doc) list;
+      cleared : string list;
+    }
+  | Removed of { collection : string; id : string }
+
 (** The full reactive surface produced by {!Make}. *)
 module type REACTIVE = sig
   (** The backend collection type this instance is built on. *)
@@ -219,18 +233,13 @@ module type REACTIVE = sig
   (** The names of the registered methods. *)
   val method_names : unit -> string list
 
-  (** [run_publication name ~added ~changed ~removed] runs the named publication's cursors with
-      field-level observe deltas wired straight to the callbacks (the [collection] is per document),
-      returning a handle that stops every cursor. This is the delta-driven entry a DDP session feeds
-      its sink from — unlike {!subscribe} it keeps no merge box; the caller emits [ready] after it
-      returns ([observe_changes] replays existing documents synchronously as [added]). An unknown
+  (** [run_publication name ~on] runs the named publication's cursors, delivering each field-level
+      observe delta to [on] as a {!beat} (the [collection] is per document), and returns a handle
+      that stops every cursor. This is the delta-driven entry a DDP session feeds its sink from —
+      unlike {!subscribe} it keeps no merge box; the caller emits [ready] after it returns
+      ([observe_changes] replays existing documents synchronously as [Added] beats). An unknown
       publication yields a no-op handle. *)
-  val run_publication :
-    string ->
-    added:(collection:string -> id:string -> fields:(string * doc) list -> unit) ->
-    changed:(collection:string -> id:string -> fields:(string * doc) list -> cleared:string list -> unit) ->
-    removed:(collection:string -> id:string -> unit) ->
-    live_handle
+  val run_publication : string -> on:(beat -> unit) -> live_handle
 
   (** Pure EJSON structural operations. *)
   module EJSON : sig

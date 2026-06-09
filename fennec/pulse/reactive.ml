@@ -12,6 +12,19 @@
 type doc = Bson.t
 type live_handle = { stop : unit -> unit }
 
+(* One field-level change a publication's live query emits — the fennec-internal "Beat" of the Pulse.
+   A DDP session lowers each beat onto the wire (Fennec_ddp.Message). Distinct from the
+   Meteor-compatible Collection.observe_changes callbacks, which stay added/changed/removed. *)
+type beat =
+  | Added of { collection : string; id : string; fields : (string * doc) list }
+  | Changed of {
+      collection : string;
+      id : string;
+      fields : (string * doc) list;
+      cleared : string list;
+    }
+  | Removed of { collection : string; id : string }
+
 module type REACTIVE = sig
   type backend_collection
 
@@ -137,12 +150,7 @@ module type REACTIVE = sig
   val publications : unit -> string list
   val method_names : unit -> string list
 
-  val run_publication :
-    string ->
-    added:(collection:string -> id:string -> fields:(string * doc) list -> unit) ->
-    changed:(collection:string -> id:string -> fields:(string * doc) list -> cleared:string list -> unit) ->
-    removed:(collection:string -> id:string -> unit) ->
-    live_handle
+  val run_publication : string -> on:(beat -> unit) -> live_handle
 
   module EJSON : sig
     val equals : ?key_order_sensitive:bool -> doc -> doc -> bool
@@ -468,11 +476,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   let publications () = Hashtbl.fold (fun k _ acc -> k :: acc) _pubs []
   let method_names () = Hashtbl.fold (fun k _ acc -> k :: acc) _methods []
 
-  (* Run a publication's cursors with field-level observe deltas wired straight to the callbacks
-     (the [collection] is per-doc). The delta-driven entry a DDP session uses — no merge box; the
-     caller emits [ready] after this returns (observe_changes replays existing docs synchronously
-     as [added] during registration). *)
-  let run_publication name ~added ~changed ~removed : live_handle =
+  (* Run a publication's cursors with field-level observe deltas delivered as beats (the [collection]
+     is per-doc). The delta-driven entry a DDP session uses — no merge box; the caller emits [ready]
+     after this returns (observe_changes replays existing docs synchronously as [Added] beats during
+     registration). *)
+  let run_publication name ~on : live_handle =
     match Hashtbl.find_opt _pubs name with
     | None -> { stop = (fun () -> ()) }
     | Some f ->
@@ -481,10 +489,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
           let coll = Collection.(cur.coll.name) in
           let h =
             Collection.observe_changes cur
-              ~added:(fun id fields -> added ~collection:coll ~id ~fields:(Query.Diff.kvs_of fields))
+              ~added:(fun id fields ->
+                on (Added { collection = coll; id; fields = Query.Diff.kvs_of fields }))
               ~changed:(fun id fields cleared ->
-                changed ~collection:coll ~id ~fields:(Query.Diff.kvs_of fields) ~cleared)
-              ~removed:(fun id -> removed ~collection:coll ~id)
+                on (Changed { collection = coll; id; fields = Query.Diff.kvs_of fields; cleared }))
+              ~removed:(fun id -> on (Removed { collection = coll; id }))
               ()
           in
           stoppers := h.stop :: !stoppers
