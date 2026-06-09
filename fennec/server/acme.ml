@@ -9,7 +9,12 @@
 let letsencrypt_prod = "https://acme-v02.api.letsencrypt.org/directory"
 let letsencrypt_staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
-type config = { email : string option; store : Cert_store.t; staging : bool; domains : string list option; directory : string option }
+(* a DNS provider for DNS-01 (wildcard certs): set/remove a TXT record. The app implements it for
+   its provider (Cloudflare / Route 53 / …) — no provider SDKs baked into fennec, same seam idea as
+   {!Cert_store}. [name] is the full record name, e.g. "_acme-challenge.app.com". *)
+type dns_provider = { upsert_txt : name:string -> value:string -> unit; remove_txt : name:string -> unit }
+
+type config = { email : string option; store : Cert_store.t; staging : bool; domains : string list option; directory : string option; dns_provider : dns_provider option }
 
 let default_dir () =
   match Sys.getenv_opt "FENNEC_ACME_DIR" with
@@ -23,12 +28,13 @@ let env_true v = match Sys.getenv_opt v with Some ("1" | "on" | "true" | "yes") 
 (* [auto] never raises — a missing email just means HTTPS stays off (logged at run), so a dev build
    with no FENNEC_ACME_EMAIL boots fine on plain HTTP. Env overrides code: FENNEC_ACME_EMAIL,
    FENNEC_ACME_STAGING. *)
-let auto ?email ?store ?staging ?domains ?directory () =
+let auto ?email ?store ?staging ?domains ?directory ?dns_provider () =
   let email = match email with Some _ -> email | None -> Sys.getenv_opt "FENNEC_ACME_EMAIL" in
   let staging = match staging with Some s -> s | None -> env_true "FENNEC_ACME_STAGING" in
-  { email; store = (match store with Some s -> s | None -> Cert_store.file ~dir:(default_dir ())); staging; domains; directory }
+  { email; store = (match store with Some s -> s | None -> Cert_store.file ~dir:(default_dir ())); staging; domains; directory; dns_provider }
 
 let domains_override cfg = cfg.domains
+let dns_enabled cfg = Option.is_some cfg.dns_provider
 
 type t = { cfg : config; challenges : (string, string) Hashtbl.t; cert : Tls.Config.server option ref }
 
@@ -104,11 +110,13 @@ let serve_http_front ~sw ~net ~challenges =
 let issue t ~clock ~net ~domains =
   let directory = match t.cfg.directory with Some d -> d | None -> if t.cfg.staging then letsencrypt_staging else letsencrypt_prod in
   let key = account_key t.cfg.store in
+  (* DNS-01 solver from the configured provider: set the TXT, return a thunk that removes it *)
+  let solve_dns01 = match t.cfg.dns_provider with Some p -> Some (fun ~name ~value -> p.upsert_txt ~name ~value; fun () -> p.remove_txt ~name) | None -> None in
   let did =
     Cert_store.(
       t.cfg.store.with_lease "acme-issue" (fun () ->
           match
-            Acme_client.obtain ~net ~clock ~directory ~account_key:key ~email:(Option.value t.cfg.email ~default:"") ~domains
+            Acme_client.obtain ~net ~clock ?solve_dns01 ~directory ~account_key:key ~email:(Option.value t.cfg.email ~default:"") ~domains
               ~provision:(fun ~token ~key_auth -> Hashtbl.replace t.challenges token key_auth)
               ~cleanup:(fun ~token -> Hashtbl.remove t.challenges token) ()
           with

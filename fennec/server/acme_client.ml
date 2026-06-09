@@ -73,7 +73,7 @@ let poll ~clock ~what get_status =
 (* [obtain] runs the full HTTP-01 flow for [domains] (one SAN cert). [provision ~token ~key_auth]
    must make the token reachable at /.well-known/acme-challenge/<token> (the manager's :80 listener
    does this); [cleanup ~token] removes it. Returns (cert-chain PEM, server-key PEM). *)
-let obtain ~net ~clock ?authenticator ~directory ~account_key ~email ~domains ~provision ~cleanup () : (string * string, string) result =
+let obtain ~net ~clock ?authenticator ?solve_dns01 ~directory ~account_key ~email ~domains ~provision ~cleanup () : (string * string, string) result =
   Mirage_crypto_rng_unix.use_default ();
   let nonce = ref "" and kid = ref None in
   let req ~meth ?headers ?body url = Https_client.request ~net ?authenticator ~meth ?headers ?body url in
@@ -109,26 +109,38 @@ let obtain ~net ~clock ?authenticator ~directory ~account_key ~email ~domains ~p
     let finalize = must order "finalize" in
     let authzs = List.filter_map Json.to_string_opt (list order "authorizations") in
     dbg "newOrder status=%d finalize=%s authzs=%d" oresp.status finalize (List.length authzs);
-    (* each authorization: solve the http-01 challenge *)
-    List.iter
-      (fun authz_url ->
-        let authz = parse (post_get authz_url).body in
-        let challenges = list authz "challenges" in
-        match List.find_opt (fun c -> str c "type" = Some "http-01") challenges with
-        | None -> failwith "acme: no http-01 challenge offered"
-        | Some c ->
-          let token = must c "token" and chal_url = must c "url" in
-          dbg "authz %s: http-01 token=%s; provisioning + triggering" authz_url token;
-          provision ~token ~key_auth:(token ^ "." ^ thumbprint account_key);
-          Fun.protect
-            ~finally:(fun () -> cleanup ~token)
-            (fun () ->
-              ignore (post ~url:chal_url ~payload:"{}" (the_kid ()));
-              ignore
-                (poll ~clock ~what:"authorization" (fun () ->
-                     let resp = post_get authz_url in
-                     match str (parse resp.body) "status" with Some "valid" -> `Valid () | Some "invalid" -> `Invalid resp.body | _ -> `Pending))))
-      authzs;
+    (* each authorization: solve http-01 if offered, else dns-01 (which is the only challenge ACME
+       offers for a wildcard — it needs a DNS provider) *)
+    let solve_authz authz_url =
+      let authz = parse (post_get authz_url).body in
+      let identifier = match Json.member "identifier" authz with Some o -> Option.value (str o "value") ~default:"" | None -> "" in
+      let challenges = list authz "challenges" in
+      let find ty = List.find_opt (fun c -> str c "type" = Some ty) challenges in
+      let wait_valid () =
+        poll ~clock ~what:("authorization " ^ identifier) (fun () ->
+            let resp = post_get authz_url in
+            match str (parse resp.body) "status" with Some "valid" -> `Valid () | Some "invalid" -> `Invalid resp.body | _ -> `Pending)
+      in
+      match (find "http-01", find "dns-01", solve_dns01) with
+      | Some c, _, _ ->
+        let token = must c "token" and chal_url = must c "url" in
+        dbg "authz %s: http-01 token=%s" identifier token;
+        provision ~token ~key_auth:(token ^ "." ^ thumbprint account_key);
+        Fun.protect ~finally:(fun () -> cleanup ~token) (fun () -> ignore (post ~url:chal_url ~payload:"{}" (the_kid ())); ignore (wait_valid ()))
+      | None, Some c, Some solve ->
+        (* RFC 8555 §8.4: the TXT value is base64url(SHA-256(keyAuthorization)) at _acme-challenge.<id> *)
+        let token = must c "token" and chal_url = must c "url" in
+        let txt = b64url (sha256 (token ^ "." ^ thumbprint account_key)) in
+        dbg "authz %s: dns-01 _acme-challenge.%s=%s" identifier identifier txt;
+        let undo = solve ~name:("_acme-challenge." ^ identifier) ~value:txt in
+        Fun.protect ~finally:undo (fun () ->
+            Eio.Time.sleep clock 3.0 (* let the record propagate before triggering validation *);
+            ignore (post ~url:chal_url ~payload:"{}" (the_kid ()));
+            ignore (wait_valid ()))
+      | None, Some _, None -> failwith (Printf.sprintf "acme: %s offers only DNS-01 (a wildcard?) — configure a DNS provider via Acme.auto ~dns_provider" identifier)
+      | _ -> failwith (Printf.sprintf "acme: no solvable challenge for %s" identifier)
+    in
+    List.iter solve_authz authzs;
     (* finalize with the CSR, then download the issued chain *)
     let server_key = X509.Private_key.generate ~bits:2048 `RSA in
     let csr_der = X509.Signing_request.encode_der (make_csr server_key domains) in
@@ -179,3 +191,10 @@ let%test "JWS RS256 signature verifies against the account public key" =
   match X509.Private_key.sign `SHA256 ~scheme:`RSA_PKCS1 k (`Message input) with
   | Error _ -> false
   | Ok signature -> ( match X509.Public_key.verify `SHA256 ~scheme:`RSA_PKCS1 ~signature (X509.Private_key.public k) (`Message input) with Ok () -> true | Error _ -> false)
+
+(* dns-01 (RFC 8555 §8.4): the TXT value is base64url(SHA-256(keyAuthorization)) — a 43-char
+   base64url SHA-256. The crypto underneath is the same vector-proven b64url+sha256. *)
+let%test "dns-01 TXT digest is a 43-char base64url SHA-256 of the key authorization" =
+  Mirage_crypto_rng_unix.use_default ();
+  let k = X509.Private_key.generate ~bits:2048 `RSA in
+  String.length (b64url (sha256 ("a-token" ^ "." ^ thumbprint k))) = 43

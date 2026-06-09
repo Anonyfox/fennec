@@ -201,12 +201,17 @@ module Acme : sig
   (** ACME configuration. *)
   type config = Fennec_server.Acme.config
 
-  (** [auto ?email ?store ?staging ?domains ?directory ()] — automatic certificates. Never raises;
-      a missing email leaves HTTPS off. Env overrides code: [FENNEC_ACME_EMAIL], [FENNEC_ACME_STAGING],
-      [FENNEC_ACME_DIR] (store). ACME runs in production only unless [FENNEC_ACME=1] forces it; in dev
-      it no-ops to plain HTTP. [store] defaults to a file store; [domains] overrides the router-derived
-      (Exact) set; [staging] uses Let's Encrypt staging (rate-limit-free testing). *)
-  val auto : ?email:string -> ?store:Cert_store.t -> ?staging:bool -> ?domains:string list -> ?directory:string -> unit -> config
+  (** A DNS provider for DNS-01 / wildcard certs — implement over your provider (Cloudflare /
+      Route 53 / …). [upsert_txt] sets the TXT record [name] to [value]; [remove_txt] deletes it. *)
+  type dns_provider = Fennec_server.Acme.dns_provider = { upsert_txt : name:string -> value:string -> unit; remove_txt : name:string -> unit }
+
+  (** [auto ?email ?store ?staging ?domains ?directory ?dns_provider ()] — automatic certificates.
+      Never raises; a missing email leaves HTTPS off. Env overrides code: [FENNEC_ACME_EMAIL],
+      [FENNEC_ACME_STAGING], [FENNEC_ACME_DIR] (store). ACME runs in production only unless
+      [FENNEC_ACME=1] forces it; in dev it no-ops to plain HTTP. [store] defaults to a file store;
+      [domains] overrides the router-derived set; [staging] uses Let's Encrypt staging. [dns_provider]
+      enables DNS-01 so wildcard hosts (e.g. ["*.app.com"]) are certified — the multi-tenant unlock. *)
+  val auto : ?email:string -> ?store:Cert_store.t -> ?staging:bool -> ?domains:string list -> ?directory:string -> ?dns_provider:dns_provider -> unit -> config
 end
 
 (** {1 Entry point} *)

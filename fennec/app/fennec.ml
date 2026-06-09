@@ -174,11 +174,22 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
   let tls_source =
     if acme_active then (
       let cfg = Option.get acme in
-      let exact =
-        List.concat_map (fun e -> List.filter_map (fun h -> match Fennec_server.Host_pattern.of_string h with Ok (Fennec_server.Host_pattern.Exact d) -> Some d | _ -> None) (Endpoint.hosts e)) endpoints
+      (* certifiable domains from the router: concrete hosts always (HTTP-01); wildcards too (a
+         [Suffix] ".app.com" → "*.app.com") when a DNS provider is configured (DNS-01) *)
+      let derived =
+        List.concat_map
+          (fun e ->
+            List.filter_map
+              (fun h ->
+                match Fennec_server.Host_pattern.of_string h with
+                | Ok (Fennec_server.Host_pattern.Exact d) -> Some d
+                | Ok (Fennec_server.Host_pattern.Suffix s) when Fennec_server.Acme.dns_enabled cfg -> Some ("*" ^ s)
+                | _ -> None)
+              (Endpoint.hosts e))
+          endpoints
         |> List.sort_uniq compare
       in
-      let domains = match Fennec_server.Acme.domains_override cfg with Some d -> d | None -> exact in
+      let domains = match Fennec_server.Acme.domains_override cfg with Some d -> d | None -> derived in
       Fennec_server.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg cert_ref;
       Some (fun () -> !cert_ref))
     else match tls with Some t -> Some (fun () -> Some t) | None -> None
