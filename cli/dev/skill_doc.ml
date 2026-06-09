@@ -46,7 +46,7 @@ let render () =
       "fennec dev --agent --port 9123";
       "```";
       "";
-      "Attach edit hooks to:";
+      "Attach harness post-edit/post-batch hooks to:";
       "";
       "```sh";
       "fennec agent hook --timeout 12";
@@ -59,6 +59,14 @@ let render () =
       "```";
       "";
       "Then keep `fennec agent hook --timeout 12` as the post-tool or post-batch hook. The hook blocks on the devserver journal and injects the completed dev verdict into the next model step. Do not parse terminal output. Do not run an extra build/test command after every edit when the hook is active.";
+      "";
+      "`fennec agent hook` is for harness hooks, not a command to run manually after an edit has already settled. For a manual agent loop, snapshot before the edit and wait after the edit:";
+      "";
+      "```sh";
+      "after=$(fennec agent mark)";
+      "# edit files";
+      "fennec agent wait --after \"$after\" --timeout 12";
+      "```";
       "";
       "The agent verdict includes served change, inline-test result when tests ran, inferred affected surface, timing fields, and focused compiler diagnostics with file/line/code frame when a build fails.";
       "";
@@ -104,3 +112,7 @@ let%test "guide names the agent hook" =
 
 let%test "guide tells agents not to poll builds after hooks" =
   Fennec_hunt_unit.str_contains (render ()) "Do not run an extra build/test command after every edit"
+
+let%test "guide distinguishes hook wiring from manual waits" =
+  Fennec_hunt_unit.str_contains (render ()) "hook` is for harness hooks"
+  && Fennec_hunt_unit.str_contains (render ()) "fennec agent wait --after"
