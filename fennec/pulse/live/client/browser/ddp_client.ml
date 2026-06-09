@@ -152,11 +152,11 @@ let subscribe t ~name ?(params = []) () : subscription =
            matches the server HTML; the live Sub then re-confirms + streams deltas under the same id. *)
         (match Hashtbl.find_opt (Fur.Data.seed_table ()) (seed_key name params) with
         | Some payload ->
-          (* install under the collection the SERVER declared (it rides in the payload) — not a
-             client-side re-derivation, so a publication whose name ≠ collection still hydrates right *)
-          (match Seed.decode payload with
-          | Some (collection, docs) -> (try MS.seed (Live.store t.live) ~sub:st.id ~collection docs with _ -> ())
-          | None -> ());
+          (* install each collection's docs under the collection the SERVER declared (they ride in the
+             payload as {c;d} groups) — handles a publication that feeds one OR several collections *)
+          List.iter
+            (fun (collection, docs) -> try MS.seed (Live.store t.live) ~sub:st.id ~collection docs with _ -> ())
+            (Seed.decode payload);
           Fur.set st.ready_sig true
         | None -> ());
         t.send (Msg.encode (Msg.Sub { id = st.id; name; params }));
@@ -196,7 +196,7 @@ let call_result t ~name ?(params = []) () : (Bson.t, string * string) result opt
 let call t ~name ?(params = []) () = ignore (call_result t ~name ~params ())
 
 (* SSR-only concept: the browser receives data over the live socket, not a publication registry *)
-let publish ~name ?collection (_ : Bson.t list -> Bson.t list) = ignore (name, collection)
+let publish ~name (_ : Bson.t list -> (string * Bson.t list) list) = ignore name
 
 let find t = Live.find t.live
 let aggregate t = Live.aggregate t.live

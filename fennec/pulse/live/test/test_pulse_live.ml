@@ -85,21 +85,22 @@ let%test "wire: added/changed route through; a control frame (ready) does not" =
    differs from its collection (the browser can't re-derive it — publish is a no-op there) ── *)
 module Seed = Fennec_pulse_live.Seed
 
-let%test "seed: round-trips the documents AND their collection" =
+let%test "seed: round-trips the documents AND their collection (single group)" =
   let docs = [ B.doc [ ("_id", B.str "1"); ("n", B.int 1) ]; B.doc [ ("_id", B.str "2") ] ] in
-  match Seed.decode (Seed.encode ~collection:"messages" docs) with
-  | Some ("messages", got) -> List.length got = 2 && B.get (List.hd got) "n" = Some (B.Int 1)
+  match Seed.decode (Seed.encode [ ("messages", docs) ]) with
+  | [ ("messages", got) ] -> List.length got = 2 && B.get (List.hd got) "n" = Some (B.Int 1)
   | _ -> false
 
-let%test "seed: the collection travels independently of the publication name (name <> collection)" =
-  (* a publication named "inbox" feeding collection "messages" seeds under "messages", so the client
-     installs there and find/live (which use the real collection) line up *)
-  match Seed.decode (Seed.encode ~collection:"messages" [ B.doc [ ("_id", B.str "1") ] ]) with
-  | Some (c, _) -> c = "messages"
-  | None -> false
+let%test "seed: carries MULTIPLE collections' groups (a multi-collection publication)" =
+  (* one publication feeding rooms + messages seeds BOTH, each under its real collection *)
+  let groups =
+    [ ("rooms", [ B.doc [ ("_id", B.str "r1") ] ]);
+      ("messages", [ B.doc [ ("_id", B.str "m1") ]; B.doc [ ("_id", B.str "m2") ] ]) ]
+  in
+  match Seed.decode (Seed.encode groups) with [ ("rooms", [ _ ]); ("messages", [ _; _ ]) ] -> true | _ -> false
 
-let%test "seed: a malformed / legacy payload decodes to None (no crash)" =
-  Seed.decode "not json" = None && Seed.decode "[1,2,3]" = None
+let%test "seed: a malformed / legacy payload decodes to [] (no crash)" =
+  Seed.decode "not json" = [] && Seed.decode "{}" = []
 
 (* ── client-side aggregation across the cache's many collections ── *)
 let%test "client aggregate: $lookup joins across the client's collections" =
