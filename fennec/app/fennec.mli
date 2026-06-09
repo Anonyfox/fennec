@@ -210,8 +210,19 @@ module Acme : sig
       [FENNEC_ACME_STAGING], [FENNEC_ACME_DIR] (store). ACME runs in production only unless
       [FENNEC_ACME=1] forces it; in dev it no-ops to plain HTTP. [store] defaults to a file store;
       [domains] overrides the router-derived set; [staging] uses Let's Encrypt staging. [dns_provider]
-      enables DNS-01 so wildcard hosts (e.g. ["*.app.com"]) are certified — the multi-tenant unlock. *)
-  val auto : ?email:string -> ?store:Cert_store.t -> ?staging:bool -> ?domains:string list -> ?directory:string -> ?dns_provider:dns_provider -> unit -> config
+      enables DNS-01 so wildcard hosts (e.g. ["*.app.com"]) are certified. [on_demand] enables
+      on-demand issuance: an HTTPS connection for an SNI host the callback approves gets its cert
+      issued on first connect and cached — for runtime-added per-tenant / customer domains. *)
+  val auto :
+    ?email:string ->
+    ?store:Cert_store.t ->
+    ?staging:bool ->
+    ?domains:string list ->
+    ?directory:string ->
+    ?dns_provider:dns_provider ->
+    ?on_demand:(string -> bool) ->
+    unit ->
+    config
 end
 
 (** {1 Entry point} *)

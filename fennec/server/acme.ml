@@ -14,7 +14,15 @@ let letsencrypt_staging = "https://acme-staging-v02.api.letsencrypt.org/director
    {!Cert_store}. [name] is the full record name, e.g. "_acme-challenge.app.com". *)
 type dns_provider = { upsert_txt : name:string -> value:string -> unit; remove_txt : name:string -> unit }
 
-type config = { email : string option; store : Cert_store.t; staging : bool; domains : string list option; directory : string option; dns_provider : dns_provider option }
+type config = {
+  email : string option;
+  store : Cert_store.t;
+  staging : bool;
+  domains : string list option;
+  directory : string option;
+  dns_provider : dns_provider option;
+  on_demand : (string -> bool) option; (* allowlist for on-demand issuance: approve an SNI host? *)
+}
 
 let default_dir () =
   match Sys.getenv_opt "FENNEC_ACME_DIR" with
@@ -28,15 +36,32 @@ let env_true v = match Sys.getenv_opt v with Some ("1" | "on" | "true" | "yes") 
 (* [auto] never raises — a missing email just means HTTPS stays off (logged at run), so a dev build
    with no FENNEC_ACME_EMAIL boots fine on plain HTTP. Env overrides code: FENNEC_ACME_EMAIL,
    FENNEC_ACME_STAGING. *)
-let auto ?email ?store ?staging ?domains ?directory ?dns_provider () =
+let auto ?email ?store ?staging ?domains ?directory ?dns_provider ?on_demand () =
   let email = match email with Some _ -> email | None -> Sys.getenv_opt "FENNEC_ACME_EMAIL" in
   let staging = match staging with Some s -> s | None -> env_true "FENNEC_ACME_STAGING" in
-  { email; store = (match store with Some s -> s | None -> Cert_store.file ~dir:(default_dir ())); staging; domains; directory; dns_provider }
+  { email; store = (match store with Some s -> s | None -> Cert_store.file ~dir:(default_dir ())); staging; domains; directory; dns_provider; on_demand }
 
 let domains_override cfg = cfg.domains
 let dns_enabled cfg = Option.is_some cfg.dns_provider
 
-type t = { cfg : config; challenges : (string, string) Hashtbl.t; cert : Tls.Config.server option ref }
+type chain = Tls_termination.chain
+
+(* the result of running ACME: the live TLS source the server reads per connection (SNI-selecting
+   among all current certs), plus an optional on-demand handler (ensure a cert for an SNI host). *)
+type running = { source : unit -> Tls.Config.server option; on_demand : (string -> unit) option }
+
+type t = {
+  cfg : config;
+  challenges : (string, string) Hashtbl.t; (* shared with the :80 front *)
+  chains : (string, chain) Hashtbl.t; (* label → cert chain: "managed" = the declared SAN; a host = on-demand *)
+  domains_of : (string, string list) Hashtbl.t; (* label → the domains it covers, for renewal *)
+}
+
+let cert_key label = label ^ ".cert.pem"
+let key_key label = label ^ ".key.pem"
+
+(* the live TLS source: SNI-select among all current chains; None until the first cert lands *)
+let source t () = match Hashtbl.fold (fun _ c acc -> c :: acc) t.chains [] with [] -> None | cs -> Some (Tls_termination.server_of_chains cs)
 
 (* the account key, persisted so the same ACME account is reused across restarts/replicas *)
 let account_key store =
@@ -48,9 +73,9 @@ let account_key store =
     Cert_store.(store.put "account.pem" (X509.Private_key.encode_pem k));
     k
 
-(* days until the stored cert expires (None if no/invalid cert) *)
-let cert_days_left store ~clock =
-  match Cert_store.(store.get "cert.pem") with
+(* days until the stored cert for [label] expires (None if no/invalid cert) *)
+let cert_days_left store ~label ~clock =
+  match Cert_store.(store.get (cert_key label)) with
   | None -> None
   | Some pem -> (
     match X509.Certificate.decode_pem_multiple pem with
@@ -60,10 +85,10 @@ let cert_days_left store ~clock =
       ( match Ptime.Span.to_int_s (Ptime.diff not_after now) with Some secs -> Some (secs / 86400) | None -> Some 0)
     | _ -> None)
 
-(* install the stored cert as the live one (hot-reloadable: the server reads [t.cert] per connection) *)
-let load_cert t =
-  match (Cert_store.(t.cfg.store.get "cert.pem"), Cert_store.(t.cfg.store.get "key.pem")) with
-  | Some cert, Some key -> ( try t.cert := Some (Tls_termination.of_pem ~cert ~key) with _ -> ())
+(* install the stored chain for [label] into the live set (hot-reloadable: source reads it per conn) *)
+let load_chain t ~label =
+  match (Cert_store.(t.cfg.store.get (cert_key label)), Cert_store.(t.cfg.store.get (key_key label))) with
+  | Some cert, Some key -> ( try Hashtbl.replace t.chains label (Tls_termination.chain_of_pem ~cert ~key) with _ -> ())
   | _ -> ()
 
 (* the HTTP response for one :80 request — serve the ACME HTTP-01 token if the path matches a
@@ -106,49 +131,63 @@ let serve_http_front ~sw ~net ~challenges =
         in
         loop ())
 
-(* obtain (or, for a non-leaseholder replica, wait for) the cert, then install it *)
-let issue t ~clock ~net ~domains =
+(* obtain (or, for a non-leaseholder replica, wait for) the cert for [label] covering [domains],
+   then install it into the live set *)
+let issue t ~clock ~net ~label ~domains =
   let directory = match t.cfg.directory with Some d -> d | None -> if t.cfg.staging then letsencrypt_staging else letsencrypt_prod in
   let key = account_key t.cfg.store in
   (* DNS-01 solver from the configured provider: set the TXT, return a thunk that removes it *)
   let solve_dns01 = match t.cfg.dns_provider with Some p -> Some (fun ~name ~value -> p.upsert_txt ~name ~value; fun () -> p.remove_txt ~name) | None -> None in
   let did =
     Cert_store.(
-      t.cfg.store.with_lease "acme-issue" (fun () ->
+      t.cfg.store.with_lease ("issue:" ^ label) (fun () ->
           match
             Acme_client.obtain ~net ~clock ?solve_dns01 ~directory ~account_key:key ~email:(Option.value t.cfg.email ~default:"") ~domains
               ~provision:(fun ~token ~key_auth -> Hashtbl.replace t.challenges token key_auth)
               ~cleanup:(fun ~token -> Hashtbl.remove t.challenges token) ()
           with
           | Ok (cert_pem, key_pem) ->
-            t.cfg.store.put "cert.pem" cert_pem;
-            t.cfg.store.put "key.pem" key_pem;
+            t.cfg.store.put (cert_key label) cert_pem;
+            t.cfg.store.put (key_key label) key_pem;
             Printf.eprintf "fennec acme: issued certificate for %s\n%!" (String.concat ", " domains)
           | Error m -> Printf.eprintf "fennec acme: issuance failed for %s — %s\n%!" (String.concat ", " domains) m))
   in
   (* another replica holds the lease and is issuing — wait for the cert to land in the shared store *)
   if not did then (
-    let rec wait n = if n <= 0 then () else match Cert_store.(t.cfg.store.get "cert.pem") with Some _ -> () | None -> Eio.Time.sleep clock 2.0; wait (n - 1) in
+    let rec wait n = if n <= 0 then () else match Cert_store.(t.cfg.store.get (cert_key label)) with Some _ -> () | None -> Eio.Time.sleep clock 2.0; wait (n - 1) in
     wait 60);
-  load_cert t
+  Hashtbl.replace t.domains_of label domains;
+  load_chain t ~label
 
-(* the full lifecycle, called from {!Fennec.serve}'s on_start (which runs before the server binds).
-   [cert_ref] is the live source the server's TLS wrap reads. *)
-let run ~sw ~clock ~net ~domains ~challenges (cfg : config) (cert_ref : Tls.Config.server option ref) =
-  match (cfg.email, domains) with
-  | None, _ -> Printf.eprintf "fennec acme: no email (pass ~email or set FENNEC_ACME_EMAIL) — HTTPS disabled\n%!"
-  | _, [] -> Printf.eprintf "fennec acme: no concrete (Exact) domain — HTTPS disabled (wildcards need DNS-01; the catch-all needs on-demand TLS)\n%!"
-  | Some _, _ ->
-    (* the :80 front (challenge + redirect) is owned by serve; [challenges] is shared with it *)
-    let t = { cfg; challenges; cert = cert_ref } in
-    (match cert_days_left cfg.store ~clock with Some d when d > 30 -> load_cert t | _ -> issue t ~clock ~net ~domains);
-    Eio.Fiber.fork ~sw (fun () ->
-        let rec loop () =
-          Eio.Time.sleep clock (12. *. 3600.);
-          (match cert_days_left cfg.store ~clock with Some d when d > 30 -> () | _ -> issue t ~clock ~net ~domains);
-          loop ()
-        in
-        loop ())
+(* on-demand: ensure a cert for an SNI [host] (load cached, else issue) when the allowlist approves —
+   called during the handshake, so the first hit to a new tenant domain blocks briefly while issuing *)
+let ensure t ~clock ~net ~allow host =
+  if (not (Hashtbl.mem t.chains host)) && allow host then (
+    load_chain t ~label:host;
+    if not (Hashtbl.mem t.chains host) then issue t ~clock ~net ~label:host ~domains:[ host ])
+
+(* the full lifecycle, called from {!Fennec.serve} before the server binds. Returns the live TLS
+   source + an optional on-demand handler. [challenges] is shared with serve's :80 front. *)
+let run ~sw ~clock ~net ~domains ~challenges (cfg : config) : running =
+  let t = { cfg; challenges; chains = Hashtbl.create 8; domains_of = Hashtbl.create 8 } in
+  (* the declared domains → one SAN cert under the "managed" label *)
+  (match (cfg.email, domains) with
+  | Some _, _ :: _ -> (
+    match cert_days_left cfg.store ~label:"managed" ~clock with
+    | Some d when d > 30 -> Hashtbl.replace t.domains_of "managed" domains; load_chain t ~label:"managed"
+    | _ -> issue t ~clock ~net ~label:"managed" ~domains)
+  | None, _ -> if cfg.on_demand = None then Printf.eprintf "fennec acme: no email (pass ~email or set FENNEC_ACME_EMAIL) — HTTPS disabled\n%!"
+  | _, [] -> if cfg.on_demand = None then Printf.eprintf "fennec acme: no concrete (Exact) domain — HTTPS disabled (wildcards need DNS-01; catch-all needs on-demand TLS)\n%!");
+  (* renewal: every ~12h re-issue any label under 30 days (declared SAN + each on-demand host) *)
+  Eio.Fiber.fork ~sw (fun () ->
+      let rec loop () =
+        Eio.Time.sleep clock (12. *. 3600.);
+        Hashtbl.iter (fun label ds -> match cert_days_left cfg.store ~label ~clock with Some d when d > 30 -> () | _ -> (try issue t ~clock ~net ~label ~domains:ds with _ -> ())) (Hashtbl.copy t.domains_of);
+        loop ()
+      in
+      loop ());
+  let on_demand = match (cfg.on_demand, cfg.email) with Some allow, Some _ -> Some (fun host -> try ensure t ~clock ~net ~allow host with _ -> ()) | _ -> None in
+  { source = source t; on_demand }
 
 (* ──── acme manager tests ──── *)
 

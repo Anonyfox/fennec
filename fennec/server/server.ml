@@ -469,7 +469,20 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : 
    @param max_conns       concurrent-connection cap (default 10_000).
    @param parallelism     worker domains (per-core); auto by default, or FENNEC_PARALLELISM.
    @param on_listen       called post-bind with the (endpoint name, url) pairs for the banner. *)
-let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
+(* peek the SNI host from a connection without consuming it (MSG_PEEK), so an on-demand handler can
+   ensure that host's cert before the TLS handshake reads the same ClientHello. Fail-safe → None. *)
+let peek_sni flow =
+  match Eio_unix.Resource.fd_opt flow with
+  | None -> None
+  | Some fd -> (
+    try
+      Eio_unix.Fd.use_exn "fennec-sni-peek" fd (fun ufd ->
+          (try Eio_unix.await_readable ufd with _ -> ());
+          let b = Bytes.create 4096 in
+          match Unix.recv ufd b 0 (Bytes.length b) [ Unix.MSG_PEEK ] with n when n > 0 -> Sni.host_of_client_hello (Bytes.sub_string b 0 n) | _ -> None)
+    with _ -> None)
+
+let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
   let dev = match dev with Some d -> d | None -> ( try Sys.getenv Fennec_core.Dev_proto.env_mode <> "production" with Not_found -> true) in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
@@ -540,6 +553,9 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
       let handle flow addr =
         Eio.Semaphore.acquire slots;
         Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () ->
+            (* on-demand TLS: peek the SNI and ensure its certificate BEFORE reading the source, so a
+               first connection to a new tenant domain issues the cert then handshakes with it *)
+            (match on_demand with Some ensure -> (match peek_sni flow with Some host -> (try ensure host with _ -> ()) | None -> ()) | None -> ());
             (* [tls] is a SOURCE read per connection (not a static config) so ACME renewal can swap
                the live cert with no restart; [None] (no TLS, or ACME hasn't issued yet) serves plain *)
             match (match tls with Some src -> src () | None -> None) with

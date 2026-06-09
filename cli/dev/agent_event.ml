@@ -92,6 +92,11 @@ let emit t ~kind ?summary ?trigger ?ms ?(fields = []) () =
   Buffer.add_char b '}';
   append_line t.events (Buffer.contents b)
 
+let emit_verdict t verdict =
+  let kind, summary, trigger, ms, fields = Verdict.agent_event verdict in
+  let trigger = match trigger with [] -> None | xs -> Some xs in
+  emit t ~kind ~summary ?trigger ~ms:(Some ms) ~fields ()
+
 let find_string_field line name =
   let needle = "\"" ^ name ^ "\":\"" in
   match Dune_watch.find_sub line needle with

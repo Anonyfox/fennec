@@ -159,7 +159,6 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
      cached cert), so :443 has a cert before its first connection; the renewal loop then hot-reloads
      [cert_ref]. ~tls (BYO cert) is a constant source. The certifiable domains are the router's
      concrete (Exact) hosts unless overridden — wildcards/catch-all are reported by Acme.run. *)
-  let cert_ref = ref None in
   let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
   (* ACME issues REAL certificates, so it runs only in production (FENNEC_ENV=production); FENNEC_ACME=1/0
      force on/off. In dev, ~acme no-ops (plain HTTP) — a dev build never touches Let's Encrypt. ~tls (a
@@ -171,7 +170,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
     | Some _, _ -> not is_dev (* ~acme given, FENNEC_ACME unset/unrecognized → production only *)
     | None, _ -> false
   in
-  let tls_source =
+  let tls_source, on_demand =
     if acme_active then (
       let cfg = Option.get acme in
       (* certifiable domains from the router: concrete hosts always (HTTP-01); wildcards too (a
@@ -190,9 +189,9 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
         |> List.sort_uniq compare
       in
       let domains = match Fennec_server.Acme.domains_override cfg with Some d -> d | None -> derived in
-      Fennec_server.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg cert_ref;
-      Some (fun () -> !cert_ref))
-    else match tls with Some t -> Some (fun () -> Some t) | None -> None
+      let r = Fennec_server.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg in
+      (Some r.Fennec_server.Acme.source, r.Fennec_server.Acme.on_demand))
+    else match tls with Some t -> (Some (fun () -> Some t), None) | None -> (None, None)
   in
   (* in TLS-mode production the app is on :443; a :80 front does the HTTP→HTTPS redirect (+ serves
      the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
@@ -214,7 +213,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
     Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Fennec_server.Host_router.describe_errors errs);
     exit 1
   | Ok router -> (
-    match Fennec_server.Server.run ~timeout ~max_conns ?tls:tls_source ?on_error ~dev:is_dev ~on_listen:announce ~env router with
+    match Fennec_server.Server.run ~timeout ~max_conns ?tls:tls_source ?on_demand ?on_error ~dev:is_dev ~on_listen:announce ~env router with
     | Ok () -> ()
     | Error (`Port_in_use port) ->
       Printf.eprintf "%s\n%!" (Dev_proto.port_busy_line port);

@@ -25,9 +25,12 @@ val emit :
   ?trigger:string list ->
   ?ms:float option ->
   ?fields:(string * string) list ->
-  unit ->
-  unit
+unit ->
+unit
 (** Append one event. [fields] values are already scalar strings. *)
+
+val emit_verdict : t -> Verdict.t -> unit
+(** Append the canonical agent event for a dev-loop verdict. *)
 
 val latest_id : dir:string -> int option
 (** Latest event id in the journal, if any. *)
