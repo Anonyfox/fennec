@@ -2,7 +2,9 @@
 
 A **paw** is fennec's request-pipeline primitive: a `Conn.t -> Conn.t` step (Elixir/Plug-style), with
 typed assigns, halting, and route matching. Routing, the websocket, static serving, and the SSR app
-are all paws.
+are all paws. *(The conceptual model — answering/declining, the two-phase pipeline — is
+[`PIPELINE.md`](./PIPELINE.md); the canonical API is the `.mli` (`Fennec.Paw`, `Fennec.Conn`). This
+page is the practical battery ladder.)*
 
 **The default is nothing.** An endpoint with just your routes imposes no middleware:
 

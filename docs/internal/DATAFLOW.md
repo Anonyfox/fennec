@@ -7,8 +7,8 @@ orchestrated by the CLI. It is grounded in the working prototype in the adjacent
 repo (the `mongo/`, `meteor/core`, `meteor/ddp`, `meteor/client` trees) and in fennec's current
 architecture (Fur signals, the Eio HTTP/WS server, the `build`/`dev`/`test` CLI, `fennec_buildkit`).
 
-Read alongside: `examples/CLI-INTEROP.md` (the dune↔CLI boundary this extends) and
-`docs/TEST-CLI.md` (the `:memory:` default that keeps tests mongod-free).
+Read alongside: `CLI-INTEROP.md` (the dune↔CLI boundary this extends) and
+`../TEST-CLI.md` (the `:memory:` default that keeps tests mongod-free).
 
 ---
 

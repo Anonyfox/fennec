@@ -18,10 +18,14 @@ type t
 (** Discover inline test runners under [root] (the workspace root). Looks for
     [.<lib>.inline-tests/inline-test-runner.exe] directories created by dune's
     [(inline_tests)] stanza. Returns build targets to add to [dune build --watch]. *)
-val create : root:string -> t
+val create : ?watch_roots:string list -> root:string -> unit -> t
 
 (** The dune build targets for the discovered runners — add these to the watch command. *)
 val targets : t -> string list
+
+(** Seed last-seen mtimes before the watch loop starts. Missing executables are seeded at [0.0],
+    so their first build after a test edit is still considered changed. *)
+val prime : t -> unit
 
 (** Run every runner whose exe mtime advanced since the last call. Returns a summary
     (total passed, total failed, per-lib results) and captures each runner's output.

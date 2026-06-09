@@ -72,13 +72,27 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   if Sys.file_exists worker_socket then Unix.putenv Dev_proto.env_esbuild_worker worker_socket
   else Ui.notice ui Ui.Info "esbuild worker did not start — falling back to cold builds";
 
-  (* inline test runners in the dev loop. Lazy: runners are discovered after the first settle
-     (when _build/default exists), then their exe paths are added to the watch so dune builds
-     them alongside the server. The supervisor runs them itself after each green settle. *)
-  let dev_tests = Dev_tests.create ~root:(Sys.getcwd ()) in
-  let tests_wired = ref false in
+  (* Unit feedback in the dev loop. Discover colocated inline-test runners plus conventional
+     *_test dune test executables under the watched app root, build them as watch targets, then
+     run only the executables whose mtimes advanced after each green settle. *)
+  let watch_roots =
+    let root_of_target target =
+      if String.length target > 1 && target.[0] = '@' then
+        let body = String.sub target 1 (String.length target - 1) in
+        match String.split_on_char '/' body with
+        | [] | [ "" ] -> None
+        | [ one ] -> Some one
+        | parts -> Some (String.concat "/" (List.rev (List.tl (List.rev parts))))
+      else Some (Filename.dirname target)
+    in
+    targets |> List.filter_map root_of_target |> List.filter (fun s -> s <> "." && s <> "")
+  in
+  let dev_tests = Dev_tests.create ~root:(Sys.getcwd ()) ~watch_roots () in
+  let initial_test_targets = Dev_tests.targets dev_tests in
+  Dev_tests.prime dev_tests;
+  let tests_wired = ref (initial_test_targets <> []) in
 
-  let dw = ref (Dune_watch.start targets) in
+  let dw = ref (Dune_watch.start (targets @ initial_test_targets)) in
   let control_path = tmp_socket "fennec-lr" in
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
      explicitly so the supervisor and server agree, and so the banner can show the gateway URL. *)

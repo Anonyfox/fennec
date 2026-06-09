@@ -19,9 +19,9 @@ Start at the top and go as deep as you need.
 | Middleware batteries (opt-in ladder) | [`PAW.md`](./PAW.md) |
 | HTTPS — TLS termination, automatic + multi-tenant ACME | [`HTTPS.md`](./HTTPS.md) |
 | Reactive data + realtime (DDP, Mongo/minimongo, live queries, SSR-with-live-data) | [`../fennec/mongo/README.md`](../fennec/mongo/README.md) + the realtime tasks in the [example](../examples/site/README.md) |
-| Testing (unit / property / HTTP / browser / system) | [`HUNT.md`](./HUNT.md) · [`../fennec/hunt/README.md`](../fennec/hunt/README.md) |
+| Testing (unit / property / HTTP / browser / system) | [`../fennec/hunt/README.md`](../fennec/hunt/README.md) |
 | The `fennec test` command | [`TEST-CLI.md`](./TEST-CLI.md) |
-| Dev loop ↔ plain dune (the decoupling contract) | [`../examples/CLI-INTEROP.md`](../examples/CLI-INTEROP.md) |
+| Dev loop ↔ plain dune (the decoupling contract) | [`internal/CLI-INTEROP.md`](./internal/CLI-INTEROP.md) |
 
 ## Reference
 

@@ -11,6 +11,9 @@ on `Fennec.serve`:
 Both ride the pure-OCaml TLS stack (`tls` / `x509` / `mirage-crypto`) — no OpenSSL, no Lwt. See the
 [build-matrix note](#build-matrix--static-binaries) for the one native dependency this pulls in.
 
+*This page is the guide — modes, deployment, and operations. The canonical API + every parameter
+lives in the `.mli`: `Fennec.serve ~tls/~acme`, `Fennec.Tls`, `Fennec.Acme`, `Fennec.Cert_store`.*
+
 ## Bring your own certificate — `~tls`
 
 ```ocaml

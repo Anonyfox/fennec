@@ -19,6 +19,10 @@ let starts_with s pfx =
   let lp = String.length pfx in
   String.length s >= lp && String.sub s 0 lp = pfx
 
+let ends_with s suffix =
+  let ls = String.length s and lsf = String.length suffix in
+  ls >= lsf && String.sub s (ls - lsf) lsf = suffix
+
 let drop_suffix s suffix =
   let ls = String.length s and lsf = String.length suffix in
   if ls >= lsf && String.sub s (ls - lsf) lsf = suffix then String.sub s 0 (ls - lsf) else s
@@ -88,7 +92,10 @@ let classify ?(backend = false) triggers =
   in
   let tests =
     List.filter
-      (fun p -> starts_with p "test/" || find_sub p "/test/" <> None || Filename.basename p = "dune" && find_sub p "test" <> None)
+      (fun p ->
+        starts_with p "test/" || find_sub p "/test/" <> None || find_sub p "_test/" <> None
+        || ends_with "_test.ml" (Filename.basename p)
+        || Filename.basename p = "dune" && find_sub p "test" <> None)
       paths
     |> uniq
   in
@@ -127,3 +134,7 @@ let%test "classifies app route" =
 let%test "short is compact" =
   let a = classify ~backend:true [ "examples/site/frontend/components/nav.mlx changed"; "examples/site/frontend/apps/web/index.mlx changed" ] in
   Fennec_hunt_unit.str_contains (short a) "backend" && Fennec_hunt_unit.str_contains (short a) "component nav"
+
+let%test "classifies conventional unit test path" =
+  let a = classify [ "examples/site/frontend_test/test_components.ml changed" ] in
+  a.tests = [ "examples/site/frontend_test/test_components.ml" ] && Fennec_hunt_unit.str_contains (short a) "tests"
