@@ -243,4 +243,18 @@ let%test "mux: a single mutation fans to ALL sharers, and a late joiner gets the
   s3.stop ();
   fanned && late_got
 
+let%test "mux: a stale double-stop is idempotent — it cannot evict a fresh same-key mux" =
+  let c = coll "mux_evict" in
+  R.publish "mux_evict_p" (fun _ -> R.Cursor (C.find c ()));
+  let before = R.live_query_count () in
+  let s1 = R.run_publication "mux_evict_p" ~params:[] ~on:(fun _ -> ()) in
+  s1.stop ();
+  (* mux torn down; a fresh subscription rebuilds it under the SAME key *)
+  let s2 = R.run_publication "mux_evict_p" ~params:[] ~on:(fun _ -> ()) in
+  s1.stop ();
+  (* this STALE second stop of s1 must be a no-op — not evict s2's fresh mux *)
+  let ok = R.live_query_count () = before + 1 in
+  s2.stop ();
+  ok && R.live_query_count () = before
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -185,6 +185,18 @@ let%test "MONGO collection: a seeded Object_id _id survives the merge + a live c
   seeded && is_oid ()
   && (match one (MS.fetch s "things" ()) with Some d -> B.get d "n" = Some (B.Int 2) | None -> false)
 
+let%test "MONGO collection: a String-_id doc seeded BEFORE an Object_id doc is still typed Object_id (mixed batch)" =
+  let s = MS.create () in
+  let a = String.make 24 'a' and b = String.make 24 'b' in
+  (* the String-_id doc comes FIRST; an Object_id doc follows in the SAME group → whole collection MONGO *)
+  MS.seed s ~sub:"s1" ~collection:"things" [ B.doc [ ("_id", B.str a) ]; B.doc [ ("_id", B.Object_id b) ] ];
+  (* every doc must read back with an Object_id _id, and a find BY Object_id must match the first one *)
+  let all_typed =
+    Array.for_all (fun d -> match B.get d "_id" with Some (B.Object_id _) -> true | _ -> false) (MS.fetch s "things" ())
+  in
+  let found = MS.fetch s "things" ~selector:(B.doc [ ("_id", B.Object_id a) ]) () in
+  all_typed && Array.length found = 1
+
 let%test "Live.aggregate recomputes when a FOREIGN $lookup collection changes (not just the primary)" =
   let lv = Live.create () in
   MS.added (Live.store lv) ~sub:"a" ~collection:"orders" ~id:"o1" ~fields:[ ("cust", B.str "c1") ];

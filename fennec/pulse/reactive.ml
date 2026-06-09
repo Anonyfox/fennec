@@ -243,14 +243,17 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
        you don't name neither accumulates here nor becomes a join target; re-using a name is last-wins;
        a dynamically-named collection can be reclaimed with {!forget}. *)
     let _collections : (string, B.collection) Hashtbl.t = Hashtbl.create 16
-    let _uid_counter = ref 0
+
+    (* atomic: [create] may be called concurrently from multiple server domains (dynamic per-tenant
+       collections), and [uid] keys the observe multiplexer — a torn/duplicated counter would collide
+       two handles onto one shared observe. fetch_and_add is the one safe primitive here. *)
+    let _uid_counter = Atomic.make 0
 
     let create ?(id_generation = STRING) ?transform ?(name = "") backend =
       if name <> "" then Hashtbl.replace _collections name backend;
-      incr _uid_counter;
       {
         backend;
-        uid = !_uid_counter;
+        uid = Atomic.fetch_and_add _uid_counter 1;
         name;
         id_generation;
         transform;
@@ -577,11 +580,18 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
        Hashtbl.iter (fun id fields -> on (Added { collection = mux.collection; id; fields })) mux.live;
        Hashtbl.replace mux.subs sid on
      end);
+    (* idempotent: a double-stop must NOT re-run teardown — otherwise the second call could see
+       [subs] emptied by a co-subscriber leaving in between and stop the shared observe (or drop the
+       _muxes entry) while a live subscriber still rides it *)
+    let stopped = ref false in
     fun () ->
-      Hashtbl.remove mux.subs sid;
-      if Hashtbl.length mux.subs = 0 then begin
-        mux.handle.stop ();
-        Hashtbl.remove _muxes key
+      if not !stopped then begin
+        stopped := true;
+        Hashtbl.remove mux.subs sid;
+        if Hashtbl.length mux.subs = 0 then begin
+          mux.handle.stop ();
+          Hashtbl.remove _muxes key
+        end
       end
 
   (* Run a publication's cursors with field-level observe deltas delivered as beats (the [collection]

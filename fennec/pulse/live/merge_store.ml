@@ -279,23 +279,30 @@ let aggregate t name (pipeline : Bson.t list) : Bson.t array =
 
 (* SSR / hydration seed: install docs into a collection as if from one sub *)
 let seed t ~sub ~collection (docs : Bson.t list) =
-  (* coalesce the whole seed burst into one notify per touched collection (avoids O(W^2) re-snapshots) *)
+  let id_of kvs =
+    match List.assoc_opt "_id" kvs with Some (Bson.String s) | Some (Bson.Object_id s) -> Some s | _ -> None
+  in
+  (* FIRST pass: if ANY doc carries an Object_id _id, this collection is MONGO — set [oid] ONCE, up
+     front, so a doc seeded AHEAD of the first Object_id isn't materialized with a String _id and left
+     mistyped (a mixed or legacy-ordered batch; the RX6 typed-_id invariant must hold for the whole
+     group, not just the docs after the first typed one). *)
+  let mongo =
+    List.exists
+      (fun d ->
+        match d with
+        | Bson.Document kvs -> ( match List.assoc_opt "_id" kvs with Some (Bson.Object_id _) -> true | _ -> false)
+        | _ -> false)
+      docs
+  in
+  if mongo then (ensure_collection t collection).oid <- true;
+  (* SECOND pass: coalesce the whole burst into one notify per touched collection (avoids O(W^2)) *)
   batch t @@ fun () ->
   List.iter
     (fun d ->
       match d with
-      | Bson.Document kvs ->
-          (* accept a string OR Object_id _id; an Object_id marks the collection MONGO so live deltas
-             reconstruct the typed _id too. A doc with no usable _id is skipped (never collapsed to "") *)
-          let id =
-            match List.assoc_opt "_id" kvs with
-            | Some (Bson.String s) -> Some s
-            | Some (Bson.Object_id s) ->
-                (ensure_collection t collection).oid <- true;
-                Some s
-            | _ -> None
-          in
-          (match id with
+      | Bson.Document kvs -> (
+          (* a string OR Object_id _id is accepted; a doc with no usable _id is skipped (never "") *)
+          match id_of kvs with
           | None -> ()
           | Some id ->
               let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
