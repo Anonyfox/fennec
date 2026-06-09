@@ -36,7 +36,7 @@ One root `dune-project`, several independently-publishable packages:
 
 | Package | What it is | Status |
 | --- | --- | --- |
-| **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, and the `Fur` UI runtime | ✅ working |
+| **`fennec`** | The runtime: HTTP core, Paw routing, Eio HTTP/WS server, automatic HTTPS, and the `Fur` UI runtime | ✅ working |
 | **`fennec-cli`** | The `fennec` binary — a native JS/CSS bundler plus the dev + test CLI, one self-contained binary | ✅ working |
 | **`fennec-hunt`** | Pure-OCaml app testing — inline unit + property tests, HTTP assertions, real-browser (CDP), and system/dev-loop checks; standalone or via `fennec test` | ✅ working |
 | `fennec-ddp` · `fennec-mongo` | The Meteor-style reactive data layer (DDP over WebSocket, mongo/minimongo) | 🧭 roadmap |
@@ -50,7 +50,7 @@ Concurrency is **Eio-only**, by design.
 - **HTTP core** — request/response, MIME, HTTP-date and semantics, a WebSocket channel; RFC-correct, with colocated unit tests.
 - **Paw** — an Elixir/Plug-style `conn -> conn` primitive: typed assigns, pipelines, routes, halting. Middleware, static, the websocket, and the SSR app are all paws.
 - **Server** — a compact Eio HTTP + WebSocket server: static serving with strong ETag / 304 / Range / HEAD, gzip + deflate negotiation (in-process zlib), WebSocket permessage-deflate, multi-app routing by Host, and a dev livereload relay.
-- **HTTPS, in-process** — terminate TLS with your own certificate (`serve ~tls`) or obtain + auto-renew Let's Encrypt certificates with zero-downtime hot-reload (`serve ~acme`) — no nginx, no reverse proxy, pure-OCaml TLS, no Lwt. Pluggable cert storage (file / memory / external) for any deployment ([`docs/HTTPS.md`](./docs/HTTPS.md)).
+- **Automatic HTTPS, in-process** — `serve ~acme:(Acme.auto ())` obtains and auto-renews Let's Encrypt certificates (zero-downtime hot-reload) for **every domain and subdomain your endpoints declare**, one SAN cert, one line — no nginx, no reverse proxy; pure-OCaml TLS, no Lwt. Bring your own cert with `serve ~tls`; behind a proxy or PaaS it just serves plain HTTP on `$PORT`. Pluggable cert storage — file (default), memory, or a custom store (k8s Secret / S3 / Redis) ([`docs/HTTPS.md`](./docs/HTTPS.md)).
 - **Fur** — the isomorphic UI runtime: signals, a vdom + reconciler, SSR, js_of_ocaml hydration, a typed router, a `<Head>` manager, and data resources with fast-render seeds. No React, no Melange, no preact runtime.
 
 ### `fennec-cli` — tooling

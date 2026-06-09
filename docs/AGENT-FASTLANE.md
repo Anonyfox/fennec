@@ -22,13 +22,20 @@ wait` and `fennec agent hook` follow that journal with a blocking event stream,
 so hooks do not parse terminal text and do not need an extra build/test command
 after edits. Every wait has a hard timeout.
 
+For green build settles, the human UI can show reloads immediately, but the
+agent event is emitted only after the inline-test lane has had its chance to run.
+When tests ran, the event summary includes both the served-change verdict and
+the test verdict. There is no hook knob for this: the default agent contract is
+the complete dev verdict for the edit, not the earliest partial signal.
+
 Events carry monotonic ids. `fennec agent wait --after ID` ignores old events and
 returns only an event with `id > ID`; before tailing, it scans already-written
 events, so it catches the race where the dev settle lands just before the hook
 starts. `fennec agent mark` snapshots the latest id and stores it under a loose
 session/tool key when the harness provides one on stdin; `fennec agent hook`
 uses that marker when present, otherwise it snapshots the latest id at hook
-start.
+start. Repeated server `ready` banners after hot restarts stay in the human UI
+and do not become separate post-edit agent events.
 
 `fennec agent status` is the cheap recovery command. It reports pid/root/events,
 the latest id and summary, the configured port when known, and whether the

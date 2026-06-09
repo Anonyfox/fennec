@@ -23,6 +23,24 @@ let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
    a plain SIGTERM for the OTHER children — dune --watch and the esbuild worker — on shutdown *)
 let kill pid = try Unix.kill pid Sys.sigterm with _ -> ()
 
+let agent_test_summary (s : Dev_tests.summary) =
+  Printf.sprintf "tests %d passed, %d failed · %d lib%s" s.Dev_tests.total_passed s.Dev_tests.total_failed
+    (List.length s.Dev_tests.results)
+    (if List.length s.Dev_tests.results = 1 then "" else "s")
+
+let agent_summary_with_tests summary = function
+  | None -> summary
+  | Some s -> summary ^ "\n" ^ agent_test_summary s
+
+let%test "agent summary combines reload verdict and inline test verdict" =
+  let tests =
+    { Dev_tests.results = [ { lib = "demo"; passed = 7; failed = 0; output = ""; ms = 1.0 } ];
+      total_passed = 7;
+      total_failed = 0;
+      ms = 1.0 }
+  in
+  agent_summary_with_tests "page reload" (Some tests) = "page reload\ntests 7 passed, 0 failed · 1 lib"
+
 (* THE supervised server, as a sum type so illegal states are unrepresentable: [Down] (no process,
    hence no dangling pipe and no stale port), or [Up] carrying the live process bundled with the
    facts that belong to THAT instance — [busy_port] (an EADDRINUSE it reported, which therefore
@@ -96,6 +114,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   let emit kind ?summary ?trigger ?ms ?fields () =
     match agent with None -> () | Some a -> Agent_event.emit a ~kind ?summary ?trigger ?ms ?fields ()
   in
+  let agent_ready_sent = ref false in
+  let pending_agent_success = ref None in
   let gateway_url = Printf.sprintf "http://localhost:%d" dev_base in
   (* FENNEC_DEV_PARENT lets the server watch THIS supervisor and self-exit if we die (even on
      SIGKILL), so it can never be left holding the dev port. FENNEC_DEV_UI asks the server to
@@ -133,9 +153,12 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     | Server_proc.Urls urls ->
       (match !server with Up up -> up.busy_port <- None (* it bound — any earlier "port busy" is stale *) | Down -> ());
       Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url;
-      emit "ready"
-        ~summary:(Printf.sprintf "ready · %s · watching %s" gateway_url (match targets with t :: _ -> Filename.dirname t | [] -> "."))
-        ~fields:[ ("url", gateway_url) ] ()
+      if not !agent_ready_sent then begin
+        agent_ready_sent := true;
+        emit "ready"
+          ~summary:(Printf.sprintf "ready · %s · watching %s" gateway_url (match targets with t :: _ -> Filename.dirname t | [] -> "."))
+          ~fields:[ ("url", gateway_url) ] ()
+      end
     | Server_proc.Port_busy p -> ( match !server with Up up -> up.busy_port <- Some p | Down -> ())
     | Server_proc.Chatter -> ()
     | Server_proc.App_log line -> Ui.app ui line
@@ -191,6 +214,11 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     Crash_limiter.reset limiter;
     dune_exits := 0;
     last_build_ms := dur;
+    let agent_success = ref None in
+    let just_wired_tests = ref false in
+    let remember_agent kind summary fields =
+      agent_success := Some (kind, summary, fields)
+    in
     (* dune already rolling another build (a still-running edit burst): its artifact is being
        rewritten. Do nothing — the next settle restarts once, on a stable image. Coalesces the
        storm AND dodges a half-written load, with no wait: it's a state check, not a debounce. *)
@@ -205,28 +233,29 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
         if mtime exe > up.last_exe then
           start_or_restart (fun () ->
             Ui.rebuilt ui ~trigger:triggers ~ms:dur;
-            emit "reload" ~summary:(Printf.sprintf "%s reload" (trigger_label triggers)) ~trigger:triggers ~ms:dur ())
+            remember_agent "reload" (Printf.sprintf "%s reload" (trigger_label triggers)) [])
         else (
           match Assets.poll assets with
           | Assets.Reload ->
             ping control_path "reload";
             Ui.reloaded ui ~trigger:triggers ~ms:dur;
-            emit "reload" ~summary:(Printf.sprintf "%s reload" (trigger_label triggers)) ~trigger:triggers ~ms:dur ()
+            remember_agent "reload" (Printf.sprintf "%s reload" (trigger_label triggers)) []
           | Assets.Css_only ->
             ping control_path "css";
             Ui.restyled ui ~trigger:triggers ~ms:dur;
-            emit "css" ~summary:(Printf.sprintf "%s css" (trigger_label triggers)) ~trigger:triggers ~ms:dur ()
+            remember_agent "css" (Printf.sprintf "%s css" (trigger_label triggers)) []
           (* nothing the server cares about changed — but if this green build FIXED a prior error
              (a revert to identical bytes), clear the stuck panel; otherwise stay silent *)
           | Assets.Nothing ->
             Ui.resolved ui ~ms:dur;
-            emit "idle" ~summary:"build ok · no served change" ~trigger:triggers ~ms:dur ());
+            remember_agent "idle" "build ok · no served change" []);
       (* after the first successful settle, wire inline test runner targets into the watch so
          dune rebuilds them on every change. Only restart the watcher once (idempotent). *)
       if not !tests_wired then begin
         let test_targets = Dev_tests.targets dev_tests in
         if test_targets <> [] then begin
           tests_wired := true;
+          just_wired_tests := true;
           (* restart the watcher with the expanded target list — dune now builds the runner
              exes alongside the server, without running them *)
           Dune_watch.stop !dw;
@@ -235,28 +264,50 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
         end
       end;
       (* run inline test runners whose exe mtime advanced since the last settle *)
-      (match Dev_tests.run_changed dev_tests with
+      let tests =
+        match Dev_tests.run_changed dev_tests with
+        | None -> None
+        | Some s ->
+          Ui.tested ui ~passed:s.Dev_tests.total_passed ~failed:s.Dev_tests.total_failed
+            ~libs:(List.length s.Dev_tests.results) ~ms:s.Dev_tests.ms;
+          List.iter (fun (r : Dev_tests.result) ->
+            if r.Dev_tests.failed > 0 then
+              Ui.notice ui Ui.Warn (Printf.sprintf "test failures in %s:\n%s" r.Dev_tests.lib (String.trim r.Dev_tests.output)))
+            s.Dev_tests.results;
+          Some s
+      in
+      if !just_wired_tests then pending_agent_success := !agent_success
+      else
+      let agent_success =
+        match (!pending_agent_success, tests) with
+        | Some pending, Some _ ->
+          pending_agent_success := None;
+          Some pending
+        | Some pending, None ->
+          (* Do not strand a hook if the follow-up settle after wiring tests did not produce
+             a changed runner. It is still the completed green verdict for the edit. *)
+          pending_agent_success := None;
+          Some pending
+        | None, _ -> !agent_success
+      in
+      (match agent_success with
        | None -> ()
-       | Some s ->
-         Ui.tested ui ~passed:s.Dev_tests.total_passed ~failed:s.Dev_tests.total_failed
-           ~libs:(List.length s.Dev_tests.results) ~ms:s.Dev_tests.ms;
-         emit "tests"
-           ~summary:
-             (Printf.sprintf "tests %d passed, %d failed · %d lib%s" s.Dev_tests.total_passed
-                s.Dev_tests.total_failed (List.length s.Dev_tests.results)
-                (if List.length s.Dev_tests.results = 1 then "" else "s"))
-           ~fields:
-             [ ("passed", string_of_int s.Dev_tests.total_passed);
-               ("failed", string_of_int s.Dev_tests.total_failed);
-               ("libs", string_of_int (List.length s.Dev_tests.results)) ]
-           ();
-         List.iter (fun (r : Dev_tests.result) ->
-           if r.Dev_tests.failed > 0 then
-             Ui.notice ui Ui.Warn (Printf.sprintf "test failures in %s:\n%s" r.Dev_tests.lib (String.trim r.Dev_tests.output)))
-           s.Dev_tests.results)
+       | Some (kind, summary, fields) ->
+         let fields =
+           match tests with
+           | None -> fields
+           | Some s ->
+             fields
+             @ [ ("tests_passed", string_of_int s.Dev_tests.total_passed);
+                 ("tests_failed", string_of_int s.Dev_tests.total_failed);
+                 ("test_libs", string_of_int (List.length s.Dev_tests.results)) ]
+         in
+         let summary = agent_summary_with_tests summary tests in
+         emit kind ~summary ~trigger:triggers ~ms:dur ~fields ())
   in
 
   let on_build_failed _n triggers messages =
+    pending_agent_success := None;
     Ui.failed ui ~raw:messages ~trigger:triggers ~serving:(serving ());
     emit "build_failed"
       ~summary:(Printf.sprintf "build failed · %s%s" (trigger_label triggers) (if serving () then " · last good build still serving" else " · server not running"))
