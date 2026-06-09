@@ -66,14 +66,41 @@ In code, `~domains` overrides the derived set and `~store` swaps the cert store 
 
 The ACME challenge type is forced by the endpoint's host pattern, so only some are auto-certifiable:
 
-| Host pattern | Example | Auto-cert |
+| Host pattern | Example | How it's certified |
 |---|---|---|
-| concrete host | `example.com`, `admin.example.com` | ✅ HTTP-01 |
-| wildcard | `*.example.com` | ❌ needs DNS-01 (not yet supported — use `~tls` with a wildcard cert) |
-| catch-all | `*` | ❌ needs on-demand TLS (not yet supported) |
+| concrete host | `example.com`, `admin.example.com` | ✅ HTTP-01, automatic (one SAN cert) |
+| wildcard | `*.example.com` | ✅ DNS-01 — needs `~dns_provider` (one cert covers every tenant subdomain) |
+| dynamic / customer domains | added at runtime | ✅ on-demand — needs `~on_demand` (issued on first connect) |
 
-Fennec certifies every **concrete** host automatically (one SAN certificate) and prints a clear note
-for wildcard / catch-all endpoints rather than failing.
+Concrete hosts are always certified automatically. Wildcards and runtime domains are the
+**multi-tenant** story below.
+
+### Multi-tenant: wildcards (DNS-01) and on-demand
+
+Two patterns, both opt-in:
+
+**Subdomain-per-tenant** (`tenant1.app.com`, `tenant2.app.com`, …) → one **wildcard** cert via
+DNS-01. Implement a tiny DNS provider for your DNS host and pass it; a `*.app.com` endpoint then
+gets `*.app.com` certified:
+
+```ocaml
+let cloudflare : Fennec.Acme.dns_provider = {
+  upsert_txt = (fun ~name ~value -> Cloudflare.set_txt ~name ~value);
+  remove_txt = (fun ~name -> Cloudflare.del_txt ~name);
+}
+let () = Fennec.serve ~acme:(Fennec.Acme.auto ~dns_provider:cloudflare ()) [ app ]  (* app roots *.app.com *)
+```
+
+**Customer-brought domains** added at runtime (`theirbrand.com`, pointed at you by the customer) →
+**on-demand**: the cert is obtained the first time that host connects, then cached. Gate it with an
+allowlist so only domains you recognize can trigger issuance (no SNI-flood abuse):
+
+```ocaml
+let () =
+  Fennec.serve
+    ~acme:(Fennec.Acme.auto ~on_demand:(fun host -> Customers.domain_exists host) ())
+    [ app ]
+```
 
 ## Certificate storage (Ops)
 

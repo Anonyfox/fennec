@@ -95,7 +95,9 @@ let emit t ~kind ?summary ?trigger ?ms ?(fields = []) () =
 let emit_verdict t verdict =
   let kind, summary, trigger, ms, fields = Verdict.agent_event verdict in
   let trigger = match trigger with [] -> None | xs -> Some xs in
-  emit t ~kind ~summary ?trigger ~ms:(Some ms) ~fields ()
+  match ms with
+  | None -> emit t ~kind ~summary ?trigger ~fields ()
+  | Some ms -> emit t ~kind ~summary ?trigger ~ms:(Some ms) ~fields ()
 
 let find_string_field line name =
   let needle = "\"" ^ name ^ "\":\"" in

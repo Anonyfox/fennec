@@ -23,24 +23,6 @@ let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
    a plain SIGTERM for the OTHER children — dune --watch and the esbuild worker — on shutdown *)
 let kill pid = try Unix.kill pid Sys.sigterm with _ -> ()
 
-let agent_test_summary (s : Dev_tests.summary) =
-  Printf.sprintf "tests %d passed, %d failed · %d lib%s" s.Dev_tests.total_passed s.Dev_tests.total_failed
-    (List.length s.Dev_tests.results)
-    (if List.length s.Dev_tests.results = 1 then "" else "s")
-
-let agent_summary_with_tests summary = function
-  | None -> summary
-  | Some s -> summary ^ "\n" ^ agent_test_summary s
-
-let%test "agent summary combines reload verdict and inline test verdict" =
-  let tests =
-    { Dev_tests.results = [ { lib = "demo"; passed = 7; failed = 0; output = ""; ms = 1.0 } ];
-      total_passed = 7;
-      total_failed = 0;
-      ms = 1.0 }
-  in
-  agent_summary_with_tests "page reload" (Some tests) = "page reload\ntests 7 passed, 0 failed · 1 lib"
-
 (* THE supervised server, as a sum type so illegal states are unrepresentable: [Down] (no process,
    hence no dangling pipe and no stale port), or [Up] carrying the live process bundled with the
    facts that belong to THAT instance — [busy_port] (an EADDRINUSE it reported, which therefore
@@ -74,11 +56,6 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
-  let trigger_label = function
-    | [] -> "filesystem change"
-    | [ x ] -> x
-    | x :: xs -> Printf.sprintf "%s +%d" x (List.length xs)
-  in
   Stublibs.ensure ();
 
   (* warm esbuild worker BEFORE dune, so even the first build delegates to it *)
@@ -111,8 +88,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     | None -> None
     | Some dir -> Some (Agent_event.start ~dir ~port:dev_base ~root:(Sys.getcwd ()) ())
   in
-  let emit kind ?summary ?trigger ?ms ?fields () =
-    match agent with None -> () | Some a -> Agent_event.emit a ~kind ?summary ?trigger ?ms ?fields ()
+  let emit_verdict verdict =
+    match agent with None -> () | Some a -> Agent_event.emit_verdict a verdict
   in
   let agent_ready_sent = ref false in
   let pending_agent_success = ref None in
@@ -155,9 +132,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
       Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url;
       if not !agent_ready_sent then begin
         agent_ready_sent := true;
-        emit "ready"
-          ~summary:(Printf.sprintf "ready · %s · watching %s" gateway_url (match targets with t :: _ -> Filename.dirname t | [] -> "."))
-          ~fields:[ ("url", gateway_url) ] ()
+        emit_verdict (Verdict.Ready { url = gateway_url; dir = (match targets with t :: _ -> Filename.dirname t | [] -> ".") })
       end
     | Server_proc.Port_busy p -> ( match !server with Up up -> up.busy_port <- Some p | Down -> ())
     | Server_proc.Chatter -> ()
@@ -198,7 +173,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     shutting_down := true;
     (match !server with Up up -> Server_proc.stop up.proc | Down -> ()); (* frees the port before we go *)
     Ui.stopped ui;
-    emit "stopped" ~summary:"stopped" ();
+    emit_verdict Verdict.Stopped;
     kill (Dune_watch.pid !dw);
     kill worker_pid;
     (try Sys.remove control_path with _ -> ());
@@ -216,8 +191,15 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     last_build_ms := dur;
     let agent_success = ref None in
     let just_wired_tests = ref false in
-    let remember_agent kind summary fields =
-      agent_success := Some (kind, summary, fields)
+    let remember_agent served =
+      agent_success :=
+        Some
+          (Verdict.Build_ok
+             { trigger = triggers;
+               served;
+               build_ms = dur;
+               tests = Verdict.Tests_not_changed;
+               affected = Affected.classify ~backend:(served = Verdict.Backend_restart) triggers })
     in
     (* dune already rolling another build (a still-running edit burst): its artifact is being
        rewritten. Do nothing — the next settle restarts once, on a stable image. Coalesces the
@@ -233,22 +215,22 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
         if mtime exe > up.last_exe then
           start_or_restart (fun () ->
             Ui.rebuilt ui ~trigger:triggers ~ms:dur;
-            remember_agent "reload" (Printf.sprintf "%s reload" (trigger_label triggers)) [])
+            remember_agent Verdict.Backend_restart)
         else (
           match Assets.poll assets with
           | Assets.Reload ->
             ping control_path "reload";
             Ui.reloaded ui ~trigger:triggers ~ms:dur;
-            remember_agent "reload" (Printf.sprintf "%s reload" (trigger_label triggers)) []
+            remember_agent Verdict.Full_reload
           | Assets.Css_only ->
             ping control_path "css";
             Ui.restyled ui ~trigger:triggers ~ms:dur;
-            remember_agent "css" (Printf.sprintf "%s css" (trigger_label triggers)) []
+            remember_agent Verdict.Css_only
           (* nothing the server cares about changed — but if this green build FIXED a prior error
              (a revert to identical bytes), clear the stuck panel; otherwise stay silent *)
           | Assets.Nothing ->
             Ui.resolved ui ~ms:dur;
-            remember_agent "idle" "build ok · no served change" []);
+            remember_agent Verdict.No_served_change);
       (* after the first successful settle, wire inline test runner targets into the watch so
          dune rebuilds them on every change. Only restart the watcher once (idempotent). *)
       if not !tests_wired then begin
@@ -292,26 +274,21 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
       in
       (match agent_success with
        | None -> ()
-       | Some (kind, summary, fields) ->
-         let fields =
-           match tests with
-           | None -> fields
-           | Some s ->
-             fields
-             @ [ ("tests_passed", string_of_int s.Dev_tests.total_passed);
-                 ("tests_failed", string_of_int s.Dev_tests.total_failed);
-                 ("test_libs", string_of_int (List.length s.Dev_tests.results)) ]
-         in
-         let summary = agent_summary_with_tests summary tests in
-         emit kind ~summary ~trigger:triggers ~ms:dur ~fields ())
+       | Some (Verdict.Build_ok b) ->
+         emit_verdict (Verdict.Build_ok { b with tests = Verdict.tests_of_summary tests })
+       | Some verdict -> emit_verdict verdict)
   in
 
   let on_build_failed _n triggers messages =
     pending_agent_success := None;
     Ui.failed ui ~raw:messages ~trigger:triggers ~serving:(serving ());
-    emit "build_failed"
-      ~summary:(Printf.sprintf "build failed · %s%s" (trigger_label triggers) (if serving () then " · last good build still serving" else " · server not running"))
-      ~trigger:triggers ~fields:[ ("serving", string_of_bool (serving ())) ] ()
+    emit_verdict
+      (Verdict.Build_failed
+         { trigger = triggers;
+           diagnostics = Diagnostics.parse messages;
+           raw = messages;
+           last_good_serving = serving ();
+           affected = Affected.classify triggers })
   in
 
   let on_dune_exit () =
@@ -320,11 +297,11 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
        broken and respawning every 0.5s would just spin and spam. Give up cleanly after a few. *)
     if !dune_exits > 5 then (
       Ui.notice ui Ui.Error "dune --watch keeps exiting — fix the build environment, then restart `fennec dev`";
-      emit "watcher_exit" ~summary:"dune --watch keeps exiting — restart `fennec dev`" ();
+      emit_verdict Verdict.Watcher_exit;
       shutdown Sys.sigterm)
     else (
       Ui.notice ui Ui.Warn "dune watcher exited — restarting";
-      emit "watcher_restart" ~summary:"dune watcher exited — restarting" ();
+      emit_verdict Verdict.Watcher_restart;
       Unix.sleepf 0.5;
       dw := Dune_watch.start (targets @ (if !tests_wired then Dev_tests.targets dev_tests else []));
       record_pids ())
@@ -335,12 +312,12 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     match Crash_limiter.record limiter ~now:(now ()) () with
     | Crash_limiter.Give_up ->
       Ui.notice ui Ui.Error "server kept crashing — fix the error and save to retry";
-      emit "server_crash" ~summary:"server kept crashing — fix the error and save to retry" ()
+      emit_verdict (Verdict.Server_crash "server kept crashing — fix the error and save to retry")
     | Crash_limiter.Retry backoff ->
       Unix.sleepf backoff;
       start_or_restart (fun () ->
         Ui.notice ui Ui.Warn "server exited — restarted";
-        emit "server_restart" ~summary:"server exited — restarted" ())
+        emit_verdict (Verdict.Server_restart "server exited — restarted"))
   in
   let on_server_crash up status =
     let port_busy = status = Unix.WEXITED Dev_proto.port_in_use_exit in
