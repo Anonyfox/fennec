@@ -32,17 +32,25 @@ for SSR and compiled to JS for the client. That's the whole model.
 
 ## Get started
 
-Prereqs: OCaml 5.x + opam ([install](https://ocaml.org/install)). Building the CLI also needs Go +
-Rust (only the native bundlers — prebuilt per-platform binaries are planned).
+The `fennec` CLI ships as a prebuilt, self-contained binary — no Node, Go, or Rust toolchain:
 
 ```sh
-git clone https://github.com/Anonyfox/fennec && cd fennec
-dune build && export PATH="$PWD/_build/default/cli:$PATH"
-cd examples/site && fennec dev        # → http://localhost:4000, hot-reloading
+# Linux x64 — for macOS Apple Silicon use fennec-macos-arm64. Homebrew + more platforms are coming.
+curl -L https://github.com/Anonyfox/fennec/releases/latest/download/fennec-linux-x64 -o fennec
+chmod +x fennec && sudo mv fennec /usr/local/bin/fennec
+```
+
+Building apps needs OCaml 5.x + opam ([install](https://ocaml.org/install)). Clone the repo and run
+the example:
+
+```sh
+git clone https://github.com/Anonyfox/fennec
+cd fennec/examples/site && fennec dev        # → http://localhost:4000, hot-reloading
 ```
 
 Edit `frontend/apps/web/index.mlx` and save — the page hot-reloads ([`examples/site`](./examples/site)
-is the full tour).
+is the full tour). Prefer to build the CLI yourself (adds Go + Rust)? See
+[Build from source](#build-from-source-contributors).
 
 **New to OCaml?** You don't need to be an expert. The mental map: opam ≈ npm, dune ≈ your bundler,
 `.mlx` ≈ JSX, `signal` ≈ `useState`, paws ≈ middleware, `.mli` ≈ a `.d.ts`, and there's no `null`.
@@ -74,8 +82,9 @@ Everything is **Eio-only**, by design.
 Working and tested end to end (see [`examples/site`](./examples/site), the living DX benchmark):
 the server, routing, isomorphic SSR + hydration, multi-app endpoints, the asset pipeline, the dev
 loop, real-browser e2e, **automatic multi-tenant HTTPS**, and the **reactive data + realtime layer**
-(DDP, Mongo/minimongo, change-stream live queries, SSR-with-live-data). **Next:** a `fennec new`
-project scaffold and a guided first-app tutorial, then prebuilt per-platform CLI binaries.
+(DDP, Mongo/minimongo, change-stream live queries, SSR-with-live-data). The CLI ships as a prebuilt,
+self-contained binary (Linux x64, macOS Apple Silicon) on every release. **Next:** a `fennec new`
+project scaffold and a guided first-app tutorial; more release platforms and package managers (Homebrew).
 
 ## Build from source (contributors)
 

@@ -1,7 +1,9 @@
 # fennec-cli — the `fennec` binary
 
 A native JS/CSS bundler plus the dev + test CLI, in one self-contained binary. The native engines
-(Go + Rust) link in at build time, so end users download a prebuilt binary — no Node, no toolchain.
+(Go + Rust) link in at build time, so end users just download a prebuilt binary from
+[GitHub Releases](https://github.com/Anonyfox/fennec/releases) (Homebrew + more platforms coming) —
+no Node, no toolchain.
 It sits *beside* dune (which owns the build graph); delete the CLI and plain `dune build --watch` +
 `dune exec` still works — the decoupling is a contract ([`../docs/internal/CLI-INTEROP.md`](../docs/internal/CLI-INTEROP.md)).
 
