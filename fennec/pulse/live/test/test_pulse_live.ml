@@ -174,4 +174,22 @@ let%test "MONGO collection: a seeded Object_id _id survives the merge + a live c
   seeded && is_oid ()
   && (match one (MS.fetch s "things" ()) with Some d -> B.get d "n" = Some (B.Int 2) | None -> false)
 
+let%test "Live.aggregate recomputes when a FOREIGN $lookup collection changes (not just the primary)" =
+  let lv = Live.create () in
+  MS.added (Live.store lv) ~sub:"a" ~collection:"orders" ~id:"o1" ~fields:[ ("cust", B.str "c1") ];
+  let r =
+    Live.aggregate lv "orders"
+      [ B.doc [ ("$lookup", B.doc [ ("from", B.str "customers"); ("localField", B.str "cust");
+                                    ("foreignField", B.str "_id"); ("as", B.str "c") ]) ] ]
+  in
+  let before = match one (Fur.peek r) with Some row -> B.get row "c" = Some (B.Array []) | None -> false in
+  (* a change to the FOREIGN collection must retrigger the join *)
+  MS.added (Live.store lv) ~sub:"a" ~collection:"customers" ~id:"c1" ~fields:[ ("name", B.str "Ada") ];
+  let after =
+    match one (Fur.peek r) with
+    | Some row -> ( match B.get row "c" with Some (B.Array [ cust ]) -> B.get cust "name" = Some (B.String "Ada") | _ -> false)
+    | None -> false
+  in
+  before && after
+
 let () = exit (Fennec_hunt_unit.run ())

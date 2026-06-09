@@ -26,8 +26,10 @@ val find :
   unit ->
   Bson.t array Fur.signal
 
-(** [aggregate t name pipeline] is a Fur signal of the aggregation result over collection [name]
-    ([$lookup] / [$unionWith] join across the client's other collections), recomputing when [name]
-    changes. (It is keyed on the primary collection's version — a change to only a foreign $lookup
-    collection does not retrigger it.) *)
+(** [aggregate t name pipeline] is a Fur signal of the aggregation result over collection [name];
+    [$lookup] / [$unionWith] join across the client's other collections, and the signal recomputes
+    when the primary collection {e or any referenced foreign collection} changes. Note the inherent
+    asymmetry with the server: the client joins over the {e subscribed subset} of a foreign collection
+    (what's in the local cache), whereas the server joins over the full collection — so a client-side
+    join sees only the foreign documents the client has also subscribed to. *)
 val aggregate : t -> string -> Bson.t list -> Bson.t array Fur.signal

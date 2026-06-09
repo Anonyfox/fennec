@@ -30,11 +30,31 @@ let find t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array Fur.signa
   Fur.on_cleanup stop;
   result
 
+(* the foreign collections a pipeline reads via $lookup.from / $unionWith — so [aggregate]'s signal
+   recomputes when one of THEM changes too, not just the primary collection (else a join goes stale) *)
+let foreign_collections (pipeline : Bson.t list) : string list =
+  List.filter_map
+    (fun stage ->
+      match stage with
+      | Bson.Document [ ("$lookup", Bson.Document spec) ] -> (
+          match List.assoc_opt "from" spec with Some (Bson.String f) -> Some f | _ -> None)
+      | Bson.Document [ ("$unionWith", Bson.String f) ] -> Some f
+      | Bson.Document [ ("$unionWith", Bson.Document spec) ] -> (
+          match List.assoc_opt "coll" spec with Some (Bson.String f) -> Some f | _ -> None)
+      | _ -> None)
+    pipeline
+
 let aggregate t name (pipeline : Bson.t list) : Bson.t array Fur.signal =
-  let v = version_signal t name in
+  let primary = version_signal t name in
+  let foreigns = List.map (version_signal t) (foreign_collections pipeline) in
   let snap () = Merge_store.aggregate t.store name pipeline in
   let result = Fur.signal [||] in
-  (* recompute when the PRIMARY collection changes; $lookup reads foreign collections at that moment *)
-  let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
+  (* recompute when the primary OR any referenced foreign ($lookup/$unionWith) collection changes *)
+  let stop =
+    Fur.watch (fun () ->
+        ignore (Fur.get primary);
+        List.iter (fun v -> ignore (Fur.get v)) foreigns;
+        Fur.set result (snap ()))
+  in
   Fur.on_cleanup stop;
   result
