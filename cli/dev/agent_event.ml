@@ -4,6 +4,7 @@ let dir t = t.dir
 let events_path ~dir = Filename.concat dir "events.jsonl"
 let status_path ~dir = Filename.concat dir "status"
 let marker_dir ~dir = Filename.concat dir "markers"
+let cursor_path ~dir = Filename.concat dir "cursor"
 
 let mkdir_p dir =
   let rec go d =
@@ -69,6 +70,7 @@ let start ?dir ?port ~root () =
   write_file status
     (Printf.sprintf "pid=%d\nroot=%s\nevents=%s\nstarted_at=%.0f\n%s" (Unix.getpid ()) root events (Unix.gettimeofday ())
        (match port with None -> "" | Some p -> Printf.sprintf "port=%d\n" p));
+  write_file (cursor_path ~dir) "0\n";
   { dir; events; next_id = 1 }
 
 let opt_field b name = function
@@ -159,6 +161,7 @@ let summarize_event line =
     | None -> line)
 
 let event_id line = find_int_field line "id"
+let event_kind line = find_string_field line "kind" |> Option.map unescape_json_string
 
 let latest_event_line ~dir =
   let events = events_path ~dir in
@@ -184,6 +187,22 @@ let first_event_after ~dir ~after =
         | line -> (
           match event_id line with
           | Some id when id > after -> Some (id, summarize_event line)
+          | _ -> loop ())
+        | exception End_of_file -> None
+      in
+      loop ())
+
+let first_hook_event_after ~dir ~after =
+  let events = events_path ~dir in
+  if not (Sys.file_exists events) then None
+  else
+    In_channel.with_open_text events (fun ic ->
+      let rec loop () =
+        match input_line ic with
+        | line -> (
+          match (event_id line, event_kind line) with
+          | Some id, Some "ready" when id > after -> loop ()
+          | Some id, _ when id > after -> Some (id, summarize_event line)
           | _ -> loop ())
         | exception End_of_file -> None
       in
@@ -244,6 +263,14 @@ let explicit_after input =
   List.find_map (fun name -> find_int_field input name)
     [ "fennec_agent_after_id"; "fennecAgentAfterId"; "after_id"; "afterId" ]
 
+let cursor_after ~dir =
+  let path = cursor_path ~dir in
+  if Sys.file_exists path then
+    In_channel.with_open_text path In_channel.input_all |> String.trim |> int_of_string_opt |> Option.value ~default:0
+  else 0
+
+let set_cursor ~dir id = write_file (cursor_path ~dir) (string_of_int id ^ "\n")
+
 let wait_next ?after ~dir ~timeout () =
   let events = events_path ~dir in
   let deadline = Unix.gettimeofday () +. timeout in
@@ -300,11 +327,76 @@ let wait_next ?after ~dir ~timeout () =
         in
         loop ()))
 
+let wait_hook_next ~after ~dir ~timeout () =
+  let events = events_path ~dir in
+  let deadline = Unix.gettimeofday () +. timeout in
+  let rec wait_for_journal () =
+    if Sys.file_exists events then Ok ()
+    else if Unix.gettimeofday () >= deadline then
+      Error (Printf.sprintf "fennec agent: no event journal at %s; start `fennec dev --agent` first" events)
+    else (Unix.sleepf 0.05; wait_for_journal ())
+  in
+  match wait_for_journal () with
+  | Error _ as e -> e
+  | Ok () -> (
+    match first_hook_event_after ~dir ~after with
+    | Some found -> Ok found
+    | None -> (
+      match liveness ~dir with
+      | `Dead pid -> Error (dead_message pid)
+      | `Alive | `Unknown ->
+        let start = (Unix.stat events).Unix.st_size in
+        let rd, wr = Unix.pipe () in
+        let pid = Unix.create_process "tail" [| "tail"; "-c"; Printf.sprintf "+%d" (start + 1); "-f"; events |] Unix.stdin wr Unix.stderr in
+        Unix.close wr;
+        Fun.protect
+          ~finally:(fun () ->
+            (try Unix.kill pid Sys.sigterm with _ -> ());
+            (try ignore (Unix.waitpid [] pid) with _ -> ());
+            (try Unix.close rd with _ -> ()))
+          (fun () ->
+            let buf = Bytes.create 4096 in
+            let pending = Buffer.create 256 in
+            let rec loop () =
+              let now = Unix.gettimeofday () in
+              if now >= deadline then Error (Printf.sprintf "fennec agent: no dev event within %.0fs" timeout)
+              else
+                let wait = min 0.25 (deadline -. now) in
+                let readable, _, _ = Unix.select [ rd ] [] [] wait in
+                if readable = [] then
+                  match liveness ~dir with
+                  | `Dead pid -> Error (dead_message pid)
+                  | `Alive | `Unknown -> loop ()
+                else
+                  let n = Unix.read rd buf 0 (Bytes.length buf) in
+                  if n = 0 then Error "fennec agent: event stream ended"
+                  else (
+                    Buffer.add_subbytes pending buf 0 n;
+                    let s = Buffer.contents pending in
+                    match Dune_watch.find_sub s "\n" with
+                    | Some i ->
+                      let line = String.sub s 0 i in
+                      let id = Option.value (event_id line) ~default:(after + 1) in
+                      if id <= after || event_kind line = Some "ready" then loop ()
+                      else Ok (id, summarize_event line)
+                    | None -> loop ())
+            in
+            loop ())))
+
 let hook_json ~dir ~timeout ~event ~input =
-  let after = match explicit_after input with Some id -> Some id | None -> marked_after ~dir ~input in
+  let after =
+    match explicit_after input with
+    | Some id -> id
+    | None -> (
+      match marked_after ~dir ~input with
+      | Some id -> id
+      | None -> cursor_after ~dir)
+  in
   let summary =
-    match wait_next ?after ~dir ~timeout () with
-    | Ok (_id, s) -> "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
+    match wait_hook_next ~after ~dir ~timeout () with
+    | Ok (id, s) ->
+      set_cursor ~dir id;
+      "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
     | Error msg -> msg ^ "\n"
   in
   "{\"hookSpecificOutput\":{\"hookEventName\":" ^ json_escape event ^ ",\"additionalContext\":" ^ json_escape summary ^ "}}"
@@ -372,6 +464,19 @@ let%test_unit "mark plus hook catches an event that settled before post hook sta
       emit t ~kind:"reload" ~summary:"post-edit reload" ();
       let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input in
       chk "hook includes post-edit event" (contains_ json "post-edit reload"))
+
+let%test_unit "plain post-tool hook catches already-settled feedback without mark" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit t ~kind:"ready" ~summary:"ready" ();
+      emit t ~kind:"reload" ~summary:"settled before hook ran" ();
+      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input:"{}" in
+      chk "hook skips ready and returns settled event" (contains_ json "settled before hook ran");
+      emit t ~kind:"idle" ~summary:"second feedback" ();
+      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input:"{}" in
+      chk "hook cursor advances" (contains_ json "second feedback");
+      chk "hook does not replay first event" (not (contains_ json "settled before hook ran")))
 
 let%test_unit "hook timeout is advisory JSON, not a crash" =
   let chk = Fennec_hunt_unit.check in

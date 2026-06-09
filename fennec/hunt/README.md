@@ -35,7 +35,7 @@ let%http "checkout" = fun () ->
 
 Each cut dir is a `-linkall` library (so dropping a file auto-registers it) plus a one-line runner
 `let () = exit (Fennec_hunt.Http.run ())`; `fennec test` builds it and runs each suite file against
-its own server instance. See [`fennec test`](../../docs/TEST-CLI.md).
+its own server instance. See the [`fennec-cli` README](../../cli/README.md) for the `fennec test` cuts.
 
 **Standalone** (no Fennec app): a suite is still just an executable — register blocks and call the
 runner yourself; run the **built binary**, not `dune exec`, if it spawns a server that shells out

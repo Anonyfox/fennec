@@ -345,7 +345,8 @@ let dev_cmd =
   let agent_arg =
     let doc =
       "Emit a machine-readable agent event journal alongside the human dev UI. Agents can then \
-       call $(b,fennec agent wait) or $(b,fennec agent hook) instead of parsing terminal output."
+       configure $(b,fennec agent hook --timeout 12) as a post-tool hook instead of parsing \
+       terminal output or running build/test probes after each edit."
     in
     Arg.(value & flag & info [ "agent" ] ~doc)
   in
@@ -483,7 +484,7 @@ let agent_cmd =
       | Ok (_id, s) -> print_endline s; 0
       | Error msg -> prerr_endline msg; 1
     in
-    Cmd.v (Cmd.info "wait" ~doc:"Wait for the next fennec dev agent event") Term.(const go $ dir_arg $ timeout_arg $ after_arg)
+    Cmd.v (Cmd.info "wait" ~doc:"Low-level: wait for the next fennec dev agent event") Term.(const go $ dir_arg $ timeout_arg $ after_arg)
   in
   let mark =
     let go dir =
@@ -492,7 +493,7 @@ let agent_cmd =
       Printf.printf "%d\n" id;
       0
     in
-    Cmd.v (Cmd.info "mark" ~doc:"Snapshot the latest event id for a future post-tool hook") Term.(const go $ dir_arg)
+    Cmd.v (Cmd.info "mark" ~doc:"Low-level: snapshot the latest event id for hook implementations") Term.(const go $ dir_arg)
   in
   let hook =
     let go dir timeout =
@@ -512,9 +513,9 @@ let agent_cmd =
       print_endline (Fennec_dev.Agent_event.hook_json ~dir:(state_dir dir) ~timeout ~event ~input);
       0
     in
-    Cmd.v (Cmd.info "hook" ~doc:"Wait and emit hookSpecificOutput.additionalContext JSON") Term.(const go $ dir_arg $ timeout_arg)
+    Cmd.v (Cmd.info "hook" ~doc:"Post-tool hook command: emit hookSpecificOutput.additionalContext JSON") Term.(const go $ dir_arg $ timeout_arg)
   in
-  let doc = "Agent-facing attachment and wait helpers for fennec dev --agent" in
+  let doc = "Agent-facing hook helpers for fennec dev --agent" in
   Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook ]
 
 let skill_cmd =

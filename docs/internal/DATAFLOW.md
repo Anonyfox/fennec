@@ -267,7 +267,7 @@ reacts to outputs.** mongod is exactly such an external process — supervised l
 today.
 
 - **`fennec test` → `:memory:` by default.** Minimongo, no mongod, deterministic, parallel-safe
-  (unchanged from `docs/TEST-CLI.md`). Real-mongo tests are opt-in (a flag / env that points at a
+  (unchanged — the CLI's testing default). Real-mongo tests are opt-in (a flag / env that points at a
   system mongod, with the single-node replica-set fixture for change streams).
 - **`fennec dev`** connects to a local mongod when the app's connection string is `mongodb://…`,
   else runs `:memory:`. The CLI **helps** with mongod: detect a system install; if absent, fetch the

@@ -1,248 +1,133 @@
 # Agent Fastlane Dev Loop
 
-Fennec's human `fennec dev` loop is already the source of truth for build state,
-last-good serving, reload kind, and inline test results. For agents, the missing
-piece is not another output format; it is a hook-friendly bridge that waits at
-tool boundaries and injects the dev-loop consequence into the next model step.
+Fennec's human `fennec dev` loop is already the source of truth for build
+state, last-good serving, reload kind, affected surface, diagnostics, and unit
+test results. The agent fastlane adds one bridge: a post-tool hook can block on
+that dev-loop verdict and inject it into the next model step.
 
-The native path is:
+The normal path is intentionally small:
 
 ```sh
 fennec dev --agent --port 9123
+```
+
+Then configure the coding harness once so its post-tool or post-edit hook runs:
+
+```sh
+fennec agent hook --timeout 12
+```
+
+After that, the agent edits normally. It should not run manual `dune build`,
+`dune runtest`, or explicit wait commands after every edit. The hook verdict is
+the feedback loop.
+
+## Hook Contract
+
+`fennec dev --agent` keeps the normal terminal UI and additionally writes an
+append-only JSONL event journal under the agent state directory. Each event has
+a monotonic id. The hook command reads that journal and emits
+`hookSpecificOutput.additionalContext` JSON for harnesses that support command
+hooks.
+
+The post-tool hook is stateful. Without any explicit marker from the harness it
+uses a persisted cursor, skips the initial `ready` event, and returns the next
+undelivered Fennec verdict. This matters because fast builds can settle before
+the hook process starts; the hook must still catch that already-written event.
+On success the cursor advances, so later hook calls do not replay stale
+feedback.
+
+Harnesses that pass explicit event ids can still do so; those are low-level
+implementation details. They are not the public agent workflow.
+
+Every hook wait is deadline-bounded. On timeout or dead devserver, the hook
+still returns model-visible context instead of hanging the agent.
+
+## Verdicts
+
+Agent output is rendered from the same internal dev verdict each cycle. Green
+build settles are emitted after the test lane has had its chance to run, so the
+agent sees the complete consequence of the edit rather than an early partial
+signal.
+
+Verdicts include:
+
+- served change: backend restart, reload, CSS hot-swap, or no served change
+- affected surface: backend, component, route, app, styles, assets, tests,
+  config when inferable
+- unit test result when tests ran
+- build timing fields
+- focused compiler diagnostics with file/line/code frame on failures
+- last-good serving state on failures
+
+Test-only edits are first-class. A successful test-only settle reports
+`build ok · no served change`, `affected: tests`, and the test tally.
+
+## Recovery
+
+Agents may run this cheap recovery command:
+
+```sh
 fennec agent status
-fennec agent mark
-fennec agent wait --timeout 12
-fennec agent wait --after 42 --timeout 12
-fennec agent hook --timeout 12
 ```
 
-`fennec dev --agent` keeps the normal human dev UI and additionally writes a
-machine-readable event journal under the agent state directory. `fennec agent
-wait` and `fennec agent hook` follow that journal with a blocking event stream,
-so hooks do not parse terminal text and do not need an extra build/test command
-after edits. Every wait has a hard timeout.
-
-For green build settles, the human UI can show reloads immediately, but the
-agent event is emitted only after the inline-test lane has had its chance to run.
-When tests ran, the event summary includes both the served-change verdict and
-the test verdict. There is no hook knob for this: the default agent contract is
-the complete dev verdict for the edit, not the earliest partial signal.
-
-Agent output is rendered from the same internal dev verdict each cycle. The
-summary stays compact, but it includes the changed surface when Fennec can infer
-one, such as affected components, routes, apps, styles, assets, tests, config, or
-backend restarts. Build failures include the focused diagnostic location and
-code frame parsed from Dune output, while the full human terminal UI remains
-unchanged.
-
-Events carry monotonic ids. `fennec agent wait --after ID` ignores old events and
-returns only an event with `id > ID`; before tailing, it scans already-written
-events, so it catches the race where the dev settle lands just before the hook
-starts. `fennec agent mark` snapshots the latest id and stores it under a loose
-session/tool key when the harness provides one on stdin; `fennec agent hook`
-uses that marker when present, otherwise it snapshots the latest id at hook
-start. Repeated server `ready` banners after hot restarts stay in the human UI
-and do not become separate post-edit agent events.
-
-`fennec agent status` is the cheap recovery command. It reports pid/root/events,
-the latest id and summary, the configured port when known, and whether the
-recorded dev pid is still alive.
-
-The older shell bridge remains useful while dogfooding:
-
-```sh
-tools/agent/fennec-dev start --port 9123
-tools/agent/fennec-dev ensure --port 9123
-tools/agent/fennec-dev wait --timeout 12
-tools/agent/fennec-dev hook --timeout 12
-tools/agent/fennec-dev stop
-```
-
-`start` runs `fennec dev` in the background and captures plain append-only output
-under `${XDG_STATE_HOME:-~/.local/state}/fennec/agent/<repo-hash>/dev.log`.
-Because stdout is not a TTY, the existing UI avoids cursor repainting and
-becomes suitable for hooks. Set `FENNEC_AGENT_STATE_DIR` to override the state
-location.
-
-`ensure` is the agent entrypoint. It attaches to an existing bridge if one is
-alive and starts a new one when the pid is missing or stale. `restart` is
-available when the log shows a wedged process. `status` prints the log path and,
-when the bridge uses `screen`, the command a human can use to attach.
-
-`wait` starts from the current log offset and blocks until the next semantic
-settle: ready, reload, css, resolved, build failed, watcher restart, or crash.
-Internally it follows the dev log with a blocking event stream (`tail -f` plus
-`select`), while the offset file catches events that settled just before the
-hook started.
-
-`hook` wraps `wait` and emits Claude Code-compatible JSON with
-`hookSpecificOutput.additionalContext`, so the feedback lands next to the tool
-result instead of requiring the model to remember to poll. If the dev loop is
-not running when the hook fires, the hook starts it before waiting. If no settle
-arrives before the timeout, the hook still returns model-visible context telling
-the agent to inspect `tools/agent/fennec-dev status` before trusting the edit.
-
-## Experimental Hook Wiring
-
-For now this document is the only persisted discovery surface for the
-experiment. Do not commit root agent instruction files or harness config files
-for this mechanism until the contract is settled.
-
-Temporary local harness configs can point at:
-
-```sh
-fennec agent hook --timeout 12
-```
-
-If the harness supports pre-tool hooks, wire pre-tool to:
-
-```sh
-fennec agent mark
-```
-
-and post-tool/batch to:
-
-```sh
-fennec agent hook --timeout 12
-```
-
-That gives the post hook an exact pre-edit event id. Without pre-tool support,
-the post hook still works with a hook-start snapshot and a bounded timeout.
-
-After testing, remove those local configs again. Hook trust is local harness
-state, not Fennec source.
+`status` reports pid/root/events, the latest id and summary, the configured port
+when known, and whether the recorded dev pid is alive. It is for inspection and
+recovery, not the normal feedback loop.
 
 ## Claude Code
 
-Claude Code supports command hooks for `PostToolUse` and `PostToolBatch`, passes
-hook input on stdin, and lets hooks inject `additionalContext` into the next
-model request. A project-local `.claude/settings.local.json` can wire this
-without committing personal automation:
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fennec agent hook --timeout 12"
-          }
-        ]
-      }
-    ],
-    "PostToolBatch": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "fennec agent hook --timeout 12"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Use `PostToolBatch` when the harness can run parallel edits, because it coalesces
-feedback once before the next model call. Use `PostToolUse` when tool batches are
-not available or when immediate per-tool feedback is preferred. If Claude Code
-pre-tool hooks are available, add `fennec agent mark` there for exact causality.
-
-If a shell command edits files, run `fennec agent wait --timeout 12`
-once after the shell batch. Do not attach the hook to every `Bash` call by
-default; most shell commands are reads, and waiting after them adds avoidable
-latency.
-
-Start or attach to the dev loop before asking for code changes:
+Claude Code command hooks can point `PostToolUse` or `PostToolBatch` at:
 
 ```sh
-fennec dev --agent --port 9123
+fennec agent hook --timeout 12
 ```
 
-Stop it when the session ends:
+Use batch hooks when available, because they coalesce multifile edits into one
+feedback verdict before the next model call. Use per-tool post hooks when batch
+hooks are unavailable.
 
-```sh
-Ctrl-C the foreground `fennec dev`, or stop the wrapper if using `tools/agent/fennec-dev`.
-```
+Do not teach Claude to run explicit waits after edits. If the hook cannot be
+installed in the active harness, the correct report is that Fennec fastlane is
+not attached.
 
 ## Codex
 
-Codex hook coverage has changed across 2026 releases. Local smoke tests against
-Codex CLI 0.137.0 verified that interactive Codex TUI `PostToolUse` hooks fire
-for both `Bash` and native `apply_patch`, and that
-`hookSpecificOutput.additionalContext` is visible to the next model step.
-`codex exec` did not fire the same `PostToolUse` hook in the smoke test, so use
-the interactive/TUI harness for true evented feedback.
-
-For a temporary local Codex smoke, the relevant inline config shape is:
-
-```toml
-[[hooks.PostToolUse]]
-matcher = "^(apply_patch|Edit|Write)$"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "fennec agent hook --timeout 12"
-timeout = 30
-statusMessage = "Waiting for Fennec dev feedback"
-```
-
-Start Codex with hooks enabled and review/trust the hook. In automation or
-throwaway smoke tests, `--dangerously-bypass-hook-trust` can bypass the trust
-prompt for that invocation. If Codex exposes reliable pre-tool hooks in the
-active mode, point them at `fennec agent mark`; interactive Codex TUI 0.137.0
-was verified for post-tool `apply_patch` hooks, while `codex exec` was not.
-
-If a Codex build or mode does not fire hooks for file edits, the fallback
-instruction is: after a native file-editing tool call, run exactly one wait
-command before reasoning about the result:
+Codex hook support varies by harness release and mode. When command hooks are
+available for file-editing tools, wire the post-tool hook to:
 
 ```sh
-fennec agent wait --timeout 12
+fennec agent hook --timeout 12
 ```
 
-That is still worse than true hook injection, but it keeps the check cheap,
-semantic, and coalesced. The model sees one settle summary instead of running
-ad-hoc build/test/curl probes.
+Interactive hook-capable harnesses get true evented feedback. Modes that do not
+fire hooks for native file edits cannot provide the full fastlane contract; do
+not paper over that by making agents run ad-hoc build/test probes after every
+edit.
 
 ## Native Future
 
-The current native path is intentionally conservative: an append-only JSONL
-journal with monotonic event ids plus a blocking `fennec agent wait`/`hook`
-reader. It already emits an `idle` event for green no-op settles, so hooks do
-not hang just because the edit produced no served change. A later richer version
-can move from file-following to a socket API:
+The current native bridge is deliberately conservative: a JSONL journal plus a
+blocking hook reader with a persisted cursor. A later version can replace the
+file-following process with a socket API, but the product contract should stay
+the same:
 
-- `--agent-socket PATH` for `status`, `wait_idle`, and `wait_next`.
-- Monotonic event IDs and causal waits such as `wait_idle_since <timestamp>`.
-- Stable event objects for ready, build_ok, build_failed, css, reload, tests,
-  crash, and watcher_restart.
-- Harness hooks that call `wait_idle_since` after writes and inject the result.
-
-That removes even the journal-following process. The important contract already
-exists: hooks consume stable dev events, not terminal output, and the human TUI
-does not change.
+- start `fennec dev --agent`
+- configure one post-tool hook
+- edit normally
+- consume stable dev verdicts, not terminal output
 
 ## Mechanical Verification
 
-Run the inline tests when changing the native event journal:
+Run focused tests after changing the event journal or generated guide:
 
 ```sh
 dune runtest cli/dev
 ```
 
-Run the shell bridge verifier when changing the wrapper:
+Useful live checks:
 
-```sh
-tools/agent/verify-fennec-dev-fastlane
-```
-
-It starts an isolated dev loop, verifies `ensure` can recover a stopped loop
-with the previous dev args, performs a rapid multifile edit batch, calls one
-hook, restores the files, then tests the settled-before-hook race by observing a
-dev event land before invoking the hook. It also asserts that `stop` leaves no
-`fennec dev` or `dune --watch` process behind.
+- start `fennec dev --agent` on an isolated port
+- make an app edit and run one post-tool `fennec agent hook --timeout 12`
+- verify the hook catches feedback that settled before the hook process started
+- make a unit-test-only edit and verify the verdict reports `affected: tests`
+- restore the files and confirm the devserver stops cleanly
