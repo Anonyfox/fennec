@@ -1,0 +1,7 @@
+; Concurrency test (native + Eio): the per-request Fur.Data context (seed table + fetch source) is
+; FIBER-LOCAL, so two simultaneous SSR renders never share a seed table. Proves DD7's isolation.
+(test
+ (name test_data_isolation)
+ (libraries fennec.fur eio eio_main)
+ (flags
+  (:standard -w -a)))

@@ -15,15 +15,17 @@ let render ~env ~(mounts : Fur.mount list) ~source ~request ~client_js ~styles (
   match dispatch mounts request with
   | None -> None
   | Some m ->
+    (* per-request isolation: each concurrent render gets its own fiber-local seed table + source *)
+    Fur.Data.with_context @@ fun () ->
     let clock = Eio.Stdenv.clock env in
     Fur.Router.activate m.router;
     Fur.Router.set_path m.router request;
     let render_root = m.root () in
     let pending : (string, unit) Hashtbl.t = Hashtbl.create 8 in
     let attempted : (string, unit) Hashtbl.t = Hashtbl.create 8 in
-    Fur.Data.source := (fun key _ ->
+    Fur.Data.set_source (fun key _ ->
       if not (Hashtbl.mem pending key) && not (Hashtbl.mem attempted key)
-         && not (Hashtbl.mem Fur.Data.seed key) then Hashtbl.replace pending key ());
+         && not (Hashtbl.mem (Fur.Data.seed_table ()) key) then Hashtbl.replace pending key ());
     let rec passes n =
       let html = Fur.to_html (render_root ()) in
       if Hashtbl.length pending = 0 || n > 16 then html
@@ -68,10 +70,10 @@ let handler ?(styles = "") ?source ~(mounts : Fur.mount list) (request : string)
      | Some src ->
        let pending : (string, unit) Hashtbl.t = Hashtbl.create 8 in
        let attempted : (string, unit) Hashtbl.t = Hashtbl.create 8 in
-       Fur.Data.source :=
+       Fur.Data.set_source
          (fun key _ ->
            if (not (Hashtbl.mem pending key)) && (not (Hashtbl.mem attempted key))
-              && not (Hashtbl.mem Fur.Data.seed key)
+              && not (Hashtbl.mem (Fur.Data.seed_table ()) key)
            then Hashtbl.replace pending key ());
        let rec passes n =
          ignore (Fur.to_html (render_root ()));
@@ -88,7 +90,7 @@ let handler ?(styles = "") ?source ~(mounts : Fur.mount list) (request : string)
          end
        in
        passes 0;
-       Fur.Data.source := (fun _ _ -> ()));
+       Fur.Data.set_source (fun _ _ -> ()));
     let body = Fur.to_html (render_root ()) in
     let ctx =
       { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script ();

@@ -20,7 +20,7 @@ let install () =
   (* a real async GET: the key IS the URL. Resolves on a later tick (the response),
      exercising the loading -> ready transition; same-origin, so it reaches the app's
      own /api/* routes. *)
-  Fur.Data.source :=
+  Fur.Data.set_source
     (fun key k ->
       let xhr = XmlHttpRequest.create () in
       xhr##_open (Js.string "GET") (Js.string key) Js._true;

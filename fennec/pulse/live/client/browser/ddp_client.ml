@@ -86,7 +86,7 @@ let subscribe t ~name ?(params = []) () : subscription =
         (* flicker-free hydration: if the SSR embedded this sub's docs (Fur's seed table), install
            them under this sub id and mark ready BEFORE sending the live Sub — so the first paint
            matches the server HTML; the live Sub then re-confirms + streams deltas under the same id. *)
-        (match Hashtbl.find_opt Fur.Data.seed (seed_key name params) with
+        (match Hashtbl.find_opt (Fur.Data.seed_table ()) (seed_key name params) with
         | Some payload ->
           (* install under the collection the SERVER declared (it rides in the payload) — not a
              client-side re-derivation, so a publication whose name ≠ collection still hydrates right *)

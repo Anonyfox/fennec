@@ -33,3 +33,20 @@ val local_remove : string -> unit
 (** Push a new URL onto the browser's history stack ([window.history.pushState]).
     No-op in SSR (path changes are handled by the router's signal directly). *)
 val push_state : string -> unit
+
+(** {1 Per-request SSR data context} *)
+
+(** [with_data_context f] runs [f] with a fresh, isolated per-request data context (the seed table +
+    the fetch source). On the concurrent native server it is {b fiber-local}, so simultaneous SSR
+    requests never share a seed table; on the browser (one document) it is the single global context.
+    Outside an Eio run the accessors below degrade to a process-global context (single-threaded, safe). *)
+val with_data_context : (unit -> 'a) -> 'a
+
+(** The current request's seed table ([key → JSON-string payload]). *)
+val seed_table : unit -> (string, string) Hashtbl.t
+
+(** The current request's fetch source (resolves a resource key to a JSON payload via a callback). *)
+val data_source : unit -> string -> (string -> unit) -> unit
+
+(** Replace the current request's fetch source. *)
+val set_data_source : (string -> (string -> unit) -> unit) -> unit

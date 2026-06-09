@@ -200,9 +200,15 @@ module Data : sig
   (** A loaded (or loading) resource of type ['a]. *)
   type 'a t
 
-  (** Per-request seed context: a [key → JSON-string] map filled by the server, read by
-      the client on hydration. Mutate via {!put_seed} / {!clear_seed}. *)
-  val seed : (string, string) Hashtbl.t
+  (** The current request's seed table ([key → JSON-string], filled by the server, read by the client
+      on hydration). It is {b fiber-local} on the concurrent server (see {!with_context}), so
+      simultaneous SSR requests never share it. Mutate via {!put_seed} / {!clear_seed}. *)
+  val seed_table : unit -> (string, string) Hashtbl.t
+
+  (** [with_context f] runs [f] with a fresh, isolated per-request data context (the seed table + the
+      fetch source). The SSR driver wraps each concurrent render in it; on the browser / outside an
+      Eio run it is the single global context. *)
+  val with_context : (unit -> 'a) -> 'a
 
   (** Write a key/value pair into the current request's seed (server-side). *)
   val put_seed : string -> string -> unit
@@ -210,10 +216,10 @@ module Data : sig
   (** Clear all seed entries (e.g. between requests in a test). *)
   val clear_seed : unit -> unit
 
-  (** The platform/app fetch strategy: a [(key, callback)] function that resolves a
-      resource key to a JSON string and calls [callback] with the result. Replaced by
-      the app's data layer. *)
-  val source : (string -> (string -> unit) -> unit) ref
+  (** [set_source f] installs the fetch strategy for the current request: [f key callback] resolves a
+      resource key to a JSON string and calls [callback] with it. Set by the app's data layer / the
+      SSR driver. *)
+  val set_source : (string -> (string -> unit) -> unit) -> unit
 
   (** [resource ~key ?client_only ~fallback ~decode ()] — declare a typed resource.
       [key] identifies it in the seed; [decode] parses the JSON string; [fallback] is the

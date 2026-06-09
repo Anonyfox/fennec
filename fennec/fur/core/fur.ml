@@ -301,17 +301,23 @@ module Data = struct
   (* IMPORTANT: per-request state — [seed] AND [source] below are the request's data
      context + fetch strategy; both must be fiber-local on the concurrent server (two
      requests fetching different data would otherwise share one table). *)
-  let seed : (string, string) Hashtbl.t = Hashtbl.create 16
-  let put_seed k v = Hashtbl.replace seed k v
+  (* The per-request seed table + fetch source live in the platform: FIBER-LOCAL on the concurrent
+     native server (so simultaneous SSR requests never share a table), a single global on the browser
+     / outside an Eio run. [with_context] establishes a fresh per-request context (the SSR driver
+     wraps each concurrent render in it). This keeps the resource/value/refetch API identical. *)
+  let seed_table () = Platform.seed_table ()
+  let with_context f = Platform.with_data_context f
+  let put_seed k v = Hashtbl.replace (seed_table ()) k v
   let take_seed k =
-    match Hashtbl.find_opt seed k with
+    let s = seed_table () in
+    match Hashtbl.find_opt s k with
     | None -> None
-    | Some v -> if !is_browser then Hashtbl.remove seed k; Some v  (* client consumes; server keeps for pass 2 + embed *)
-  let clear_seed () = Hashtbl.clear seed
+    | Some v -> if !is_browser then Hashtbl.remove s k; Some v  (* client consumes; server keeps for pass 2 + embed *)
+  let clear_seed () = Hashtbl.clear (seed_table ())
 
   (* platform SOURCE: deliver a key's raw payload to a continuation. Default no-op
-     (overridden by the server driver / the client fetch binding). *)
-  let source : (string -> (string -> unit) -> unit) ref = ref (fun _ _ -> ())
+     (overridden by the server driver / the client fetch binding via [set_source]). *)
+  let set_source f = Platform.set_data_source f
 
   let resource ~key ?(client_only = false) ~fallback ~decode () =
     let initial, fetch_now =
@@ -320,7 +326,7 @@ module Data = struct
       | None -> (Loading, not (client_only && not !is_browser)) (* server skips browser-only data *)
     in
     let st = signal initial in
-    if fetch_now then !source key (fun json -> set st (Ready (decode json)));
+    if fetch_now then (Platform.data_source ()) key (fun json -> set st (Ready (decode json)));
     { st; key; decode; fallback }
 
   (* common case: string payload (no decoder). [Data.string "/api/x" ~fallback:"…" ()] *)
@@ -333,7 +339,7 @@ module Data = struct
   let loading r = match get r.st with Loading -> true | _ -> false
   let error r = match get r.st with Failed e -> Some e | _ -> None
   (* an explicit, dynamic refetch always hits the network (bypasses the seed) *)
-  let refetch r = set r.st Loading; !source r.key (fun json -> set r.st (Ready (r.decode json)))
+  let refetch r = set r.st Loading; (Platform.data_source ()) r.key (fun json -> set r.st (Ready (r.decode json)))
 
   (* serialize the data context to a <script>-safe JS assignment *)
   let js_string s =
@@ -347,7 +353,7 @@ module Data = struct
     Buffer.add_char b '"';
     Buffer.contents b
   let to_script () =
-    let pairs = Hashtbl.fold (fun k v acc -> (js_string k ^ ":" ^ js_string v) :: acc) seed [] in
+    let pairs = Hashtbl.fold (fun k v acc -> (js_string k ^ ":" ^ js_string v) :: acc) (seed_table ()) [] in
     "window.__FUR_DATA__={" ^ String.concat "," pairs ^ "}"
 end
 
@@ -872,14 +878,14 @@ let%test_unit "seeded not loading" =
 
 let%test_unit "miss shows fallback" =
   Data.clear_seed ();
-  Data.source := (fun _ _ -> ());
+  Data.set_source (fun _ _ -> ());
   let miss = Data.string "absent" ~fallback:"f" () in
   Fennec_hunt_unit.check_eq "miss shows fallback"
     ~expected:"f" ~got:(Data.value miss)
 
 let%test_unit "miss is loading" =
   Data.clear_seed ();
-  Data.source := (fun _ _ -> ());
+  Data.set_source (fun _ _ -> ());
   let miss = Data.string "absent" ~fallback:"f" () in
   Fennec_hunt_unit.check "miss is loading" (Data.loading miss)
 

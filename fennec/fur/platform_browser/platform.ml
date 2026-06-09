@@ -21,3 +21,11 @@ let local_remove k = Js.Optdef.iter (Dom_html.window##.localStorage) (fun s -> s
 let push_state abs =
   ignore (Js.Unsafe.meth_call (Js.Unsafe.get Dom_html.window (Js.string "history"))
             "pushState" [| Js.Unsafe.inject Js.null; Js.Unsafe.inject (Js.string ""); Js.Unsafe.inject (Js.string abs) |])
+
+(* per-request data context — one document, single-threaded, so a single global suffices *)
+let _seed : (string, string) Hashtbl.t = Hashtbl.create 16
+let _source : (string -> (string -> unit) -> unit) ref = ref (fun _ _ -> ())
+let with_data_context f = f ()
+let seed_table () = _seed
+let data_source () = !_source
+let set_data_source s = _source := s
