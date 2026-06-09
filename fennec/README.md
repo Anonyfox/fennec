@@ -66,7 +66,9 @@ Mongo driver (`fennec-mongo`) for production.
 Aggregation runs in-memory too, with cross-collection **`$lookup` / `$unionWith`** — the same joins on
 the server and (over its subscribed subset) on the client. The client **reconnects and resyncs** after
 a dropped socket; methods report success/failure via `Pulse.call_result`; publications are
-parameterized (`subscribe ~params`).
+parameterized (`subscribe ~params`). At scale, every subscription to the same query rides **one shared
+backend observe** (refcounted), so a broadcast feed costs one selector eval per change, not one per
+viewer.
 
 **Coming from Meteor, your daily words don't change — only the namespace.** `Pulse.publish` /
 `subscribe` / `method` / `call`, `find`, `insert` / `update` / `remove`, and `Ddp` / `Mongo` /

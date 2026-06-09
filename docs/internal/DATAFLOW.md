@@ -205,7 +205,11 @@ Ports `ocaml-light/meteor/core` (transport-agnostic; depends only on the mongo p
   keeping a per-session document copy + diff; the CLIENT merges (the per-`(coll,id)` merge box with
   per-field precedence + refcounted removal). There is no server-side per-session merge box on the
   wire path; `Reactive.subscribe` is a server-side SNAPSHOT / inspection helper (its own merge box,
-  `is_ready` always true), used by no transport.
+  `is_ready` always true), used by no transport. The backend observe IS shared, though: one observe
+  per (collection-handle, query), refcounted across every subscription with that query (the RX9
+  multiplexer) — so a mutation is matched once and fanned to all subscribers (the broadcast shape
+  costs O(1) selector evals, not O(sessions)). `Reactive.live_query_count` gauges how many are active;
+  a late joiner gets the mux's current state replayed synchronously, so [ready]-after-return holds.
 - **Methods**: a dispatch table `invocation -> Bson.t list -> Bson.t`. **v1 server-only** (no client
   stub, no `updated` barrier beyond the trivial "writes done" signal). Placeholder comments mark the
   latency-comp seam (§9).
