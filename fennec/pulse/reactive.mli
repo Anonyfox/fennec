@@ -244,9 +244,17 @@ module type REACTIVE = sig
       the subscription's arguments), delivering each field-level observe delta to [on] as a {!beat}
       (the [collection] is per document), and returns a handle that stops every cursor. This is the
       delta-driven entry a DDP session feeds its sink from — unlike {!subscribe} it keeps no merge
-      box; the caller emits [ready] after it returns ([observe_changes] replays existing documents
-      synchronously as [Added] beats). An unknown publication yields a no-op handle. *)
+      box. Each cursor is backed by a SHARED backend observe (the multiplexer): every subscription
+      with the same (collection, query) rides one observe, yet [on] still receives the full initial
+      state synchronously before this returns — a fresh observe replays it, a late joiner gets the
+      current state replayed — so emitting [ready] after return stays correct. An unknown publication
+      yields a no-op handle. *)
   val run_publication : string -> params:doc list -> on:(beat -> unit) -> live_handle
+
+  (** Number of active SHARED backend observes — the observe multiplexer collapses every subscription
+      with the same (collection, query) onto one, so this counts distinct live queries, not
+      subscriptions. An operational scalability gauge. *)
+  val live_query_count : unit -> int
 
   (** Pure EJSON structural operations. *)
   module EJSON : sig

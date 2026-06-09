@@ -153,6 +153,10 @@ module type REACTIVE = sig
 
   val run_publication : string -> params:doc list -> on:(beat -> unit) -> live_handle
 
+  (** number of active SHARED backend observes (the RX9 multiplexer) — an operational gauge of
+      distinct live queries, not subscriptions *)
+  val live_query_count : unit -> int
+
   module EJSON : sig
     val equals : ?key_order_sensitive:bool -> doc -> doc -> bool
     val clone : doc -> doc
@@ -217,6 +221,9 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
     type t = {
       backend : B.collection;
+      uid : int;
+          (* unique per collection HANDLE — keys the observe multiplexer (RX9), so two same-named or
+             two unnamed handles never collide onto one shared observe *)
       name : string;
       id_generation : id_generation;
       transform : (doc -> doc) option;
@@ -236,11 +243,14 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
        you don't name neither accumulates here nor becomes a join target; re-using a name is last-wins;
        a dynamically-named collection can be reclaimed with {!forget}. *)
     let _collections : (string, B.collection) Hashtbl.t = Hashtbl.create 16
+    let _uid_counter = ref 0
 
     let create ?(id_generation = STRING) ?transform ?(name = "") backend =
       if name <> "" then Hashtbl.replace _collections name backend;
+      incr _uid_counter;
       {
         backend;
+        uid = !_uid_counter;
         name;
         id_generation;
         transform;
@@ -497,28 +507,94 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   let publications () = Hashtbl.fold (fun k _ acc -> k :: acc) _pubs []
   let method_names () = Hashtbl.fold (fun k _ acc -> k :: acc) _methods []
 
+  (* ---- the observe multiplexer (RX9) ---------------------------------------
+     ONE backend observe per (collection-handle, query), shared across every subscription with that
+     exact query: N sessions watching the same feed cost one observe + one selector eval per mutation
+     (fanned to all N), not N. Keyed by the collection's uid (so same-named / unnamed handles never
+     collide) + the canonical query key. Refcounted — the last subscriber out stops the observe and
+     drops the entry. Single Eio domain: a subscribe replays current state then registers, with no
+     mutation interleaving in between, so a late joiner can't miss or double-apply a delta. *)
+  type mux = {
+    mutable handle : live_handle;
+    subs : (int, beat -> unit) Hashtbl.t;
+    live : (string, (string * doc) list) Hashtbl.t; (* id -> current field set, for late-joiner replay *)
+    collection : string;
+    mutable subc : int;
+  }
+
+  let _muxes : (string, mux) Hashtbl.t = Hashtbl.create 64
+
+  (* active shared observes — an operational gauge of how effectively the multiplexer is collapsing
+     subscriptions (one entry per distinct (collection-handle, query), regardless of subscriber count) *)
+  let live_query_count () = Hashtbl.length _muxes
+
+  (* merge a [changed] delta into a doc's stored field set (drop [cleared], overwrite/add [fields]) *)
+  let _mux_merge fields_now fields cleared =
+    let kept = List.filter (fun (k, _) -> not (List.mem k cleared)) fields_now in
+    List.fold_left (fun acc (k, v) -> (k, v) :: List.filter (fun (k', _) -> k' <> k) acc) kept fields
+
+  (* subscribe [on] to the shared observe for [cur]; returns an unsubscribe that refcounts the mux *)
+  let mux_subscribe (cur : Collection.cursor) ~on : unit -> unit =
+    let coll = Collection.(cur.coll.name) in
+    let key = string_of_int Collection.(cur.coll.uid) ^ "\x00" ^ Query_key.of_query ~collection:coll cur.q in
+    let mux, fresh =
+      match Hashtbl.find_opt _muxes key with
+      | Some mux -> (mux, false)
+      | None ->
+          let mux =
+            { handle = { stop = (fun () -> ()) }; subs = Hashtbl.create 8; live = Hashtbl.create 64;
+              collection = coll; subc = 0 }
+          in
+          Hashtbl.replace _muxes key mux;
+          (mux, true)
+    in
+    let sid = mux.subc in
+    mux.subc <- sid + 1;
+    (if fresh then begin
+       (* register BEFORE observing so the synchronous initial replay's [added]s reach [on] (and fill
+          [live]) before this returns — the caller's ready-after-return contract (RX7) depends on it *)
+       Hashtbl.replace mux.subs sid on;
+       let fan b = Hashtbl.iter (fun _ f -> f b) mux.subs in
+       let h =
+         Collection.observe_changes cur
+           ~added:(fun id fields ->
+             let fs = Query.Diff.kvs_of fields in
+             Hashtbl.replace mux.live id fs;
+             fan (Added { collection = coll; id; fields = fs }))
+           ~changed:(fun id fields cleared ->
+             let fs = Query.Diff.kvs_of fields in
+             Hashtbl.replace mux.live id (_mux_merge (try Hashtbl.find mux.live id with Not_found -> []) fs cleared);
+             fan (Changed { collection = coll; id; fields = fs; cleared }))
+           ~removed:(fun id ->
+             Hashtbl.remove mux.live id;
+             fan (Removed { collection = coll; id }))
+           ()
+       in
+       mux.handle <- h
+     end
+     else begin
+       (* late joiner: replay the current merged state to THIS sub only, then ride the shared stream *)
+       Hashtbl.iter (fun id fields -> on (Added { collection = mux.collection; id; fields })) mux.live;
+       Hashtbl.replace mux.subs sid on
+     end);
+    fun () ->
+      Hashtbl.remove mux.subs sid;
+      if Hashtbl.length mux.subs = 0 then begin
+        mux.handle.stop ();
+        Hashtbl.remove _muxes key
+      end
+
   (* Run a publication's cursors with field-level observe deltas delivered as beats (the [collection]
-     is per-doc). The delta-driven entry a DDP session uses — no merge box; the caller emits [ready]
-     after this returns (observe_changes replays existing docs synchronously as [Added] beats during
-     registration). *)
+     is per-doc), each backed by a SHARED observe (the multiplexer above). The delta-driven entry a
+     DDP session uses — no merge box; the caller emits [ready] after this returns (the shared observe
+     replays existing docs synchronously — as a fresh observe's [added]s, or a late joiner's [live]
+     replay — during this call). *)
   let run_publication name ~params ~on : live_handle =
     match Hashtbl.find_opt _pubs name with
     | None -> { stop = (fun () -> ()) }
     | Some f ->
         let stoppers = ref [] in
-        let observe_one (cur : Collection.cursor) =
-          let coll = Collection.(cur.coll.name) in
-          let h =
-            Collection.observe_changes cur
-              ~added:(fun id fields ->
-                on (Added { collection = coll; id; fields = Query.Diff.kvs_of fields }))
-              ~changed:(fun id fields cleared ->
-                on (Changed { collection = coll; id; fields = Query.Diff.kvs_of fields; cleared }))
-              ~removed:(fun id -> on (Removed { collection = coll; id }))
-              ()
-          in
-          stoppers := h.stop :: !stoppers
-        in
+        let observe_one cur = stoppers := mux_subscribe cur ~on :: !stoppers in
         (match f params with Cursor c -> observe_one c | Cursors cs -> List.iter observe_one cs);
         { stop = (fun () -> List.iter (fun s -> s ()) !stoppers) }
 

@@ -75,7 +75,7 @@ let%test "observe_changes: added, changed, removed-on-move-out" =
   let changed = match !log with x :: _ -> x = "chg:k" | _ -> false in
   let _ = C.update t (doc [ ("_id", B.String "k") ]) (doc [ ("$set", doc [ ("room", i 9) ]) ]) in
   let removed = match !log with x :: _ -> x = "rem:k" | _ -> false in
-  h.Reactive.stop ();
+  h.stop ();
   initial && changed && removed
 
 (* ── publish / subscribe ── *)
@@ -178,7 +178,7 @@ let%test "a publication receives its subscription params (parameterized cursor)"
     R.run_publication "byroom" ~params:[ Bson.Document [ ("room", i 1) ] ]
       ~on:(function Reactive.Added { fields; _ } -> seen := fields :: !seen | _ -> ())
   in
-  h.Reactive.stop ();
+  h.stop ();
   match !seen with [ fields ] -> List.assoc_opt "room" fields = Some (B.Int 1) | _ -> false
 
 let%test "Collection.forget removes a collection from the $lookup registry" =
@@ -206,5 +206,41 @@ let%test "query_key: a different selector / collection / limit yields a differen
   q (doc [ ("a", i 1) ]) <> q (doc [ ("a", i 2) ])
   && q (doc []) <> q ~coll:"u" (doc [])
   && q (doc []) <> q ~limit:5 (doc [])
+
+(* ── RX9: the observe multiplexer — one shared backend observe per (collection, query) ── *)
+let%test "mux: same-query subscriptions share ONE observe; a distinct query gets its own; teardown frees" =
+  let c = coll "mux_share" in
+  let _ = C.insert c (doc [ ("v", i 1) ]) in
+  R.publish "mux_p" (fun _ -> R.Cursor (C.find c ()));
+  R.publish "mux_q" (fun _ -> R.Cursor (C.find c ~selector:(doc [ ("v", i 1) ]) ()));
+  let before = R.live_query_count () in
+  let s1 = R.run_publication "mux_p" ~params:[] ~on:(fun _ -> ()) in
+  let s2 = R.run_publication "mux_p" ~params:[] ~on:(fun _ -> ()) in
+  (* same (collection, query) as s1 → shared *)
+  let s3 = R.run_publication "mux_q" ~params:[] ~on:(fun _ -> ()) in
+  (* different query → its own observe *)
+  let shared = R.live_query_count () = before + 2 in
+  s1.stop ();
+  s2.stop ();
+  s3.stop ();
+  shared && R.live_query_count () = before
+
+let%test "mux: a single mutation fans to ALL sharers, and a late joiner gets the current state" =
+  let c = coll "mux_fan" in
+  R.publish "mux_fan_p" (fun _ -> R.Cursor (C.find c ()));
+  let got1 = ref 0 and got2 = ref 0 in
+  let s1 = R.run_publication "mux_fan_p" ~params:[] ~on:(fun _ -> incr got1) in
+  let s2 = R.run_publication "mux_fan_p" ~params:[] ~on:(fun _ -> incr got2) in
+  let _ = C.insert c (doc [ ("v", i 9) ]) in
+  (* one mutation → fanned to BOTH subscribers *)
+  let fanned = !got1 >= 1 && !got2 >= 1 in
+  let late = ref 0 in
+  let s3 = R.run_publication "mux_fan_p" ~params:[] ~on:(fun _ -> incr late) in
+  (* late joiner gets the existing doc replayed (≥1 beat) without re-observing the backend *)
+  let late_got = !late >= 1 in
+  s1.stop ();
+  s2.stop ();
+  s3.stop ();
+  fanned && late_got
 
 let () = exit (Fennec_hunt_unit.run ())
