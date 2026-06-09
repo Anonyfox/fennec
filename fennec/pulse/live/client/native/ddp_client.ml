@@ -44,5 +44,10 @@ let subscribe t ~name ?(params = []) () : subscription =
 
 let use_subscribe t ~name ?(params = []) () = (subscribe t ~name ~params ()).ready
 let call _ ~name ?(params = []) () = ignore (name, params)
+
+(* SSR has no socket, so a method never resolves here — the signal stays [None] (pending) *)
+let call_result _ ~name ?(params = []) () : (Bson.t, string * string) result option Fur.signal =
+  ignore (name, params);
+  Fur.signal None
 let find t = Live.find t.live
 let aggregate t = Live.aggregate t.live

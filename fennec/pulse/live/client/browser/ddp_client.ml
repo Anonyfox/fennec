@@ -38,6 +38,9 @@ type t = {
   mutable subc : int;
   mutable methodc : int;
   mutable session_id : string option; (* captured from Connected; replayed for DDP session resume *)
+  (* in-flight method calls awaiting their Result: id → a signal that resolves to Ok value /
+     Error (code, reason). [None] = still pending. *)
+  methods_pending : (string, (Bson.t, string * string) result option Fur.signal) Hashtbl.t;
 }
 
 let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set st.ready_sig true | None -> ()
@@ -62,6 +65,18 @@ let handle t raw =
             (match error with Some _ -> MS.sub_stopped box id | None -> ());
             mark_ready t id
         | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
+        | Msg.Result { id; error; result } ->
+            (* resolve the call's result signal (if a caller is awaiting it via [call_result]) *)
+            (match Hashtbl.find_opt t.methods_pending id with
+            | Some sig_ ->
+                Fur.set sig_
+                  (Some
+                     (match error with
+                     | Some e -> Error (e.Msg.code, Option.value e.Msg.reason ~default:"")
+                     | None -> Ok (Option.value result ~default:Bson.Null)));
+                Hashtbl.remove t.methods_pending id
+            | None -> ())
+        | Msg.Updated _ -> () (* the server's write-fence; the data change already flows via the subscription *)
         | Msg.Failed _ -> () (* DDP version mismatch — nothing to renegotiate; proceed best-effort *)
         | _ -> ()
 
@@ -73,7 +88,7 @@ let connect ?(path = "/websocket") () : t =
   let url = scheme ^ host ^ path in
   let t =
     { live = Live.create (); send = (fun _ -> ()); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
-      subc = 0; methodc = 0; session_id = None }
+      subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16 }
   in
   (* sends before the socket is open (component setup fires subscribe/call before onopen) queue up *)
   let is_open = ref false in
@@ -167,9 +182,18 @@ let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
   Fur.on_cleanup sub.stop;
   sub.ready
 
-let call t ~name ?(params = []) () =
+(* [call_result] invokes a method and returns a signal that resolves to its outcome — [None] while
+   in flight, then [Some (Ok value)] or [Some (Error (code, reason))] (e.g. an allow/deny 403). *)
+let call_result t ~name ?(params = []) () : (Bson.t, string * string) result option Fur.signal =
   t.methodc <- t.methodc + 1;
-  t.send (Msg.encode (Msg.Method { method_ = name; params; id = "m" ^ string_of_int t.methodc; random_seed = None }))
+  let id = "m" ^ string_of_int t.methodc in
+  let sig_ = Fur.signal None in
+  Hashtbl.replace t.methods_pending id sig_;
+  t.send (Msg.encode (Msg.Method { method_ = name; params; id; random_seed = None }));
+  sig_
+
+(* fire-and-forget: the data a method changes returns via the open subscription as a normal delta *)
+let call t ~name ?(params = []) () = ignore (call_result t ~name ~params ())
 
 (* SSR-only concept: the browser receives data over the live socket, not a publication registry *)
 let publish ~name ?collection (_ : Bson.t list -> Bson.t list) = ignore (name, collection)
