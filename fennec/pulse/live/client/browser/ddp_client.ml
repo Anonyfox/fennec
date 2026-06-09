@@ -36,15 +36,14 @@ let handle t raw =
   | None -> ()
   | Some m ->
       let box = Live.store t.live in
-      let s = function Some s -> s | None -> "" in
-      (match m with
-      | Msg.Added { collection; id; fields; sub } -> MS.added box ~sub:(s sub) ~collection ~id ~fields
-      | Msg.Changed { collection; id; fields; cleared; sub } -> MS.changed box ~sub:(s sub) ~collection ~id ~fields ~cleared
-      | Msg.Removed { collection; id; sub } -> MS.removed box ~sub:(s sub) ~collection ~id
-      | Msg.Ready { subs } -> List.iter (mark_ready t) subs
-      | Msg.Nosub { id; _ } -> mark_ready t id (* the sub ended/failed — stop "loading" rather than hang *)
-      | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
-      | _ -> ())
+      (* data deltas (incl. the ordered addedBefore/movedBefore) route through the shared, native-
+         tested Wire_route; control frames are this client's concern (they touch subscription state) *)
+      if not (Fennec_pulse_live.Wire_route.apply_delta box m) then
+        (match m with
+        | Msg.Ready { subs } -> List.iter (mark_ready t) subs
+        | Msg.Nosub { id; _ } -> mark_ready t id (* the sub ended/failed — stop "loading" rather than hang *)
+        | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
+        | _ -> ())
 
 let connect ?(path = "/websocket") () : t =
   let loc = Js.Unsafe.get Dom_html.window (Js.string "location") in

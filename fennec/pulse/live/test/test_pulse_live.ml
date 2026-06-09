@@ -58,4 +58,27 @@ let%test "Live.find signal recomputes reactively as the store changes" =
   MS.added (Live.store lv) ~sub:"a" ~collection:"items" ~id:"2" ~fields:[ ("n", B.int 2) ];
   empty && one_doc && Array.length (Fur.peek result) = 2
 
+(* ── wire→cache routing (DDP delta → merge store), including the ordered deltas ── *)
+module WR = Fennec_pulse_live.Wire_route
+module Msg = Fennec_ddp.Message
+
+let%test "wire: addedBefore surfaces the doc (ordered delta is NOT dropped)" =
+  let s = MS.create () in
+  let handled =
+    WR.apply_delta s (Msg.Added_before { collection = "c"; id = "1"; fields = [ ("n", B.int 1) ]; before = None })
+  in
+  handled && (match one (MS.fetch s "c" ()) with Some d -> B.get d "n" = Some (B.Int 1) | None -> false)
+
+let%test "wire: movedBefore is handled as a no-op (pure reorder — nothing lost or spuriously added)" =
+  let s = MS.create () in
+  WR.apply_delta s (Msg.Moved_before { collection = "c"; id = "1"; before = None })
+  && Array.length (MS.fetch s "c" ()) = 0
+
+let%test "wire: added/changed route through; a control frame (ready) does not" =
+  let s = MS.create () in
+  let a = WR.apply_delta s (Msg.Added { collection = "c"; id = "1"; fields = [ ("n", B.int 1) ]; sub = Some "x" }) in
+  let c = WR.apply_delta s (Msg.Changed { collection = "c"; id = "1"; fields = [ ("n", B.int 2) ]; cleared = []; sub = Some "x" }) in
+  let upd = match one (MS.fetch s "c" ()) with Some d -> B.get d "n" = Some (B.Int 2) | None -> false in
+  a && c && upd && not (WR.apply_delta s (Msg.Ready { subs = [ "x" ] }))
+
 let () = exit (Fennec_hunt_unit.run ())

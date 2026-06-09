@@ -2,5 +2,5 @@
 ; and the Fur `find` binding's reactivity (Fur signals run native, so this needs no browser).
 (test
  (name test_pulse_live)
- (libraries fennec.pulse.live fennec.fur fennec-mongo.bson fennec-mongo.minimongo fennec-hunt.unit)
+ (libraries fennec.pulse.live fennec.ddp fennec.fur fennec-mongo.bson fennec-mongo.minimongo fennec-hunt.unit)
  (preprocess (pps fennec-hunt.ppx)))

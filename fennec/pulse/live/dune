@@ -6,4 +6,4 @@
 (library
  (name fennec_pulse_live)
  (public_name fennec.pulse.live)
- (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo fennec.fur))
+ (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo fennec.fur fennec.ddp))
