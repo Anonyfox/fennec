@@ -100,6 +100,14 @@ let%test "session: a method's Method_error is reported, not collapsed to 500" =
       | _ -> false)
     !out
 
+let%test "session: a throwing publication emits Nosub, not a hang" =
+  let out = ref [] in
+  let pubs = Hashtbl.create 1 in
+  Hashtbl.replace pubs "boom" (fun ~params:_ (_ : Session.sink) -> failwith "publication boom");
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) in
+  Session.dispatch s (Message.Sub { id = "sub1"; name = "boom"; params = [] });
+  List.exists (function Message.Nosub { id = "sub1"; error = Some _ } -> true | _ -> false) !out
+
 (* ── interop: REAL DDP frames captured off a live Meteor 3.x server (raw /websocket) must decode
    losslessly — the proof the wire stays Meteor-compatible (V1 drop-in), pinning the quirks (numeric
    error codes, nested number/array fields). Ported from the reference repo so fennec's own CI guards

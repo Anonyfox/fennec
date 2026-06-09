@@ -63,8 +63,16 @@ let dispatch (t : t) (m : Msg.t) : unit =
               ready = (fun () -> t.emit (Msg.Ready { subs = [ id ] }));
             }
           in
-          let h = pub ~params sink in
-          Hashtbl.replace t.subs id h)
+          (* a publication that raises must not hang the client in "loading" (nor unwind the read
+             loop) — surface it as a Nosub error, re-raising only the control exceptions *)
+          let started =
+            try `Ok (pub ~params sink)
+            with (Stack_overflow | Out_of_memory) as e -> raise e | _ -> `Failed
+          in
+          match started with
+          | `Ok h -> Hashtbl.replace t.subs id h
+          | `Failed ->
+              t.emit (Msg.Nosub { id; error = Some (err "500" ("publication " ^ name ^ " failed")) }))
   | Msg.Unsub { id } ->
       (match Hashtbl.find_opt t.subs id with
        | Some h -> h.stop (); Hashtbl.remove t.subs id

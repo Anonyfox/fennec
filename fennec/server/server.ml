@@ -215,17 +215,22 @@ let serve_ws ~sw ~pmd (r : Eio.Buf_read.t) (w : Eio.Buf_write.t) (setup : ws -> 
     let payload = if rsv1 then (try Deflate.decompress payload with _ -> payload) else payload in
     ws.on_text payload
   in
+  (* fire [on_close] EXACTLY once, however the read loop exits — a clean Close/EOF, OR an abrupt flow
+     exception (TCP reset / a non-Eof IO error from the underlying flow) that would otherwise unwind
+     the switch WITHOUT running on_close, leaking the session's subscriptions/observers forever. *)
+  let closed = ref false in
+  let fire_close () = if not !closed then (closed := true; ws.on_close ()) in
   let close ?code () =
     (match code with
      | Some c -> Eio.Stream.add outbox (Ws.close_frame ~code:c ())
      | None -> Eio.Stream.add outbox (Ws.close_frame ()));
-    ws.on_close ()
+    fire_close ()
   in
   (* read loop with fragmentation reassembly. [frag] is Some (opcode_rsv1, buf)
      while a fragmented message is in progress; control frames may interleave. *)
   let rec loop frag =
     match Ws.read_frame r with
-    | Ws.Eof -> ws.on_close ()
+    | Ws.Eof -> fire_close ()
     | Ws.Protocol_error _ -> close ~code:1002 ()
     | Ws.Frame { Ws.opcode = Ws.Close; _ } -> close ~code:1000 ()
     | Ws.Frame { Ws.opcode = Ws.Ping; payload; _ } ->
@@ -251,7 +256,9 @@ let serve_ws ~sw ~pmd (r : Eio.Buf_read.t) (w : Eio.Buf_write.t) (setup : ws -> 
         else loop frag)
     | Ws.Frame { Ws.opcode = Ws.Other _; _ } -> close ~code:1002 ()
   in
-  loop None
+  (* whatever happens in the read loop (clean close or an abrupt flow exception), guarantee teardown *)
+  (try loop None with _ -> ());
+  fire_close ()
 
 (* keep-alive decision honoring the protocol version (RFC 7230 §6.3):
    - HTTP/1.1 defaults to keep-alive unless "Connection: close"
