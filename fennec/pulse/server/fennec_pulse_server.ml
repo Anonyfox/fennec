@@ -31,17 +31,15 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     try R.call name params with R.Error { code; reason } -> raise (Session.Method_error { code; reason })
 
   (* the publication/method registries for a session — the names are fixed at registration time *)
-  (* the pub/method registries are identical for every session (their closures capture only the
-     name), so build them ONCE and share read-only — a session's only mutable state is its [subs].
-     Publications/methods are registered at boot, before serving, so the lazy snapshot is complete. *)
-  let _registries =
-    lazy
-      (let pubs = Hashtbl.create 16 and methods = Hashtbl.create 16 in
-       List.iter (fun n -> Hashtbl.replace pubs n (publication_of n)) (R.publications ());
-       List.iter (fun n -> Hashtbl.replace methods n (method_of n)) (R.method_names ());
-       (pubs, methods))
-
-  let registries () = Lazy.force _registries
+  (* a per-session snapshot of the publication/method names (wrapped into session sinks). Rebuilt per
+     connection — cheap (O(pubs+methods), all reads of the global tables) and CORRECT even if
+     publications are registered after the first session connects; memoizing it would capture a stale
+     snapshot and silently miss later registrations. The session's own mutable state is just its subs. *)
+  let registries () =
+    let pubs = Hashtbl.create 16 and methods = Hashtbl.create 16 in
+    List.iter (fun n -> Hashtbl.replace pubs n (publication_of n)) (R.publications ());
+    List.iter (fun n -> Hashtbl.replace methods n (method_of n)) (R.method_names ());
+    (pubs, methods)
 
   let new_session ~session_id ~emit =
     let pubs, methods = registries () in
