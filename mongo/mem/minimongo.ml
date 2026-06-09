@@ -126,6 +126,17 @@ let remove t (selector : doc) : int =
   t.rorder <- List.filter (fun x -> not (Hashtbl.mem dead x)) t.rorder;
   List.length ms
 
+(* remove a single document BY its id — an O(1) hash delete (plus one order-list compaction),
+   skipping the O(n) selector scan [remove {_id: …}] would run. Returns whether a doc was present. *)
+let remove_id t (id : string) : bool =
+  match Hashtbl.find_opt t.store id with
+  | None -> false
+  | Some old ->
+      Hashtbl.remove t.store id;
+      t.rorder <- List.filter (fun x -> x <> id) t.rorder;
+      notify t { op = Remove; id; new_doc = None; old_doc = Some old };
+      true
+
 (* ---- cursors / queries ---- *)
 
 type cursor = {

@@ -33,6 +33,10 @@ type collection_view = {
      Inferred from a seeded document's typed [_id]; a live-only MONGO collection (never seeded)
      defaults to string ids. *)
   mutable oid : bool;
+  (* memoized full-collection fetch for $lookup resolution, keyed by [version]: a primary-only change
+     bumps the primary's version but not a foreign's, so the foreign fetch is reused, not rebuilt on
+     every aggregate recompute *)
+  mutable agg_cache : (int * Bson.t list) option;
 }
 
 type sub_info = {
@@ -48,10 +52,16 @@ type t = {
      linger as a stale fast-render row *)
   tentative : (string, (string * string, unit) Hashtbl.t) Hashtbl.t;
   mutable seq : int;
+  (* coalescing: while [batch_depth] > 0, [bump] records each touched view in [dirty] instead of
+     firing; the outermost [batch] fires each once at the end — a W-op burst's O(W^2) re-snapshots
+     collapse to O(W) *)
+  mutable batch_depth : int;
+  mutable dirty : collection_view list;
 }
 
 let create () =
-  { collections = Hashtbl.create 8; subs = Hashtbl.create 16; tentative = Hashtbl.create 16; seq = 0 }
+  { collections = Hashtbl.create 8; subs = Hashtbl.create 16; tentative = Hashtbl.create 16; seq = 0;
+    batch_depth = 0; dirty = [] }
 
 (* ---- collections --------------------------------------------------------- *)
 
@@ -60,14 +70,34 @@ let ensure_collection t name : collection_view =
   | Some cv -> cv
   | None ->
       let cv =
-        { store = C.create (); docs = Hashtbl.create 64; listeners = Hashtbl.create 4; lc = 0; version = 0; oid = false }
+        { store = C.create (); docs = Hashtbl.create 64; listeners = Hashtbl.create 4; lc = 0; version = 0;
+          oid = false; agg_cache = None }
       in
       Hashtbl.replace t.collections name cv;
       cv
 
-let bump cv =
+let fire cv = Hashtbl.iter (fun _ f -> f ()) cv.listeners
+
+(* bump the version + notify reactive readers (Live.find/aggregate re-snapshot). During a [batch]
+   (a burst — seed/replay), defer the notify and coalesce so each touched view fires exactly ONCE at
+   batch end: an O(W) burst's O(W^2) re-snapshots collapse to O(W). *)
+let bump t cv =
   cv.version <- cv.version + 1;
-  Hashtbl.iter (fun _ f -> f ()) cv.listeners
+  if t.batch_depth > 0 then (if not (List.memq cv t.dirty) then t.dirty <- cv :: t.dirty) else fire cv
+
+(* run [f], coalescing every version bump inside it into one notify per touched view; re-entrant. *)
+let batch t f =
+  t.batch_depth <- t.batch_depth + 1;
+  let finish () =
+    t.batch_depth <- t.batch_depth - 1;
+    if t.batch_depth = 0 && t.dirty <> [] then (
+      let d = t.dirty in
+      t.dirty <- [];
+      List.iter fire d)
+  in
+  match f () with
+  | v -> finish (); v
+  | exception e -> finish (); raise e
 
 let store t name = (ensure_collection t name).store
 let version t name = match Hashtbl.find_opt t.collections name with Some cv -> cv.version | None -> 0
@@ -130,11 +160,11 @@ let drop_sub_from_doc dv sub =
   List.iter (fun f -> clear_field dv f sub) fkeys
 
 (* rebuild the winning document into minimongo (or remove it) and notify *)
-let recompute cv id dv =
+let recompute t cv id dv =
   (* a MONGO collection keeps its Object_id _id (the wire/seed carry the hex as a string) *)
   let id_val = if cv.oid then Bson.Object_id id else Bson.String id in
-  let by_id = Bson.Document [ ("_id", id_val) ] in
-  ignore (C.remove cv.store by_id);
+  (* keyed delete — an O(1) hash remove, not the O(n) selector scan [remove {_id}] would run *)
+  ignore (C.remove_id cv.store id);
   if Hashtbl.length dv.exists_in = 0 then Hashtbl.remove cv.docs id
   else begin
     let kvs =
@@ -142,7 +172,7 @@ let recompute cv id dv =
     in
     ignore (C.insert cv.store (Bson.Document (("_id", id_val) :: kvs)))
   end;
-  bump cv
+  bump t cv
 
 let doc_of cv id =
   match Hashtbl.find_opt cv.docs id with
@@ -179,7 +209,7 @@ let added t ~sub ~collection ~id ~fields =
   Hashtbl.replace dv.exists_in sub prec;
   List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
   track t sub collection id;
-  recompute cv id dv;
+  recompute t cv id dv;
   confirm t sub collection id
 
 (* changed: this sub updated [fields] / unset [cleared] of an existing doc *)
@@ -193,7 +223,7 @@ let changed t ~sub ~collection ~id ~fields ~cleared =
           let prec = sub_prec t sub in
           List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
           List.iter (fun f -> clear_field dv f sub) cleared;
-          recompute cv id dv;
+          recompute t cv id dv;
           confirm t sub collection id)
 
 (* removed: this sub no longer includes [id] *)
@@ -203,7 +233,7 @@ let removed t ~sub ~collection ~id =
   | Some cv -> (
       match Hashtbl.find_opt cv.docs id with
       | None -> ()
-      | Some dv -> drop_sub_from_doc dv sub; untrack t sub collection id; recompute cv id dv)
+      | Some dv -> drop_sub_from_doc dv sub; untrack t sub collection id; recompute t cv id dv)
 
 (* sub_stopped: drop everything this sub contributed (O(that sub's docs)) *)
 let sub_stopped t sub =
@@ -215,7 +245,7 @@ let sub_stopped t sub =
           match Hashtbl.find_opt t.collections collection with
           | Some cv -> (
               match Hashtbl.find_opt cv.docs id with
-              | Some dv -> drop_sub_from_doc dv sub; recompute cv id dv
+              | Some dv -> drop_sub_from_doc dv sub; recompute t cv id dv
               | None -> ())
           | None -> ())
         info.contributed;
@@ -232,13 +262,25 @@ let fetch t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array =
    client's OTHER collections — the same multi-collection joins the server does, now on the client *)
 let aggregate t name (pipeline : Bson.t list) : Bson.t array =
   let cv = ensure_collection t name in
+  (* resolve a $lookup/$unionWith foreign collection, MEMOIZED by its [version]: a primary-only change
+     reuses the foreign's last fetch instead of re-materializing it on every recompute *)
   let lookup other =
-    match Hashtbl.find_opt t.collections other with Some o -> C.fetch (C.find o.store ()) | None -> []
+    match Hashtbl.find_opt t.collections other with
+    | None -> []
+    | Some o -> (
+        match o.agg_cache with
+        | Some (v, docs) when v = o.version -> docs
+        | _ ->
+            let docs = C.fetch (C.find o.store ()) in
+            o.agg_cache <- Some (o.version, docs);
+            docs)
   in
   Array.of_list (C.aggregate cv.store ~lookup pipeline)
 
 (* SSR / hydration seed: install docs into a collection as if from one sub *)
 let seed t ~sub ~collection (docs : Bson.t list) =
+  (* coalesce the whole seed burst into one notify per touched collection (avoids O(W^2) re-snapshots) *)
+  batch t @@ fun () ->
   List.iter
     (fun d ->
       match d with

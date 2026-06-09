@@ -102,6 +102,16 @@ let%test "seed: carries MULTIPLE collections' groups (a multi-collection publica
 let%test "seed: a malformed / legacy payload decodes to [] (no crash)" =
   Seed.decode "not json" = [] && Seed.decode "{}" = []
 
+(* ── coalescing: a burst of mutations notifies each reactive view ONCE, not per-doc (the O(W^2)
+   subscription-replay guard) ── *)
+let%test "merge store: a seed burst fires a view's listeners ONCE (coalesced, not W times)" =
+  let box = MS.create () in
+  let fires = ref 0 in
+  let _ = MS.on_change box "tasks" (fun () -> incr fires) in
+  MS.seed box ~sub:"s1" ~collection:"tasks"
+    [ B.doc [ ("_id", B.str "a") ]; B.doc [ ("_id", B.str "b") ]; B.doc [ ("_id", B.str "c") ] ];
+  !fires = 1
+
 (* ── client-side aggregation across the cache's many collections ── *)
 let%test "client aggregate: $lookup joins across the client's collections" =
   let s = MS.create () in

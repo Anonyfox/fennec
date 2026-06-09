@@ -262,6 +262,14 @@ let%test "remove of an empty selector clears the collection" =
   let c = C.create () in
   List.iter (fun n -> ignore (C.insert c (d [ ("v", i n) ]))) [ 1; 2; 3 ];
   C.remove c (d []) = 3 && C.count (C.find c ()) = 0
+let%test "remove_id removes exactly that one document, keeps the rest and their order" =
+  let c = C.create () in
+  let a = C.insert c (d [ ("v", i 1) ]) in
+  let _ = C.insert c (d [ ("v", i 2) ]) in
+  let _ = C.insert c (d [ ("v", i 3) ]) in
+  C.remove_id c a (* present → true *)
+  && (not (C.remove_id c a)) (* already gone → false *)
+  && vals (C.fetch (C.find c ())) = [ 2; 3 ]
 let%test "find_one and is_empty" =
   let c = C.create () in
   C.is_empty (C.find c ())

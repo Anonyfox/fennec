@@ -59,6 +59,11 @@ val update : t -> ?multi:bool -> ?upsert:bool -> doc -> doc -> int
 (** [remove t selector] removes all documents matching [selector]; returns the number removed. *)
 val remove : t -> doc -> int
 
+(** [remove_id t id] removes the single document whose id is [id] — an O(1) hash delete (plus one
+    order-list compaction), skipping the O(n) selector scan [remove] runs. Returns whether a document
+    was present. *)
+val remove_id : t -> string -> bool
+
 (** {2 Cursors & queries} *)
 
 (** A query over a collection: selector + sort/skip/limit/projection. Lazy — evaluated by
