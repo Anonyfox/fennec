@@ -23,6 +23,21 @@ val connect : ?path:string -> unit -> t
     firing forever. Idempotent. On the SSR/native client there is no socket, so it is a no-op. *)
 val close : t -> unit
 
+(** The live connection state, as a Fur signal — OFFLINE MODE is built in, this is just the
+    affordance hook ("reconnecting…", a disabled save button). [`Connected]: socket open and the
+    heartbeat healthy. [`Connecting]: a dial in progress. [`Waiting]: offline, backing off until the
+    next attempt. While not connected the app keeps WORKING: {!find} renders the cache, stubs apply
+    instantly, and method calls buffer in order ({!pending_writes}) — the reconnect handshake
+    resubscribes, heals the cache (resync + quiescence), and flushes the buffer, all automatically.
+    Silent network death (no FIN) is detected by a DDP heartbeat within ~25s. Scope: the running
+    page — buffers don't survive a reload. On SSR/native this is pinned [`Connected] (the first
+    paint assumes connectivity). *)
+val status : t -> [ `Connected | `Connecting | `Waiting ] Fur.signal
+
+(** How many method calls are currently buffered/unacknowledged (0 = everything flushed and
+    confirmed) — drive a "saving… (N)" affordance. Pinned [0] on SSR/native. *)
+val pending_writes : t -> int Fur.signal
+
 (** [publish ~name f] registers, for SERVER-SIDE SSR only (the browser ignores it), a publication's
     initial-document fetcher. [f params] returns the documents GROUPED BY collection —
     [[ (collection, docs); … ]] — so a publication that feeds several collections seeds them all

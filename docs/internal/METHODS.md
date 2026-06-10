@@ -102,7 +102,29 @@ reveal (STRING, the default, converges); over **mongod** the fence is best-effor
 - **Runtime**: dispatch is a registry lookup + the handler; codecs run once per call at the edge;
   the fence is a handful of already-idle drain checks at user-action rate.
 
-## 5. Deferred (deliberately, with seams marked)
+## 5. Offline mode (built in — no plugin, no userland plumbing)
+
+A network drop degrades gracefully with **zero app code**. While disconnected: `find` keeps
+rendering the cache (last known truth), stubs keep applying instantly (full optimistic UI offline),
+and every method call **buffers in order** (the unacked list — the same at-least-once machinery as
+reconnect resend). When the socket returns, ONE handshake heals everything, in this order: `connect`
+(session resume) → resubscribe every live subscription (resync + `ready`-quiescence drop what the
+server stopped sending) → flush the buffered methods verbatim, oldest first. Their `updated`s then
+resolve the waiting simulations exactly as if the network had never blinked.
+
+Deliberately, **nothing else queues offline**: the server session dies with the socket, so raw
+frames buffered client-side could only double-send — subs rebuild from `t.subs`, methods from the
+buffer. **Silent network death** (wifi gone, no FIN — the case browsers take minutes to notice) is
+caught by a DDP heartbeat: a ping every 15s with a 10s deadline force-closes the dead socket and the
+reconnect loop takes over (≤ ~25s detection).
+
+Affordances are two Fur signals on the client — `status` ([`Connected | `Connecting | `Waiting]) and
+`pending_writes` (buffered count) — for "reconnecting…" banners and "saving… (N)" hints; both are
+pinned (`Connected`/0) on SSR so the first paint never flashes an offline state. Scope, by design:
+the **running page** — buffers do not survive a reload (durability across reloads = a different
+feature, IndexedDB persistence, deliberately out).
+
+## 6. Deferred (deliberately, with seams marked)
 
 - `this.unblock` (concurrent methods per connection).
 - Alea-exact seed derivation for **stock Meteor clients'** optimistic UI (fennec↔fennec converges

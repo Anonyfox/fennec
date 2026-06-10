@@ -27,6 +27,10 @@ let connect ?path () =
 (* SSR has no socket / reconnect loop, so tearing down is a no-op *)
 let close (_ : t) = ()
 
+(* SSR assumes connectivity for the first paint (no offline banner flash server-side) *)
+let status (_ : t) : [ `Connected | `Connecting | `Waiting ] Fur.signal = Fur.signal `Connected
+let pending_writes (_ : t) : int Fur.signal = Fur.signal 0
+
 let subscribe t ~name ?(params = []) () : subscription =
   let ready =
     match Hashtbl.find_opt _pubs name with

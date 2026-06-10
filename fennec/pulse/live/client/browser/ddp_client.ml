@@ -2,10 +2,17 @@
    feeds sub-tagged data deltas into a live merge store ({!Fennec_pulse_live}). [subscribe] dedups +
    refcounts by (name, params) and tracks readiness; [find]/[aggregate] are the reactive Fur queries
    over the merged cache; [call] invokes a server method (its data change returns via the open
-   subscription as a normal delta). RESILIENT: on a dropped socket it reconnects with exponential
-   backoff, replays the handshake (with the saved session id), resubscribes every live subscription,
-   and RESYNCS the cache — the resubscription's fresh snapshot re-confirms surviving docs and the
-   [ready] quiescence drops whatever the server stopped sending during the outage. Browser-only. *)
+   subscription as a normal delta).
+
+   OFFLINE BY DEFAULT: a network drop degrades gracefully with no userland code. [find] keeps
+   rendering the cache; optimistic stubs keep applying instantly; method calls buffer (the unacked
+   list) in order. NOTHING ELSE queues — the server session dies with the socket, so the reconnect
+   handshake REBUILDS everything from client state: Connect (session resume) → resubscribe every
+   live subscription (with resync_begin, so the fresh snapshots + [ready] quiescence heal the cache)
+   → re-send the buffered methods verbatim, oldest first (at-least-once). A HEARTBEAT (DDP ping every
+   15s, 10s pong deadline) detects silent network death (wifi gone, no FIN) and force-closes the
+   socket so the reconnect loop takes over; [status]/[pending_writes] are Fur signals for offline
+   affordances. Scope: the running page — buffers do not survive a reload (by design). Browser-only. *)
 
 open Js_of_ocaml
 module Msg = Fennec_ddp.Message
@@ -32,7 +39,6 @@ type subscription = { ready : bool Fur.signal; stop : unit -> unit }
 
 type t = {
   live : Live.t;
-  mutable send : string -> unit; (* rebound to the live socket on each (re)connect *)
   subs : (string, sub_state) Hashtbl.t; (* Subkey.key (name,params) → state *)
   by_id : (string, sub_state) Hashtbl.t; (* sub id → state, for ready/nosub *)
   mutable subc : int;
@@ -46,10 +52,16 @@ type t = {
      forever (same id, same seed; write idempotency is the app's concern, exactly as in Meteor).
      Method frames bypass the pre-open queue and ride ONLY this list, so they can't double-send. *)
   mutable unacked : (string * string) list;
-  mutable send_if_open : string -> unit; (* raw socket send when open, drop otherwise (methods) *)
+  (* THE one send primitive: raw socket send when open, silently dropped otherwise — every frame
+     category is rebuilt by the reconnect handshake (subs from t.subs, methods from unacked), so
+     queueing frames offline would only produce duplicates *)
+  mutable send_if_open : string -> unit;
   (* running optimistic simulations: method id → its sim sub; dropped (server truth revealed) when
      the method's [updated] arrives *)
   sims : (string, string) Hashtbl.t;
+  status_sig : [ `Connected | `Connecting | `Waiting ] Fur.signal; (* for offline affordances *)
+  pending_sig : int Fur.signal; (* buffered/unacknowledged method count ("saving… N pending") *)
+  mutable awaiting_pong : bool; (* heartbeat: set on ping, cleared by ANY incoming frame *)
   mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
@@ -59,6 +71,8 @@ let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set 
 (* route one decoded message: data deltas → merge store (via the shared Wire_route); control frames
    are this client's concern (they touch session/subscription state) *)
 let handle t raw =
+  t.awaiting_pong <- false;
+  (* any inbound traffic proves the link is alive *)
   match try Some (Msg.decode raw) with _ -> None with
   | None -> Firebug.console##warn (Js.string ("fennec/ddp: dropped an undecodable frame: " ^ raw))
   | Some m ->
@@ -75,10 +89,11 @@ let handle t raw =
                "loading" rather than hang. *)
             (match error with Some _ -> MS.sub_stopped box id | None -> ());
             mark_ready t id
-        | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
+        | Msg.Ping { id } -> t.send_if_open (Msg.encode (Msg.Pong { id }))
         | Msg.Result { id; error; result } ->
             (* acknowledged: never re-sent, and resolve the awaiting caller (call_result/call_m) *)
             t.unacked <- List.filter (fun (i, _) -> i <> id) t.unacked;
+            Fur.set t.pending_sig (List.length t.unacked);
             (match Hashtbl.find_opt t.methods_pending id with
             | Some resolve ->
                 Hashtbl.remove t.methods_pending id;
@@ -109,30 +124,36 @@ let connect ?(path = "/websocket") () : t =
   let scheme = if protocol = "https:" then "wss://" else "ws://" in
   let url = scheme ^ host ^ path in
   let t =
-    { live = Live.create (); send = (fun _ -> ()); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
+    { live = Live.create (); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
       subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; unacked = [];
-      send_if_open = (fun _ -> ()); sims = Hashtbl.create 8; closed = false; ws = None }
+      send_if_open = (fun _ -> ()); sims = Hashtbl.create 8; status_sig = Fur.signal `Connecting;
+      pending_sig = Fur.signal 0; awaiting_pong = false; closed = false; ws = None }
   in
-  (* sends before the socket is open (component setup fires subscribe/call before onopen) queue up *)
+  (* NO offline frame queue, deliberately: the server session dies with the socket, so every frame
+     category is rebuilt from client state on reconnect (subs from t.subs, methods from unacked) —
+     queueing raw frames would only double-send. [send_if_open] silently drops when not open. *)
   let is_open = ref false in
-  let pending = Queue.create () in
   let backoff_ms = ref 500 in (* exponential, capped at 30s; reset on a clean open *)
   let set_timeout cb ms =
     ignore
       (Js.Unsafe.fun_call (Js.Unsafe.pure_js_expr "setTimeout")
          [| Js.Unsafe.inject (Js.wrap_callback cb); Js.Unsafe.inject ms |])
   in
+  let force_close () =
+    match t.ws with Some ws -> (try ignore (Js.Unsafe.meth_call ws "close" [||]) with _ -> ()) | None -> ()
+  in
   let rec open_socket () =
     is_open := false;
+    Fur.set t.status_sig `Connecting;
     let ws = Js.Unsafe.new_obj (Js.Unsafe.pure_js_expr "WebSocket") [| Js.Unsafe.inject (Js.string url) |] in
     t.ws <- Some (Js.Unsafe.inject ws);
     let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
-    t.send <- (fun str -> if !is_open then raw str else Queue.add str pending);
     t.send_if_open <- (fun str -> if !is_open then raw str);
     Js.Unsafe.set ws (Js.string "onopen")
       (Dom.handler (fun _ ->
            is_open := true;
            backoff_ms := 500; (* connected — reset the backoff *)
+           Fur.set t.status_sig `Connected;
            raw (Msg.encode (Msg.Connect { session = t.session_id; version = "1"; support = [ "1" ] }));
            (* resubscribe + resync every live subscription: re-mark its docs tentative so the fresh
               snapshot re-confirms survivors and the [ready] quiesce drops what the server dropped *)
@@ -141,10 +162,8 @@ let connect ?(path = "/websocket") () : t =
                MS.resync_begin (Live.store t.live) st.id;
                raw (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params })))
              t.subs;
-           (* re-send every unacknowledged method, oldest first (at-least-once, verbatim frames) *)
+           (* flush the offline buffer: every unacknowledged method, oldest first, verbatim *)
            List.iter (fun (_, frame) -> raw frame) (List.rev t.unacked);
-           Queue.iter raw pending;
-           Queue.clear pending;
            Js._true));
     Js.Unsafe.set ws (Js.string "onmessage")
       (Dom.handler (fun ev ->
@@ -154,6 +173,7 @@ let connect ?(path = "/websocket") () : t =
     Js.Unsafe.set ws (Js.string "onclose")
       (Dom.handler (fun _ ->
            is_open := false;
+           Fur.set t.status_sig `Waiting;
            (* don't reconnect once [close] was called; a timer scheduled just before [close] also
               re-checks the flag when it fires, so a finished client never reopens a socket *)
            if not t.closed then begin
@@ -164,6 +184,23 @@ let connect ?(path = "/websocket") () : t =
            Js._true))
   in
   open_socket ();
+  (* HEARTBEAT: silent network death (wifi gone — no FIN, no onclose) would leave the client
+     believing it is online for minutes. A DDP ping every 15s with a 10s deadline detects it: any
+     inbound frame counts as life ([handle] clears the flag); a missed deadline force-closes the
+     socket, and the normal reconnect loop (with its resubscribe + buffered-method flush) heals. *)
+  let rec heartbeat () =
+    if not t.closed then begin
+      (if !is_open then begin
+         t.awaiting_pong <- true;
+         t.send_if_open (Msg.encode (Msg.Ping { id = None }));
+         set_timeout
+           (fun () -> if (not t.closed) && !is_open && t.awaiting_pong then force_close ())
+           10_000
+       end);
+      set_timeout heartbeat 15_000
+    end
+  in
+  set_timeout heartbeat 15_000;
   t
 
 (* tear the client down: stop reconnecting, drop any running simulations (their methods can never
@@ -198,7 +235,8 @@ let subscribe t ~name ?(params = []) () : subscription =
             (Seed.decode payload);
           Fur.set st.ready_sig true
         | None -> ());
-        t.send (Msg.encode (Msg.Sub { id = st.id; name; params }));
+        (* offline: dropped silently — the onopen handshake re-sends every live sub from t.subs *)
+        t.send_if_open (Msg.encode (Msg.Sub { id = st.id; name; params }));
         st
   in
   let stopped = ref false in
@@ -209,7 +247,9 @@ let subscribe t ~name ?(params = []) () : subscription =
       if st.refcount <= 0 then begin
         Hashtbl.remove t.subs key;
         Hashtbl.remove t.by_id st.id;
-        t.send (Msg.encode (Msg.Unsub { id = st.id }));
+        (* offline: nothing to unsub — the server session died with the socket, and the onopen
+           handshake only re-sends subs still in t.subs (this one just left) *)
+        t.send_if_open (Msg.encode (Msg.Unsub { id = st.id }));
         MS.sub_stopped (Live.store t.live) st.id
       end
     end
@@ -231,6 +271,7 @@ let send_method t ~name ~params ~random_seed (resolve : (Bson.t, string * string
   let frame = Msg.encode (Msg.Method { method_ = name; params; id; random_seed }) in
   Hashtbl.replace t.methods_pending id resolve;
   t.unacked <- (id, frame) :: t.unacked;
+  Fur.set t.pending_sig (List.length t.unacked);
   t.send_if_open frame;
   id
 
@@ -283,3 +324,7 @@ let publish ~name (_ : Bson.t list -> (string * Bson.t list) list) = ignore name
 
 let find t = Live.find t.live
 let aggregate t = Live.aggregate t.live
+
+(* offline affordances: the connection state and the buffered-write count, as Fur signals *)
+let status t = t.status_sig
+let pending_writes t = t.pending_sig

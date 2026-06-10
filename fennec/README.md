@@ -77,7 +77,10 @@ typed value shared by server and client (`Method.define name ~args ~result` — 
 validation; drift is a compile error), with **opt-in optimistic UI** (`?stub`): the stub's writes win
 instantly via the client cache's precedence band, the server's `updated` (behind a write fence)
 reveals truth, and seeded id streams make the optimistic row and the real row one row. Methods are
-serial per connection and re-send on reconnect (at-least-once). The guide:
+serial per connection and re-send on reconnect (at-least-once). **Offline mode is built in**: a
+dropped (or silently dead — heartbeat-detected) connection keeps the app fully working from the
+cache with optimistic writes buffering in order, and one reconnect handshake heals the cache and
+flushes the buffer; `status`/`pending_writes` signals drive the affordances. The guide:
 [`../docs/internal/METHODS.md`](../docs/internal/METHODS.md).
 
 **Coming from Meteor, your daily words don't change — only the namespace.** `Pulse.publish` /
