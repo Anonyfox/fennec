@@ -22,8 +22,11 @@ type subscription = { ready : bool Fur.signal; stop : unit -> unit }
     [ready] (quiescence prunes what died) — and the WRITE OUTBOX survives reloads: buffered methods
     re-issue with fresh ids and their original seeds, their stubs replaying byte-identically
     ({!Fennec_pulse_method.Method.stub_replay} + the deterministic seed streams). Call
-    {!purge_storage} on logout/user-switch. *)
-val connect : ?path:string -> ?persist:string -> unit -> t
+    {!purge_storage} on logout/user-switch (auto-purged on a server-pushed identity change).
+    [chrome] controls the built-in status indicator (offline / saving… (N) / update-available, a
+    small CSS-variable-styleable element): ON by default in PWA mode (persistence active), [false]
+    to opt out, [true] to force it on without persistence. *)
+val connect : ?path:string -> ?persist:string -> ?chrome:bool -> unit -> t
 
 (** [purge_storage t] wipes this client's persisted namespace (snapshots + outbox) — the
     identity-change hook: call it on logout/user-switch so one user's cache never leaks to the

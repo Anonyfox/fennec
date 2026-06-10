@@ -263,6 +263,51 @@ let auto_persist () : string option =
       (fun el -> Js.Opt.case (el##getAttribute (Js.string "content")) (fun () -> None) (fun v -> Some (Js.to_string v)))
   with _ -> None
 
+(* ---- the built-in status chrome (A2) ----------------------------------------------------------
+   One small fixed-position element rendering the three states every offline-capable app needs:
+   "offline / reconnecting", "saving… (N)", and "update available → reload". Auto-mounted in PWA
+   mode (persistence on) unless [~chrome:false]; styleable via CSS variables (--fennec-chrome-bg /
+   -fg / -font); hidden whenever everything is fine. Userland writes NOTHING. *)
+let mount_chrome t =
+  try
+    let doc = Dom_html.document in
+    let el = doc##createElement (Js.string "div") in
+    el##setAttribute (Js.string "class") (Js.string "fennec-chrome");
+    el##setAttribute (Js.string "style")
+      (Js.string
+         "position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:99999;display:none;          padding:6px 14px;border-radius:999px;font:13px var(--fennec-chrome-font,system-ui);          background:var(--fennec-chrome-bg,#111c);color:var(--fennec-chrome-fg,#fff);          backdrop-filter:blur(4px);cursor:default");
+    Dom.appendChild doc##.body el;
+    let update_waiting = ref false in
+    let render () =
+      let st = Fur.get t.status_sig in
+      let pending = Fur.get t.pending_sig in
+      let text, show, clickable =
+        if !update_waiting then ("Update available — tap to reload", true, true)
+        else
+          match st with
+          | `Connected when pending > 0 -> (Printf.sprintf "Saving… (%d)" pending, true, false)
+          | `Connected -> ("", false, false)
+          | `Connecting -> ("Connecting…", true, false)
+          | `Waiting ->
+              ((if pending > 0 then Printf.sprintf "Offline — %d change(s) queued" pending else "Offline"),
+               true, false)
+      in
+      el##.textContent := Js.some (Js.string text);
+      el##.style##.display := Js.string (if show then "block" else "none");
+      el##.style##.cursor := Js.string (if clickable then "pointer" else "default")
+    in
+    let (_ : unit -> unit) = Fur.watch render in
+    ignore
+      (Js.Unsafe.meth_call Dom_html.window "addEventListener"
+         [| Js.Unsafe.inject (Js.string "fennec:sw-update");
+            Js.Unsafe.inject (Js.wrap_callback (fun _ -> update_waiting := true; render ())) |]);
+    el##.onclick :=
+      Dom_html.handler (fun _ ->
+          if !update_waiting then
+            ignore (Js.Unsafe.eval_string "window.__fennecApplyUpdate && window.__fennecApplyUpdate()");
+          Js._true)
+  with _ -> () (* chrome is an enhancement — never let it break the app *)
+
 (* B1: frame-coalesced reactivity — schedule recomputes on animation frames so a burst of deltas
    (replay, resync, hot feed) is ONE re-render per collection per frame. Installed once. *)
 let _raf_installed = ref false
@@ -278,7 +323,7 @@ let install_raf_scheduler () =
              [| Js.Unsafe.inject (Js.wrap_callback (fun _ -> k ())) |]))
   end
 
-let connect ?(path = "/websocket") ?persist () : t =
+let connect ?(path = "/websocket") ?persist ?chrome () : t =
   install_raf_scheduler ();
   let persist = match persist with Some _ as p -> p | None -> auto_persist () in
   let loc = Js.Unsafe.get Dom_html.window (Js.string "location") in
@@ -392,6 +437,11 @@ let connect ?(path = "/websocket") ?persist () : t =
     end
   in
   set_timeout heartbeat 15_000;
+  (* the status chrome: on by default in PWA mode (persistence active), explicit ~chrome overrides *)
+  (match chrome with
+  | Some true -> mount_chrome t
+  | Some false -> ()
+  | None -> if persist <> None then mount_chrome t);
   t
 
 (* tear the client down: stop reconnecting, drop any running simulations (their methods can never

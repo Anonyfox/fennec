@@ -20,8 +20,8 @@ let _pubs : (string, Bson.t list -> (string * Bson.t list) list) Hashtbl.t = Has
 let publish ~name f = Hashtbl.replace _pubs name f
 let seed_key name params = "ddp:" ^ Subkey.key name params
 
-let connect ?path ?persist () =
-  ignore (path, persist);
+let connect ?path ?persist ?chrome () =
+  ignore (path, persist, chrome);
   { live = Live.create () }
 
 (* SSR has no socket / reconnect loop, so tearing down is a no-op *)
