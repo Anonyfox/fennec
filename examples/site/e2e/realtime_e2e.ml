@@ -80,7 +80,7 @@ let () =
     let recv () = Msg.decode (Fennec_hunt.Cdp.ws_recv ws) in
     send (Msg.Connect { session = None; version = "1"; support = [ "1" ] });
     let connected = match recv () with Msg.Connected _ -> true | _ -> false in
-    send (Msg.Sub { id = "s1"; name = "tasks"; params = [] });
+    send (Msg.Sub { id = "s1"; name = "tasks"; params = []; have = None });
     let added = ref 0 and ready = ref false in
     while not !ready do
       match recv () with Msg.Added _ -> incr added | Msg.Ready _ -> ready := true | _ -> ()

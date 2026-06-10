@@ -23,7 +23,16 @@ type t =
   | Failed of { version : string }
   | Ping of { id : string option }
   | Pong of { id : string option }
-  | Sub of { id : string; name : string; params : Bson.t list }
+  | Sub of {
+      id : string;
+      name : string;
+      params : Bson.t list;
+      have : (string * (string * string) list) list option;
+          (** v2 delta resync: what the client already holds, per collection (id → {!Doc_hash}
+              of its fields). The server skips matching docs in the initial replay and emits
+              explicit [removed] at [ready] for held docs no longer in the result — so a warm
+              reconnect downloads only the difference. [None] = full replay (v1/stock). *)
+    }
   | Unsub of { id : string }
   | Nosub of { id : string; error : error option }
   | Added of { collection : string; id : string; fields : (string * Bson.t) list; sub : string option }

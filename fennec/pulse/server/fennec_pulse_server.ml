@@ -88,17 +88,17 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     List.iter (fun n -> Hashtbl.replace methods n (method_of n)) (R.method_names ());
     (pubs, methods)
 
-  let new_session ~session_id ~emit =
+  let new_session ?user_id ~session_id ~emit () =
     let pubs, methods = registries () in
     (* the write fence: a method's [updated] is emitted only after R.fence reports every committed
        delta delivered — the client may then safely reveal server truth over its simulation *)
-    Session.create ~fence:R.fence ~session_id ~emit ~pubs ~methods ()
+    Session.create ?user_id ~fence:R.fence ~session_id ~emit ~pubs ~methods ()
 
   let gen_session_id = function Some s -> s | None -> R.ObjectID.make ()
 
   (* raw /websocket: exactly one DDP JSON message per text frame *)
-  let serve ?session_id (ch : Ws.t) : unit =
-    let session = new_session ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Msg.encode m)) in
+  let serve ?user_id ?session_id (ch : Ws.t) : unit =
+    let session = new_session ?user_id ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Msg.encode m)) () in
     (* the DECODE is broadly guarded — a malformed frame is dropped, the connection kept. DISPATCH is
        NOT guarded here: it already handles app-level failures internally (a method exception → a 500
        Result, a failing publication → Nosub), so anything that still escapes it is a genuine
@@ -107,9 +107,9 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     ch.Ws.on_close <- (fun () -> Session.close session)
 
   (* /sockjs: DDP messages are wrapped in SockJS array frames (for the stock Meteor browser client) *)
-  let serve_sockjs ?session_id (ch : Ws.t) : unit =
+  let serve_sockjs ?user_id ?session_id (ch : Ws.t) : unit =
     let session =
-      new_session ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Sockjs.wrap [ Msg.encode m ]))
+      new_session ?user_id ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Sockjs.wrap [ Msg.encode m ])) ()
     in
     ch.Ws.send Sockjs.open_frame;
     ch.Ws.on_text <-
@@ -119,5 +119,8 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
           (Sockjs.unwrap frame));
     ch.Ws.on_close <- (fun () -> Session.close session)
 
-  let paw ?(path = "/websocket") () = Fennec_server.Websocket.make path (fun ch -> serve ch)
+  let paw ?(path = "/websocket") ?(user_id = fun _ -> None) () =
+    fun c ->
+      let uid = user_id c in
+      Fennec_server.Websocket.make path (fun ch -> serve ?user_id:uid ch) c
 end

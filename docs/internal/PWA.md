@@ -43,6 +43,20 @@ double-execute each other's pending writes — sessionStorage is per-tab and sur
 reloads, exactly the right lifetime. Data snapshots ARE shared across tabs (any tab's snapshot is
 valid data; last-writer-wins is benign), and a stopped subscription deletes its snapshot.
 
+## Delta resync (v2 — the 100MB-class enabler, as-built)
+
+A resubscription against a fennec server downloads only the DIFFERENCE. Mechanism: `Sub` carries
+`have` — per collection, (id → `Doc_hash` of fields, a canonical-order MD5/12hex fingerprint both
+sides compute identically). The session wraps the publication's sink (`Session.resync_wrap`, pure +
+unit-tested): a replayed `added` whose fields hash to the client's copy is SKIPPED; held-but-changed
+docs pass (client re-adds idempotently); at `ready`, every held doc the replay didn't cover gets an
+explicit `removed` — replacing the client's tentative/quiesce pass for that resubscription.
+Capability-gated adaptively: the client sends `have` only after seeing a v2 beacon (`fennecUser`),
+so first connects and stock-Meteor servers get the classic full replay + quiescence. Publications
+and the multiplexer are untouched — the filter is one per-session sink wrapper. Cost model: a warm
+reconnect uploads ~30 bytes/doc held and downloads only changed/new docs, instead of re-downloading
+the subscription.
+
 ## Out (named seams)
 
 Push notifications (VAPID infra), SW background sync while the page is closed (DDP-in-worker or an

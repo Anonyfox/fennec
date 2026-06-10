@@ -70,6 +70,7 @@ type t = {
   status_sig : [ `Connected | `Connecting | `Waiting ] Fur.signal; (* for offline affordances *)
   pending_sig : int Fur.signal; (* buffered/unacknowledged method count ("saving… N pending") *)
   mutable awaiting_pong : bool; (* heartbeat: set on ping, cleared by ANY incoming frame *)
+  mutable v2 : bool; (* the server spoke a v2 extension (fennecUser) → delta resync is safe *)
   (* PWA persistence (tier 2+3): the storage namespace, None = off. Sub snapshots persist (debounced
      + on ready) under "sub:<key>"; the write outbox under "outbox" (mid-paired in memory, codec'd
      without mids — fresh ids remint on restore). *)
@@ -175,7 +176,9 @@ let handle t raw =
       else
         match m with
         | Msg.Connected { session } -> t.session_id <- Some session (* for session resume on reconnect *)
-        | Msg.User { id } -> (
+        | Msg.User { id } ->
+            t.v2 <- true; (* the capability beacon: this server understands the v2 extensions *)
+            (
             (* transparent identity hygiene: the persisted cache belongs to ONE user — on a pushed
                identity change (login/logout/user-switch), purge the namespace and adopt the new
                owner. Zero userland code; one user's data never leaks to the next. *)
@@ -335,8 +338,8 @@ let connect ?(path = "/websocket") ?persist ?chrome () : t =
     { live = Live.create (); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
       subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; unacked = [];
       send_if_open = (fun _ -> ()); sims = Hashtbl.create 8; status_sig = Fur.signal `Connecting;
-      pending_sig = Fur.signal 0; awaiting_pong = false; persist; outbox = []; persist_scheduled = false;
-      dirty_subs = Hashtbl.create 8; closed = false; ws = None }
+      pending_sig = Fur.signal 0; awaiting_pong = false; v2 = false; persist; outbox = [];
+      persist_scheduled = false; dirty_subs = Hashtbl.create 8; closed = false; ws = None }
   in
   (* PWA outbox restore (tier 3): every write that survived the reload re-issues with a FRESH id
      and its ORIGINAL seed, and its stub re-runs (Method.stub_replay) — the deterministic seed
@@ -391,12 +394,36 @@ let connect ?(path = "/websocket") ?persist ?chrome () : t =
            backoff_ms := 500; (* connected — reset the backoff *)
            Fur.set t.status_sig `Connected;
            raw (Msg.encode (Msg.Connect { session = t.session_id; version = "1"; support = [ "1" ] }));
-           (* resubscribe + resync every live subscription: re-mark its docs tentative so the fresh
-              snapshot re-confirms survivors and the [ready] quiesce drops what the server dropped *)
+           (* resubscribe + resync every live subscription. Against a v2 server (the fennecUser
+              beacon was seen), send WHAT WE HOLD (delta resync): the server skips matching docs and
+              sends explicit removed for dead ones — a warm reconnect downloads only the difference,
+              and no tentative/quiesce pass is needed. Otherwise (first connect, stock server):
+              re-mark docs tentative and let the full replay + ready quiescence heal. *)
            Hashtbl.iter
              (fun _ (st : sub_state) ->
-               MS.resync_begin (Live.store t.live) st.id;
-               raw (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params })))
+               let have =
+                 if not t.v2 then None
+                 else
+                   Some
+                     (List.map
+                        (fun (coll, docs) ->
+                          ( coll,
+                            List.filter_map
+                              (fun d ->
+                                match Bson.get d "_id" with
+                                | Some (Bson.String id) | Some (Bson.Object_id id) ->
+                                    let fields =
+                                      match d with
+                                      | Bson.Document kvs -> List.filter (fun (k, _) -> k <> "_id") kvs
+                                      | _ -> []
+                                    in
+                                    Some (id, Fennec_ddp.Doc_hash.fields fields)
+                                | _ -> None)
+                              docs ))
+                        (MS.snapshot_sub (Live.store t.live) ~sub:st.id))
+               in
+               if have = None then MS.resync_begin (Live.store t.live) st.id;
+               raw (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params; have })))
              t.subs;
            (* flush the offline buffer: every unacknowledged method, oldest first, verbatim *)
            List.iter (fun (_, frame) -> raw frame) (List.rev t.unacked);
@@ -490,7 +517,7 @@ let subscribe t ~name ?(params = []) () : subscription =
                       (Seed.decode payload);
                     Fur.set st.ready_sig true)));
         (* offline: dropped silently — the onopen handshake re-sends every live sub from t.subs *)
-        t.send_if_open (Msg.encode (Msg.Sub { id = st.id; name; params }));
+        t.send_if_open (Msg.encode (Msg.Sub { id = st.id; name; params; have = None }));
         st
   in
   let stopped = ref false in

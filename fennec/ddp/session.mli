@@ -39,15 +39,24 @@ type method_fn = method_ctx -> Bson.t list -> Bson.t
     other exception becomes a generic ["500"]. *)
 exception Method_error of { code : string; reason : string }
 
+(** Delta resync (v2, [Sub.have]): wraps a sink so the initial replay skips [added]s whose fields
+    hash to what the client declared it holds, and [ready] emits explicit [removed] for held docs
+    the replay did not cover (replacing the client's quiescence pass for that resubscription).
+    Inert after [ready]. Applied automatically by {!dispatch}; exposed for tests. *)
+val resync_wrap : have:(string * (string * string) list) list -> sink -> sink
+
 (** A live session. *)
 type t
 
-(** [create ?fence ~session_id ~emit ~pubs ~methods ()] builds a session: [emit] sends a message to
-    the peer; [pubs]/[methods] are the registries the session dispatches [sub]/[method] against.
-    [fence k] must run [k] only once the data deltas of already-committed writes have been DELIVERED
-    to this session — the write fence that keeps [updated] from overtaking a method's own writes
-    (default: immediate, for tests and fenceless transports). *)
+(** [create ?user_id ?fence ~session_id ~emit ~pubs ~methods ()] builds a session: [emit] sends a
+    message to the peer; [pubs]/[methods] are the registries the session dispatches [sub]/[method]
+    against. [user_id] seeds the connection's authenticated user from an HTTP/browser handshake
+    cookie before any method runs. [fence k] must run [k] only once the data deltas of
+    already-committed writes have been DELIVERED to this session — the write fence that keeps
+    [updated] from overtaking a method's own writes (default: immediate, for tests and fenceless
+    transports). *)
 val create :
+  ?user_id:string ->
   ?fence:((unit -> unit) -> unit) ->
   session_id:string ->
   emit:(Message.t -> unit) ->

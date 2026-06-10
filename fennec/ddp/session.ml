@@ -53,6 +53,43 @@ exception Method_error of { code : string; reason : string }
 
 let err code reason = { Msg.code; reason = Some reason; message = None; error_type = "Meteor.Error" }
 
+(* ---- delta resync (v2, Sub.have) ---------------------------------------------------------------
+   A resubscribing client declares what it already holds — per collection, (id -> Doc_hash of
+   fields) — and this sink wrapper turns the publication's FULL initial replay into a difference:
+   an [added] whose fields hash to the client's copy is SKIPPED; a held-but-different doc passes
+   through (re-adds are idempotent client-side); and at [ready] every held doc the replay did NOT
+   cover gets an explicit [removed] — it left the publication while the client was away. This
+   REPLACES the client's quiescence pass for that resubscription (the client must not mark held
+   docs tentative when it sent [have]). After [ready] the wrapper is inert. *)
+let resync_wrap ~(have : (string * (string * string) list) list) (sink : sink) : sink =
+  let held : (string * string, string) Hashtbl.t = Hashtbl.create 64 in
+  List.iter (fun (coll, ids) -> List.iter (fun (id, h) -> Hashtbl.replace held (coll, id) h) ids) have;
+  let replaying = ref true in
+  {
+    added =
+      (fun ~collection ~id ~fields ->
+        if !replaying then (
+          match Hashtbl.find_opt held (collection, id) with
+          | Some h ->
+              Hashtbl.remove held (collection, id);
+              if h <> Doc_hash.fields fields then sink.added ~collection ~id ~fields
+              (* matching hash: the client's copy IS current — skip the bytes *)
+          | None -> sink.added ~collection ~id ~fields)
+        else sink.added ~collection ~id ~fields);
+    changed = sink.changed;
+    removed =
+      (fun ~collection ~id ->
+        if !replaying then Hashtbl.remove held (collection, id);
+        sink.removed ~collection ~id);
+    ready =
+      (fun () ->
+        (* anything still held left the publication while the client was away *)
+        Hashtbl.iter (fun (collection, id) _ -> sink.removed ~collection ~id) held;
+        Hashtbl.reset held;
+        replaying := false;
+        sink.ready ());
+  }
+
 let dispatch (t : t) (m : Msg.t) : unit =
   match m with
   | Msg.Connect _ ->
@@ -60,7 +97,7 @@ let dispatch (t : t) (m : Msg.t) : unit =
       t.emit (Msg.User { id = t.user_id })
   | Msg.Ping { id } -> t.emit (Msg.Pong { id })
   | Msg.Pong _ -> ()
-  | Msg.Sub { id; name; params } -> (
+  | Msg.Sub { id; name; params; have } -> (
       match Hashtbl.find_opt t.pubs name with
       | None -> t.emit (Msg.Nosub { id; error = Some (err "404" ("no publication " ^ name)) })
       | Some pub ->
@@ -80,6 +117,9 @@ let dispatch (t : t) (m : Msg.t) : unit =
               ready = (fun () -> t.emit (Msg.Ready { subs = [ id ] }));
             }
           in
+          (* v2 delta resync: when the client declared what it already holds, wrap the sink so the
+             initial replay skips matching docs and [ready] emits explicit removed for dead ones *)
+          let sink = match have with Some have -> resync_wrap ~have sink | None -> sink in
           (* a publication that raises must not hang the client in "loading" (nor unwind the read
              loop) — surface it as a Nosub error, re-raising only the control exceptions *)
           let started =

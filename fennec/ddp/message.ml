@@ -22,7 +22,14 @@ type t =
   | Ping of { id : string option }
   | Pong of { id : string option }
   (* pub/sub *)
-  | Sub of { id : string; name : string; params : Bson.t list }
+  | Sub of {
+      id : string;
+      name : string;
+      params : Bson.t list;
+      have : (string * (string * string) list) list option;
+          (* v2 delta resync: what the client already holds, per collection (id -> field hash) —
+             the server skips matching docs and sends explicit removed for dead ones *)
+    }
   | Unsub of { id : string }
   | Nosub of { id : string; error : error option }
   (* [sub] is our extended-mode tag (the contributing sub id); None in standard DDP. Meteor parsers
@@ -85,8 +92,16 @@ let to_json (m : t) : Json.t =
   | Failed { version } -> msg "failed" [ ("version", some (s version)) ]
   | Ping { id } -> msg "ping" [ ("id", Option.map s id) ]
   | Pong { id } -> msg "pong" [ ("id", Option.map s id) ]
-  | Sub { id; name; params } ->
-      msg "sub" [ ("id", some (s id)); ("name", some (s name)); ("params", opt_params params) ]
+  | Sub { id; name; params; have } ->
+      let have_json =
+        Option.map
+          (fun groups ->
+            Json.Obj (List.map (fun (coll, ids) -> (coll, Json.Obj (List.map (fun (i, h) -> (i, s h)) ids))) groups))
+          have
+      in
+      msg "sub"
+        [ ("id", some (s id)); ("name", some (s name)); ("params", opt_params params);
+          ("have", have_json) ]
   | Unsub { id } -> msg "unsub" [ ("id", some (s id)) ]
   | Nosub { id; error } ->
       msg "nosub" [ ("id", some (s id)); ("error", Option.map error_to_json error) ]
@@ -166,7 +181,24 @@ let of_json (j : Json.t) : t =
       | "failed" -> Failed { version = str_of (m "version") }
       | "ping" -> Ping { id = str_opt (m "id") }
       | "pong" -> Pong { id = str_opt (m "id") }
-      | "sub" -> Sub { id = str_of (m "id"); name = str_of (m "name"); params = params_of (m "params") }
+      | "sub" ->
+          let have =
+            match m "have" with
+            | Some (Json.Obj groups) ->
+                Some
+                  (List.map
+                     (fun (coll, v) ->
+                       ( coll,
+                         match v with
+                         | Json.Obj ids ->
+                             List.filter_map
+                               (fun (i, h) -> match h with Json.String h -> Some (i, h) | _ -> None)
+                               ids
+                         | _ -> [] ))
+                     groups)
+            | _ -> None
+          in
+          Sub { id = str_of (m "id"); name = str_of (m "name"); params = params_of (m "params"); have }
       | "unsub" -> Unsub { id = str_of (m "id") }
       | "nosub" -> Nosub { id = str_of (m "id"); error = Option.bind (m "error") error_of_json }
       | "added" ->

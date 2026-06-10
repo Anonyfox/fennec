@@ -24,7 +24,7 @@ let%test "connect → connected, sub → sub-tagged added + ready (full stack)" 
   let ch, out = fake_channel () in
   D.serve ~session_id:"S1" ch;
   ch.Ws.on_text (Msg.encode (Msg.Connect { session = None; version = "1"; support = [] }));
-  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sub1"; name = "rt_feed"; params = [] }));
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sub1"; name = "rt_feed"; params = []; have = None }));
   let ms = emitted out in
   List.exists (function Msg.Connected { session = "S1" } -> true | _ -> false) ms
   && List.exists (function Msg.Added { sub = Some "sub1"; collection = "feed"; _ } -> true | _ -> false) ms
@@ -35,7 +35,7 @@ let%test "a live insert after subscribe pushes a sub-tagged added to the channel
   R.publish "rt_feed2" (fun _ -> R.Cursor (R.cursor feed ()));
   let ch, out = fake_channel () in
   D.serve ~session_id:"S2" ch;
-  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "s2"; name = "rt_feed2"; params = [] }));
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "s2"; name = "rt_feed2"; params = []; have = None }));
   let _ = C.insert feed (B.doc [ ("k", B.int 9) ]) in
   List.exists (function Msg.Added { sub = Some "s2"; collection = "feed2"; _ } -> true | _ -> false) (emitted out)
 
@@ -45,6 +45,15 @@ let%test "method call returns a result over the channel" =
   D.serve ~session_id:"S3" ch;
   ch.Ws.on_text (Msg.encode (Msg.Method { method_ = "rt_sum"; params = [ B.int 2; B.int 3 ]; id = "m1"; random_seed = None }));
   List.exists (function Msg.Result { id = "m1"; result = Some (B.Int 5); _ } -> true | _ -> false) (emitted out)
+
+let%test "initial user_id reaches the first Pulse method" =
+  R.methods [ ("rt_whoami_initial", fun inv _ -> match inv.R.user_id with Some u -> B.str u | None -> B.Null) ];
+  let ch, out = fake_channel () in
+  D.serve ~user_id:"cookie-user" ~session_id:"S-user" ch;
+  ch.Ws.on_text (Msg.encode (Msg.Method { method_ = "rt_whoami_initial"; params = []; id = "m-user"; random_seed = None }));
+  List.exists
+    (function Msg.Result { id = "m-user"; result = Some (B.String "cookie-user"); _ } -> true | _ -> false)
+    (emitted out)
 
 let%test "a method error reaches the client with its code, not a generic 500" =
   R.methods [ ("rt_boom", fun _ _ -> raise (R.Error { code = "403"; reason = "no" })) ];
@@ -59,7 +68,7 @@ let%test "write fence: a method's data delta reaches the channel BEFORE its upda
   R.methods [ ("rt_add_fence", fun _ _ -> B.str (C.insert feed (B.doc [ ("v", B.int 1) ]))) ];
   let ch, out = fake_channel () in
   D.serve ~session_id:"SF" ch;
-  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sf"; name = "rt_feed_fence"; params = [] }));
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sf"; name = "rt_feed_fence"; params = []; have = None }));
   ch.Ws.on_text (Msg.encode (Msg.Method { method_ = "rt_add_fence"; params = []; id = "mf"; random_seed = None }));
   let ms = emitted out in
   let idx p =
@@ -76,7 +85,7 @@ let%test "latency compensation: a seeded method mints the SAME insert id the cli
   R.methods [ ("rt_conv_add", fun _ _ -> B.str (C.insert feed (B.doc [ ("t", B.int 1) ]))) ];
   let ch, out = fake_channel () in
   D.serve ~session_id:"SC" ch;
-  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sc"; name = "rt_conv"; params = [] }));
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sc"; name = "rt_conv"; params = []; have = None }));
   ch.Ws.on_text
     (Msg.encode
        (Msg.Method { method_ = "rt_conv_add"; params = []; id = "mc"; random_seed = Some (B.str "seedX") }));
@@ -85,6 +94,24 @@ let%test "latency compensation: a seeded method mints the SAME insert id the cli
     Query.Id.random_id ~rng:(Method.Seed.stream ~seed:"seedX" ~scope:"conv") ()
   in
   List.exists (function Msg.Added { collection = "conv"; id; _ } -> id = predicted | _ -> false) (emitted out)
+
+let%test "delta resync full-stack: a Sub with [have] skips held docs, removes the dead, streams the rest" =
+  let feed = C.create ~name:"rsync" (Minimongo.create ()) in
+  let id_kept = C.insert feed (B.doc [ ("n", B.int 1) ]) in
+  let id_new = C.insert feed (B.doc [ ("n", B.int 2) ]) in
+  R.publish "rt_rsync" (fun _ -> R.Cursor (R.cursor feed ()));
+  let ch, out = fake_channel () in
+  D.serve ~session_id:"SR" ch;
+  (* the client holds id_kept (current) and a doc that no longer exists *)
+  let have =
+    [ ("rsync", [ (id_kept, Fennec_ddp.Doc_hash.fields [ ("n", B.Int 1) ]); ("ghost", "deadhash") ]) ]
+  in
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sr"; name = "rt_rsync"; params = []; have = Some have }));
+  let ms = emitted out in
+  (not (List.exists (function Msg.Added { id; _ } -> id = id_kept | _ -> false) ms)) (* skipped *)
+  && List.exists (function Msg.Added { id; _ } -> id = id_new | _ -> false) ms (* streamed *)
+  && List.exists (function Msg.Removed { id = "ghost"; _ } -> true | _ -> false) ms (* dead → removed *)
+  && List.exists (function Msg.Ready { subs = [ "sr" ] } -> true | _ -> false) ms
 
 let%test "sockjs serve opens with 'o' and wraps replies in array frames" =
   R.methods [ ("rt_id", fun _ _ -> B.Int 1) ];

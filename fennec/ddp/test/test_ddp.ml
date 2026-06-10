@@ -58,7 +58,7 @@ let%test "session: sub runs the publication sub-tagged and emits ready" =
       sink.ready ();
       { Session.stop = (fun () -> ()) });
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) () in
-  Session.dispatch s (Message.Sub { id = "sub1"; name = "feed"; params = [] });
+  Session.dispatch s (Message.Sub { id = "sub1"; name = "feed"; params = []; have = None });
   List.exists (function Message.Added a -> a.sub = Some "sub1" && a.collection = "items" | _ -> false) !out
   && List.exists (function Message.Ready { subs = [ "sub1" ] } -> true | _ -> false) !out
 let%test "session: method emits result + updated; unknown pub emits nosub" =
@@ -67,7 +67,7 @@ let%test "session: method emits result + updated; unknown pub emits nosub" =
   Hashtbl.replace methods "sum" (fun _ctx args -> match args with [ B.Int a; B.Int b ] -> B.Int (a + b) | _ -> B.Null);
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods () in
   Session.dispatch s (Message.Method { method_ = "sum"; params = [ B.int 2; B.int 3 ]; id = "m1"; random_seed = None });
-  Session.dispatch s (Message.Sub { id = "s2"; name = "nope"; params = [] });
+  Session.dispatch s (Message.Sub { id = "s2"; name = "nope"; params = []; have = None });
   List.exists (function Message.Result { id = "m1"; result = Some (B.Int 5); _ } -> true | _ -> false) !out
   && List.exists (function Message.Updated { methods = [ "m1" ] } -> true | _ -> false) !out
   && List.exists (function Message.Nosub { id = "s2"; error = Some _ } -> true | _ -> false) !out
@@ -106,7 +106,7 @@ let%test "session: a throwing publication emits Nosub, not a hang" =
   let pubs = Hashtbl.create 1 in
   Hashtbl.replace pubs "boom" (fun ~params:_ (_ : Session.sink) -> failwith "publication boom");
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) () in
-  Session.dispatch s (Message.Sub { id = "sub1"; name = "boom"; params = [] });
+  Session.dispatch s (Message.Sub { id = "sub1"; name = "boom"; params = []; have = None });
   List.exists (function Message.Nosub { id = "sub1"; error = Some _ } -> true | _ -> false) !out
 
 let%test "session: set_user_id rebinds the connection's user for subsequent methods" =
@@ -177,5 +177,38 @@ let%test "interop: encode produces exact Meteor wire bytes (V1 byte-identity, su
   && Message.encode
        (Message.Added { collection = "tasks"; id = "1"; fields = [ ("title", B.str "hi") ]; sub = None })
      = {|{"msg":"added","collection":"tasks","id":"1","fields":{"title":"hi"}}|}
+
+(* ── delta resync (v2): the sink wrapper turns a full replay into a difference ── *)
+let%test "resync_wrap: skips matching docs, passes changed/new ones, removes the dead at ready" =
+  let out = ref [] in
+  let sink =
+    { Session.added = (fun ~collection ~id ~fields:_ -> out := ("added", collection, id) :: !out);
+      changed = (fun ~collection ~id ~fields:_ ~cleared:_ -> out := ("changed", collection, id) :: !out);
+      removed = (fun ~collection ~id -> out := ("removed", collection, id) :: !out);
+      ready = (fun () -> out := ("ready", "", "") :: !out) }
+  in
+  let f_same = [ ("n", B.int 1) ] and f_diff = [ ("n", B.int 2) ] in
+  let have = [ ("c", [ ("same", Doc_hash.fields f_same); ("stale", Doc_hash.fields f_same); ("dead", "x") ]) ] in
+  let w = Session.resync_wrap ~have sink in
+  w.Session.added ~collection:"c" ~id:"same" ~fields:f_same; (* matching → skipped *)
+  w.Session.added ~collection:"c" ~id:"stale" ~fields:f_diff; (* held but different → passes *)
+  w.Session.added ~collection:"c" ~id:"new" ~fields:f_same; (* not held → passes *)
+  w.Session.ready ();
+  w.Session.added ~collection:"c" ~id:"live" ~fields:f_same; (* post-ready → inert passthrough *)
+  let ms = List.rev !out in
+  ms = [ ("added", "c", "stale"); ("added", "c", "new"); ("removed", "c", "dead"); ("ready", "", "");
+         ("added", "c", "live") ]
+
+let%test "doc hash: field order does not matter; values do" =
+  Doc_hash.fields [ ("a", B.int 1); ("b", B.str "x") ] = Doc_hash.fields [ ("b", B.str "x"); ("a", B.int 1) ]
+  && Doc_hash.fields [ ("a", B.int 1) ] <> Doc_hash.fields [ ("a", B.int 2) ]
+
+let%test "wire: Sub round-trips the have payload; absent stays None" =
+  (match Message.decode (Message.encode (Message.Sub { id = "s"; name = "n"; params = []; have = Some [ ("c", [ ("1", "abc") ]) ] })) with
+   | Message.Sub { have = Some [ ("c", [ ("1", "abc") ]) ]; _ } -> true
+   | _ -> false)
+  && (match Message.decode {|{"msg":"sub","id":"s","name":"n","params":[]}|} with
+      | Message.Sub { have = None; _ } -> true
+      | _ -> false)
 
 let () = exit (Fennec_hunt_unit.run ())
