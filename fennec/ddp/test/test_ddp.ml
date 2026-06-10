@@ -46,8 +46,9 @@ let%test "session: connect emits connected; ping emits pong" =
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods:(Hashtbl.create 1) () in
   Session.dispatch s (Message.Connect { session = None; version = "1"; support = [] });
   Session.dispatch s (Message.Ping { id = Some "p" });
+  (* connect now also pushes the connection identity (v2 fennecUser) — anonymous here *)
   match !out with
-  | [ Message.Pong { id = Some "p" }; Message.Connected { session = "S" } ] -> true
+  | [ Message.Pong { id = Some "p" }; Message.User { id = None }; Message.Connected { session = "S" } ] -> true
   | _ -> false
 let%test "session: sub runs the publication sub-tagged and emits ready" =
   let out = ref [] in
@@ -121,6 +122,19 @@ let%test "session: set_user_id rebinds the connection's user for subsequent meth
   List.exists (function Message.Result { id = "m1"; result = Some B.Null; _ } -> true | _ -> false) !out
   && List.exists (function Message.Result { id = "m3"; result = Some (B.String "alice"); _ } -> true | _ -> false) !out
   && Session.user_id s = Some "alice"
+
+let%test "session: initial user_id is visible to the first method" =
+  let out = ref [] in
+  let methods = Hashtbl.create 1 in
+  Hashtbl.replace methods "whoami" (fun ctx _ ->
+      match ctx.Session.user_id with Some u -> B.str u | None -> B.Null);
+  let s =
+    Session.create ~user_id:"cookie-user" ~session_id:"S" ~emit:(fun m -> out := m :: !out)
+      ~pubs:(Hashtbl.create 1) ~methods ()
+  in
+  Session.dispatch s (Message.Method { method_ = "whoami"; params = []; id = "m1"; random_seed = None });
+  Session.user_id s = Some "cookie-user"
+  && List.exists (function Message.Result { id = "m1"; result = Some (B.String "cookie-user"); _ } -> true | _ -> false) !out
 
 (* ── interop: REAL DDP frames captured off a live Meteor 3.x server (raw /websocket) must decode
    losslessly — the proof the wire stays Meteor-compatible (V1 drop-in), pinning the quirks (numeric

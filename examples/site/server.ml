@@ -100,8 +100,8 @@ let web =
        (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
   |> Endpoint.get "/api/download" (fun c -> Conn.send_file c ~path:download_path ())
   |> Endpoint.app
-       (Fur_ssr.handler ~styles:Site_styles.css ~source:api_source
-          ~mounts:[ Web_app.Routes.mount ])
+       (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
+          ~source:api_source ~mounts:[ Web_app.Routes.mount ])
 
 let admin =
   Endpoint.make ~name:"admin" ~hosts:[ "admin.localhost" ] () (* scoped by host; more specific, so it wins *)

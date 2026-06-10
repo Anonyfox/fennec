@@ -41,8 +41,8 @@ type t = {
   fence : (unit -> unit) -> unit;
 }
 
-let create ?(fence = fun k -> k ()) ~session_id ~emit ~pubs ~methods () =
-  { emit; pubs; methods; subs = Hashtbl.create 16; session_id; user_id = None; fence }
+let create ?user_id ?(fence = fun k -> k ()) ~session_id ~emit ~pubs ~methods () =
+  { emit; pubs; methods; subs = Hashtbl.create 16; session_id; user_id; fence }
 
 let user_id t = t.user_id
 
@@ -55,7 +55,9 @@ let err code reason = { Msg.code; reason = Some reason; message = None; error_ty
 
 let dispatch (t : t) (m : Msg.t) : unit =
   match m with
-  | Msg.Connect _ -> t.emit (Msg.Connected { session = t.session_id })
+  | Msg.Connect _ ->
+      t.emit (Msg.Connected { session = t.session_id });
+      t.emit (Msg.User { id = t.user_id })
   | Msg.Ping { id } -> t.emit (Msg.Pong { id })
   | Msg.Pong _ -> ()
   | Msg.Sub { id; name; params } -> (
@@ -99,7 +101,16 @@ let dispatch (t : t) (m : Msg.t) : unit =
           t.emit (Msg.Result { id; error = Some (err "404" ("no method " ^ method_)); result = None });
           t.emit (Msg.Updated { methods = [ id ] })
       | Some f ->
-          let ctx = { user_id = t.user_id; set_user_id = (fun u -> t.user_id <- u); random_seed } in
+          let ctx =
+            { user_id = t.user_id;
+              set_user_id =
+                (fun u ->
+                  if u <> t.user_id then begin
+                    t.user_id <- u;
+                    t.emit (Msg.User { id = u })
+                  end);
+              random_seed }
+          in
           (match
              try Ok (f ctx params) with
              | Method_error { code; reason } -> Error (code, reason)

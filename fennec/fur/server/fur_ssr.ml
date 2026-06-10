@@ -11,7 +11,7 @@ let dispatch (mounts : Fur.mount list) path =
   |> List.sort (fun (a : Fur.mount) b -> compare (String.length b.base) (String.length a.base))
   |> function m :: _ -> Some m | [] -> None
 
-let render ~env ~(mounts : Fur.mount list) ~source ~request ~client_js ~styles () : string option =
+let render ?(head_extra = "") ~env ~(mounts : Fur.mount list) ~source ~request ~client_js ~styles () : string option =
   match dispatch mounts request with
   | None -> None
   | Some m ->
@@ -40,7 +40,7 @@ let render ~env ~(mounts : Fur.mount list) ~source ~request ~client_js ~styles (
       end
     in
     let body = passes 0 in
-    let ctx = { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script (); body; styles; client_js } in
+    let ctx = { Fur.Doc.head = Fur.Head.to_ssr () ^ head_extra; data = Fur.Data.to_script (); body; styles; client_js } in
     Some (Fur.document (m.document ctx))
 
 (* Synchronous render — no Eio. This is the shape the framework's [Endpoint.app]
@@ -57,7 +57,7 @@ let render ~env ~(mounts : Fur.mount list) ~source ~request ~client_js ~styles (
    [?styles] is inlined into the document <style> (the extracted, scoped [%%style] of the
    app's components). Asset URLs (js/css <link>/<script>) stay the document template's
    concern; ctx.client_js is left empty (external bundle, served by the framework). *)
-let handler ?(styles = "") ?source ~(mounts : Fur.mount list) (request : string) : string option =
+let handler ?(styles = "") ?(head_extra = "") ?source ~(mounts : Fur.mount list) (request : string) : string option =
   match dispatch mounts request with
   | None -> None
   | Some m ->
@@ -93,7 +93,7 @@ let handler ?(styles = "") ?source ~(mounts : Fur.mount list) (request : string)
        Fur.Data.set_source (fun _ _ -> ()));
     let body = Fur.to_html (render_root ()) in
     let ctx =
-      { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script ();
+      { Fur.Doc.head = Fur.Head.to_ssr () ^ head_extra; data = Fur.Data.to_script ();
         body; styles; client_js = "" }
     in
     Some (Fur.document (m.document ctx))

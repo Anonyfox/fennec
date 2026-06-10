@@ -14,6 +14,9 @@ type t =
   (* handshake *)
   | Connect of { session : string option; version : string; support : string list }
   | Connected of { session : string }
+  | User of { id : string option }
+      (* v2 extension: the connection's authenticated user (pushed on connect + on change) — drives
+         the client's transparent cache purge on identity change; stock clients ignore it *)
   | Failed of { version : string }
   (* heartbeat *)
   | Ping of { id : string option }
@@ -78,6 +81,7 @@ let to_json (m : t) : Json.t =
         [ ("session", Option.map s session); ("version", some (s version));
           ("support", some (strs support)) ]
   | Connected { session } -> msg "connected" [ ("session", some (s session)) ]
+  | User { id } -> msg "fennecUser" [ ("id", Option.map s id) ]
   | Failed { version } -> msg "failed" [ ("version", some (s version)) ]
   | Ping { id } -> msg "ping" [ ("id", Option.map s id) ]
   | Pong { id } -> msg "pong" [ ("id", Option.map s id) ]
@@ -158,6 +162,7 @@ let of_json (j : Json.t) : t =
           Connect { session = str_opt (m "session"); version = str_of (m "version");
                     support = strs_of (m "support") }
       | "connected" -> Connected { session = str_of (m "session") }
+      | "fennecUser" -> User { id = str_opt (m "id") }
       | "failed" -> Failed { version = str_of (m "version") }
       | "ping" -> Ping { id = str_opt (m "id") }
       | "pong" -> Pong { id = str_opt (m "id") }

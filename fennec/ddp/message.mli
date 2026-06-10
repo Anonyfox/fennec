@@ -16,6 +16,10 @@ type error = {
 type t =
   | Connect of { session : string option; version : string; support : string list }
   | Connected of { session : string }
+  | User of { id : string option }
+      (** v2 extension: the connection's authenticated user, pushed on connect and whenever a method
+          rebinds it ([set_user_id]) — the client purges its persisted cache on identity change.
+          Stock DDP clients ignore unknown messages. *)
   | Failed of { version : string }
   | Ping of { id : string option }
   | Pong of { id : string option }

@@ -141,6 +141,19 @@ let handle t raw =
       else
         match m with
         | Msg.Connected { session } -> t.session_id <- Some session (* for session resume on reconnect *)
+        | Msg.User { id } -> (
+            (* transparent identity hygiene: the persisted cache belongs to ONE user — on a pushed
+               identity change (login/logout/user-switch), purge the namespace and adopt the new
+               owner. Zero userland code; one user's data never leaks to the next. *)
+            match t.persist with
+            | None -> ()
+            | Some ns ->
+                let owner = Kv.get ~ns "owner" in
+                let now = Option.value id ~default:"" in
+                if owner <> Some now then begin
+                  (match owner with Some _ -> Kv.purge ~ns | None -> ());
+                  Kv.put ~ns "owner" now
+                end)
         | Msg.Ready { subs } ->
             (* quiescence: drop seeded/stale docs the live snapshot didn't re-confirm, then mark ready *)
             List.iter (fun id -> MS.quiesce box id; mark_ready t id) subs;
@@ -201,7 +214,18 @@ let send_method t ~name ~params ~random_seed (resolve : (Bson.t, string * string
   t.send_if_open frame;
   id
 
+(* the PWA head snippet plants <meta name="fennec-persist">: persistence turns on ADAPTIVELY when
+   the app is a PWA, with zero client code — the explicit ?persist still overrides *)
+let auto_persist () : string option =
+  try
+    Js.Opt.case
+      (Dom_html.document##querySelector (Js.string "meta[name=fennec-persist]"))
+      (fun () -> None)
+      (fun el -> Js.Opt.case (el##getAttribute (Js.string "content")) (fun () -> None) (fun v -> Some (Js.to_string v)))
+  with _ -> None
+
 let connect ?(path = "/websocket") ?persist () : t =
+  let persist = match persist with Some _ as p -> p | None -> auto_persist () in
   let loc = Js.Unsafe.get Dom_html.window (Js.string "location") in
   let protocol = Js.to_string (Js.Unsafe.get loc (Js.string "protocol")) in
   let host = Js.to_string (Js.Unsafe.get loc (Js.string "host")) in

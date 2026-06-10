@@ -134,7 +134,7 @@ self.addEventListener('fetch', (e) => {
 
 let head_html (cfg : t) : string =
   Printf.sprintf
-    {|<link rel="manifest" href="%smanifest.webmanifest"><meta name="theme-color" content="%s"><script>
+    {|<link rel="manifest" href="%smanifest.webmanifest"><meta name="theme-color" content="%s"><meta name="fennec-persist" content="%s"><script>
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('%ssw.js', {scope: '%s'}).then((reg) => {
   window.__fennecApplyUpdate = () => {
     if (reg.waiting) {
@@ -152,7 +152,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('%ssw.js', {s
   });
 });
 </script>|}
-    cfg.scope cfg.theme_color cfg.scope cfg.scope
+    cfg.scope cfg.theme_color cfg.short_name cfg.scope cfg.scope
 
 (* ---- the serving paw --------------------------------------------------------- *)
 
