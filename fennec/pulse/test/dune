@@ -2,5 +2,5 @@
 ; inline test tooling. The same assertions will later run against the native backend to prove parity.
 (test
  (name test_pulse)
- (libraries fennec.pulse fennec-mongo.bson fennec-mongo.minimongo fennec-hunt.unit)
+ (libraries fennec.pulse fennec.pulse.method fennec-mongo.bson fennec-mongo.minimongo fennec-mongo.query fennec-hunt.unit)
  (preprocess (pps fennec-hunt.ppx)))

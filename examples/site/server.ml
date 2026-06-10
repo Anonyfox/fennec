@@ -69,12 +69,11 @@ let setup_realtime ~sw =
   (* SSR: hand the same docs to the SSR reactive so the first server-rendered paint already includes
      the tasks; the browser hydrates them flicker-free, then the live subscription re-confirms. *)
   Ddp_client.publish ~name:"tasks" (fun _ -> [ ("tasks", RData.Collection.fetch (RData.Collection.find tasks ())) ]);
-  RData.methods
-    [ ( "addTask",
-        fun _ args ->
-          match args with
-          | [ Bson.String t ] -> Bson.String (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ]))
-          | _ -> Bson.Null ) ]
+  (* the TYPED method: the handler attaches to the SHARED declaration (Site_methods.add_task — the
+     same value the browser calls through), so name/args/result can never drift; a malformed call is
+     a 400 before this handler runs (the codec is the validation) *)
+  RData.handle Site_methods.add_task (fun _inv title ->
+      RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str title) ]))
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)

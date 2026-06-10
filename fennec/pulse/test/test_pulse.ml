@@ -117,6 +117,35 @@ let%test "methods: the invocation carries user_id and can rebind it via set_user
   let as_user = R.apply ~user_id:(Some "u1") "whoami" [] = B.str "u1" in
   let _ = R.apply ~set_user_id:(fun u -> rebound := u) "login" [] in
   anon && as_user && !rebound = Some "alice"
+(* ── the typed method layer: one shared value; the codec IS the validation ── *)
+module MT = Fennec_pulse_method
+
+let%test "typed methods: handle decodes args + encodes result; a malformed call is a 400 BEFORE the handler" =
+  let m = MT.Method.define "typed_sum" ~args:(MT.Codec.a2 MT.Codec.int MT.Codec.int) ~result:MT.Codec.int in
+  let ran = ref 0 in
+  R.handle m (fun _ (a, b) ->
+      incr ran;
+      a + b);
+  let ok = R.call "typed_sum" [ B.int 2; B.int 40 ] = B.Int 42 in
+  let bad = try ignore (R.call "typed_sum" [ B.str "x" ]); None with R.Error { code; _ } -> Some code in
+  ok && bad = Some "400" && !ran = 1
+
+let%test "codec: roundtrips, EJSON float-ints, decode errors carry the shape" =
+  let open MT.Codec in
+  (match (list int).dec ((list int).enc [ 1; 2; 3 ]) with Ok [ 1; 2; 3 ] -> true | _ -> false)
+  && (match (option string).dec Bson.Null with Ok None -> true | _ -> false)
+  && (match int.dec (Bson.Float 7.0) with Ok 7 -> true | _ -> false)
+  && (match string.dec (Bson.Int 3) with Error e -> e = "expected string, got int" | Ok _ -> false)
+  && (match (a2 int bool).dec_args [ B.int 1 ] with Error _ -> true | Ok _ -> false)
+
+let%test "seed streams: same (seed, scope) mints the SAME ids both sides; another scope diverges" =
+  let s1 = MT.Method.Seed.stream ~seed:"abc" ~scope:"tasks" in
+  let s2 = MT.Method.Seed.stream ~seed:"abc" ~scope:"tasks" in
+  let s3 = MT.Method.Seed.stream ~seed:"abc" ~scope:"other" in
+  let id_of s = Query.Id.random_id ~rng:s () in
+  let a = id_of s1 and b = id_of s2 and c = id_of s3 in
+  a = b && a <> c && id_of s1 = id_of s2 (* the streams stay in lockstep, not just their head *)
+
 let%test "ObjectID make / validate / reject" =
   let o = R.ObjectID.make () in
   String.length (R.ObjectID.to_hex_string o) = 24

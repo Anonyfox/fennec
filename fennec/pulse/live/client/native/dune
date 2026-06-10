@@ -6,6 +6,6 @@
  (public_name fennec.pulse.live.client.native)
  (implements fennec.pulse.live.client)
  (modes byte native)
- (libraries fennec.pulse.live fennec.fur fennec-mongo.bson)
+ (libraries fennec.pulse.live fennec.fur fennec-mongo.bson fennec.pulse.method)
  (flags
   (:standard -w -a)))

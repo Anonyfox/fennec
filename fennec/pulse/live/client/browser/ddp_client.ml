@@ -13,6 +13,7 @@ module MS = Fennec_pulse_live.Merge_store
 module Live = Fennec_pulse_live.Live
 module Subkey = Fennec_pulse_live.Subkey
 module Seed = Fennec_pulse_live.Seed
+module Mth = Fennec_pulse_method
 
 (* the key the SSR embedded this subscription's hydration docs under (Fur's seed table) *)
 let seed_key name params = "ddp:" ^ Subkey.key name params
@@ -38,9 +39,9 @@ type t = {
   mutable subc : int;
   mutable methodc : int;
   mutable session_id : string option; (* captured from Connected; replayed for DDP session resume *)
-  (* in-flight method calls awaiting their Result: id → a signal that resolves to Ok value /
-     Error (code, reason). [None] = still pending. *)
-  methods_pending : (string, (Bson.t, string * string) result option Fur.signal) Hashtbl.t;
+  (* in-flight method calls awaiting their Result: id → the resolver invoked with Ok value /
+     Error (code, reason) (the typed path decodes inside its resolver) *)
+  methods_pending : (string, (Bson.t, string * string) result -> unit) Hashtbl.t;
   mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
@@ -68,15 +69,14 @@ let handle t raw =
             mark_ready t id
         | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
         | Msg.Result { id; error; result } ->
-            (* resolve the call's result signal (if a caller is awaiting it via [call_result]) *)
+            (* resolve the call's outcome (if a caller is awaiting it via [call_result]/[call_m]) *)
             (match Hashtbl.find_opt t.methods_pending id with
-            | Some sig_ ->
-                Fur.set sig_
-                  (Some
-                     (match error with
-                     | Some e -> Error (e.Msg.code, Option.value e.Msg.reason ~default:"")
-                     | None -> Ok (Option.value result ~default:Bson.Null)));
-                Hashtbl.remove t.methods_pending id
+            | Some resolve ->
+                Hashtbl.remove t.methods_pending id;
+                resolve
+                  (match error with
+                  | Some e -> Error (e.Msg.code, Option.value e.Msg.reason ~default:"")
+                  | None -> Ok (Option.value result ~default:Bson.Null))
             | None -> ())
         | Msg.Updated _ -> () (* the server's write-fence; the data change already flows via the subscription *)
         | Msg.Failed _ -> () (* DDP version mismatch — nothing to renegotiate; proceed best-effort *)
@@ -195,18 +195,42 @@ let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
   Fur.on_cleanup sub.stop;
   sub.ready
 
+(* the one method-send path: mint the id, register the resolver, put the frame on the wire *)
+let send_method t ~name ~params ~random_seed (resolve : (Bson.t, string * string) result -> unit) :
+    string =
+  t.methodc <- t.methodc + 1;
+  let id = "m" ^ string_of_int t.methodc in
+  Hashtbl.replace t.methods_pending id resolve;
+  t.send (Msg.encode (Msg.Method { method_ = name; params; id; random_seed }));
+  id
+
 (* [call_result] invokes a method and returns a signal that resolves to its outcome — [None] while
    in flight, then [Some (Ok value)] or [Some (Error (code, reason))] (e.g. a method's 403). *)
 let call_result t ~name ?(params = []) () : (Bson.t, string * string) result option Fur.signal =
-  t.methodc <- t.methodc + 1;
-  let id = "m" ^ string_of_int t.methodc in
   let sig_ = Fur.signal None in
-  Hashtbl.replace t.methods_pending id sig_;
-  t.send (Msg.encode (Msg.Method { method_ = name; params; id; random_seed = None }));
+  ignore (send_method t ~name ~params ~random_seed:None (fun r -> Fur.set sig_ (Some r)));
   sig_
 
 (* fire-and-forget: the data a method changes returns via the open subscription as a normal delta *)
 let call t ~name ?(params = []) () = ignore (call_result t ~name ~params ())
+
+(* the TYPED call: arguments encode through the shared method value's codec; the outcome decodes
+   before it reaches the signal (a result the codec rejects surfaces as a client-decode error) *)
+let call_m t (m : ('a, 'r) Mth.Method.t) (a : 'a) : ('r, string * string) result option Fur.signal =
+  let sig_ = Fur.signal None in
+  let resolve r =
+    Fur.set sig_
+      (Some
+         (match r with
+         | Error e -> Error e
+         | Ok v -> (
+             match (Mth.Method.result m).Mth.Codec.dec v with
+             | Ok r -> Ok r
+             | Error e -> Error ("client-decode", e))))
+  in
+  let params = (Mth.Method.args m).Mth.Codec.enc_args a in
+  ignore (send_method t ~name:(Mth.Method.name m) ~params ~random_seed:None resolve);
+  sig_
 
 (* SSR-only concept: the browser receives data over the live socket, not a publication registry *)
 let publish ~name (_ : Bson.t list -> (string * Bson.t list) list) = ignore name

@@ -49,6 +49,8 @@ module type REACTIVE = sig
     doc list ->
     doc
 
+  val handle : ('a, 'r) Fennec_pulse_method.Method.t -> (invocation -> 'a -> 'r) -> unit
+
   type id_generation = STRING | MONGO
 
   module ObjectID : sig
@@ -208,6 +210,17 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     match with_lock _reg_lock (fun () -> Hashtbl.find_opt _methods name) with
     | None -> error ~reason:(Printf.sprintf "Method '%s' not found" name) "404"
     | Some h -> h { user_id; is_simulation; set_user_id } args (* the handler runs outside the lock *)
+
+  (* the TYPED method layer: attach a handler to a shared Method.t value. A decode failure becomes a
+     400 BEFORE the handler runs — the codec is the validation; the result encodes on the way out. *)
+  let handle (m : ('a, 'r) Fennec_pulse_method.Method.t) (f : invocation -> 'a -> 'r) : unit =
+    let module M = Fennec_pulse_method in
+    methods
+      [ ( M.Method.name m,
+          fun inv params ->
+            match (M.Method.args m).M.Codec.dec_args params with
+            | Error e -> error "400" ~reason:("invalid arguments: " ^ e)
+            | Ok a -> (M.Method.result m).M.Codec.enc (f inv a) ) ]
 
   let call ?(user_id = None) name args = apply ~user_id name args
 

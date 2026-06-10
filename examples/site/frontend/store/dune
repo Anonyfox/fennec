@@ -3,5 +3,5 @@
 (library
  (name site_store)
  (wrapped false)
- (libraries fennec.fur)
+ (libraries fennec.fur fennec.pulse.method fennec-mongo.bson)
  (flags (:standard -w -a -open Fur)))

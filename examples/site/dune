@@ -61,7 +61,7 @@
  (name server)
  (modes byte exe)
  (modules server assets)
- (libraries fennec fennec.fur.server web_app admin_app site_styles fennec.pulse.server fennec.pulse
+ (libraries fennec fennec.fur.server web_app admin_app site_styles site_store fennec.pulse.server fennec.pulse fennec.pulse.method
    fennec.pulse.mongo fennec.ddp fennec.pulse.live.client fennec-mongo.bson fennec-mongo.minimongo))
 
 ; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test

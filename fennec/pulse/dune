@@ -5,4 +5,4 @@
 (library
  (name fennec_pulse)
  (public_name fennec.pulse)
- (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo))
+ (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo fennec.pulse.method))

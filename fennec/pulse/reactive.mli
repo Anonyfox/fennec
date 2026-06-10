@@ -66,6 +66,12 @@ module type REACTIVE = sig
     doc list ->
     doc
 
+  (** [handle m f] attaches the server handler to a shared typed method value
+      ({!Fennec_pulse_method.Method.t}, declared once in code both sides link). The codec is the
+      validation: a parameter-decode failure becomes a ["400"] {!Error} before [f] runs, and the
+      result encodes on the way out. The typed twin of {!methods}. *)
+  val handle : ('a, 'r) Fennec_pulse_method.Method.t -> (invocation -> 'a -> 'r) -> unit
+
   (** How a collection mints [_id]s: 17-char strings ([STRING]) or 24-hex ObjectIds ([MONGO]). *)
   type id_generation = STRING | MONGO
 

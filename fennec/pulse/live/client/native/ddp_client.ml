@@ -51,5 +51,11 @@ let call _ ~name ?(params = []) () = ignore (name, params)
 let call_result _ ~name ?(params = []) () : (Bson.t, string * string) result option Fur.signal =
   ignore (name, params);
   Fur.signal None
+
+(* typed twin: same SSR no-op — sends nothing, stays pending *)
+let call_m _ (m : ('a, 'r) Fennec_pulse_method.Method.t) (a : 'a) :
+    ('r, string * string) result option Fur.signal =
+  ignore (m, a);
+  Fur.signal None
 let find t = Live.find t.live
 let aggregate t = Live.aggregate t.live

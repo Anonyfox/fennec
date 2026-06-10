@@ -29,7 +29,8 @@ let make () =
   let tasks = Ddp_client.find client "tasks" () in
   let add_task () =
     incr added;
-    Ddp_client.call client ~name:"addTask" ~params:[ Bson.str ("Task " ^ string_of_int !added) ] ()
+    (* the TYPED call through the shared declaration — a wrong argument type is a compile error *)
+    ignore (Ddp_client.call_m client Site_methods.add_task ("Task " ^ string_of_int !added))
   in
   fun () ->
     <div className="tasks">
