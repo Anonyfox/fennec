@@ -391,6 +391,54 @@ let%test "$unwind preserveNullAndEmptyArrays keeps empty/missing" =
        docs)
   = 2
 
+(* ── windowed observe: sort+limit/skip windows are maintained LIVE ── *)
+let%test "windowed observe_changes: a sorted+limited window is maintained live (enter/displace/promote, no leak)" =
+  let c = C.create () in
+  let add id s = ignore (C.insert c (d [ ("_id", Bson.str id); ("score", i s) ])) in
+  add "a" 30; add "b" 20; add "k" 10;
+  let live = Hashtbl.create 8 in
+  let events = ref 0 in
+  let h =
+    C.observe_changes (C.find c ~sort:(d [ ("score", i (-1)) ]) ~limit:3 ())
+      ~added:(fun id _ -> Hashtbl.replace live id (); incr events)
+      ~removed:(fun id -> Hashtbl.remove live id; incr events)
+      ()
+  in
+  let init_ok = Hashtbl.length live = 3 in
+  (* a higher-ranked doc enters → the boundary doc ("k") is displaced; the window stays at 3 *)
+  add "d" 40;
+  let displaced = Hashtbl.mem live "d" && (not (Hashtbl.mem live "k")) && Hashtbl.length live = 3 in
+  (* a doc below the window → membership unchanged *)
+  add "e" 5;
+  let no_leak = Hashtbl.length live = 3 && not (Hashtbl.mem live "e") in
+  (* the top doc drops out by score → it leaves, "k" promotes back in *)
+  ignore (C.update c (d [ ("_id", Bson.str "a") ]) (d [ ("$set", d [ ("score", i 1) ]) ]));
+  let promoted = (not (Hashtbl.mem live "a")) && Hashtbl.mem live "k" && Hashtbl.length live = 3 in
+  (* removing a window doc promotes the next-best ("e" beats a=1) *)
+  ignore (C.remove_id c "d");
+  let refilled = (not (Hashtbl.mem live "d")) && Hashtbl.mem live "e" && Hashtbl.length live = 3 in
+  h.C.stop ();
+  init_ok && displaced && no_leak && promoted && refilled && !events > 0
+
+let%test "windowed observe_changes: a skip window shifts when a doc enters ahead of it" =
+  let c = C.create () in
+  let add id s = ignore (C.insert c (d [ ("_id", Bson.str id); ("v", i s) ])) in
+  add "one" 1; add "two" 2; add "three" 3;
+  let live = Hashtbl.create 8 in
+  let h =
+    C.observe_changes (C.find c ~sort:(d [ ("v", i 1) ]) ~skip:1 ~limit:2 ())
+      ~added:(fun id _ -> Hashtbl.replace live id ())
+      ~removed:(fun id -> Hashtbl.remove live id)
+      ()
+  in
+  (* initial window (skip the lowest): two, three *)
+  let init_ok = Hashtbl.mem live "two" && Hashtbl.mem live "three" && Hashtbl.length live = 2 in
+  (* a new lowest doc shifts the window: skip "zero" → window = one, two ("three" leaves, "one" enters) *)
+  add "zero" 0;
+  let shifted = Hashtbl.mem live "one" && Hashtbl.mem live "two" && (not (Hashtbl.mem live "three")) && Hashtbl.length live = 2 in
+  h.C.stop ();
+  init_ok && shifted
+
 (* ── Fanout: the ordered fan-out monitor the change stream rides on ── *)
 module F = C.Fanout
 

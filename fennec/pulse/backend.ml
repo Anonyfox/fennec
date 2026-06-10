@@ -57,10 +57,12 @@ module Mini : S with type collection = Minimongo.t = struct
   let distinct c key sel = Minimongo.distinct c ~key ~selector:sel ()
 
   let observe_changes c q ~added ~changed ~removed =
-    (* projection is honoured on live deltas; sort/skip/limit shape the snapshot *)
+    (* the FULL query reaches minimongo: selector + projection on live deltas, and sort/skip/limit
+       make it a WINDOWED observe whose window is maintained live (enter/displace/promote) — a
+       limited publication never leaks past its limit *)
     let h =
       Minimongo.observe_changes
-        (Minimongo.find c ~selector:q.selector ~fields:q.fields ())
+        (Minimongo.find c ~selector:q.selector ~sort:q.sort ~skip:q.skip ~limit:q.limit ~fields:q.fields ())
         ~added ~changed ~removed ()
     in
     { stop = h.Minimongo.stop }

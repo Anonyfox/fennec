@@ -307,6 +307,44 @@ let%test "mux (multicore): concurrent same-key subscribers across domains all se
   (* every subscriber converged on all 120 docs; the mux table drained back to baseline *)
   List.for_all (fun n -> n = 120) seen_counts && R.live_query_count () = before
 
+let%test "ordered observe: moved_to carries from/to indexes and changed_at the current index" =
+  let c = coll "ord_obs" in
+  let _ = C.insert c (doc [ ("_id", B.str "x"); ("r", i 1) ]) in
+  let _ = C.insert c (doc [ ("_id", B.str "y"); ("r", i 2) ]) in
+  let _ = C.insert c (doc [ ("_id", B.str "z"); ("r", i 3) ]) in
+  let moved = ref None and chg_at = ref (-1) in
+  let h =
+    C.observe (C.find c ~sort:(doc [ ("r", i 1) ]) ())
+      ~moved_to:(fun _ from to_ _ -> moved := Some (from, to_))
+      ~changed_at:(fun _ _ idx -> chg_at := idx)
+      ()
+  in
+  (* z's sort key drops to the front: order x,y,z → z,x,y — z moves index 2 → 0 *)
+  ignore (C.update c (doc [ ("_id", B.str "z") ]) (doc [ ("$set", doc [ ("r", i 0) ]) ]));
+  h.stop ();
+  !moved = Some (2, 0) && !chg_at = 0
+
+let%test "publication: a sorted+limited cursor maintains its top-N over the wire (window, not a leak)" =
+  let c = coll "win_pub" in
+  let add id s = ignore (C.insert c (doc [ ("_id", B.str id); ("score", i s) ])) in
+  add "a" 30; add "b" 20; add "k" 10;
+  R.publish "win_p" (fun _ -> R.Cursor (C.find c ~sort:(doc [ ("score", i (-1)) ]) ~limit:2 ()));
+  let live = Hashtbl.create 8 in
+  let s =
+    R.run_publication "win_p" ~params:[]
+      ~on:(function
+        | Reactive.Added { id; _ } -> Hashtbl.replace live id ()
+        | Reactive.Removed { id; _ } -> Hashtbl.remove live id
+        | _ -> ())
+  in
+  (* initial top-2 *)
+  let init_ok = Hashtbl.mem live "a" && Hashtbl.mem live "b" && Hashtbl.length live = 2 in
+  (* a better-ranked doc displaces the boundary doc on the live wire *)
+  add "d" 40;
+  let windowed = Hashtbl.mem live "d" && Hashtbl.mem live "a" && (not (Hashtbl.mem live "b")) && Hashtbl.length live = 2 in
+  s.stop ();
+  init_ok && windowed
+
 let%test "mux: a publication feeding Cursors [] is a no-op stream (ready, zero beats, no observe)" =
   R.publish "mux_empty_p" (fun _ -> R.Cursors []);
   let before = R.live_query_count () in

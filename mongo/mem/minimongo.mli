@@ -133,9 +133,13 @@ val distinct : t -> key:string -> ?selector:doc -> unit -> doc list
 
 (** [observe_changes cur ?added ?changed ?removed ()] — field-level, unordered membership tracking.
     Fires [added id fields] for each doc in the initial window, then live: [added]/[removed] as docs
-    enter/leave the selector, [changed id changed_fields cleared_names] as winning fields change.
-    Honors selector + projection on live deltas; skip/limit affect only the initial snapshot. This
-    is the cheap, incremental path — prefer it where ordering is not needed. *)
+    enter/leave the result set, [changed id changed_fields cleared_names] as winning fields change.
+    Honors selector + projection on live deltas — and a WINDOWED cursor (sort + skip/limit) maintains
+    its window live: a doc entering displaces the boundary doc ([added] + [removed]), one leaving
+    promotes the next, and the tracked set never exceeds the window. Costs: an un-windowed delta is
+    O(fields of the one changed doc); a windowed delta re-snapshots + diffs the window — O(M log M)
+    over the M matching docs — and writes that cannot affect the window are O(1)-skipped. This is the
+    incremental path — prefer it where positional ordering callbacks are not needed. *)
 val observe_changes :
   cursor ->
   ?added:(string -> doc -> unit) ->

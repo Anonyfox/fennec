@@ -105,7 +105,9 @@ module type REACTIVE = sig
       ?changed:(doc -> doc -> unit) ->
       ?removed:(doc -> unit) ->
       ?added_at:(doc -> int -> string option -> unit) ->
+      ?changed_at:(doc -> doc -> int -> unit) ->
       ?removed_at:(doc -> int -> unit) ->
+      ?moved_to:(doc -> int -> int -> string option -> unit) ->
       unit ->
       live_handle
 
@@ -391,39 +393,55 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       { stop = h.Backend.stop }
 
     (* ordered, document-level observe: re-fetch the sorted window on each event and diff (pure).
-       transform is applied to documents handed to callbacks. *)
+       The full Meteor callback family — added/addedAt, changed/changedAt, removed/removedAt,
+       movedTo — at the in-process API (the DDP wire stays unordered, exactly like Meteor's own
+       server: per the DDP spec the ordered messages "are not currently used by Meteor"; clients
+       re-sort in minimongo). transform is applied to documents handed to callbacks. *)
     let observe (cur : cursor) ?(added = fun _ -> ()) ?(changed = fun _ _ -> ())
         ?(removed = fun _ -> ()) ?(added_at = fun _ _ _ -> ())
-        ?(removed_at = fun _ _ -> ()) () : live_handle =
+        ?(changed_at = fun _ _ _ -> ()) ?(removed_at = fun _ _ -> ())
+        ?(moved_to = fun _ _ _ _ -> ()) () : live_handle =
       let tf d = apply_tf cur d in
       let snap () = List.map (fun d -> (Query.Diff.doc_id d, d)) (raw_fetch cur) in
       let order = ref (List.map fst (snap ())) in
       let prev = ref (snap ()) in
-      let index_of id =
+      let index_in lst id =
         let rec go i = function
           | [] -> -1
           | x :: _ when x = id -> i
           | _ :: tl -> go (i + 1) tl
         in
-        go 0 !order
+        go 0 lst
       in
+      let index_of id = index_in !order id in
       List.iteri (fun i (_, d) -> added (tf d); added_at (tf d) i None) !prev;
       let recompute () =
         let nw = snap () in
+        let nw_order = List.map fst nw in
         Query.Diff.diff_ordered ~old_list:!prev ~new_list:nw
           ~added_before:(fun id _ before ->
             (match List.assoc_opt id nw with
              | Some d ->
-                 order := List.map fst nw;
+                 order := nw_order;
                  added d;
                  added_at d (index_of id) before
              | None -> ()))
           ~changed:(fun id _ _ ->
             match (List.assoc_opt id nw, List.assoc_opt id !prev) with
-            | Some d, Some o -> changed (tf d) (tf o)
-            | Some d, None -> changed (tf d) (tf d)
+            | Some d, Some o ->
+                changed (tf d) (tf o);
+                changed_at (tf d) (tf o) (index_in nw_order id)
+            | Some d, None ->
+                changed (tf d) (tf d);
+                changed_at (tf d) (tf d) (index_in nw_order id)
             | _ -> ())
-          ~moved_before:(fun _ _ -> order := List.map fst nw)
+          ~moved_before:(fun id before ->
+            (* from = the doc's index in the PRE-move order, to = in the post-move order *)
+            let from = index_of id in
+            order := nw_order;
+            match List.assoc_opt id nw with
+            | Some d -> moved_to (tf d) from (index_in nw_order id) before
+            | None -> ())
           ~removed:(fun id ->
             match List.assoc_opt id !prev with
             | Some o ->

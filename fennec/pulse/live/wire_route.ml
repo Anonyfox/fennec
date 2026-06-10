@@ -2,9 +2,13 @@
    client(s); control messages (ready / nosub / ping) stay in the client since they touch its
    subscription state. Pure + native, so the wire→cache mapping is unit-testable without a browser.
 
-   [Added_before] / [Moved_before] are Meteor's ordered-observe deltas. A fennec server emits only
-   added/changed/removed, but a real Meteor server (V1 drop-in) can send ordered ones — so we SURFACE
-   the document (ordering is honored by [find ~sort]) instead of dropping it on the floor. *)
+   [Added_before] / [Moved_before] are the DDP spec's ordered-collection deltas. Neither side of a
+   fennec↔Meteor pairing actually emits them — the spec itself notes the ordered messages "are not
+   currently used by Meteor", and a fennec server likewise sends only added/changed/removed (clients
+   re-sort via [find ~sort], so windowed/sorted publications need no wire ordering). They are handled
+   here for spec-general DDP servers: the DOCUMENT is surfaced (membership preserved); the positional
+   hint is dropped, exactly as a Mongo-backed Meteor client effectively treats it — a caveat only for
+   a non-Meteor server whose collection order is not derivable from document fields. *)
 
 module Msg = Fennec_ddp.Message
 

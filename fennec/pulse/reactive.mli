@@ -169,15 +169,21 @@ module type REACTIVE = sig
       live_handle
 
     (** Document-level ordered observation: re-fetches the sorted window and diffs, so sort/skip/
-        limit are honored and callbacks receive whole documents (with positional [added_at]/
-        [removed_at]). *)
+        limit are honored and callbacks receive whole documents — the full Meteor callback family:
+        [added]/[added_at doc index before], [changed]/[changed_at new old index],
+        [removed]/[removed_at doc index], and [moved_to doc from_index to_index before]. This is the
+        in-process ordered API; the DDP {e wire} stays unordered (exactly like Meteor's own server —
+        per the DDP spec, the ordered messages "are not currently used by Meteor"; clients re-sort
+        in minimongo, so publish the fields you sort by). *)
     val observe :
       cursor ->
       ?added:(doc -> unit) ->
       ?changed:(doc -> doc -> unit) ->
       ?removed:(doc -> unit) ->
       ?added_at:(doc -> int -> string option -> unit) ->
+      ?changed_at:(doc -> doc -> int -> unit) ->
       ?removed_at:(doc -> int -> unit) ->
+      ?moved_to:(doc -> int -> int -> string option -> unit) ->
       unit ->
       live_handle
 

@@ -298,10 +298,34 @@ let get_view q : query_view =
                     vrefs = 0; obs = o; detach = (fun () -> ()) }
                 in
                 retain o;
-                (if not o.polled then
-                   let det = attach_sink_u o (fun ev -> route v ev) in
+                (if not o.polled then begin
+                   (* a WINDOWED query (skip/limit) can have a doc displaced/promoted by another doc's
+                      change, so incremental routing is wrong — a relevant event instead re-runs the
+                      windowed fetch and diffs (reconcile, the same machinery the poller uses; IO runs
+                      outside the lock, and the stream daemon serializes these per collection). An
+                      event that can't affect the window (not matching, not cached) is O(1)-skipped. *)
+                   let windowed = q.limit > 0 || q.skip > 0 in
+                   let sink =
+                     if windowed then (fun ev ->
+                       let id = ev_id ev in
+                       let relevant =
+                         with_lock (fun () -> Hashtbl.mem v.cache id)
+                         ||
+                         match ev.Change_stream.op with
+                         | Change_stream.Insert | Change_stream.Update | Change_stream.Replace -> (
+                             match ev.Change_stream.full_document with
+                             | Some d -> Q.Matcher.doc_matches v.q.selector d
+                             | None -> false)
+                         | Change_stream.Delete -> false
+                         | _ -> true (* drop/invalidate: always reconcile *)
+                       in
+                       if relevant then reconcile v)
+                     else fun ev -> route v ev
+                   in
+                   let det = attach_sink_u o sink in
                    (* the stored detach is invoked OUTSIDE the lock (in stop), so it locks itself *)
-                   v.detach <- (fun () -> with_lock det));
+                   v.detach <- (fun () -> with_lock det)
+                 end);
                 Hashtbl.replace _views vk v;
                 (v, true))
       in

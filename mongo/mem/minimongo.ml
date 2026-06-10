@@ -261,13 +261,18 @@ let distinct t ~key ?(selector = Document []) () : doc list =
    the snapshot already contained re-delivers harmlessly (the cache/diff turns it into a no-op). *)
 
 (* observeChanges — field-level, unordered membership routing. Honors selector + projection on live
-   deltas; skip/limit affect only the initial snapshot. *)
+   deltas. A WINDOWED cursor (skip/limit > 0) maintains its window live: a relevant event re-snapshots
+   the window and diffs it against the cache, so enter/leave/displacement all surface as membership
+   deltas and the cache never exceeds the window. Costs: an un-windowed delta is O(fields) (the
+   single changed doc); a windowed delta is O(M log M + window) for the M selector-matching docs —
+   and O(1) for writes that can't affect the window (non-matching, not cached). *)
 let observe_changes cur ?(added = fun _ _ -> ()) ?(changed = fun _ _ _ -> ())
     ?(removed = fun _ -> ()) () : handle =
   let t = cur.coll in
   let p = projection cur in
   let cache : (string, doc) Hashtbl.t = Hashtbl.create 64 in
-  let route (ch : change) =
+  (* the cheap incremental path: membership = the selector alone, so one event routes in O(fields) *)
+  let route_incremental (ch : change) =
     let id = ch.id in
     match ch.op with
     | Remove -> if Hashtbl.mem cache id then ( Hashtbl.remove cache id; removed id)
@@ -291,6 +296,45 @@ let observe_changes cur ?(added = fun _ _ -> ()) ?(changed = fun _ _ _ -> ())
             removed id
         | Outside -> ())
   in
+  (* the windowed path: membership depends on sort/skip/limit, so a doc entering can displace another
+     and a doc leaving promotes one — a relevant event re-snapshots the window (a consistent locked
+     read; we are in delivery, outside all locks) and field-diffs it against the cache. An event that
+     cannot affect the window (doc not matching and not cached) short-circuits. *)
+  let route_windowed (ch : change) =
+    let relevant =
+      Hashtbl.mem cache ch.id
+      ||
+      match ch.op with
+      | Remove -> false
+      | Insert | Update -> (
+          match ch.new_doc with Some d -> Query.Matcher.doc_matches cur.selector d | None -> false)
+    in
+    if relevant then begin
+      let fresh = windowed cur in
+      let fresh_tbl : (string, doc) Hashtbl.t = Hashtbl.create 16 in
+      List.iter
+        (fun d ->
+          Hashtbl.replace fresh_tbl (Query.Diff.doc_id d)
+            (Query.Projection.apply p (Query.Diff.fields_without_id d)))
+        fresh;
+      let gone = Hashtbl.fold (fun id _ acc -> if Hashtbl.mem fresh_tbl id then acc else id :: acc) cache [] in
+      List.iter (fun id -> Hashtbl.remove cache id; removed id) gone;
+      Hashtbl.iter
+        (fun id f ->
+          match Hashtbl.find_opt cache id with
+          | None ->
+              Hashtbl.replace cache id f;
+              added id f
+          | Some old ->
+              let chg, cleared = Query.Diff.diff_fields ~old_doc:old ~new_doc:f in
+              if chg <> [] || cleared <> [] then begin
+                Hashtbl.replace cache id f;
+                changed id (Document chg) cleared
+              end)
+        fresh_tbl
+    end
+  in
+  let route = if cur.skip > 0 || cur.limit > 0 then route_windowed else route_incremental in
   let sub, initial =
     with_lock t.lock (fun () -> (Fanout.subscribe t.fan ~ready:false route, windowed_unlocked cur))
   in
