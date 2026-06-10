@@ -1,16 +1,30 @@
 (** In-memory MongoDB — a [Minimongo.t] is one collection: the [_id]-keyed store, mutations,
-    cursors, and a reactive observe engine. A mutation synchronously emits a change event (the
-    "simulated change stream"); the observe engines recompute off those events with the pure
-    matcher/diff core. No Eio, no polling, no systhreads. Pure, so it cross-compiles to JavaScript —
-    and it is the default backend for dev and test.
+    cursors, and a reactive observe engine. A mutation emits a change event (the "simulated change
+    stream"); the observe engines recompute off those events with the pure matcher/diff core. No Eio,
+    no polling, no systhreads. Cross-compiles to JavaScript — and it is the default backend for dev
+    and test.
 
     This module is the {b front door}: build selectors, update documents, and projections as plain
     {!Bson.t} values and pass them to [find]/[update]/[aggregate]. The [Query.*] modules
     ([Matcher]/[Modifier]/[Projection]/[Sorter]/[Aggregate]/[Expr]/[Geo]) are the underlying engine
     and are only needed for advanced or standalone (collection-less) use.
 
+    {b Thread-safety:} every operation is safe to call from any OCaml 5 domain. Reads snapshot and
+    mutations commit under a per-collection lock; change events are delivered through {!Fanout}
+    OUTSIDE all locks, in commit order, by one drainer at a time — so observers see a linearized
+    stream, may re-entrantly mutate the collection, and a slow/suspending observer blocks nothing but
+    its own delivery. Two caveats follow from "delivery happens outside the lock": under concurrent
+    writers a mutation may return before its event is delivered (the active drainer delivers it), and
+    a custom [gen_id] must be pure/non-blocking (it runs under the lock). On a single domain — and
+    compiled to JavaScript — behavior is exactly the old synchronous delivery.
+
     Insert is O(1) and store lookups are total, so a re-entrant observer that mutates the collection
     during a notification can never raise. *)
+
+(** The ordered event fan-out the change stream rides on — reusable wherever the same
+    commit-ordered, deliver-outside-locks discipline is needed (the framework's observe multiplexer
+    uses it too). *)
+module Fanout : module type of Fanout
 
 (** A document — a BSON value (in practice a [Document]). *)
 type doc = Bson.t

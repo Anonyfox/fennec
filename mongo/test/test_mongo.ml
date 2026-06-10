@@ -391,4 +391,121 @@ let%test "$unwind preserveNullAndEmptyArrays keeps empty/missing" =
        docs)
   = 2
 
+(* ── Fanout: the ordered fan-out monitor the change stream rides on ── *)
+module F = C.Fanout
+
+let%test "fanout: events deliver in publish order; a dead sub is skipped" =
+  let f = F.create () in
+  let got = ref [] in
+  let s1 = F.subscribe f ~ready:true (fun e -> got := e :: !got) in
+  let s2 = F.subscribe f ~ready:true (fun _ -> ()) in
+  F.publish f 1;
+  F.publish f 2;
+  F.unsubscribe f s2;
+  F.publish f 3;
+  F.unsubscribe f s1;
+  F.publish f 4;
+  (* delivered only while alive, in order *)
+  List.rev !got = [ 1; 2; 3 ] && F.count f = 0
+
+let%test "fanout: a buffering sub holds events (in order) until ready flushes them" =
+  let f = F.create () in
+  let got = ref [] in
+  let s = F.subscribe f ~ready:false (fun e -> got := e :: !got) in
+  F.publish f 1;
+  F.publish f 2;
+  let before_ready = !got = [] in
+  F.ready f s;
+  F.publish f 3;
+  before_ready && List.rev !got = [ 1; 2; 3 ]
+
+let%test "fanout: a re-entrant publish from inside a delivery is delivered after, not lost (single drainer)" =
+  let f = F.create () in
+  let got = ref [] in
+  let fired = ref false in
+  let _ =
+    F.subscribe f ~ready:true (fun e ->
+        got := e :: !got;
+        if not !fired then begin
+          fired := true;
+          F.publish f 99 (* re-entrant: we ARE the drainer; this enqueues and is drained next *)
+        end)
+  in
+  F.publish f 1;
+  List.rev !got = [ 1; 99 ]
+
+(* ── multicore: domains hammering one collection stay linearized and uncorrupted ── *)
+let%test "multicore: concurrent domain writers + a live observer — exact final state, legal transitions" =
+  let c = C.create () in
+  (* per-id transition legality: added → (changed* ) → removed, never out of order, tracked by the
+     observer's own view (Adds/Removes balance per id) *)
+  let seen : (string, int) Hashtbl.t = Hashtbl.create 64 in
+  let illegal = ref 0 in
+  let obs_lock = Mutex.create () in
+  let on_added id =
+    Mutex.lock obs_lock;
+    (match Hashtbl.find_opt seen id with
+    | Some n when n > 0 -> incr illegal (* added while already present *)
+    | _ -> Hashtbl.replace seen id 1);
+    Mutex.unlock obs_lock
+  in
+  let on_removed id =
+    Mutex.lock obs_lock;
+    (match Hashtbl.find_opt seen id with
+    | Some 1 -> Hashtbl.replace seen id 0
+    | _ -> incr illegal (* removed while absent *));
+    Mutex.unlock obs_lock
+  in
+  let h = C.observe_changes (C.find c ()) ~added:(fun id _ -> on_added id) ~removed:on_removed () in
+  let domains =
+    List.init 4 (fun w ->
+        Domain.spawn (fun () ->
+            for k = 0 to 199 do
+              let id = Printf.sprintf "w%d-%d" w k in
+              ignore (C.insert c (d [ ("_id", Bson.str id); ("v", i k) ]));
+              ignore (C.update c (d [ ("_id", Bson.str id) ]) (d [ ("$inc", d [ ("v", i 1) ]) ]));
+              if k mod 2 = 0 then ignore (C.remove_id c id)
+            done))
+  in
+  List.iter Domain.join domains;
+  (* one final write from this domain becomes the drainer for anything still queued *)
+  let flush = C.insert c (d [ ("_id", Bson.str "flush") ]) in
+  ignore (C.remove_id c flush);
+  h.C.stop ();
+  (* exact survivors: per worker the odd k of 0..199 → 100 each → 400 total *)
+  let final = C.count (C.find c ()) in
+  let live_in_view = Hashtbl.fold (fun _ n acc -> acc + n) seen 0 in
+  final = 400 && !illegal = 0 && live_in_view = 400
+
+let%test "multicore: concurrent subscribes during a write storm see a complete snapshot+stream view" =
+  let c = C.create () in
+  for k = 0 to 49 do
+    ignore (C.insert c (d [ ("_id", Bson.str (string_of_int k)) ]))
+  done;
+  let writer =
+    Domain.spawn (fun () ->
+        for k = 50 to 299 do
+          ignore (C.insert c (d [ ("_id", Bson.str (string_of_int k)) ]))
+        done)
+  in
+  (* subscribe mid-storm: replay + buffered stream must cover every doc exactly (dups impossible at
+     this layer: an insert re-delivered after the snapshot diffs to Stayed/no-op, never added twice) *)
+  let seen = Hashtbl.create 512 in
+  let dup = ref 0 in
+  let lk = Mutex.create () in
+  let h =
+    C.observe_changes (C.find c ())
+      ~added:(fun id _ ->
+        Mutex.lock lk;
+        if Hashtbl.mem seen id then incr dup else Hashtbl.replace seen id ();
+        Mutex.unlock lk)
+      ()
+  in
+  Domain.join writer;
+  (* drain stragglers by becoming the drainer once more *)
+  let flush = C.insert c (d [ ("_id", Bson.str "flush") ]) in
+  ignore (C.remove_id c flush);
+  h.C.stop ();
+  !dup = 0 && Hashtbl.length seen >= 300 (* all 300 ids seen exactly once (flush may add 1) *)
+
 let () = exit (Fennec_hunt_unit.run ())
