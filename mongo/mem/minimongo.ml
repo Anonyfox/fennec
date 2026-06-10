@@ -298,19 +298,41 @@ let observe_changes cur ?(added = fun _ _ -> ()) ?(changed = fun _ _ _ -> ())
   in
   (* the windowed path: membership depends on sort/skip/limit, so a doc entering can displace another
      and a doc leaving promotes one — a relevant event re-snapshots the window (a consistent locked
-     read; we are in delivery, outside all locks) and field-diffs it against the cache. An event that
-     cannot affect the window (doc not matching and not cached) short-circuits. *)
+     read; we are in delivery, outside all locks) and field-diffs it against the cache.
+
+     Relevance is exact: a write can affect the window iff it touches a WINDOW doc, its new form
+     MATCHES the selector (it might enter), or — with skip > 0 — its OLD form matched (a doc leaving
+     the skipped prefix shifts every rank below it, changing the window without itself being in it).
+
+     The boundary short-circuit makes the dominant miss case O(1): with skip = 0 and a FULL window,
+     a matching out-of-window doc that sorts STRICTLY below the last window doc cannot enter — no
+     re-snapshot. (skip = 0 only: a prefix interaction can shift the window from above. Strict
+     comparison only: ties re-snapshot, since relative order at a tie is the sorter's business. The
+     boundary is kept un-projected, so the comparator always sees the sort fields. An empty sort spec
+     compares everything equal — never strictly below — so insertion-order windows never
+     short-circuit.) Per relevant write the cost stays O(N + M log M) over the M matching docs; per
+     short-circuited write it is one match + one compare. *)
+  let cmp = Query.Sorter.of_spec cur.sort in
+  let boundary : doc option ref = ref None in
+  let set_boundary fresh =
+    boundary :=
+      (if cur.skip = 0 && cur.limit > 0 && List.length fresh = cur.limit then
+         List.nth_opt fresh (cur.limit - 1)
+       else None)
+  in
   let route_windowed (ch : change) =
-    let relevant =
-      Hashtbl.mem cache ch.id
-      ||
-      match ch.op with
-      | Remove -> false
-      | Insert | Update -> (
-          match ch.new_doc with Some d -> Query.Matcher.doc_matches cur.selector d | None -> false)
+    let matches = function Some d -> Query.Matcher.doc_matches cur.selector d | None -> false in
+    let in_window = Hashtbl.mem cache ch.id in
+    let matches_new = match ch.op with Remove -> false | Insert | Update -> matches ch.new_doc in
+    let prefix_affected = cur.skip > 0 && matches ch.old_doc in
+    let cannot_enter =
+      (not in_window) && matches_new && (not prefix_affected) && cur.skip = 0
+      && Hashtbl.length cache = cur.limit
+      && match (ch.new_doc, !boundary) with Some d, Some b -> cmp d b > 0 | _ -> false
     in
-    if relevant then begin
+    if (in_window || matches_new || prefix_affected) && not cannot_enter then begin
       let fresh = windowed cur in
+      set_boundary fresh;
       let fresh_tbl : (string, doc) Hashtbl.t = Hashtbl.create 16 in
       List.iter
         (fun d ->
@@ -338,6 +360,7 @@ let observe_changes cur ?(added = fun _ _ -> ()) ?(changed = fun _ _ _ -> ())
   let sub, initial =
     with_lock t.lock (fun () -> (Fanout.subscribe t.fan ~ready:false route, windowed_unlocked cur))
   in
+  set_boundary initial;
   List.iter
     (fun d ->
       let id = Query.Diff.doc_id d in

@@ -439,6 +439,57 @@ let%test "windowed observe_changes: a skip window shifts when a doc enters ahead
   h.C.stop ();
   init_ok && shifted
 
+let%test "windowed observe_changes: a PREFIX doc's removal / selector-exit shifts a skip window" =
+  (* the skipped prefix interacts with the window: removing (or selector-evicting) a prefix doc pulls
+     the first window doc up into the prefix and promotes the next-below-boundary doc in *)
+  let c = C.create () in
+  let add id s = ignore (C.insert c (d [ ("_id", Bson.str id); ("v", i s); ("t", Bson.str "x") ])) in
+  add "one" 1; add "two" 2; add "three" 3; add "four" 4; add "five" 5;
+  let live = Hashtbl.create 8 in
+  let h =
+    C.observe_changes
+      (C.find c ~selector:(d [ ("t", Bson.str "x") ]) ~sort:(d [ ("v", i 1) ]) ~skip:1 ~limit:2 ())
+      ~added:(fun id _ -> Hashtbl.replace live id ())
+      ~removed:(fun id -> Hashtbl.remove live id)
+      ()
+  in
+  (* window = skip "one" → {two, three} *)
+  let init_ok = Hashtbl.mem live "two" && Hashtbl.mem live "three" && Hashtbl.length live = 2 in
+  (* REMOVE the prefix doc → order two,three,four,five; skip 1 → {three, four} *)
+  ignore (C.remove_id c "one");
+  let after_remove = Hashtbl.mem live "three" && Hashtbl.mem live "four" && (not (Hashtbl.mem live "two")) in
+  (* move the NEW prefix doc ("two") out of the selector → order three,four,five; skip 1 → {four, five} *)
+  ignore (C.update c (d [ ("_id", Bson.str "two") ]) (d [ ("$set", d [ ("t", Bson.str "y") ]) ]));
+  let after_exit = Hashtbl.mem live "four" && Hashtbl.mem live "five" && (not (Hashtbl.mem live "three")) in
+  h.C.stop ();
+  init_ok && after_remove && after_exit
+
+let%test "windowed observe_changes: boundary edges — a tie re-evaluates, an update can re-enter, a non-full window admits" =
+  let c = C.create () in
+  let add id s = ignore (C.insert c (d [ ("_id", Bson.str id); ("score", i s) ])) in
+  add "a" 30; add "b" 20;
+  let live = Hashtbl.create 8 in
+  let h =
+    C.observe_changes (C.find c ~sort:(d [ ("score", i (-1)) ]) ~limit:3 ())
+      ~added:(fun id _ -> Hashtbl.replace live id ())
+      ~removed:(fun id -> Hashtbl.remove live id)
+      ()
+  in
+  (* the window is NOT full (2 of 3) → even the lowest doc must be admitted (no short-circuit) *)
+  add "k" 1;
+  let admits = Hashtbl.mem live "k" && Hashtbl.length live = 3 in
+  (* a strictly-below doc with a FULL window stays out (the short-circuit path) *)
+  add "low" 0;
+  let stays_out = (not (Hashtbl.mem live "low")) && Hashtbl.length live = 3 in
+  (* a TIE with the boundary ("k" = 1) re-evaluates safely (no corruption, window stays 3) *)
+  add "tie" 1;
+  let tie_safe = Hashtbl.length live = 3 in
+  (* the below-boundary doc UPDATED above the top must enter (the short-circuit must not blind us) *)
+  ignore (C.update c (d [ ("_id", Bson.str "low") ]) (d [ ("$set", d [ ("score", i 99) ]) ]));
+  let re_enters = Hashtbl.mem live "low" && Hashtbl.length live = 3 in
+  h.C.stop ();
+  admits && stays_out && tie_safe && re_enters
+
 (* ── Fanout: the ordered fan-out monitor the change stream rides on ── *)
 module F = C.Fanout
 

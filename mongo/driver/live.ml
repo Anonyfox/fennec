@@ -206,6 +206,12 @@ type query_view = {
   mutable vrefs : int;
   obs : coll_obs;
   mutable detach : unit -> unit; (* run under [_lock] (sink detach) — the poller variant is wrapped *)
+  (* the last reconciled window's tail doc (under [_lock]; skip = 0, no projection, full window only):
+     a matching out-of-window doc sorting STRICTLY below it cannot enter, so its event skips the
+     reconcile (and its DB query) entirely. Exact, not heuristic: short-circuited events provably
+     leave the window unchanged, so the boundary stays the live window's tail until the next
+     reconcile resets it. *)
+  mutable boundary : Bson.t option;
 }
 
 let _views : (string, query_view) Hashtbl.t = Hashtbl.create 64
@@ -253,6 +259,14 @@ let reconcile v =
   let fresh = raw_fetch v.q in
   let deliveries =
     with_lock (fun () ->
+        (* maintain the boundary for the short-circuit: only meaningful un-projected (the comparator
+           needs the sort fields), skip = 0, and with a FULL window *)
+        v.boundary <-
+          (if v.q.skip = 0 && v.q.limit > 0
+              && (match v.q.fields with Bson.Document [] -> true | _ -> false)
+              && List.length fresh = v.q.limit
+           then List.nth_opt fresh (v.q.limit - 1)
+           else None);
         let out = ref [] in
         let fan mk = List.iter (fun (_, s) -> out := (fun () -> mk s) :: !out) v.subs in
         let seen = Hashtbl.create 64 in
@@ -295,7 +309,7 @@ let get_view q : query_view =
             | None ->
                 let v =
                   { vk; q; proj = Q.Projection.of_fields q.fields; cache = Hashtbl.create 64; subs = [];
-                    vrefs = 0; obs = o; detach = (fun () -> ()) }
+                    vrefs = 0; obs = o; detach = (fun () -> ()); boundary = None }
                 in
                 retain o;
                 (if not o.polled then begin
@@ -305,17 +319,28 @@ let get_view q : query_view =
                       outside the lock, and the stream daemon serializes these per collection). An
                       event that can't affect the window (not matching, not cached) is O(1)-skipped. *)
                    let windowed = q.limit > 0 || q.skip > 0 in
+                   let cmp = Q.Sorter.of_spec q.sort in
                    let sink =
                      if windowed then (fun ev ->
                        let id = ev_id ev in
                        let relevant =
-                         with_lock (fun () -> Hashtbl.mem v.cache id)
+                         (* skip > 0: a prefix doc's change/removal shifts the window, and change
+                            streams carry no pre-image to filter by — every event reconciles *)
+                         q.skip > 0
+                         || with_lock (fun () -> Hashtbl.mem v.cache id)
                          ||
                          match ev.Change_stream.op with
                          | Change_stream.Insert | Change_stream.Update | Change_stream.Replace -> (
                              match ev.Change_stream.full_document with
-                             | Some d -> Q.Matcher.doc_matches v.q.selector d
-                             | None -> false)
+                             | None -> false
+                             | Some d ->
+                                 Q.Matcher.doc_matches v.q.selector d
+                                 (* boundary short-circuit: matching but STRICTLY below a full
+                                    window → cannot enter; skip the reconcile and its DB query *)
+                                 && not
+                                      (match with_lock (fun () -> v.boundary) with
+                                      | Some b -> cmp d b > 0
+                                      | None -> false))
                          | Change_stream.Delete -> false
                          | _ -> true (* drop/invalidate: always reconcile *)
                        in
