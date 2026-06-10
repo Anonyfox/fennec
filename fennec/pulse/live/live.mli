@@ -18,6 +18,12 @@ val create : unit -> t
 (** The underlying {!Merge_store} — feed it DDP deltas (the WebSocket client does this). *)
 val store : t -> Merge_store.t
 
+(** Install the recompute scheduler — how a store change reaches the reactive signals. Default:
+    immediate (native/SSR/tests keep synchronous semantics). The browser client installs a
+    frame-batched scheduler so a delta burst costs one recompute per collection per frame. Per-signal
+    dedup is built in; the scheduler only decides WHEN the batch runs. *)
+val set_scheduler : ((unit -> unit) -> unit) -> unit
+
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;
     the underlying watch is torn down on the component's cleanup.

@@ -76,6 +76,7 @@ type t = {
   persist : string option;
   mutable outbox : (string * Outbox.entry) list; (* (mid, entry), newest first; mirrors unacked *)
   mutable persist_scheduled : bool; (* the snapshot debounce flag *)
+  dirty_subs : (string, unit) Hashtbl.t; (* sub ids touched since the last snapshot flush *)
   mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
@@ -104,16 +105,46 @@ let persist_outbox t =
   | None -> ()
   | Some ns -> Kv.put ~ns (outbox_key ()) (Outbox.encode (List.rev_map snd t.outbox))
 
-(* persist every live sub's snapshot (the SEED format — restores via the normal seed path) *)
+(* per-sub snapshot budget: above it the sub's persistence degrades gracefully (warn once, live
+   behavior unchanged) — a 100MB-class subscription must not jank the main thread or blow the quota *)
+let _snapshot_budget = 2_000_000
+let _budget_warned : (string, unit) Hashtbl.t = Hashtbl.create 4
+
+let persist_one t ns key (st : sub_state) =
+  let payload = Seed.encode (MS.snapshot_sub (Live.store t.live) ~sub:st.id) in
+  if String.length payload > _snapshot_budget then begin
+    if not (Hashtbl.mem _budget_warned key) then begin
+      Hashtbl.replace _budget_warned key ();
+      Firebug.console##warn
+        (Js.string
+           ("fennec/persist: snapshot for '" ^ key
+          ^ "' exceeds the per-sub budget — not persisted (live behavior unchanged; window the publication)"))
+    end
+  end
+  else Kv.put ~ns ("sub:" ^ key) payload
+
+(* persist the DIRTY subs' snapshots (the SEED format — restores via the normal seed path). Dirty
+   tracking rides the sub tags every delta carries, so a hot feed snapshots only itself. *)
 let persist_subs t =
   match t.persist with
   | None -> ()
   | Some ns ->
       Hashtbl.iter
-        (fun key (st : sub_state) ->
-          let groups = MS.snapshot_sub (Live.store t.live) ~sub:st.id in
-          Kv.put ~ns ("sub:" ^ key) (Seed.encode groups))
-        t.subs
+        (fun sid () ->
+          match Hashtbl.find_opt t.by_id sid with
+          | Some st -> persist_one t ns (Subkey.key st.name st.params) st
+          | None -> ())
+        t.dirty_subs;
+      Hashtbl.reset t.dirty_subs
+
+(* which sub a data delta belongs to; [None] = untagged (a standard-DDP server) → all subs dirty *)
+let delta_sub = function
+  | Msg.Added { sub; _ } | Msg.Changed { sub; _ } | Msg.Removed { sub; _ } -> sub
+  | _ -> None (* ordered/standard-DDP deltas are untagged → conservatively mark all subs dirty *)
+
+let mark_dirty t = function
+  | Some sid -> Hashtbl.replace t.dirty_subs sid ()
+  | None -> Hashtbl.iter (fun _ (st : sub_state) -> Hashtbl.replace t.dirty_subs st.id ()) t.subs
 
 (* debounced: data deltas arrive in bursts; one snapshot a second is plenty *)
 let schedule_persist t =
@@ -137,7 +168,10 @@ let handle t raw =
   | None -> Firebug.console##warn (Js.string ("fennec/ddp: dropped an undecodable frame: " ^ raw))
   | Some m ->
       let box = Live.store t.live in
-      if Fennec_pulse_live.Wire_route.apply_delta box m then schedule_persist t
+      if Fennec_pulse_live.Wire_route.apply_delta box m then begin
+        mark_dirty t (delta_sub m);
+        schedule_persist t
+      end
       else
         match m with
         | Msg.Connected { session } -> t.session_id <- Some session (* for session resume on reconnect *)
@@ -156,8 +190,13 @@ let handle t raw =
                 end)
         | Msg.Ready { subs } ->
             (* quiescence: drop seeded/stale docs the live snapshot didn't re-confirm, then mark ready *)
-            List.iter (fun id -> MS.quiesce box id; mark_ready t id) subs;
-            persist_subs t (* a clean truth point: snapshot immediately, not debounced *)
+            List.iter
+              (fun id ->
+                MS.quiesce box id;
+                mark_ready t id;
+                Hashtbl.replace t.dirty_subs id ())
+              subs;
+            persist_subs t (* a clean truth point: snapshot the readied subs immediately *)
         | Msg.Nosub { id; error } ->
             (* a FAILED sub (error=Some) — GC the docs it contributed so they don't linger; an
                error=None nosub is the server's Unsub ack (already cleaned on stop). Either way, stop
@@ -224,7 +263,23 @@ let auto_persist () : string option =
       (fun el -> Js.Opt.case (el##getAttribute (Js.string "content")) (fun () -> None) (fun v -> Some (Js.to_string v)))
   with _ -> None
 
+(* B1: frame-coalesced reactivity — schedule recomputes on animation frames so a burst of deltas
+   (replay, resync, hot feed) is ONE re-render per collection per frame. Installed once. *)
+let _raf_installed = ref false
+
+let install_raf_scheduler () =
+  if not !_raf_installed then begin
+    _raf_installed := true;
+    Live.set_scheduler (fun k ->
+        ignore
+          (Js.Unsafe.fun_call
+             (Js.Unsafe.pure_js_expr
+                "(window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : function(f){setTimeout(f,16)})")
+             [| Js.Unsafe.inject (Js.wrap_callback (fun _ -> k ())) |]))
+  end
+
 let connect ?(path = "/websocket") ?persist () : t =
+  install_raf_scheduler ();
   let persist = match persist with Some _ as p -> p | None -> auto_persist () in
   let loc = Js.Unsafe.get Dom_html.window (Js.string "location") in
   let protocol = Js.to_string (Js.Unsafe.get loc (Js.string "protocol")) in
@@ -236,7 +291,7 @@ let connect ?(path = "/websocket") ?persist () : t =
       subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; unacked = [];
       send_if_open = (fun _ -> ()); sims = Hashtbl.create 8; status_sig = Fur.signal `Connecting;
       pending_sig = Fur.signal 0; awaiting_pong = false; persist; outbox = []; persist_scheduled = false;
-      closed = false; ws = None }
+      dirty_subs = Hashtbl.create 8; closed = false; ws = None }
   in
   (* PWA outbox restore (tier 3): every write that survived the reload re-issues with a FRESH id
      and its ORIGINAL seed, and its stub re-runs (Method.stub_replay) — the deterministic seed

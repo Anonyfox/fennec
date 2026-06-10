@@ -268,6 +268,25 @@ let%test "Sim.writes: insert mints the seeded id, update runs the real modifier,
   id = predicted && upd = 1 && n_now && rm = 1 && gone
   && Array.length (MS.fetch s "tasks" ()) = 1 (* the optimistic insert remains *)
 
+(* ── B1: the recompute scheduler — a delta burst coalesces to one recompute per batch window ── *)
+let%test "scheduler: a 5-delta burst is ONE coalesced recompute under a batched scheduler" =
+  let queue = ref [] in
+  Fennec_pulse_live.Live.set_scheduler (fun k -> queue := k :: !queue);
+  let lv = Live.create () in
+  let sig_ = Live.find lv "c" () in
+  let recomputes = ref (-1) in
+  let stop = Fur.watch (fun () -> ignore (Fur.get sig_); incr recomputes) in
+  for k = 1 to 5 do
+    MS.added (Live.store lv) ~sub:"a" ~collection:"c" ~id:(string_of_int k) ~fields:[ ("v", B.int k) ]
+  done;
+  let during = !recomputes = 0 (* nothing recomputed yet: all five deltas pended one thunk *) in
+  let batched = List.length !queue = 1 in
+  List.iter (fun k -> k ()) !queue;
+  let after = !recomputes >= 1 && Array.length (Fur.get sig_) = 5 in
+  stop ();
+  Fennec_pulse_live.Live.set_scheduler (fun k -> k ());
+  during && batched && after
+
 (* ── PWA persistence primitives: snapshot_sub (tier 2) + the outbox codec & stub replay (tier 3) ── *)
 let%test "snapshot_sub: round-trips through the seed path; takes only the sub's own fields; tentative on restore" =
   let s = MS.create () in

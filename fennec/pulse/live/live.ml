@@ -12,6 +12,14 @@ type t = {
 let create () = { store = Merge_store.create (); vlock = Mutex.create (); versions = Hashtbl.create 8 }
 let store t = t.store
 
+(* The recompute SCHEDULER: how a store change reaches the Fur signals. Default = immediate (native,
+   SSR, tests — synchronous semantics unchanged). The browser client installs a frame-batched
+   scheduler (requestAnimationFrame), so a BURST of deltas — a subscription replay, a reconnect
+   resync, a hot feed — costs ONE recompute/re-render per collection per frame instead of one per
+   delta. The per-signal [pending] flag dedups within a batch window. *)
+let _scheduler : ((unit -> unit) -> unit) ref = ref (fun k -> k ())
+let set_scheduler f = _scheduler := f
+
 (* one shared Fur signal per collection, bumped from the merge store's change listener. The lock
    covers only the table find-or-create (signal updates arrive via the store's fire, outside it). *)
 let version_signal t name =
@@ -21,8 +29,15 @@ let version_signal t name =
     | Some s -> s
     | None ->
         let s = Fur.signal (Merge_store.version t.store name) in
+        let pending = ref false in
         let (_ : int) =
-          Merge_store.on_change t.store name (fun () -> Fur.set s (Merge_store.version t.store name))
+          Merge_store.on_change t.store name (fun () ->
+              if not !pending then begin
+                pending := true;
+                !_scheduler (fun () ->
+                    pending := false;
+                    Fur.set s (Merge_store.version t.store name))
+              end)
         in
         Hashtbl.replace t.versions name s;
         s
