@@ -50,7 +50,7 @@ val call : t -> name:string -> ?params:Bson.t list -> unit -> unit
 
 (** [call_result t ~name ?params ()] invokes a method and returns a Fur signal of its outcome: [None]
     while in flight, then [Some (Ok value)] or [Some (Error (code, reason))] — so a rejected method
-    (e.g. an allow/deny [403]) surfaces to the UI instead of failing silently. {!call} is the
+    (e.g. a method's [403]) surfaces to the UI instead of failing silently. {!call} is the
     fire-and-forget form (the data a method changes still flows back via the open subscription). *)
 val call_result : t -> name:string -> ?params:Bson.t list -> unit -> (Bson.t, string * string) result option Fur.signal
 

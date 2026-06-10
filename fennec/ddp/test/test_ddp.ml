@@ -43,7 +43,7 @@ let%test "Message coerces a numeric error code to a string" =
 (* ── session state machine ── *)
 let%test "session: connect emits connected; ping emits pong" =
   let out = ref [] in
-  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods:(Hashtbl.create 1) in
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods:(Hashtbl.create 1) () in
   Session.dispatch s (Message.Connect { session = None; version = "1"; support = [] });
   Session.dispatch s (Message.Ping { id = Some "p" });
   match !out with
@@ -56,15 +56,15 @@ let%test "session: sub runs the publication sub-tagged and emits ready" =
       sink.added ~collection:"items" ~id:"1" ~fields:[ ("n", B.int 1) ];
       sink.ready ();
       { Session.stop = (fun () -> ()) });
-  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) in
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) () in
   Session.dispatch s (Message.Sub { id = "sub1"; name = "feed"; params = [] });
   List.exists (function Message.Added a -> a.sub = Some "sub1" && a.collection = "items" | _ -> false) !out
   && List.exists (function Message.Ready { subs = [ "sub1" ] } -> true | _ -> false) !out
 let%test "session: method emits result + updated; unknown pub emits nosub" =
   let out = ref [] in
   let methods = Hashtbl.create 1 in
-  Hashtbl.replace methods "sum" (fun args -> match args with [ B.Int a; B.Int b ] -> B.Int (a + b) | _ -> B.Null);
-  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods in
+  Hashtbl.replace methods "sum" (fun _ctx args -> match args with [ B.Int a; B.Int b ] -> B.Int (a + b) | _ -> B.Null);
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods () in
   Session.dispatch s (Message.Method { method_ = "sum"; params = [ B.int 2; B.int 3 ]; id = "m1"; random_seed = None });
   Session.dispatch s (Message.Sub { id = "s2"; name = "nope"; params = [] });
   List.exists (function Message.Result { id = "m1"; result = Some (B.Int 5); _ } -> true | _ -> false) !out
@@ -91,8 +91,8 @@ let%test "JSON rejects trailing garbage and a lone minus" =
 let%test "session: a method's Method_error is reported, not collapsed to 500" =
   let out = ref [] in
   let methods = Hashtbl.create 1 in
-  Hashtbl.replace methods "boom" (fun _ -> raise (Session.Method_error { code = "403"; reason = "Not authorized" }));
-  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods in
+  Hashtbl.replace methods "boom" (fun _ctx _ -> raise (Session.Method_error { code = "403"; reason = "Not authorized" }));
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods () in
   Session.dispatch s (Message.Method { method_ = "boom"; params = []; id = "m"; random_seed = None });
   List.exists
     (function
@@ -104,9 +104,23 @@ let%test "session: a throwing publication emits Nosub, not a hang" =
   let out = ref [] in
   let pubs = Hashtbl.create 1 in
   Hashtbl.replace pubs "boom" (fun ~params:_ (_ : Session.sink) -> failwith "publication boom");
-  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) in
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) () in
   Session.dispatch s (Message.Sub { id = "sub1"; name = "boom"; params = [] });
   List.exists (function Message.Nosub { id = "sub1"; error = Some _ } -> true | _ -> false) !out
+
+let%test "session: set_user_id rebinds the connection's user for subsequent methods" =
+  let out = ref [] in
+  let methods = Hashtbl.create 2 in
+  Hashtbl.replace methods "login" (fun ctx _ -> ctx.Session.set_user_id (Some "alice"); B.Bool true);
+  Hashtbl.replace methods "whoami" (fun ctx _ ->
+      match ctx.Session.user_id with Some u -> B.str u | None -> B.Null);
+  let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs:(Hashtbl.create 1) ~methods () in
+  Session.dispatch s (Message.Method { method_ = "whoami"; params = []; id = "m1"; random_seed = None });
+  Session.dispatch s (Message.Method { method_ = "login"; params = []; id = "m2"; random_seed = None });
+  Session.dispatch s (Message.Method { method_ = "whoami"; params = []; id = "m3"; random_seed = None });
+  List.exists (function Message.Result { id = "m1"; result = Some B.Null; _ } -> true | _ -> false) !out
+  && List.exists (function Message.Result { id = "m3"; result = Some (B.String "alice"); _ } -> true | _ -> false) !out
+  && Session.user_id s = Some "alice"
 
 (* ── interop: REAL DDP frames captured off a live Meteor 3.x server (raw /websocket) must decode
    losslessly — the proof the wire stays Meteor-compatible (V1 drop-in), pinning the quirks (numeric

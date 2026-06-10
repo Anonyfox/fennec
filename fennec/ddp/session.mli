@@ -21,8 +21,18 @@ type handle = { stop : unit -> unit }
 (** A publication: given [params] and a {!sink}, start streaming and return a {!handle}. *)
 type publication = params:Bson.t list -> sink -> handle
 
-(** A server method: arguments to a result value. *)
-type method_fn = Bson.t list -> Bson.t
+(** The per-call context a method runs in: [user_id] is the connection's current user (None =
+    anonymous), [set_user_id] rebinds it for the rest of the connection (a login method's job — the
+    Meteor [this.setUserId]), and [random_seed] is the client's seed for deterministic id minting
+    (latency compensation). *)
+type method_ctx = {
+  user_id : string option;
+  set_user_id : string option -> unit;
+  random_seed : Bson.t option;
+}
+
+(** A server method: a per-call {!method_ctx} and arguments to a result value. *)
+type method_fn = method_ctx -> Bson.t list -> Bson.t
 
 (** A {!method_fn} raises this for an application-level error (code + reason); the session maps it
     to the DDP error payload. Control exceptions ([Stack_overflow]/[Out_of_memory]) propagate; any
@@ -32,14 +42,22 @@ exception Method_error of { code : string; reason : string }
 (** A live session. *)
 type t
 
-(** [create ~session_id ~emit ~pubs ~methods] builds a session: [emit] sends a message to the peer;
-    [pubs]/[methods] are the registries the session dispatches [sub]/[method] against. *)
+(** [create ?fence ~session_id ~emit ~pubs ~methods ()] builds a session: [emit] sends a message to
+    the peer; [pubs]/[methods] are the registries the session dispatches [sub]/[method] against.
+    [fence k] must run [k] only once the data deltas of already-committed writes have been DELIVERED
+    to this session — the write fence that keeps [updated] from overtaking a method's own writes
+    (default: immediate, for tests and fenceless transports). *)
 val create :
+  ?fence:((unit -> unit) -> unit) ->
   session_id:string ->
   emit:(Message.t -> unit) ->
   pubs:(string, publication) Hashtbl.t ->
   methods:(string, method_fn) Hashtbl.t ->
+  unit ->
   t
+
+(** The connection's current authenticated user (None = anonymous). *)
+val user_id : t -> string option
 
 (** [dispatch t m] advances the session on an incoming message: [connect]→[connected], [sub]→ run
     the publication (sub-tagged deltas) + [ready] or [nosub], [unsub]→stop + [nosub],

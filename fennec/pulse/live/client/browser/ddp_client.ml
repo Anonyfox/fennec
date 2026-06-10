@@ -196,7 +196,7 @@ let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
   sub.ready
 
 (* [call_result] invokes a method and returns a signal that resolves to its outcome — [None] while
-   in flight, then [Some (Ok value)] or [Some (Error (code, reason))] (e.g. an allow/deny 403). *)
+   in flight, then [Some (Ok value)] or [Some (Error (code, reason))] (e.g. a method's 403). *)
 let call_result t ~name ?(params = []) () : (Bson.t, string * string) result option Fur.signal =
   t.methodc <- t.methodc + 1;
   let id = "m" ^ string_of_int t.methodc in

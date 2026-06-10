@@ -30,12 +30,24 @@ module type REACTIVE = sig
 
   exception Error of { code : string; reason : string }
 
-  type invocation = { user_id : string option; is_simulation : bool }
+  type invocation = {
+    user_id : string option;
+    is_simulation : bool;
+    set_user_id : string option -> unit;
+  }
+
   type method_handler = invocation -> doc list -> doc
 
   val methods : (string * method_handler) list -> unit
   val call : ?user_id:string option -> string -> doc list -> doc
-  val apply : ?user_id:string option -> ?is_simulation:bool -> string -> doc list -> doc
+
+  val apply :
+    ?user_id:string option ->
+    ?is_simulation:bool ->
+    ?set_user_id:(string option -> unit) ->
+    string ->
+    doc list ->
+    doc
 
   type id_generation = STRING | MONGO
 
@@ -111,23 +123,6 @@ module type REACTIVE = sig
       unit ->
       live_handle
 
-    val allow :
-      t ->
-      ?insert:(string option -> doc -> bool) ->
-      ?update:(string option -> doc -> bool) ->
-      ?remove:(string option -> doc -> bool) ->
-      unit ->
-      unit
-
-    val deny :
-      t ->
-      ?insert:(string option -> doc -> bool) ->
-      ?update:(string option -> doc -> bool) ->
-      ?remove:(string option -> doc -> bool) ->
-      unit ->
-      unit
-
-    val insert_from_client : ?user_id:string option -> t -> doc -> string
   end
 
   type cursor_kind = Cursor of Collection.cursor | Cursors of Collection.cursor list
@@ -193,7 +188,14 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   let _reg_lock = Mutex.create ()
 
   (* ---- methods ---- *)
-  type invocation = { user_id : string option; is_simulation : bool }
+  type invocation = {
+    user_id : string option;
+    is_simulation : bool;
+    set_user_id : string option -> unit;
+        (* rebinds the CONNECTION's user for subsequent calls (a login method's job — Meteor's
+           [this.setUserId]); a no-op off-connection (direct [call]/[apply], simulations) *)
+  }
+
   type method_handler = invocation -> doc list -> doc
 
   let _methods : (string, method_handler) Hashtbl.t = Hashtbl.create 16
@@ -201,10 +203,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   let methods defs =
     with_lock _reg_lock (fun () -> List.iter (fun (n, h) -> Hashtbl.replace _methods n h) defs)
 
-  let apply ?(user_id = None) ?(is_simulation = false) name (args : doc list) : doc =
+  let apply ?(user_id = None) ?(is_simulation = false) ?(set_user_id = fun _ -> ()) name
+      (args : doc list) : doc =
     match with_lock _reg_lock (fun () -> Hashtbl.find_opt _methods name) with
     | None -> error ~reason:(Printf.sprintf "Method '%s' not found" name) "404"
-    | Some h -> h { user_id; is_simulation } args (* the handler itself runs outside the lock *)
+    | Some h -> h { user_id; is_simulation; set_user_id } args (* the handler runs outside the lock *)
 
   let call ?(user_id = None) name args = apply ~user_id name args
 
@@ -231,18 +234,6 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
   (* ---- Collection ---- *)
   module Collection = struct
-    type rule = string option -> doc -> bool
-
-    type rules = {
-      mutable allow_insert : rule list;
-      mutable allow_update : rule list;
-      mutable allow_remove : rule list;
-      mutable deny_insert : rule list;
-      mutable deny_update : rule list;
-      mutable deny_remove : rule list;
-      mutable secured : bool;
-    }
-
     type t = {
       backend : B.collection;
       uid : int;
@@ -251,7 +242,6 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       name : string;
       id_generation : id_generation;
       transform : (doc -> doc) option;
-      rules : rules;
     }
 
     (* a cursor's transform disposition — replaces a triple-state [(doc -> doc) option option] *)
@@ -286,19 +276,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
         match name with Some s when s <> "" -> (s, true) | _ -> ("_anon" ^ string_of_int uid, false)
       in
       if registered then with_lock _reg_lock (fun () -> Hashtbl.replace _collections name backend);
-      {
-        backend;
-        uid;
-        name;
-        id_generation;
-        transform;
-        rules =
-          {
-            allow_insert = []; allow_update = []; allow_remove = [];
-            deny_insert = []; deny_remove = []; deny_update = [];
-            secured = false;
-          };
-      }
+      { backend; uid; name; id_generation; transform }
 
     let name c = c.name
 
@@ -460,30 +438,9 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       in
       { stop = h.Backend.stop }
 
-    (* allow / deny *)
-    let allow c ?(insert = fun _ _ -> false) ?(update = fun _ _ -> false)
-        ?(remove = fun _ _ -> false) () =
-      c.rules.secured <- true;
-      c.rules.allow_insert <- insert :: c.rules.allow_insert;
-      c.rules.allow_update <- update :: c.rules.allow_update;
-      c.rules.allow_remove <- remove :: c.rules.allow_remove
-
-    let deny c ?(insert = fun _ _ -> false) ?(update = fun _ _ -> false)
-        ?(remove = fun _ _ -> false) () =
-      c.rules.secured <- true;
-      c.rules.deny_insert <- insert :: c.rules.deny_insert;
-      c.rules.deny_update <- update :: c.rules.deny_update;
-      c.rules.deny_remove <- remove :: c.rules.deny_remove
-
-    let passes allow deny uid d =
-      (not (List.exists (fun f -> f uid d) deny))
-      && List.exists (fun f -> f uid d) allow
-
-    let insert_from_client ?(user_id = None) c d =
-      if not c.rules.secured then
-        error "403" ~reason:"Access denied. No allow validators set on collection."
-      else if passes c.rules.allow_insert c.rules.deny_insert user_id d then insert c d
-      else error "403" ~reason:"Access denied"
+    (* NO allow/deny, deliberately: client writes go through METHODS, full stop — the one blessed
+       path. Rule machinery for direct client mutations is the part of Meteor its own community
+       regretted; fennec never ships it. *)
   end
 
   (* ---- publish / subscribe (multi-collection merge box) ---- *)

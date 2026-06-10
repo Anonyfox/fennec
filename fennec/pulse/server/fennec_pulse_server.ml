@@ -25,10 +25,13 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     { Session.stop = h.Rx.stop }
 
   (* a method, translating a reactive Error into the session's Method_error so its code/reason reach
-     the client instead of being collapsed to a generic 500 *)
+     the client instead of being collapsed to a generic 500. The session's per-call context threads
+     through: the connection's user reaches the handler's invocation, and a login method's
+     set_user_id rebinds the connection. *)
   let method_of name : Session.method_fn =
-   fun params ->
-    try R.call name params with R.Error { code; reason } -> raise (Session.Method_error { code; reason })
+   fun ctx params ->
+    try R.apply ~user_id:ctx.Session.user_id ~set_user_id:ctx.Session.set_user_id name params
+    with R.Error { code; reason } -> raise (Session.Method_error { code; reason })
 
   (* the publication/method registries for a session — the names are fixed at registration time *)
   (* a per-session snapshot of the publication/method names (wrapped into session sinks). Rebuilt per
@@ -43,7 +46,7 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
 
   let new_session ~session_id ~emit =
     let pubs, methods = registries () in
-    Session.create ~session_id ~emit ~pubs ~methods
+    Session.create ~session_id ~emit ~pubs ~methods ()
 
   let gen_session_id = function Some s -> s | None -> R.ObjectID.make ()
 

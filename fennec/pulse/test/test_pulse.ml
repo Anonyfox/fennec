@@ -1,7 +1,8 @@
 (* The Meteor feature suite, run against the in-memory reactive instance. CRUD, query options,
    projection, upsert, idGeneration, document transform, the observe engine, multi-collection
-   publish/subscribe with the merge box, methods, allow/deny, ObjectID, and EJSON — the surface a
-   reactive app builds on. Publications use unique names per test (the registry is module-global). *)
+   publish/subscribe with the merge box, methods (the one blessed client write path), ObjectID, and
+   EJSON — the surface a reactive app builds on. Publications use unique names per test (the
+   registry is module-global). *)
 
 open Fennec_pulse
 module R = Reactive.Mini
@@ -102,19 +103,20 @@ let%test "publish projection hides a field, including after a live update" =
   sub.R.stop ();
   before && after
 
-(* ── methods / allow-deny / ObjectID / EJSON ── *)
+(* ── methods (THE client write path — no allow/deny in fennec, by decree) / ObjectID / EJSON ── *)
 let%test "call runs a registered method" =
   R.methods [ ("sum", fun _ args -> match args with [ B.Int a; B.Int b ] -> B.Int (a + b) | _ -> B.Null) ];
   R.call "sum" [ B.Int 2; B.Int 3 ] = B.Int 5
-let%test "allow/deny gate client inserts" =
-  let sec = coll "sec" in
-  let denied f = try ignore (f ()); false with R.Error _ -> true in
-  let no_rules = denied (fun () -> C.insert_from_client sec (doc [ ("x", i 1) ])) in
-  C.allow sec ~insert:(fun _ _ -> true) ();
-  let allowed = String.length (C.insert_from_client sec (doc [ ("x", i 1) ])) > 0 in
-  C.deny sec ~insert:(fun _ _ -> true) ();
-  let deny_wins = denied (fun () -> C.insert_from_client sec (doc [ ("x", i 2) ])) in
-  no_rules && allowed && deny_wins
+
+let%test "methods: the invocation carries user_id and can rebind it via set_user_id" =
+  R.methods
+    [ ("whoami", fun inv _ -> (match inv.R.user_id with Some u -> B.str u | None -> B.Null));
+      ("login", fun inv _ -> inv.R.set_user_id (Some "alice"); B.Bool true) ];
+  let rebound = ref None in
+  let anon = R.call "whoami" [] = B.Null in
+  let as_user = R.apply ~user_id:(Some "u1") "whoami" [] = B.str "u1" in
+  let _ = R.apply ~set_user_id:(fun u -> rebound := u) "login" [] in
+  anon && as_user && !rebound = Some "alice"
 let%test "ObjectID make / validate / reject" =
   let o = R.ObjectID.make () in
   String.length (R.ObjectID.to_hex_string o) = 24

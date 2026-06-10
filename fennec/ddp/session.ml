@@ -18,7 +18,16 @@ type sink = {
 
 type handle = { stop : unit -> unit }
 type publication = params:Bson.t list -> sink -> handle
-type method_fn = Bson.t list -> Bson.t
+
+(* the per-call context a method runs in: the connection's current user (set by a prior method via
+   [set_user_id] — e.g. a login method), and the client's randomSeed for deterministic id minting *)
+type method_ctx = {
+  user_id : string option;
+  set_user_id : string option -> unit;
+  random_seed : Bson.t option;
+}
+
+type method_fn = method_ctx -> Bson.t list -> Bson.t
 
 type t = {
   emit : Msg.t -> unit;
@@ -26,10 +35,16 @@ type t = {
   methods : (string, method_fn) Hashtbl.t;
   subs : (string, handle) Hashtbl.t; (* subId -> running publication *)
   session_id : string;
+  mutable user_id : string option; (* the connection's authenticated user (None = anonymous) *)
+  (* the write fence: runs [k] once the data deltas already committed have been DELIVERED to this
+     session's sink, so [updated] can never overtake the writes it announces (default: immediate) *)
+  fence : (unit -> unit) -> unit;
 }
 
-let create ~session_id ~emit ~pubs ~methods =
-  { emit; pubs; methods; subs = Hashtbl.create 16; session_id }
+let create ?(fence = fun k -> k ()) ~session_id ~emit ~pubs ~methods () =
+  { emit; pubs; methods; subs = Hashtbl.create 16; session_id; user_id = None; fence }
+
+let user_id t = t.user_id
 
 (* A method raises this for an application-level error (a code + reason the client switches on);
    the session maps it to the DDP error payload. Control exceptions are re-raised; any other
@@ -78,14 +93,15 @@ let dispatch (t : t) (m : Msg.t) : unit =
        | Some h -> h.stop (); Hashtbl.remove t.subs id
        | None -> ());
       t.emit (Msg.Nosub { id; error = None })
-  | Msg.Method { id; method_; params; _ } -> (
+  | Msg.Method { id; method_; params; random_seed } -> (
       match Hashtbl.find_opt t.methods method_ with
       | None ->
           t.emit (Msg.Result { id; error = Some (err "404" ("no method " ^ method_)); result = None });
           t.emit (Msg.Updated { methods = [ id ] })
       | Some f ->
+          let ctx = { user_id = t.user_id; set_user_id = (fun u -> t.user_id <- u); random_seed } in
           (match
-             try Ok (f params) with
+             try Ok (f ctx params) with
              | Method_error { code; reason } -> Error (code, reason)
              | (Stack_overflow | Out_of_memory) as e -> raise e
              | _ -> Error ("500", "method failed")
@@ -93,7 +109,9 @@ let dispatch (t : t) (m : Msg.t) : unit =
            | Ok v -> t.emit (Msg.Result { id; error = None; result = Some v })
            | Error (code, reason) ->
                t.emit (Msg.Result { id; error = Some (err code reason); result = None }));
-          t.emit (Msg.Updated { methods = [ id ] }))
+          (* the write fence: [updated] is the client's cue to reveal server truth (drop its
+             optimistic simulation), so it must FOLLOW the data deltas this method's writes caused *)
+          t.fence (fun () -> t.emit (Msg.Updated { methods = [ id ] })))
   | _ -> ()
 
 (* tear down all running subscriptions (connection closed) *)
