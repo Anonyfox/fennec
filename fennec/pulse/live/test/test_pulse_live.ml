@@ -269,6 +269,75 @@ let%test "Sim.writes: insert mints the seeded id, update runs the real modifier,
   id = predicted && upd = 1 && n_now && rm = 1 && gone
   && Array.length (MS.fetch s "tasks" ()) = 1 (* the optimistic insert remains *)
 
+(* ── server-wins under BUGGY stubs: the reveal (sub_stopped) is the arbiter, whatever the stub did ── *)
+let%test "server-wins: a PHANTOM optimistic insert (server never created it) vanishes at reveal" =
+  let s = MS.create () in
+  MS.begin_sim s "sim:m";
+  MS.added s ~sub:"sim:m" ~collection:"c" ~id:"ghost" ~fields:[ ("v", B.int 1) ];
+  let shown = Array.length (MS.fetch s "c" ()) = 1 in
+  MS.sub_stopped s "sim:m";
+  (* [updated] arrived; no real sub ever confirmed "ghost" *)
+  shown && Array.length (MS.fetch s "c" ()) = 0
+
+let%test "server-wins: conflicting stub values lose to the server's, and stub-only junk fields vanish" =
+  let s = MS.create () in
+  MS.added s ~sub:"real" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ];
+  MS.begin_sim s "sim:m";
+  (* a buggy stub: wrong value AND a field the server never writes *)
+  MS.changed s ~sub:"sim:m" ~collection:"c" ~id:"x"
+    ~fields:[ ("v", B.int 999); ("junk", B.str "oops") ]
+    ~cleared:[];
+  (* the server's true delta lands (fence-ordered) BEFORE updated *)
+  MS.changed s ~sub:"real" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 2) ] ~cleared:[];
+  let optimistic =
+    match MS.fetch s "c" () with
+    | [| d |] -> B.get d "v" = Some (B.Int 999) && B.get d "junk" = Some (B.String "oops")
+    | _ -> false
+  in
+  MS.sub_stopped s "sim:m";
+  let revealed =
+    match MS.fetch s "c" () with
+    | [| d |] -> B.get d "v" = Some (B.Int 2) && B.get d "junk" = None
+    | _ -> false
+  in
+  optimistic && revealed
+
+let%test "server-wins: a REJECTED method reverts the WHOLE simulation (insert + update + delete) exactly" =
+  let s = MS.create () in
+  MS.added s ~sub:"real" ~collection:"c" ~id:"a" ~fields:[ ("v", B.int 1) ];
+  MS.added s ~sub:"real" ~collection:"c" ~id:"b" ~fields:[ ("v", B.int 2) ];
+  let w = Fennec_pulse_live.Sim.writes s ~sim:"sim:m" ~seed:"sx" in
+  let module Mth = Fennec_pulse_method in
+  ignore (w.Mth.Method.insert "c" (B.doc [ ("v", B.int 3) ]));
+  ignore (w.Mth.Method.update "c" (B.doc [ ("_id", B.str "a") ]) (B.doc [ ("$set", B.doc [ ("v", B.int 99) ]) ]));
+  ignore (w.Mth.Method.remove "c" (B.doc [ ("_id", B.str "b") ]));
+  let during =
+    let docs = MS.fetch s "c" () in
+    Array.length docs = 2 (* a (modified) + the optimistic insert; b hidden *)
+  in
+  (* the server rejected: error Result + updated, ZERO server writes → drop the sim *)
+  MS.sub_stopped s "sim:m";
+  let after = MS.fetch s "c" ~sort:(B.doc [ ("v", B.int 1) ]) () in
+  during && Array.length after = 2
+  && B.get after.(0) "v" = Some (B.Int 1)
+  && B.get after.(1) "v" = Some (B.Int 2) (* byte-exact original state: a=1 back, b restored, ghost gone *)
+
+let%test "server-wins: overlapping in-flight simulations resolve independently, in any updated order" =
+  let s = MS.create () in
+  MS.added s ~sub:"real" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ];
+  MS.begin_sim s "sim:m1";
+  MS.begin_sim s "sim:m2";
+  MS.changed s ~sub:"sim:m1" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 10) ] ~cleared:[];
+  MS.changed s ~sub:"sim:m2" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 20) ] ~cleared:[];
+  let v () = match MS.fetch s "c" () with [| d |] -> B.get d "v" | _ -> None in
+  let later_wins = v () = Some (B.Int 20) in
+  MS.sub_stopped s "sim:m1";
+  (* m1's updated first: m2's overlay still stands *)
+  let m2_stands = v () = Some (B.Int 20) in
+  MS.sub_stopped s "sim:m2";
+  let truth = v () = Some (B.Int 1) in
+  later_wins && m2_stands && truth
+
 let%test "changed: a changed for a doc this sub never added creates it (Meteor-tolerant, not dropped)" =
   let s = MS.create () in
   MS.changed s ~sub:"a" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ] ~cleared:[];
