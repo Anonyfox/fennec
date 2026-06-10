@@ -52,6 +52,25 @@ Edit `frontend/apps/web/index.mlx` and save — the page hot-reloads ([`examples
 is the full tour). Prefer to build the CLI yourself (adds Go + Rust)? See
 [Build from source](#build-from-source-contributors).
 
+## AI-first loop
+
+Fennec treats humans and coding agents as first-class users of the same CLI. Before editing, ask the
+source-generated framework map what public path to use:
+
+```sh
+fennec discover "build an SSR page with a local counter"
+```
+
+During iteration, supported agents such as Codex and Claude Code can attach to the dev loop:
+
+```sh
+fennec dev --agent --attach
+```
+
+After that, compiler diagnostics, reload kind, affected surface, and inline-test results arrive in
+the agent's next step automatically. Run plain `fennec` for the generated guide that explains the
+human and agent workflow from the installed binary.
+
 **New to OCaml?** You don't need to be an expert. The mental map: opam ≈ npm, dune ≈ your bundler,
 `.mlx` ≈ JSX, `signal` ≈ `useState`, paws ≈ middleware, `.mli` ≈ a `.d.ts`, and there's no `null`.
 The compiler + Merlin/LSP carry the rest.

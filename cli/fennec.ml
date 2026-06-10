@@ -727,6 +727,10 @@ let main_cmd =
          supervised livereload loop; $(b,test) runs and verifies everything — unit, http, \
          browser, and system tests, plus doc-coverage ($(b,fennec test docs)).";
       `P
+        "Run $(b,fennec) with no arguments for the generated project guide. Use $(b,fennec discover \
+         \"task\") before editing to find the source-backed Fennec path, then $(b,fennec dev \
+         --agent --attach) when a coding agent should receive devserver feedback after edits.";
+      `P
         "$(b,fennec) is convenience and quality on top, never a replacement for dune: delete it \
          and the project is still a plain dune project — $(b,dune build) and $(b,dune exec) build \
          and run it. You lose only the automated restart, CSS hot-swap, and orchestrated test cuts.";
