@@ -238,6 +238,35 @@ let label_near line_text =
   let s = String.trim line_text in
   if s = "" then Filename.basename s else if String.length s > 80 then String.sub s 0 80 else s
 
+let label_from_window mention_index fallback window =
+  let score line =
+    let mentions = first_api_mentions mention_index line |> List.length in
+    let marker =
+      if str_contains line "send_chunked" then 80
+      else
+      if
+        str_contains line "let%test"
+        || str_contains line "let%http"
+        || str_contains line "let%browser"
+        || str_contains line "let%system"
+        || str_contains line "check "
+        || str_contains line "S.check"
+        || str_contains line "Router.page"
+        || str_contains line "pipe_matched"
+        || str_contains line "~multipart"
+      then 8
+      else 0
+    in
+    (mentions * 10) + marker
+  in
+  window |> String.split_on_char '\n'
+  |> List.map (fun line -> (line, score line))
+  |> List.filter (fun (line, s) -> s > 0 && String.trim line <> "")
+  |> List.sort (fun (_, a) (_, b) -> compare b a)
+  |> function
+  | (line, _) :: _ -> label_near line
+  | [] -> label_near fallback
+
 let window_text lines idx =
   let len = Array.length lines in
   let lo = max 0 (idx - 1) in
@@ -284,7 +313,7 @@ let evidence_of_file ~root mention_index file =
         in
         let acc =
           if interesting && not (str_contains line "GENERATED") then
-            let label = label_near line in
+            let label = label_from_window mention_index line window in
             {
               id = evidence_id (evidence_kind_to_string kind) rel_path label line;
               kind;

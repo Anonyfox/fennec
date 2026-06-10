@@ -12,7 +12,43 @@ let item_line (i : public_item) =
   Printf.sprintf "  %-34s %s  (%s)" i.path detail (Source_ref.to_string i.source)
 
 let evidence_line (e : evidence) =
-  Printf.sprintf "  %s  %s" e.label (Source_ref.to_string e.source)
+  let clean_line s =
+    s |> String.trim
+    |> fun s ->
+    let s =
+      if String.length s >= 2 && String.sub s 0 2 = "(*" then
+        String.sub s 2 (String.length s - 2) |> String.trim
+      else s
+    in
+    let s =
+      if String.length s >= 2 && String.sub s (String.length s - 2) 2 = "*)" then
+        String.sub s 0 (String.length s - 2) |> String.trim
+      else s
+    in
+    s
+  in
+  let useful s =
+    let s = clean_line s in
+    s <> "" && s <> "." && s <> "fun () ->" && s <> "()" && String.exists (fun c -> Char.code c >= Char.code 'A' && Char.code c <= Char.code 'z') s
+  in
+  let likely_continuation s =
+    let s = clean_line s in
+    String.length s > 0 && s.[0] >= 'a' && s.[0] <= 'z' && not (String.starts_with ~prefix:"let " s)
+  in
+  let label = clean_line e.label in
+  let candidates =
+    (if useful label && not (likely_continuation label) then [ label ] else [])
+    @ (e.text |> String.split_on_char '\n' |> List.map clean_line)
+    @ [ label ]
+  in
+  let excerpt =
+    candidates
+    |> List.find_opt useful
+    |> Option.value ~default:(clean_line e.label)
+    |> fun s -> short_doc ~limit:118 (Some s)
+    |> fun s -> if s = "" then evidence_kind_to_string e.kind else s
+  in
+  Printf.sprintf "  %-7s %s  (%s)" (evidence_kind_to_string e.kind) excerpt (Source_ref.to_string e.source)
 
 let render_list title lines =
   match lines with

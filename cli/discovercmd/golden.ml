@@ -105,13 +105,13 @@ let tasks =
     {
       query = "choose Pulse live data vs local Fur state";
       must_use = [ "Fur.signal"; "Pulse.Live" ];
-      must_evidence = [ "web_test.ml"; "task_list.mlx" ];
+      must_evidence = [ "counter.mlx"; "task_list.mlx" ];
       must_answer = [ "Fur.signal"; "Pulse.Live"; "server-backed" ];
       starter = false;
       must_card = "compare";
       top_use = Some "Fur.signal";
       default_use = [ "Fur.signal"; "Pulse.Live" ];
-      default_evidence = [ "web_test.ml"; "task_list.mlx" ];
+      default_evidence = [ "counter.mlx"; "task_list.mlx" ];
     };
   ]
 

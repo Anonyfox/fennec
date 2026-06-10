@@ -376,6 +376,30 @@ let plan_steps terms uses evidence =
       "Follow the closest example/test evidence, then add the narrowest focused test.";
     ]
 
+let focused_uses terms evidence uses =
+  let kind = infer_plan_kind terms uses evidence in
+  let keep_path path prefixes =
+    List.exists (fun prefix -> path = prefix || starts_with path (prefix ^ ".")) prefixes
+  in
+  let prefixes =
+    match kind with
+    | Matched_auth -> [ "Fennec.Endpoint"; "Fennec.Paw.Basic_auth" ]
+    | Response_cookie -> [ "Fennec.Conn.cookie"; "Fennec.Conn.cookies"; "Fennec.Conn.set_cookie"; "Fennec.Conn.delete_cookie" ]
+    | Session -> [ "Fennec.Paw.Session" ]
+    | Upload -> [ "Fennec.Conn.files"; "Fennec.Conn.file" ]
+    | Chunked_stream -> [ "Fennec.Conn.send_chunked"; "Fennec.Conn.stream" ]
+    | Http_test -> [ "Fennec_hunt.Http" ]
+    | Local_state -> [ "Fur.signal"; "Fur.get"; "Fur.set"; "Fur.update"; "Fur.Head" ]
+    | Router -> [ "Fur.Router" ]
+    | Generic -> []
+  in
+  let focused =
+    match prefixes with
+    | [] -> uses
+    | prefixes -> List.filter (fun (i : public_item) -> keep_path i.path prefixes) uses
+  in
+  match focused with [] -> uses | _ -> focused
+
 let avoid_notes evidence =
   evidence
   |> List.filter_map (fun e -> match e.kind with Hazard -> Some e.text | _ -> None)
@@ -392,7 +416,7 @@ let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
     else if has "cookie" && contains_sub ~needle:"fennec/paw/conn.ml" path then 75.0
     else if has "cookie" && contains_sub ~needle:"fennec/core/cookie.ml" path then 70.0
     else if contains_sub ~needle:"examples/site/frontend/components/task_list" path && (has "pulse" || has "live") then 120.0
-    else if contains_sub ~needle:"examples/site/test/browser/web_test" path && (has "local" || has "state" || has "counter") then 90.0
+    else if contains_sub ~needle:"examples/site/test/browser/web_test" path && (has "local" || has "state" || has "counter") then 10.0
     else if contains_sub ~needle:"examples/site/frontend/components/counter" path && (has "local" || has "counter") then 85.0
     else if contains_sub ~needle:"examples/site/server.ml" path then 35.0
     else if contains_sub ~needle:"examples/site/test/system/domains_test" path then 35.0
@@ -414,6 +438,11 @@ let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
   +. (if linked then 24.0 else 0.0)
   +. (r.score *. 3.0)
   +. (match e.kind with Test -> 8.0 | Example -> 6.0 | Route -> 5.0 | Doctest -> 4.0 | Hazard -> -.20.0)
+
+let evidence_presentable terms selected_ids (e : evidence) =
+  let linked = List.exists (fun api -> Hashtbl.mem selected_ids api) e.apis in
+  let visible_text = String.concat " " [ e.label; e.text; e.source.path; evidence_kind_to_string e.kind ] in
+  linked || token_hits terms visible_text >= 2
 
 let find_api = Retrieve.find_api
 
@@ -546,22 +575,24 @@ let query snapshot ~more task =
   let uses : public_item list =
     Select.plan_uses ~terms:ordered_terms ~more ~api_results ~evidence_seed_items ~public_items:snapshot.public_items
   in
+  let evidence_uses = if more then uses else focused_uses terms [] uses in
   let selected_results =
-    let selected = Hashtbl.create (List.length uses * 2) in
-    List.iter (fun (i : public_item) -> Hashtbl.replace selected i.id ()) uses;
+    let selected = Hashtbl.create (List.length evidence_uses * 2) in
+    List.iter (fun (i : public_item) -> Hashtbl.replace selected i.id ()) evidence_uses;
     api_results
     |> List.filter (fun r -> Hashtbl.mem selected r.Retrieve.item.id)
   in
   let evidence : evidence list =
-    let max_per_source = if mentions terms [ "vs"; "versus"; "choose"; "when" ] then 1 else 2 in
-    let selected_ids = Hashtbl.create (List.length uses * 2) in
-    List.iter (fun (i : public_item) -> Hashtbl.replace selected_ids i.id ()) uses;
+    let max_per_source = if more then 2 else 1 in
+    let selected_ids = Hashtbl.create (List.length evidence_uses * 2) in
+    List.iter (fun (i : public_item) -> Hashtbl.replace selected_ids i.id ()) evidence_uses;
     Retrieve.evidence snapshot terms selected_results
     |> List.map (fun r -> (r.Retrieve.ev, evidence_card_score terms selected_ids r))
+    |> List.filter (fun (e, _) -> more || evidence_presentable terms selected_ids e)
     |> List.sort (fun (_, a) (_, b) -> compare b a)
     |> List.map fst
     |> limit_evidence_per_source max_per_source
-    |> take (if more then 8 else 4)
+    |> take (if more then 8 else 2)
   in
   let top = match api_results with x :: _ -> Some x | [] -> None in
   let second = match api_results with _ :: x :: _ -> Some x | _ -> None in
@@ -581,6 +612,7 @@ let query snapshot ~more task =
     match compare_card snapshot task ordered_terms uses evidence with
     | Some c -> c
     | None ->
+      let uses = if more then uses else focused_uses terms evidence uses in
       Plan
         {
           task;
@@ -594,6 +626,7 @@ let query snapshot ~more task =
           next = next_for_query task uses;
         })
   else
+    let uses = if more then uses else focused_uses terms evidence uses in
     Plan
       {
         task;
