@@ -37,7 +37,11 @@ re-issues each entry with a FRESH id and its ORIGINAL seed, and `Method.stub_rep
 stub — the deterministic seed streams remint byte-identical optimistic ids, so the rows reappear
 exactly as they were, before the socket even opens. The normal flush + `updated` reveal then
 resolves them with the proven server-wins reconciliation. At-least-once across sessions: write
-idempotency stays the app's concern, now with a longer fuse.
+idempotency stays the app's concern, now with a longer fuse. The outbox key is **TAB-scoped** (a
+sessionStorage-persisted suffix): two tabs sharing one persist namespace never clobber or
+double-execute each other's pending writes — sessionStorage is per-tab and survives that tab's
+reloads, exactly the right lifetime. Data snapshots ARE shared across tabs (any tab's snapshot is
+valid data; last-writer-wins is benign), and a stopped subscription deletes its snapshot.
 
 ## Out (named seams)
 

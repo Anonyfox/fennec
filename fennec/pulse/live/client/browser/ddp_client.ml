@@ -80,11 +80,29 @@ type t = {
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
 
+(* the outbox storage key is TAB-scoped (a sessionStorage-persisted suffix): two tabs sharing one
+   persist namespace must not clobber or double-execute each other's pending writes — sessionStorage
+   is per-tab and survives that tab's reloads, exactly the right lifetime *)
+let outbox_key () =
+  let ss k = try
+      Js.Optdef.case (Dom_html.window##.sessionStorage) (fun () -> None)
+        (fun st -> Js.Opt.case (st##getItem (Js.string k)) (fun () -> None) (fun v -> Some (Js.to_string v)))
+    with _ -> None
+  in
+  match ss "fennec:tab" with
+  | Some id -> "outbox:" ^ id
+  | None ->
+      let id = string_of_int (int_of_float (Js.to_float (Js.Unsafe.eval_string "Math.random()*1e9"))) in
+      (try Js.Optdef.iter (Dom_html.window##.sessionStorage) (fun st ->
+           st##setItem (Js.string "fennec:tab") (Js.string id))
+       with _ -> ());
+      "outbox:" ^ id
+
 (* persist the outbox NOW (writes are precious; no debounce) *)
 let persist_outbox t =
   match t.persist with
   | None -> ()
-  | Some ns -> Kv.put ~ns "outbox" (Outbox.encode (List.rev_map snd t.outbox))
+  | Some ns -> Kv.put ~ns (outbox_key ()) (Outbox.encode (List.rev_map snd t.outbox))
 
 (* persist every live sub's snapshot (the SEED format — restores via the normal seed path) *)
 let persist_subs t =
@@ -203,8 +221,8 @@ let connect ?(path = "/websocket") ?persist () : t =
   (match persist with
   | None -> ()
   | Some ns ->
-      let entries = Outbox.decode (Option.value (Kv.get ~ns "outbox") ~default:"") in
-      Kv.del ~ns "outbox";
+      let entries = Outbox.decode (Option.value (Kv.get ~ns (outbox_key ())) ~default:"") in
+      Kv.del ~ns (outbox_key ());
       List.iter
         (fun (e : Outbox.entry) ->
           let mid =
@@ -354,6 +372,7 @@ let subscribe t ~name ?(params = []) () : subscription =
       if st.refcount <= 0 then begin
         Hashtbl.remove t.subs key;
         Hashtbl.remove t.by_id st.id;
+        (match t.persist with Some ns -> Kv.del ~ns ("sub:" ^ key) | None -> ());
         (* offline: nothing to unsub — the server session died with the socket, and the onopen
            handshake only re-sends subs still in t.subs (this one just left) *)
         t.send_if_open (Msg.encode (Msg.Unsub { id = st.id }));
