@@ -19,9 +19,13 @@ module Http = Fennec_core.Http
 (** Cookie parsing and serialization (see {!Fennec_core.Cookie}). *)
 module Cookie = Fennec_core.Cookie
 
-(** {1 Endpoints — named apps routed by host} *)
+(** {1 Endpoints — host routing, apps, and route-local middleware} *)
 
-(** Named apps routed by the request's Host header (see {!Fennec_server.Endpoint}). *)
+(** Named apps routed by the request's Host header (see {!Fennec_server.Endpoint}).
+
+    Use endpoints to define one app per host/catch-all, mount SSR apps, add route handlers, and
+    attach matched-route middleware such as auth or rate limiting without turning unrelated 404s
+    into 401/403 responses. *)
 module Endpoint = Fennec_server.Endpoint
 
 (** {1 Paw — the pipeline primitive + prebuilt batteries}
@@ -60,6 +64,10 @@ module Paw : sig
   end
 
   module Basic_auth : sig
+    (** HTTP Basic auth middleware. Put it in {!Endpoint.use_matched} or
+        {!Endpoint.pipe_matched} when protecting only real routes, so missing URLs still return
+        404. Use it in the always phase only when every request to the endpoint must be
+        challenged. *)
     val make : username:string -> password:string -> ?realm:string -> unit -> t
   end
 
@@ -103,9 +111,19 @@ module Paw : sig
     val make : ?cache_control:string -> source -> t
   end
 
+  (** Signed cookie-backed sessions for login state, flash data, preferences, and other small
+      request-to-request values. Add {!Paw.Session.make} early in the paw pipeline, then read and
+      write with {!Fennec_server.Session.get}, {!Fennec_server.Session.set},
+      {!Fennec_server.Session.delete}, or {!Fennec_server.Session.clear} downstream. For a one-off
+      response cookie, use {!Conn.set_cookie} / {!Conn.delete_cookie} instead. *)
   module Session : sig
+    (** Optional server-side session storage. Without a store, the signed cookie carries the
+        session map directly. *)
     type store = Fennec_server.Session.store
 
+    (** Build the session paw. [secret] signs the cookie; without [~store] the signed cookie
+        carries the session map, and with [~store] it carries only a signed server-side id. Use
+        this for login state and other signed cookie-backed values that persist across requests. *)
     val make :
       secret:string ->
       ?cookie:string ->

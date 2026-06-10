@@ -7,11 +7,18 @@
 (** {1 Reactivity} *)
 
 (** A reactive value of type ['a]. Reading it inside a {!watch} or {!comp} body automatically
-    tracks it as a dependency; writing it re-runs every dependent effect synchronously. *)
+    tracks it as a dependency; writing it re-runs every dependent effect synchronously.
+
+    This is the primitive for local client-side UI state: counters with +/- buttons, toggles,
+    input text, selected tabs, optimistic form state, and other values owned by one component or
+    page. It is not a server subscription; for cross-client/server live data use Pulse live data
+    and read the returned signal in Fur. *)
 type 'a signal
 
-(** [signal ?eq init] — create a signal with initial value [init]. [eq] is the equality
-    predicate used to suppress spurious re-runs (default: structural [=]). *)
+(** [signal ?eq init] — create a local reactive signal with initial value [init]. [eq] is the
+    equality predicate used to suppress spurious re-runs (default: structural [=]). A typical
+    interactive widget creates [let count = signal 0], renders [get count], and updates it from
+    click handlers with {!set}, {!update}, [+=], or [-=]. *)
 val signal : ?eq:('a -> 'a -> bool) -> 'a -> 'a signal
 
 (** Read the current signal value WITHOUT registering it as a dependency. Use inside effects
@@ -22,10 +29,12 @@ val peek : 'a signal -> 'a
     ({!watch} or {!comp}). Aliased as [!s] in Fur component syntax. *)
 val get : 'a signal -> 'a
 
-(** Set the signal to a new value; notifies dependents synchronously. *)
+(** Set the signal to a new value; notifies dependents synchronously. Use from browser event
+    handlers for local UI interactions such as button clicks. *)
 val set : 'a signal -> 'a -> unit
 
-(** [update s f] — set [s] to [f (peek s)]: a read-modify-write that does not track [s]. *)
+(** [update s f] — set [s] to [f (peek s)]: a read-modify-write that does not track [s].
+    This is the usual form for counters and other incremental local state. *)
 val update : 'a signal -> ('a -> 'a) -> unit
 
 (** [watch f] runs [f] immediately, tracking every {!get} inside it, then re-runs
@@ -195,7 +204,10 @@ end
 
     A resource is declared once (e.g. [let user = Data.string "user_id"]), loads on first
     render, seeds the hydrated client from the SSR pass (so the first client render is
-    synchronous from the seed), and exposes {!Data.refetch} for mutations. *)
+    synchronous from the seed), and exposes {!Data.refetch} for mutations.
+
+    Use {!Data} for request/SSR data that should be fetched and seeded. For UI-only values owned
+    by a component, use {!signal}. For shared realtime collections, use Pulse. *)
 module Data : sig
   (** A loaded (or loading) resource of type ['a]. *)
   type 'a t
@@ -271,7 +283,11 @@ end
 (** SPA client-side router: declares pages as pattern → render-thunk pairs, tracks the
     current path as a reactive signal, and renders the matching page at {!Router.outlet}.
     On the server the path is the request URL; in the browser it syncs with [window.location]
-    via the History API. *)
+    via the History API.
+
+    In generated Fur apps, route files such as [products/id_.mlx] become dynamic route patterns,
+    typed path/link helpers, and mounted pages. Use the generated routes/paths for app navigation
+    and {!param} / {!param_or} for captured segments. *)
 module Router : sig
   (** A router instance. *)
   type t
@@ -284,7 +300,8 @@ module Router : sig
       paths (useful for apps mounted at a sub-path). *)
   val make : ?base:string -> ?not_found:page -> unit -> t
 
-  (** [page ?name pattern render t] — register a page for a URL pattern. *)
+  (** [page ?name pattern render t] — register a page for a URL pattern. Patterns may contain
+      dynamic segments; generated route modules produce these registrations from the file tree. *)
   val page : ?name:string -> string -> page -> t -> t
 
   (** The router's base path prefix. *)
@@ -305,10 +322,12 @@ module Router : sig
   (** [build t path params] — build a URL with query params. *)
   val build : t -> string -> (string * string) list -> string
 
-  (** [href t path params] — build a URL string. *)
+  (** [href t path params] — build a URL string, including query parameters, for links inside
+      the app. *)
   val href : t -> string -> (string * string) list -> string
 
-  (** [path t fmt ...] — build an in-app path using a format string. *)
+  (** [path t fmt ...] — build an in-app path using a format string. Generated typed path helpers
+      call into this so dynamic route links stay compiler-checked. *)
   val path : t -> ('a, unit, string) format -> 'a
 
   (** [ext fmt ...] — build a raw URL (external or absolute) without the router's base. *)

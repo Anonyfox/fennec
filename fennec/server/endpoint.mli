@@ -6,6 +6,10 @@
     {b Matched-phase} paws ({!pipe_matched}, {!use_matched}) run ONLY after an always-phase paw
     answered (a route matched) — this prevents the "404 becomes 401" class of bugs.
 
+    For protected pages or APIs, define routes/mounts first and put auth, rate limiting, or
+    business middleware in the matched phase. Use the always phase for infrastructure that really
+    must see every request, such as logging, request ids, static files, and method override.
+
     For simple apps (no matched-phase paws) behaviour is identical to a flat pipeline. *)
 
 (** Re-exports {!Fennec_paw.Paw} for convenience in endpoint definitions. *)
@@ -21,10 +25,10 @@ val make : name:string -> ?hosts:string list -> unit -> t
 
 (** {1 Always-phase — runs on every request, matched or not} *)
 
-(** Append a reusable pipeline (a paw list). *)
+(** Append a reusable always-phase pipeline (a paw list). It runs even when no route matches. *)
 val pipe : Paw.t list -> t -> t
 
-(** Append a single paw. *)
+(** Append a single always-phase paw. It runs even when no route matches. *)
 val use : Paw.t -> t -> t
 
 (** Prepend a paw so it runs before the rest (e.g. the dev livereload injector). *)
@@ -51,10 +55,12 @@ val app : ?at:string -> (string -> string option) -> t -> t
 (** {1 Matched-phase — runs only after a route in the always-phase answered} *)
 
 (** Append a paw that runs only after a route matched. Auth, rate limiting, and business
-    middleware belong here — they should never fire on an unmatched request. *)
+    middleware belong here when protecting route handlers, SSR apps, or APIs — they should never
+    fire on an unmatched request. *)
 val use_matched : Paw.t -> t -> t
 
-(** Append a pipeline that runs only after a route matched. *)
+(** Append a pipeline that runs only after a route matched. Prefer this for a small stack such as
+    session loading, login checks, authorization, and response decoration around matched routes. *)
 val pipe_matched : Paw.t list -> t -> t
 
 (** {1 Introspection} *)

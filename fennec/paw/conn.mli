@@ -82,10 +82,13 @@ val query_params : t -> (string * string) list
 (** A single query parameter value by name (case-sensitive). *)
 val query : t -> string -> string option
 
-(** Request cookies (parsed lazily). *)
+(** Request cookies (parsed lazily). These read cookies sent by the browser on this request.
+    To write a response cookie, use {!set_cookie}; to expire one, use {!delete_cookie};
+    to persist request-to-request state, prefer {!Fennec.Paw.Session.make}. *)
 val cookies : t -> (string * string) list
 
-(** A single cookie value by name. *)
+(** A single request cookie value by name. This does not inspect pending response
+    [Set-Cookie] headers. *)
 val cookie : t -> string -> string option
 
 (** Form body fields ([application/x-www-form-urlencoded] or [multipart/form-data], parsed
@@ -95,7 +98,9 @@ val body_params : t -> (string * string) list
 (** A single form field value by name. *)
 val body_param : t -> string -> string option
 
-(** Uploaded file parts (multipart). *)
+(** Uploaded file parts from a [multipart/form-data] request body. Use this for incoming file
+    upload handlers; HTTP tests can send matching bodies with {!Fennec_hunt.Http.file} and
+    [~multipart]. *)
 val files : t -> Fennec_core.Multipart.part list
 
 (** An uploaded file part by form field name. *)
@@ -130,8 +135,10 @@ val set_status : int -> t -> t
 (** Add a response header (accumulates; survives a later answering paw). *)
 val set_header : t -> string -> string -> t
 
-(** Set a response cookie (does not answer). Defaults: [path="/"], [http_only=true],
-    [same_site=Lax]; [SameSite=None] implies [Secure]. *)
+(** Set a response cookie (adds [Set-Cookie], does not answer). Use for small browser
+    preferences, one-off flags, and remember-me style response cookies. Defaults:
+    [path="/"], [http_only=true], [same_site=Lax]; [SameSite=None] implies [Secure].
+    For request-to-request application state, prefer {!Fennec.Paw.Session.make}. *)
 val set_cookie :
   t ->
   ?path:string ->
@@ -145,7 +152,8 @@ val set_cookie :
   string ->
   t
 
-(** Expire a cookie now. *)
+(** Expire a response cookie now by emitting a matching [Set-Cookie] deletion. The [path] and
+    [domain] should match the cookie that was originally set. *)
 val delete_cookie : t -> ?path:string -> ?domain:string -> string -> t
 
 (** Set the effective method (used by a method-override paw). *)

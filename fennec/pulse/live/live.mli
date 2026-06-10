@@ -1,9 +1,15 @@
-(** The Fur binding over a {!Merge_store}: a reactive [find] whose signal recomputes as the merged
-    collection changes. Pure over Fur's signals → native (tests/SSR) and browser. The DDP WebSocket
-    client and [subscribe] (which feed the store) are a later js_of_ocaml addition; this is the read
-    side. *)
+(** Pulse live data for Fur components.
 
-(** A reactive client cache: a merge store plus the per-collection Fur signals that drive {!find}. *)
+    This is the Fur binding over a {!Merge_store}: reactive queries whose signals recompute as a
+    subscribed server collection changes. Pure over Fur's signals → native (tests/SSR) and
+    browser. The DDP WebSocket client and [subscribe] feed the store; this module is the read side.
+
+    Use Pulse live data for server-backed, cross-client, realtime collections such as task lists,
+    chat messages, notifications, or collaborative records. Use plain {!Fur.signal} for local
+    browser UI state such as counters, toggles, and input drafts. *)
+
+(** A reactive client cache: a merge store plus the per-collection Fur signals that drive
+    {!find} and {!aggregate}. *)
 type t
 
 (** A fresh client cache. *)
@@ -14,7 +20,10 @@ val store : t -> Merge_store.t
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;
-    the underlying watch is torn down on the component's cleanup. *)
+    the underlying watch is torn down on the component's cleanup.
+
+    Choose this when the UI should follow live server data. For a local counter or button-only
+    widget, create a {!Fur.signal} instead. *)
 val find :
   t ->
   string ->

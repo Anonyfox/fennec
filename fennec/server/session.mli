@@ -1,10 +1,16 @@
-(** Sessions (Dream-grade). A small [string -> string] map per request.
+(** Sessions (Dream-grade). A small [string -> string] map per request for login state,
+    flash messages, CSRF-related state, preferences, and other data that must survive across
+    requests.
 
     Two stores: the default {b signed-cookie} store (stateless — the signed data rides in
     the cookie, so it scales horizontally for free) and an optional {b server-side} store
     ([?store]) where the cookie holds only a signed id. Either way a session has a
     [lifetime]: expired sessions load empty and a past-half-life session is auto-refreshed.
-    Add {!make} early, read/write with {!get}/{!set} downstream. Constant-time verify. *)
+    Add {!make} early, read/write with {!get}/{!set} downstream. Constant-time verify.
+
+    Use sessions for signed cookie-backed request-to-request state such as "remember the
+    logged-in user". Use {!Fennec_paw.Conn.set_cookie} / {!Fennec_paw.Conn.delete_cookie} for a
+    single unsessioned response cookie. *)
 
 (** Sign a payload: ["<b64 payload>.<b64 hmac>"] (also usable as a generic signed token). *)
 val sign : secret:string -> string -> string
@@ -28,13 +34,16 @@ val memory_store : ?ttl:float -> unit -> store
     paw can use this to fail loudly on a misordered pipeline. *)
 val active : Fennec_paw.Conn.t -> bool
 
-(** A session value, if {!make} ran and the key is set. *)
+(** A session value, if {!make} ran and the key is set. Typical login checks read a user id
+    or account id here in downstream handlers or matched-route middleware. *)
 val get : Fennec_paw.Conn.t -> string -> string option
 
 (** The session map (reserved ["_"]-prefixed keys hidden). *)
 val get_all : Fennec_paw.Conn.t -> (string * string) list
 
-(** Set a value (returns the same conn, for piping). *)
+(** Set a value (returns the same conn, for piping). Use after successful login or any handler
+    that changes request-to-request state; the session paw writes the refreshed signed cookie at
+    the end of the response. *)
 val set : Fennec_paw.Conn.t -> string -> string -> Fennec_paw.Conn.t
 
 (** Remove one key. *)
@@ -46,7 +55,11 @@ val clear : Fennec_paw.Conn.t -> Fennec_paw.Conn.t
 (** The session paw. [secret] signs the cookie; [lifetime] is the max age (seconds, default
     1 day). With [store], the cookie holds a signed id and the data lives server-side;
     without it, the cookie holds the signed data. [secure] defaults to whether the request
-    is https; the cookie is HttpOnly + SameSite=Lax by default. *)
+    is https; the cookie is HttpOnly + SameSite=Lax by default.
+
+    Put this paw before handlers that call {!get}, {!set}, {!delete}, or {!clear}. It only
+    enables the session; it does not require a login by itself. Pair it with an auth paw or
+    handler logic when protecting routes. *)
 val make :
   secret:string ->
   ?cookie:string ->

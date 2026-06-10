@@ -1,7 +1,7 @@
 (* The `fennec` command-line tool: a native asset bundler and the framework's dev + test CLI,
    sitting beside dune (which owns the build graph and is the sole watcher of source).
 
-   Three user commands:
+   Four user commands:
    - [build] bundles JS (esbuild) and CSS/SCSS (Lightning CSS + grass), statically linked via
      {!Fennec_buildkit} — one self-contained binary, engine chosen per input extension. It's a
      general-purpose bundler; in a Fennec project, dune rules call it.
@@ -10,6 +10,8 @@
      hot-reload the frontend without a restart.
    - [test] runs and verifies the app — unit/http/browser/system tests plus doc-coverage
      ([fennec test docs]); delegates to {!Fennec_testcmd}.
+   - [discover] answers task-shaped "what should I use?" questions from a source-generated
+     framework snapshot.
 
    Plus plumbing not run by hand (listed under INTERNAL COMMANDS): [__esbuild-worker], the warm
    worker `fennec dev` spawns, and [gen-doctests], codegen a dune rule calls so .mli examples run
@@ -553,6 +555,49 @@ let skill_cmd =
   in
   Cmd.v (Cmd.info "skill" ~doc ~man) Term.(const go $ const ())
 
+let discover_cmd =
+  let json_arg =
+    let doc = "Emit schema-versioned JSON instead of the bounded terminal card." in
+    Arg.(value & flag & info [ "json" ] ~doc)
+  in
+  let more_arg =
+    let doc = "Expand the card with more public items and evidence while keeping output bounded." in
+    Arg.(value & flag & info [ "more" ] ~doc)
+  in
+  let why_arg =
+    let doc = "Explain a discover id, accepting exact ids or unique prefixes." in
+    Arg.(value & opt (some string) None & info [ "why" ] ~docv:"ID" ~doc)
+  in
+  let browse_arg =
+    let doc = "Browse one shallow public module surface, e.g. Fennec.Paw." in
+    Arg.(value & opt (some string) None & info [ "browse" ] ~docv:"MODULE" ~doc)
+  in
+  let query_arg =
+    let doc = "Task-shaped question, e.g. \"build login with signed cookies\"." in
+    Arg.(value & pos_all string [] & info [] ~docv:"TASK" ~doc)
+  in
+  let go json more why browse query_words =
+    let query = match query_words with [] -> None | xs -> Some (String.concat " " xs) in
+    let opts : Fennec_discover_core.Discover_model.options = { json; more; query; why; browse } in
+    print_string (Fennec_discover.Discover.run opts);
+    0
+  in
+  let doc = "Discover the Fennec way to solve a task" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Answer task-shaped orientation questions from the source-generated Fennec framework \
+         snapshot. This is not symbol lookup: it is for the pre-edit phase where a human or \
+         coding agent needs the public API path, source-backed evidence, and safe next drills.";
+      `S Manpage.s_examples;
+      `Pre "  fennec discover \"build login with signed cookies\"";
+      `Pre "  fennec discover \"SSR page with client-side counter\"";
+      `Pre "  fennec discover --browse Fennec.Paw";
+      `Pre "  fennec discover --why api:Fennec.Paw.Basic_auth.make";
+      `Pre "  fennec discover --json \"write an HTTP test\"" ]
+  in
+  Cmd.v (Cmd.info "discover" ~doc ~man) Term.(const go $ json_arg $ more_arg $ why_arg $ browse_arg $ query_arg)
+
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =
   let socket_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"SOCKET") in
@@ -582,15 +627,27 @@ let test_cmd =
   let strict_arg = Arg.(value & flag & info [ "strict" ] ~doc:"Docs cut: fail (exit non-zero) on any undocumented or $(b,.ml)-only export — a CI gate. Default: warn only.") in
   let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Docs cut: also check $(b,.ml) top-level definitions, not just $(b,.mli) exports.") in
   let promote_arg = Arg.(value & flag & info [ "promote" ] ~doc:"Docs cut: move each doc that lives only in a $(b,.ml) up into the sibling $(b,.mli), where it renders. Idempotent; the $(b,.mli) wins on conflict.") in
+  let discover_arg = Arg.(value & flag & info [ "discover" ] ~doc:"Docs cut: also check the embedded discover snapshot against golden task queries.") in
   let mongo_arg = Arg.(value & flag & info [ "mongo" ] ~doc:"Launch a managed MongoDB ($(b,mongod)) for the run and point the app at it via $(b,MONGO_URL), so the data layer uses the real driver instead of the in-memory engine. The instance is ephemeral, isolated, and torn down on exit (no dangling process); an absent mongod degrades to in-memory.") in
-  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port strict private_ promote mongo =
+  let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port strict private_ promote discover mongo =
     let opts ?(paths = []) suite =
       { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed;
         screenshots; base_port; mongo; strict; private_; promote; paths }
     in
+    let discover_gate code =
+      if not discover then code
+      else
+        match Fennec_discover.Discover.check () with
+        | [] ->
+          Printf.printf "discover: golden task snapshot ok\n%!";
+          code
+        | failures ->
+          List.iter (Printf.eprintf "discover: %s\n%!") failures;
+          1
+    in
     match positionals with
     | "new" :: rest -> R.scaffold rest               (* fennec test new <cut> <name> — scaffold a suite *)
-    | "docs" :: paths -> R.run (opts ~paths R.Docs)  (* trailing positionals are paths to check *)
+    | "docs" :: paths -> discover_gate (R.run (opts ~paths R.Docs))  (* trailing positionals are paths to check *)
     | [] -> R.run (opts R.Unit)
     | suite :: _ ->
       (match R.suite_of_string suite with
@@ -634,7 +691,7 @@ let test_cmd =
       `Pre "  fennec test new system reclaim # scaffold test/system/reclaim_test.ml" ]
   in
   Cmd.v (Cmd.info "test" ~doc ~man)
-    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg $ strict_arg $ private_arg $ promote_arg $ mongo_arg)
+    Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg $ strict_arg $ private_arg $ promote_arg $ discover_arg $ mongo_arg)
 
 (* Generate (to stdout) a module running the executable {@ocaml[ ]} doc examples from the .mli
    interfaces in a directory. Not run by hand — wired by a one-time dune (rule), the route_gen
@@ -681,6 +738,6 @@ let main_cmd =
   let default =
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
+  Cmd.group info ~default [ build_cmd; dev_cmd; discover_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

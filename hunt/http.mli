@@ -1,7 +1,13 @@
-(** Full-featured, deterministic HTTP testing.
+(** Full-featured, deterministic HTTP endpoint testing.
 
     Every request is ONE call → ONE response → immediate pass or fail.
     Works against any URL — local, remote, spawned or pre-existing.
+
+    Use this package when testing Fennec handlers, middleware, cookies, redirects, auth, JSON
+    APIs, file uploads, and server responses over HTTP. The normal public shape is
+    {!hunt}/[let%http], {!check}, one request such as {!get} or {!post}, and a focused
+    [~expect] assertion list. The {!For_test} module below is only for unit-testing this package's
+    pure internals; application HTTP tests should not start there.
 
     {@ocaml skip[
     open Fennec_hunt.Http
@@ -64,13 +70,15 @@ val run : unit -> int
 
 (** {1 Test cases} *)
 
-(** [check label body] — one test case. Fresh cookie jar. Reports pass/fail. *)
+(** [check label body] — one HTTP test case. It gets a fresh cookie jar, so cookies from one
+    request inside the same check carry forward but another check starts clean. *)
 val check : string -> (unit -> unit) -> unit
 
 (** {1 Multipart parts (file uploads)} *)
 
-(** One part of a [multipart/form-data] body — a text field or a file. Construct with
-    {!field} / {!file}; pass a list as [~multipart]. *)
+(** One part of a [multipart/form-data] body — a text field or a file upload. Construct with
+    {!field} / {!file}; pass a list as [~multipart]. Fennec handlers read these through
+    {!Fennec.Conn.files} and {!Fennec.Conn.file}. *)
 type part
 
 (** A plain text field: [field name value]. *)
@@ -295,10 +303,11 @@ val bearer : string -> string * string
 (** Content-Type header for JSON bodies. (Prefer [~json] on the request instead.) *)
 val json_content_type : string * string
 
-(** {1 Internal — exposed for tests; not a stable API}
+(** {1 Internal — exposed for this package's own unit tests; not a stable API}
 
     Pure cores of the I/O features, with effects (clock, sleep) injected so they can be
-    unit-tested deterministically without a server. Subject to change; do not depend on this. *)
+    unit-tested deterministically without a server. Subject to change; do not depend on this for
+    application or framework HTTP tests. *)
 module For_test : sig
   (** The pure poll policy behind {!eventually}: re-run [body] until it stops raising or
       [now ()] passes the [within] deadline, sleeping [interval] between tries. *)
