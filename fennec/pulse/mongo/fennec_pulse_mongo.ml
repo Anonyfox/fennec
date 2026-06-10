@@ -75,6 +75,12 @@ let aggregate c ?lookup (pipeline : B.t list) =
   Coll.aggregate c ~pipeline:(B.Array pipeline) ()
 let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
 
+(* BEST-EFFORT fence on the native driver: mongod's change-stream delivery is asynchronous (network)
+   and v1 carries no resume-token plumbing, so the fence runs immediately — a method's [updated] may
+   precede its stream deltas under lag (an optimistic client then briefly shows the pre-method state;
+   Meteor fences via oplog positions — the resume-token equivalent is the marked seam here). *)
+let fence _c k = k ()
+
 (* real change streams: Live keeps ONE stream per collection, replays the initial set synchronously
    (ready-after-data), then routes per-query field-level deltas *)
 let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.handle =
@@ -122,4 +128,6 @@ module Dynamic = struct
     match c with
     | Mem m -> Mini.observe_changes m q ~added ~changed ~removed
     | Native r -> observe_changes r q ~added ~changed ~removed
+
+  let fence c k = match c with Mem m -> Mini.fence m k | Native r -> fence r k
 end

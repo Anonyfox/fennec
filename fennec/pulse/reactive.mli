@@ -273,6 +273,14 @@ module type REACTIVE = sig
       subscriptions. An operational scalability gauge. *)
   val live_query_count : unit -> int
 
+  (** [fence k] — the write fence: runs [k] once every delta already committed has been DELIVERED to
+      the live subscribers, draining the two fan-out hops in order (backend change stream, then the
+      multiplexer fans). The DDP session sends a method's [updated] through this, so the client's cue
+      to drop its optimistic simulation can never overtake the method's own data deltas. Exact on the
+      in-memory backend; best-effort over mongod (whose stream delivery is asynchronous — see the
+      driver's fence note). Immediate when nothing is in flight. *)
+  val fence : (unit -> unit) -> unit
+
   (** Pure EJSON structural operations. *)
   module EJSON : sig
     (** Value equality; [key_order_sensitive] (default false) controls document field-order. *)

@@ -50,3 +50,10 @@ val pump : 'e t -> unit
 
 (** [publish t e] = {!enqueue} + {!pump}, for producers whose commit needs no lock of its own. *)
 val publish : 'e t -> 'e -> unit
+
+(** [on_drained t k] runs [k] once every event enqueued {e so far} has been delivered — the
+    write-fence primitive (a method's [updated] must follow its own data deltas). Fires immediately,
+    on the calling fiber, when the fanout is already idle; otherwise the active drainer fires it —
+    outside the lock — the moment the queue empties. Under a sustained firehose the wait extends to
+    the next quiescent instant. [k]'s exceptions are contained like a subscriber's. *)
+val on_drained : 'e t -> (unit -> unit) -> unit

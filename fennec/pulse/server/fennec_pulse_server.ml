@@ -46,7 +46,9 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
 
   let new_session ~session_id ~emit =
     let pubs, methods = registries () in
-    Session.create ~session_id ~emit ~pubs ~methods ()
+    (* the write fence: a method's [updated] is emitted only after R.fence reports every committed
+       delta delivered — the client may then safely reveal server truth over its simulation *)
+    Session.create ~fence:R.fence ~session_id ~emit ~pubs ~methods ()
 
   let gen_session_id = function Some s -> s | None -> R.ObjectID.make ()
 

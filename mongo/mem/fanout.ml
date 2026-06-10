@@ -38,9 +38,14 @@ type 'e t = {
   mutable subc : int;
   pending : 'e Queue.t;
   mutable draining : bool;
+  (* drain waiters (the write fence): fired — outside the lock — when the queue empties with no
+     drainer active, i.e. when every event enqueued so far has been DELIVERED *)
+  mutable waiters : (unit -> unit) list;
 }
 
-let create () = { lock = Mutex.create (); subs = Hashtbl.create 8; subc = 0; pending = Queue.create (); draining = false }
+let create () =
+  { lock = Mutex.create (); subs = Hashtbl.create 8; subc = 0; pending = Queue.create (); draining = false;
+    waiters = [] }
 
 let with_lock m f =
   Mutex.lock m;
@@ -107,7 +112,9 @@ let pump t : unit =
             match Queue.take_opt t.pending with
             | None ->
                 t.draining <- false;
-                None
+                let ws = t.waiters in
+                t.waiters <- [];
+                `Drained ws
             | Some e ->
                 let targets =
                   Hashtbl.fold
@@ -120,11 +127,11 @@ let pump t : unit =
                       | Dead -> acc)
                     t.subs []
                 in
-                Some (e, targets))
+                `Deliver (e, targets))
       in
       match next with
-      | None -> ()
-      | Some (e, targets) ->
+      | `Drained ws -> List.iter (fun k -> deliver_one k ()) ws (* fence waiters, outside the lock *)
+      | `Deliver (e, targets) ->
           List.iter (fun f -> deliver_one f e) targets;
           drain ()
     in
@@ -135,3 +142,19 @@ let pump t : unit =
 let publish t e =
   enqueue t e;
   pump t
+
+(* the write-fence primitive: run [k] once every event enqueued SO FAR has been delivered. Fires
+   immediately (on this fiber) when the fanout is already idle; otherwise the active drainer fires it
+   — outside the lock — the moment the queue empties. Under a sustained firehose the wait extends to
+   the next quiescent instant (total per-collection order makes a finer cut impossible without
+   tagging every event). *)
+let on_drained t (k : unit -> unit) : unit =
+  let now =
+    with_lock t.lock (fun () ->
+        if (not t.draining) && Queue.is_empty t.pending then true
+        else begin
+          t.waiters <- k :: t.waiters;
+          false
+        end)
+  in
+  if now then k ()

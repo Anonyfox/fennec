@@ -518,6 +518,21 @@ let%test "fanout: a buffering sub holds events (in order) until ready flushes th
   F.publish f 3;
   before_ready && List.rev !got = [ 1; 2; 3 ]
 
+let%test "fanout: on_drained fires immediately when idle, and only AFTER the drain when busy" =
+  let f = F.create () in
+  let order = ref [] in
+  let _ = F.subscribe f ~ready:true (fun e -> order := ("ev" ^ string_of_int e) :: !order) in
+  (* idle → immediate *)
+  F.on_drained f (fun () -> order := "idle" :: !order);
+  let idle_now = !order = [ "idle" ] in
+  (* enqueue without pumping (a producer mid-commit), register the fence, then pump: the fence must
+     fire after the delivery, not before *)
+  F.enqueue f 1;
+  F.on_drained f (fun () -> order := "drained" :: !order);
+  let deferred = !order = [ "idle" ] in
+  F.pump f;
+  idle_now && deferred && List.rev !order = [ "idle"; "ev1"; "drained" ]
+
 let%test "fanout: a re-entrant publish from inside a delivery is delivered after, not lost (single drainer)" =
   let f = F.create () in
   let got = ref [] in

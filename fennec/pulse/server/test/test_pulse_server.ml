@@ -53,6 +53,23 @@ let%test "a method error reaches the client with its code, not a generic 500" =
   ch.Ws.on_text (Msg.encode (Msg.Method { method_ = "rt_boom"; params = []; id = "m2"; random_seed = None }));
   List.exists (function Msg.Result { error = Some e; _ } -> e.Msg.code = "403" | _ -> false) (emitted out)
 
+let%test "write fence: a method's data delta reaches the channel BEFORE its updated (the sim-reveal order)" =
+  let feed = C.create ~name:"feed_fence" (Minimongo.create ()) in
+  R.publish "rt_feed_fence" (fun _ -> R.Cursor (R.cursor feed ()));
+  R.methods [ ("rt_add_fence", fun _ _ -> B.str (C.insert feed (B.doc [ ("v", B.int 1) ]))) ];
+  let ch, out = fake_channel () in
+  D.serve ~session_id:"SF" ch;
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sf"; name = "rt_feed_fence"; params = [] }));
+  ch.Ws.on_text (Msg.encode (Msg.Method { method_ = "rt_add_fence"; params = []; id = "mf"; random_seed = None }));
+  let ms = emitted out in
+  let idx p =
+    let rec go i = function [] -> -1 | x :: tl -> if p x then i else go (i + 1) tl in
+    go 0 ms
+  in
+  let added_i = idx (function Msg.Added { collection = "feed_fence"; _ } -> true | _ -> false) in
+  let updated_i = idx (function Msg.Updated { methods = [ "mf" ] } -> true | _ -> false) in
+  added_i >= 0 && updated_i >= 0 && added_i < updated_i
+
 let%test "sockjs serve opens with 'o' and wraps replies in array frames" =
   R.methods [ ("rt_id", fun _ _ -> B.Int 1) ];
   let ch, out = fake_channel () in

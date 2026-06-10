@@ -66,6 +66,12 @@ module type S = sig
     changed:(string -> Bson.t -> string list -> unit) ->
     removed:(string -> unit) ->
     handle
+
+  (** [fence c k] runs [k] once every change committed to [c] {e so far} has been DELIVERED to its
+      observers — the write-fence behind a method's [updated]. Exact on the in-memory engine; a
+      backend whose deltas arrive over an external stream (a real mongod) may run [k] immediately
+      (best-effort, documented at the impl). *)
+  val fence : collection -> (unit -> unit) -> unit
 end
 
 (** The in-memory minimongo backend — the default for dev and test. *)

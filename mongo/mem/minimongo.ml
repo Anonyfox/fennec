@@ -65,6 +65,10 @@ let watch t (f : observer) : handle =
   let sub = Fanout.subscribe t.fan ~ready:true f in
   { stop = (fun () -> Fanout.unsubscribe t.fan sub) }
 
+(* the write fence: run [k] once every change event committed so far has been DELIVERED to the
+   observers — see {!Fanout.on_drained} *)
+let on_drained t k = Fanout.on_drained t.fan k
+
 (* ids in insertion order — call under [t.lock] *)
 let ids_unlocked t = List.rev t.rorder
 

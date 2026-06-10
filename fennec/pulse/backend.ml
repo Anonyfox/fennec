@@ -37,6 +37,11 @@ module type S = sig
     changed:(string -> Bson.t -> string list -> unit) ->
     removed:(string -> unit) ->
     handle
+
+  (** [fence c k] runs [k] once every change committed to [c] {e so far} has been DELIVERED to its
+      observers — the write-fence behind a method's [updated]. A backend whose deltas arrive over an
+      external stream (a real mongod) may run [k] immediately (best-effort; documented there). *)
+  val fence : collection -> (unit -> unit) -> unit
 end
 
 (* The in-memory minimongo backend. *)
@@ -66,4 +71,7 @@ module Mini : S with type collection = Minimongo.t = struct
         ~added ~changed ~removed ()
     in
     { stop = h.Minimongo.stop }
+
+  (* exact for the in-memory engine: the change stream IS the fanout being fenced *)
+  let fence = Minimongo.on_drained
 end

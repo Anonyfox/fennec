@@ -159,6 +159,10 @@ module type REACTIVE = sig
       distinct live queries, not subscriptions *)
   val live_query_count : unit -> int
 
+  (** the write fence: run [k] once every delta already committed has been DELIVERED to the live
+      subscribers (a method's [updated] rides this) *)
+  val fence : (unit -> unit) -> unit
+
   module EJSON : sig
     val equals : ?key_order_sensitive:bool -> doc -> doc -> bool
     val clone : doc -> doc
@@ -562,6 +566,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     live : (string, (string, doc) Hashtbl.t) Hashtbl.t; (* id -> field table (late-joiner replay) *)
     mutable handle : live_handle option; (* None while the backend observe is still being built *)
     collection : string;
+    backend_fence : (unit -> unit) -> unit; (* fences the BACKEND delivery hop feeding this mux *)
   }
 
   let _mux_lock = Mutex.create ()
@@ -570,6 +575,31 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   (* active shared observes — an operational gauge of how effectively the multiplexer is collapsing
      subscriptions (one entry per distinct (collection-handle, query), regardless of subscriber count) *)
   let live_query_count () = with_lock _mux_lock (fun () -> Hashtbl.length _muxes)
+
+  (* The WRITE FENCE: run [k] once every delta already committed has been DELIVERED to the live
+     subscribers — so a method's [updated] (the client's cue to drop its optimistic simulation) can
+     never overtake the method's own data deltas. Deltas cross two fan-out hops (the backend change
+     stream → the mux handlers → the mux fan → the sinks), so the fence drains them IN ORDER: phase 1
+     waits on every live query's backend hop (whose drain pumps into the mux fans), phase 2 on the
+     mux fans themselves. Exact for the in-memory backend; best-effort over mongod (its fence is
+     immediate — see fennec_pulse_mongo). With no live queries there is nothing in flight: immediate. *)
+  let fence (k : unit -> unit) : unit =
+    let muxes = with_lock _mux_lock (fun () -> Hashtbl.fold (fun _ m acc -> m :: acc) _muxes []) in
+    match muxes with
+    | [] -> k ()
+    | _ ->
+        let n = List.length muxes in
+        let pending2 = Atomic.make n in
+        let phase2 () =
+          List.iter
+            (fun m ->
+              Fanout.on_drained m.fan (fun () -> if Atomic.fetch_and_add pending2 (-1) = 1 then k ()))
+            muxes
+        in
+        let pending1 = Atomic.make n in
+        List.iter
+          (fun m -> m.backend_fence (fun () -> if Atomic.fetch_and_add pending1 (-1) = 1 then phase2 ()))
+          muxes
 
   (* subscribe [on] to the shared observe for [cur]; returns an idempotent unsubscribe that
      refcounts the mux *)
@@ -593,9 +623,10 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
                   in
                   (mux, false, sub, replay))
           | None ->
+              let backend = Collection.(cur.coll.backend) in
               let mux =
                 { fan = Fanout.create (); mlock = Mutex.create (); live = Hashtbl.create 64;
-                  handle = None; collection = coll }
+                  handle = None; collection = coll; backend_fence = (fun k -> B.fence backend k) }
               in
               Hashtbl.replace _muxes key mux;
               (* the first subscriber is live from the start: the only producer into this fan is the

@@ -59,6 +59,10 @@ type handle = { stop : unit -> unit }
     selector/projection). Returns a {!handle}. The reactive cursor engines are built on this. *)
 val watch : t -> observer -> handle
 
+(** [on_drained t k] runs [k] once every change event committed {e so far} has been delivered to the
+    observers — the write-fence primitive (fires immediately when idle; see {!Fanout.on_drained}). *)
+val on_drained : t -> (unit -> unit) -> unit
+
 (** {2 Mutations} (each emits a change event) *)
 
 (** [insert t d] inserts [d], minting an [_id] if absent, and returns the id. *)

@@ -42,6 +42,12 @@ type t = {
   (* in-flight method calls awaiting their Result: id → the resolver invoked with Ok value /
      Error (code, reason) (the typed path decodes inside its resolver) *)
   methods_pending : (string, (Bson.t, string * string) result -> unit) Hashtbl.t;
+  (* UNACKNOWLEDGED method frames (newest first), re-sent verbatim after a reconnect — Meteor's
+     at-least-once semantics: a method lost to a dropped socket re-executes rather than dangling
+     forever (same id, same seed; write idempotency is the app's concern, exactly as in Meteor).
+     Method frames bypass the pre-open queue and ride ONLY this list, so they can't double-send. *)
+  mutable unacked : (string * string) list;
+  mutable send_if_open : string -> unit; (* raw socket send when open, drop otherwise (methods) *)
   mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
@@ -69,7 +75,8 @@ let handle t raw =
             mark_ready t id
         | Msg.Ping { id } -> t.send (Msg.encode (Msg.Pong { id }))
         | Msg.Result { id; error; result } ->
-            (* resolve the call's outcome (if a caller is awaiting it via [call_result]/[call_m]) *)
+            (* acknowledged: never re-sent, and resolve the awaiting caller (call_result/call_m) *)
+            t.unacked <- List.filter (fun (i, _) -> i <> id) t.unacked;
             (match Hashtbl.find_opt t.methods_pending id with
             | Some resolve ->
                 Hashtbl.remove t.methods_pending id;
@@ -90,7 +97,8 @@ let connect ?(path = "/websocket") () : t =
   let url = scheme ^ host ^ path in
   let t =
     { live = Live.create (); send = (fun _ -> ()); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
-      subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; closed = false; ws = None }
+      subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; unacked = [];
+      send_if_open = (fun _ -> ()); closed = false; ws = None }
   in
   (* sends before the socket is open (component setup fires subscribe/call before onopen) queue up *)
   let is_open = ref false in
@@ -107,6 +115,7 @@ let connect ?(path = "/websocket") () : t =
     t.ws <- Some (Js.Unsafe.inject ws);
     let raw str = ignore (Js.Unsafe.meth_call ws "send" [| Js.Unsafe.inject (Js.string str) |]) in
     t.send <- (fun str -> if !is_open then raw str else Queue.add str pending);
+    t.send_if_open <- (fun str -> if !is_open then raw str);
     Js.Unsafe.set ws (Js.string "onopen")
       (Dom.handler (fun _ ->
            is_open := true;
@@ -119,6 +128,8 @@ let connect ?(path = "/websocket") () : t =
                MS.resync_begin (Live.store t.live) st.id;
                raw (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params })))
              t.subs;
+           (* re-send every unacknowledged method, oldest first (at-least-once, verbatim frames) *)
+           List.iter (fun (_, frame) -> raw frame) (List.rev t.unacked);
            Queue.iter raw pending;
            Queue.clear pending;
            Js._true));
@@ -195,13 +206,17 @@ let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
   Fur.on_cleanup sub.stop;
   sub.ready
 
-(* the one method-send path: mint the id, register the resolver, put the frame on the wire *)
+(* the one method-send path: mint the id, register the resolver, record the frame as unacknowledged
+   (the reconnect path re-sends it verbatim), and put it on the wire if the socket is open — methods
+   never ride the pre-open queue, so a frame can't go out twice *)
 let send_method t ~name ~params ~random_seed (resolve : (Bson.t, string * string) result -> unit) :
     string =
   t.methodc <- t.methodc + 1;
   let id = "m" ^ string_of_int t.methodc in
+  let frame = Msg.encode (Msg.Method { method_ = name; params; id; random_seed }) in
   Hashtbl.replace t.methods_pending id resolve;
-  t.send (Msg.encode (Msg.Method { method_ = name; params; id; random_seed }));
+  t.unacked <- (id, frame) :: t.unacked;
+  t.send_if_open frame;
   id
 
 (* [call_result] invokes a method and returns a signal that resolves to its outcome — [None] while
