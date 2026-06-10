@@ -216,6 +216,59 @@ let%test "seed: a duplicate _id within one group resolves to a single row (union
   | [| row |] -> B.get row "x" = Some (B.Int 1) && B.get row "y" = Some (B.Int 2)
   | _ -> false
 
+(* ── optimistic simulation: a sim sub wins, rolls back via sub_stopped, and can hide (delete) ── *)
+let%test "sim: a simulation's field wins over the real sub; dropping it reveals server truth" =
+  let s = MS.create () in
+  MS.added s ~sub:"real" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ];
+  MS.begin_sim s "sim:m1";
+  MS.changed s ~sub:"sim:m1" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 99) ] ~cleared:[];
+  let optimistic = match MS.fetch s "c" () with [| d |] -> B.get d "v" = Some (B.Int 99) | _ -> false in
+  MS.sub_stopped s "sim:m1";
+  let revealed = match MS.fetch s "c" () with [| d |] -> B.get d "v" = Some (B.Int 1) | _ -> false in
+  optimistic && revealed
+
+let%test "sim: a LATER simulation wins over an earlier one on the same field" =
+  let s = MS.create () in
+  MS.begin_sim s "sim:a";
+  MS.begin_sim s "sim:b";
+  MS.added s ~sub:"sim:a" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ];
+  MS.changed s ~sub:"sim:b" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 2) ] ~cleared:[];
+  match MS.fetch s "c" () with [| d |] -> B.get d "v" = Some (B.Int 2) | _ -> false
+
+let%test "sim_hide: an optimistic delete hides the doc; dropping the sim restores it — unless really gone" =
+  let s = MS.create () in
+  MS.added s ~sub:"real" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ];
+  MS.added s ~sub:"real" ~collection:"c" ~id:"y" ~fields:[ ("v", B.int 2) ];
+  MS.begin_sim s "sim:m";
+  MS.sim_hide s ~sub:"sim:m" ~collection:"c" ~id:"x";
+  MS.sim_hide s ~sub:"sim:m" ~collection:"c" ~id:"y";
+  let hidden = Array.length (MS.fetch s "c" ()) = 0 in
+  (* the server really removed y meanwhile; x it kept *)
+  MS.removed s ~sub:"real" ~collection:"c" ~id:"y";
+  MS.sub_stopped s "sim:m";
+  let after = MS.fetch s "c" () in
+  hidden && Array.length after = 1
+  && (match B.get after.(0) "_id" with Some (B.String "x") -> true | _ -> false)
+
+let%test "Sim.writes: insert mints the seeded id, update runs the real modifier, remove hides" =
+  let s = MS.create () in
+  MS.added s ~sub:"real" ~collection:"tasks" ~id:"t1" ~fields:[ ("n", B.int 1) ];
+  let w = Fennec_pulse_live.Sim.writes s ~sim:"sim:m" ~seed:"seed1" in
+  let module Mth = Fennec_pulse_method in
+  let id = w.Mth.Method.insert "tasks" (B.doc [ ("title", B.str "hello") ]) in
+  (* the minted id is exactly the (seed, collection)-stream's prediction *)
+  let predicted = Query.Id.random_id ~rng:(Mth.Method.Seed.stream ~seed:"seed1" ~scope:"tasks") () in
+  let upd = w.Mth.Method.update "tasks" (B.doc [ ("_id", B.str "t1") ]) (B.doc [ ("$inc", B.doc [ ("n", B.int 41) ]) ]) in
+  let n_now =
+    match MS.fetch s "tasks" ~selector:(B.doc [ ("_id", B.str "t1") ]) () with
+    | [| d |] -> B.get d "n" = Some (B.Int 42)
+    | _ -> false
+  in
+  let rm = w.Mth.Method.remove "tasks" (B.doc [ ("_id", B.str "t1") ]) in
+  let gone = Array.length (MS.fetch s "tasks" ~selector:(B.doc [ ("_id", B.str "t1") ]) ()) = 0 in
+  id = predicted && upd = 1 && n_now && rm = 1 && gone
+  && Array.length (MS.fetch s "tasks" ()) = 1 (* the optimistic insert remains *)
+
 let%test "changed: a changed for a doc this sub never added creates it (Meteor-tolerant, not dropped)" =
   let s = MS.create () in
   MS.changed s ~sub:"a" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ] ~cleared:[];

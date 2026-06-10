@@ -72,6 +72,11 @@ module type REACTIVE = sig
       result encodes on the way out. The typed twin of {!methods}. *)
   val handle : ('a, 'r) Fennec_pulse_method.Method.t -> (invocation -> 'a -> 'r) -> unit
 
+  (** Internal server-glue seam (installed once by [fennec.pulse.server]): a per-call lookup from
+      collection name to the method's seeded id stream, so a handler's inserts mint the SAME ids the
+      client's optimistic stub minted (latency compensation). Apps never call this. *)
+  val set_seeded_id_provider : (string -> (int -> int) option) -> unit
+
   (** How a collection mints [_id]s: 17-char strings ([STRING]) or 24-hex ObjectIds ([MONGO]). *)
   type id_generation = STRING | MONGO
 

@@ -48,6 +48,9 @@ type t = {
      Method frames bypass the pre-open queue and ride ONLY this list, so they can't double-send. *)
   mutable unacked : (string * string) list;
   mutable send_if_open : string -> unit; (* raw socket send when open, drop otherwise (methods) *)
+  (* running optimistic simulations: method id → its sim sub; dropped (server truth revealed) when
+     the method's [updated] arrives *)
+  sims : (string, string) Hashtbl.t;
   mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
@@ -85,7 +88,18 @@ let handle t raw =
                   | Some e -> Error (e.Msg.code, Option.value e.Msg.reason ~default:"")
                   | None -> Ok (Option.value result ~default:Bson.Null))
             | None -> ())
-        | Msg.Updated _ -> () (* the server's write-fence; the data change already flows via the subscription *)
+        | Msg.Updated { methods } ->
+            (* the server's write fence has passed: its data deltas for these methods have ARRIVED,
+               so reveal server truth — dropping each method's simulation is one sub_stopped (the
+               merge store's precedence fallthrough IS the rollback) *)
+            List.iter
+              (fun mid ->
+                match Hashtbl.find_opt t.sims mid with
+                | Some simid ->
+                    MS.sub_stopped box simid;
+                    Hashtbl.remove t.sims mid
+                | None -> ())
+              methods
         | Msg.Failed _ -> () (* DDP version mismatch — nothing to renegotiate; proceed best-effort *)
         | _ -> ()
 
@@ -98,7 +112,7 @@ let connect ?(path = "/websocket") () : t =
   let t =
     { live = Live.create (); send = (fun _ -> ()); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
       subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; unacked = [];
-      send_if_open = (fun _ -> ()); closed = false; ws = None }
+      send_if_open = (fun _ -> ()); sims = Hashtbl.create 8; closed = false; ws = None }
   in
   (* sends before the socket is open (component setup fires subscribe/call before onopen) queue up *)
   let is_open = ref false in
@@ -153,10 +167,12 @@ let connect ?(path = "/websocket") () : t =
   open_socket ();
   t
 
-(* tear the client down: stop reconnecting and shut the live socket. After this the client is inert
-   (no timer keeps firing). Idempotent. *)
+(* tear the client down: stop reconnecting, drop any running simulations (their methods can never
+   resolve now), and shut the live socket. After this the client is inert. Idempotent. *)
 let close t =
   t.closed <- true;
+  Hashtbl.iter (fun _ simid -> MS.sub_stopped (Live.store t.live) simid) t.sims;
+  Hashtbl.reset t.sims;
   match t.ws with Some ws -> (try ignore (Js.Unsafe.meth_call ws "close" [||]) with _ -> ()) | None -> ()
 
 let subscribe t ~name ?(params = []) () : subscription =
@@ -230,7 +246,10 @@ let call_result t ~name ?(params = []) () : (Bson.t, string * string) result opt
 let call t ~name ?(params = []) () = ignore (call_result t ~name ~params ())
 
 (* the TYPED call: arguments encode through the shared method value's codec; the outcome decodes
-   before it reaches the signal (a result the codec rejects surfaces as a client-decode error) *)
+   before it reaches the signal (a result the codec rejects surfaces as a client-decode error).
+   A declared [?stub] runs IMMEDIATELY as an optimistic simulation against the client cache — the
+   UI updates now; the server's [updated] reveals truth (Updated handler above). The call carries a
+   randomSeed so the server's seeded handler mints the SAME insert ids as the stub (convergence). *)
 let call_m t (m : ('a, 'r) Mth.Method.t) (a : 'a) : ('r, string * string) result option Fur.signal =
   let sig_ = Fur.signal None in
   let resolve r =
@@ -244,7 +263,20 @@ let call_m t (m : ('a, 'r) Mth.Method.t) (a : 'a) : ('r, string * string) result
              | Error e -> Error ("client-decode", e))))
   in
   let params = (Mth.Method.args m).Mth.Codec.enc_args a in
-  ignore (send_method t ~name:(Mth.Method.name m) ~params ~random_seed:None resolve);
+  (match Mth.Method.stub m with
+  | None -> ignore (send_method t ~name:(Mth.Method.name m) ~params ~random_seed:None resolve)
+  | Some stub ->
+      let seed = Query.Id.random_id () in
+      let mid =
+        send_method t ~name:(Mth.Method.name m) ~params ~random_seed:(Some (Bson.String seed)) resolve
+      in
+      let simid = "sim:" ^ mid in
+      (* a throwing stub is logged and skipped — the call still went to the server (truth) *)
+      (try stub (Fennec_pulse_live.Sim.writes (Live.store t.live) ~sim:simid ~seed) a
+       with e ->
+         Firebug.console##warn
+           (Js.string ("fennec/method: stub failed (simulation skipped): " ^ Printexc.to_string e)));
+      Hashtbl.replace t.sims mid simid);
   sig_
 
 (* SSR-only concept: the browser receives data over the live socket, not a publication registry *)

@@ -70,6 +70,22 @@ let%test "write fence: a method's data delta reaches the channel BEFORE its upda
   let updated_i = idx (function Msg.Updated { methods = [ "mf" ] } -> true | _ -> false) in
   added_i >= 0 && updated_i >= 0 && added_i < updated_i
 
+let%test "latency compensation: a seeded method mints the SAME insert id the client stub predicts" =
+  let feed = C.create ~name:"conv" (Minimongo.create ()) in
+  R.publish "rt_conv" (fun _ -> R.Cursor (R.cursor feed ()));
+  R.methods [ ("rt_conv_add", fun _ _ -> B.str (C.insert feed (B.doc [ ("t", B.int 1) ]))) ];
+  let ch, out = fake_channel () in
+  D.serve ~session_id:"SC" ch;
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "sc"; name = "rt_conv"; params = [] }));
+  ch.Ws.on_text
+    (Msg.encode
+       (Msg.Method { method_ = "rt_conv_add"; params = []; id = "mc"; random_seed = Some (B.str "seedX") }));
+  (* the client stub would mint from the SAME (seed, collection) stream — both sides converge *)
+  let predicted =
+    Query.Id.random_id ~rng:(Fennec_pulse_method.Method.Seed.stream ~seed:"seedX" ~scope:"conv") ()
+  in
+  List.exists (function Msg.Added { collection = "conv"; id; _ } -> id = predicted | _ -> false) (emitted out)
+
 let%test "sockjs serve opens with 'o' and wraps replies in array frames" =
   R.methods [ ("rt_id", fun _ _ -> B.Int 1) ];
   let ch, out = fake_channel () in

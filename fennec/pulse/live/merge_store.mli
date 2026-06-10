@@ -82,3 +82,16 @@ val quiesce : t -> string -> unit
     sending during the outage. Heals the cache after a dropped socket using the same machinery as the
     SSR seed. *)
 val resync_begin : t -> string -> unit
+
+(** [begin_sim t sub] registers [sub] as an optimistic SIMULATION: its precedence comes from a
+    negative, descending band, so its field writes (the normal {!added}/{!changed} under this sub)
+    win over every real subscription instantly, and a later simulation wins over an earlier one.
+    Rollback is just {!sub_stopped} — the per-field precedence fallthrough reveals server truth with
+    no bespoke undo machinery. *)
+val begin_sim : t -> string -> unit
+
+(** [sim_hide t ~sub ~collection ~id] optimistically DELETES a doc for the duration of simulation
+    [sub]: it leaves the visible store, but its view survives — dropping the sim restores it (unless
+    a real removal landed meanwhile, in which case it stays gone). Precedence can't express absence,
+    so hiding is its own axis. *)
+val sim_hide : t -> sub:string -> collection:string -> id:string -> unit

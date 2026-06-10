@@ -26,6 +26,10 @@ type field_entry = { sub : string; prec : int; value : Bson.t }
 type doc_view = {
   exists_in : (string, int) Hashtbl.t; (* subId -> precedence *)
   fields : (string, field_entry list) Hashtbl.t; (* field -> precedence list (asc by prec) *)
+  (* sim subs currently HIDING this doc (an optimistic delete): while non-empty the doc is absent
+     from the visible store but the view survives — dropping the sim restores it (precedence can't
+     express absence, so hiding is its own axis) *)
+  hidden_by : (string, unit) Hashtbl.t;
 }
 
 type collection_view = {
@@ -62,13 +66,16 @@ type t = {
      linger as a stale fast-render row *)
   tentative : (string, (string * string, unit) Hashtbl.t) Hashtbl.t;
   mutable seq : int;
+  (* sim subs get precedences from a NEGATIVE, descending band: every simulation wins over every
+     real subscription, and a later simulation wins over an earlier one (per field) *)
+  mutable sim_seq : int;
   (* the collections a mutation section touched — their listeners fire (once each) after unlock *)
   mutable dirty : collection_view list;
 }
 
 let create () =
   { lock = Mutex.create (); collections = Hashtbl.create 8; subs = Hashtbl.create 16;
-    tentative = Hashtbl.create 16; seq = 0; dirty = [] }
+    tentative = Hashtbl.create 16; seq = 0; sim_seq = 0; dirty = [] }
 
 let with_lock t f =
   Mutex.lock t.lock;
@@ -171,6 +178,7 @@ let clear_field dv field sub =
 
 let drop_sub_from_doc dv sub =
   Hashtbl.remove dv.exists_in sub;
+  Hashtbl.remove dv.hidden_by sub;
   (* iterate over a snapshot of keys since clear_field mutates the table *)
   let fkeys = Hashtbl.fold (fun k _ acc -> k :: acc) dv.fields [] in
   List.iter (fun f -> clear_field dv f sub) fkeys
@@ -179,11 +187,15 @@ let drop_sub_from_doc dv sub =
 let recompute t cv id dv =
   (* a MONGO collection keeps its Object_id _id (the wire/seed carry the hex as a string) *)
   let id_val = if cv.oid then Bson.Object_id id else Bson.String id in
-  if Hashtbl.length dv.exists_in = 0 then begin
+  if Hashtbl.length dv.exists_in = 0 && Hashtbl.length dv.hidden_by = 0 then begin
     (* gone from every sub → keyed delete (O(1) hash remove, not an O(n) selector scan) *)
     ignore (C.remove_id cv.store id);
     Hashtbl.remove cv.docs id
   end
+  else if Hashtbl.length dv.hidden_by > 0 then
+    (* optimistically deleted: absent from the visible store, but the view survives so dropping the
+       sim (or a real removal) recomputes it back into existence / out entirely *)
+    ignore (C.remove_id cv.store id)
   else begin
     (* still present → INSERT overwrites the store entry with the full merged doc and leaves [rorder]
        untouched when the id is already there (insert only conses a NEW id), so the common change/add
@@ -199,7 +211,7 @@ let doc_of cv id =
   match Hashtbl.find_opt cv.docs id with
   | Some dv -> dv
   | None ->
-      let dv = { exists_in = Hashtbl.create 2; fields = Hashtbl.create 8 } in
+      let dv = { exists_in = Hashtbl.create 2; fields = Hashtbl.create 8; hidden_by = Hashtbl.create 1 } in
       Hashtbl.replace cv.docs id dv;
       dv
 
@@ -363,6 +375,36 @@ let quiesce t sub =
       | Some set ->
           Hashtbl.iter (fun (collection, id) () -> removed_u t ~sub ~collection ~id) set;
           Hashtbl.remove t.tentative sub)
+
+(* ---- optimistic simulation (latency compensation) --------------------------
+   A method stub's writes ride a SIM SUB: a virtual subscription from the negative precedence band,
+   so its field values win over every real subscription instantly — and "rollback" when the server's
+   [updated] arrives is just {!sub_stopped}: the precedence fallthrough this store already implements
+   reveals server truth with no bespoke undo machinery. Deletes need their own axis (precedence can't
+   express absence): {!sim_hide} tombstones a doc until the sim drops. *)
+
+(* register [sub] as a simulation: top precedence, later sims over earlier (per field) *)
+let begin_sim t sub =
+  with_lock t (fun () ->
+      if not (Hashtbl.mem t.subs sub) then begin
+        t.sim_seq <- t.sim_seq - 1;
+        Hashtbl.replace t.subs sub { order = t.sim_seq; contributed = Hashtbl.create 16 }
+      end)
+
+(* optimistically DELETE [id] for the duration of [sub] (a sim registered via {!begin_sim}): the doc
+   leaves the visible store but its view survives — dropping the sim restores it (unless a real
+   removal landed meanwhile, in which case it stays gone) *)
+let sim_hide t ~sub ~collection ~id =
+  mutate t (fun () ->
+      match Hashtbl.find_opt t.collections collection with
+      | None -> ()
+      | Some cv -> (
+          match Hashtbl.find_opt cv.docs id with
+          | None -> ()
+          | Some dv ->
+              Hashtbl.replace dv.hidden_by sub ();
+              track t sub collection id;
+              recompute t cv id dv))
 
 (* on reconnect: re-mark everything [sub] currently holds as tentative, so the resubscription's fresh
    snapshot (which re-adds the still-present docs, confirming them) plus the [ready] {!quiesce} drops

@@ -24,14 +24,59 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     sink.Session.ready ();
     { Session.stop = h.Rx.stop }
 
+  (* ---- seeded id minting (latency compensation) ------------------------------------------------
+     The client's randomSeed must drive the handler's insert ids so they CONVERGE with its stub's.
+     The seam is fiber-local (Eio's equivalent of AsyncLocalStorage): [with_seed] binds the call's
+     per-collection streams for the handler's dynamic extent — concurrent methods on other fibers and
+     domains each see their own. Outside an Eio run (unit tests) the fiber effect is unhandled, so a
+     plain global stands in (single-fiber there — the DD7 pattern). *)
+  module Mth = Fennec_pulse_method
+
+  type _seed_streams = string * (string, int -> int) Hashtbl.t (* seed + per-collection streams *)
+
+  let _seed_key : _seed_streams Eio.Fiber.key = Eio.Fiber.create_key ()
+  let _seed_fallback : _seed_streams option ref = ref None
+
+  let _current_streams () =
+    match (try Eio.Fiber.get _seed_key with Stdlib.Effect.Unhandled _ -> None) with
+    | Some v -> Some v
+    | None -> !_seed_fallback
+
+  let () =
+    R.set_seeded_id_provider (fun coll ->
+        match _current_streams () with
+        | None -> None
+        | Some (seed, tbl) ->
+            Some
+              (match Hashtbl.find_opt tbl coll with
+              | Some r -> r
+              | None ->
+                  let r = Mth.Method.Seed.stream ~seed ~scope:coll in
+                  Hashtbl.replace tbl coll r;
+                  r))
+
+  let with_seed seed f =
+    let v = (seed, Hashtbl.create 4) in
+    (* probe whether a fiber context exists BEFORE running f, so f executes exactly once *)
+    match try `Fiber (ignore (Eio.Fiber.get _seed_key : _seed_streams option)) with Stdlib.Effect.Unhandled _ -> `Plain with
+    | `Fiber () -> Eio.Fiber.with_binding _seed_key v f
+    | `Plain ->
+        _seed_fallback := Some v;
+        Fun.protect f ~finally:(fun () -> _seed_fallback := None)
+
   (* a method, translating a reactive Error into the session's Method_error so its code/reason reach
      the client instead of being collapsed to a generic 500. The session's per-call context threads
-     through: the connection's user reaches the handler's invocation, and a login method's
-     set_user_id rebinds the connection. *)
+     through: the connection's user reaches the handler's invocation, a login method's set_user_id
+     rebinds the connection, and a randomSeed binds the seeded id streams for the handler's extent. *)
   let method_of name : Session.method_fn =
    fun ctx params ->
-    try R.apply ~user_id:ctx.Session.user_id ~set_user_id:ctx.Session.set_user_id name params
-    with R.Error { code; reason } -> raise (Session.Method_error { code; reason })
+    let run () =
+      try R.apply ~user_id:ctx.Session.user_id ~set_user_id:ctx.Session.set_user_id name params
+      with R.Error { code; reason } -> raise (Session.Method_error { code; reason })
+    in
+    match ctx.Session.random_seed with
+    | Some (Bson.String seed) when seed <> "" -> with_seed seed run
+    | _ -> run ()
 
   (* the publication/method registries for a session — the names are fixed at registration time *)
   (* a per-session snapshot of the publication/method names (wrapped into session sinks). Rebuilt per

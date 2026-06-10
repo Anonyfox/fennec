@@ -3,6 +3,6 @@
 ; real socket. The live server round-trip is a separate system test.
 (test
  (name test_pulse_server)
- (libraries fennec.pulse.server fennec.pulse fennec.ddp fennec.core fennec-mongo.bson fennec-mongo.minimongo
+ (libraries fennec.pulse.server fennec.pulse fennec.pulse.method fennec.ddp fennec.core fennec-mongo.bson fennec-mongo.minimongo fennec-mongo.query
    fennec-hunt.unit)
  (preprocess (pps fennec-hunt.ppx)))

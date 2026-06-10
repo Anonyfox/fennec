@@ -50,6 +50,7 @@ module type REACTIVE = sig
     doc
 
   val handle : ('a, 'r) Fennec_pulse_method.Method.t -> (invocation -> 'a -> 'r) -> unit
+  val set_seeded_id_provider : (string -> (int -> int) option) -> unit
 
   type id_generation = STRING | MONGO
 
@@ -215,6 +216,13 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     | None -> error ~reason:(Printf.sprintf "Method '%s' not found" name) "404"
     | Some h -> h { user_id; is_simulation; set_user_id } args (* the handler runs outside the lock *)
 
+  (* the seeded-id provider — server glue (fennec.pulse.server) installs a per-method-call lookup so
+     [Collection]'s id minting draws from the client's randomSeed streams (latency compensation: the
+     stub and the handler mint the SAME insert ids and the optimistic doc converges with the real
+     one). Default: none — normal random ids, one ref deref of cost. *)
+  let _seeded_rng : (string -> (int -> int) option) ref = ref (fun _ -> None)
+  let set_seeded_id_provider f = _seeded_rng := f
+
   (* the TYPED method layer: attach a handler to a shared Method.t value. A decode failure becomes a
      400 BEFORE the handler runs — the codec is the validation; the result encodes on the way out. *)
   let handle (m : ('a, 'r) Fennec_pulse_method.Method.t) (f : invocation -> 'a -> 'r) : unit =
@@ -306,12 +314,14 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
       let kvs = Query.Diff.kvs_of d in
       if List.mem_assoc "_id" kvs then (Query.Diff.doc_id d, d)
       else
+        (* ids draw from the ambient seeded stream when a method call carries a randomSeed (latency
+           compensation — the client stub mints the same ids), else from the normal RNG *)
         match c.id_generation with
         | STRING ->
-            let id = Query.Id.random_id () in
+            let id = Query.Id.random_id ?rng:(!_seeded_rng c.name) () in
             (id, Bson.Document (("_id", Bson.String id) :: kvs))
         | MONGO ->
-            let id = Query.Id.object_id () in
+            let id = Query.Id.object_id ?rng:(!_seeded_rng c.name) () in
             (id, Bson.Document (("_id", Bson.Object_id id) :: kvs))
 
     let insert c (d : doc) : string =
