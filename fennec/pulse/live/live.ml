@@ -3,22 +3,32 @@
    the browser. The DDP WebSocket client + [subscribe] (which feed the store) are a later
    js_of_ocaml addition; here [find] is the read side, driven by whatever feeds the store. *)
 
-type t = { store : Merge_store.t; versions : (string, int Fur.signal) Hashtbl.t }
+type t = {
+  store : Merge_store.t;
+  vlock : Mutex.t; (* guards [versions] — an SSR-shared client may be read from several domains *)
+  versions : (string, int Fur.signal) Hashtbl.t;
+}
 
-let create () = { store = Merge_store.create (); versions = Hashtbl.create 8 }
+let create () = { store = Merge_store.create (); vlock = Mutex.create (); versions = Hashtbl.create 8 }
 let store t = t.store
 
-(* one shared Fur signal per collection, bumped from the merge store's change listener *)
+(* one shared Fur signal per collection, bumped from the merge store's change listener. The lock
+   covers only the table find-or-create (signal updates arrive via the store's fire, outside it). *)
 let version_signal t name =
-  match Hashtbl.find_opt t.versions name with
-  | Some s -> s
-  | None ->
-      let s = Fur.signal (Merge_store.version t.store name) in
-      let (_ : int) =
-        Merge_store.on_change t.store name (fun () -> Fur.set s (Merge_store.version t.store name))
-      in
-      Hashtbl.replace t.versions name s;
-      s
+  Mutex.lock t.vlock;
+  let s =
+    match Hashtbl.find_opt t.versions name with
+    | Some s -> s
+    | None ->
+        let s = Fur.signal (Merge_store.version t.store name) in
+        let (_ : int) =
+          Merge_store.on_change t.store name (fun () -> Fur.set s (Merge_store.version t.store name))
+        in
+        Hashtbl.replace t.versions name s;
+        s
+  in
+  Mutex.unlock t.vlock;
+  s
 
 let find t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array Fur.signal =
   let v = version_signal t name in

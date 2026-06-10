@@ -221,6 +221,31 @@ let%test "changed: a changed for a doc this sub never added creates it (Meteor-t
   MS.changed s ~sub:"a" ~collection:"c" ~id:"x" ~fields:[ ("v", B.int 1) ] ~cleared:[];
   match MS.fetch s "c" () with [| d |] -> B.get d "v" = Some (B.Int 1) | _ -> false
 
+let%test "multicore: an SSR-shared store survives concurrent domain seeds + deltas + reads, exactly" =
+  let s = MS.create () in
+  let listener_fires = Atomic.make 0 in
+  let _ = MS.on_change s "c" (fun () -> Atomic.incr listener_fires) in
+  let domains =
+    List.init 4 (fun w ->
+        Domain.spawn (fun () ->
+            let sub = "s" ^ string_of_int w in
+            (* a seed burst + live deltas + interleaved reads, per domain on ITS OWN sub *)
+            MS.seed s ~sub ~collection:"c"
+              (List.init 25 (fun k -> B.doc [ ("_id", B.str (Printf.sprintf "%d-%d" w k)) ]));
+            for k = 0 to 24 do
+              let id = Printf.sprintf "%d-%d" w k in
+              MS.changed s ~sub ~collection:"c" ~id ~fields:[ ("v", B.int k) ] ~cleared:[];
+              ignore (MS.fetch s "c" ())
+            done;
+            (* drop the odd ones *)
+            for k = 0 to 24 do
+              if k mod 2 = 1 then MS.removed s ~sub ~collection:"c" ~id:(Printf.sprintf "%d-%d" w k)
+            done))
+  in
+  List.iter Domain.join domains;
+  (* 4 domains × 13 surviving (even k of 0..24) = 52; every fire happened outside the lock *)
+  Array.length (MS.fetch s "c" ()) = 52 && Atomic.get listener_fires > 0
+
 let%test "Live.aggregate recomputes when a FOREIGN $lookup collection changes (not just the primary)" =
   let lv = Live.create () in
   MS.added (Live.store lv) ~sub:"a" ~collection:"orders" ~id:"o1" ~fields:[ ("cust", B.str "c1") ];

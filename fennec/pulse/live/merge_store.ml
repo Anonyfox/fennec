@@ -10,7 +10,14 @@
                    wins; on clear/remove the next sub's value takes over).
    Each sub also remembers the set of (collection,id) it touched, so stopping a sub is O(that sub's
    docs). The collection carries a version + listeners so the Fur binding can recompute. Pure
-   (bson + minimongo) → native AND JS. *)
+   (bson + minimongo) → native AND JS.
+
+   CONCURRENCY: in the browser the store is single-threaded; on the server one SSR-shared store may
+   be touched by several domains' render fibers. One [t.lock] guards every read snapshot and every
+   mutation; listener notification ("fires") ALWAYS happens after the lock is released — a listener
+   may freely re-enter (Live's recompute calls [fetch]). Each public mutation is one atomic section
+   whose touched collections fire exactly ONCE afterwards (the burst coalescing this also buys is
+   what keeps a W-doc seed at O(W) instead of O(W²) re-snapshots). *)
 
 module C = Minimongo
 
@@ -37,7 +44,7 @@ type collection_view = {
      bumps the primary's version but not a foreign's, so the foreign fetch is reused, not rebuilt on
      every aggregate recompute *)
   mutable agg_cache : (int * Bson.t list) option;
-  (* O(1) dirty-set membership during a [batch] — avoids an O(W) List.memq per touched view *)
+  (* O(1) dirty-set membership within a mutation section — avoids an O(W) List.memq per touched view *)
   mutable in_dirty : bool;
 }
 
@@ -47,6 +54,7 @@ type sub_info = {
 }
 
 type t = {
+  lock : Mutex.t; (* guards everything below; never held across a listener fire *)
   collections : (string, collection_view) Hashtbl.t;
   subs : (string, sub_info) Hashtbl.t;
   (* per sub: docs it SEEDED (SSR) that the live snapshot hasn't re-confirmed yet — dropped on the
@@ -54,18 +62,39 @@ type t = {
      linger as a stale fast-render row *)
   tentative : (string, (string * string, unit) Hashtbl.t) Hashtbl.t;
   mutable seq : int;
-  (* coalescing: while [batch_depth] > 0, [bump] records each touched view in [dirty] instead of
-     firing; the outermost [batch] fires each once at the end — a W-op burst's O(W^2) re-snapshots
-     collapse to O(W) *)
-  mutable batch_depth : int;
+  (* the collections a mutation section touched — their listeners fire (once each) after unlock *)
   mutable dirty : collection_view list;
 }
 
 let create () =
-  { collections = Hashtbl.create 8; subs = Hashtbl.create 16; tentative = Hashtbl.create 16; seq = 0;
-    batch_depth = 0; dirty = [] }
+  { lock = Mutex.create (); collections = Hashtbl.create 8; subs = Hashtbl.create 16;
+    tentative = Hashtbl.create 16; seq = 0; dirty = [] }
 
-(* ---- collections --------------------------------------------------------- *)
+let with_lock t f =
+  Mutex.lock t.lock;
+  match f () with
+  | v ->
+      Mutex.unlock t.lock;
+      v
+  | exception e ->
+      Mutex.unlock t.lock;
+      raise e
+
+(* run a mutation as one atomic section, then fire each touched collection's listeners ONCE, outside
+   the lock (so a listener can re-enter — Live's recompute calls [fetch]) *)
+let mutate t f =
+  let v, fired =
+    with_lock t (fun () ->
+        let v = f () in
+        let d = t.dirty in
+        t.dirty <- [];
+        List.iter (fun cv -> cv.in_dirty <- false) d;
+        (v, d))
+  in
+  List.iter (fun cv -> Hashtbl.iter (fun _ f -> f ()) cv.listeners) fired;
+  v
+
+(* ---- collections (internal: call under [t.lock]) -------------------------- *)
 
 let ensure_collection t name : collection_view =
   match Hashtbl.find_opt t.collections name with
@@ -78,43 +107,30 @@ let ensure_collection t name : collection_view =
       Hashtbl.replace t.collections name cv;
       cv
 
-let fire cv = Hashtbl.iter (fun _ f -> f ()) cv.listeners
-
-(* bump the version + notify reactive readers (Live.find/aggregate re-snapshot). During a [batch]
-   (a burst — seed/replay), defer the notify and coalesce so each touched view fires exactly ONCE at
-   batch end: an O(W) burst's O(W^2) re-snapshots collapse to O(W). *)
+(* bump the version + mark the view for the post-unlock notify (coalesced: once per section) *)
 let bump t cv =
   cv.version <- cv.version + 1;
-  if t.batch_depth > 0 then (if not cv.in_dirty then (cv.in_dirty <- true; t.dirty <- cv :: t.dirty)) else fire cv
+  if not cv.in_dirty then begin
+    cv.in_dirty <- true;
+    t.dirty <- cv :: t.dirty
+  end
 
-(* run [f], coalescing every version bump inside it into one notify per touched view; re-entrant. *)
-let batch t f =
-  t.batch_depth <- t.batch_depth + 1;
-  let finish () =
-    t.batch_depth <- t.batch_depth - 1;
-    if t.batch_depth = 0 && t.dirty <> [] then (
-      let d = t.dirty in
-      t.dirty <- [];
-      List.iter (fun cv -> cv.in_dirty <- false; fire cv) d)
-  in
-  match f () with
-  | v -> finish (); v
-  | exception e -> finish (); raise e
-
-let store t name = (ensure_collection t name).store
-let version t name = match Hashtbl.find_opt t.collections name with Some cv -> cv.version | None -> 0
+let store t name = with_lock t (fun () -> (ensure_collection t name).store)
+let version t name = with_lock t (fun () -> match Hashtbl.find_opt t.collections name with Some cv -> cv.version | None -> 0)
 
 let on_change t name f =
-  let cv = ensure_collection t name in
-  cv.lc <- cv.lc + 1;
-  let id = cv.lc in
-  Hashtbl.replace cv.listeners id f;
-  id
+  with_lock t (fun () ->
+      let cv = ensure_collection t name in
+      cv.lc <- cv.lc + 1;
+      let id = cv.lc in
+      Hashtbl.replace cv.listeners id f;
+      id)
 
 let off_change t name id =
-  match Hashtbl.find_opt t.collections name with Some cv -> Hashtbl.remove cv.listeners id | None -> ()
+  with_lock t (fun () ->
+      match Hashtbl.find_opt t.collections name with Some cv -> Hashtbl.remove cv.listeners id | None -> ())
 
-(* ---- subscriptions registry ---------------------------------------------- *)
+(* ---- subscriptions registry (internal) ------------------------------------ *)
 
 let ensure_sub t sub : sub_info =
   match Hashtbl.find_opt t.subs sub with
@@ -127,19 +143,17 @@ let ensure_sub t sub : sub_info =
 
 let sub_prec t sub = match Hashtbl.find_opt t.subs sub with Some i -> i.order | None -> max_int
 
-let ckey collection id = collection ^ "\000" ^ id
-
 let track t sub collection id =
   match Hashtbl.find_opt t.subs sub with
-  | Some i -> Hashtbl.replace i.contributed (ckey collection id) (collection, id)
+  | Some i -> Hashtbl.replace i.contributed (collection ^ "\000" ^ id) (collection, id)
   | None -> ()
 
 let untrack t sub collection id =
   match Hashtbl.find_opt t.subs sub with
-  | Some i -> Hashtbl.remove i.contributed (ckey collection id)
+  | Some i -> Hashtbl.remove i.contributed (collection ^ "\000" ^ id)
   | None -> ()
 
-(* ---- field precedence ---------------------------------------------------- *)
+(* ---- field precedence (internal) ------------------------------------------ *)
 
 let set_field dv field sub prec value =
   let cur = match Hashtbl.find_opt dv.fields field with Some l -> l | None -> [] in
@@ -161,7 +175,7 @@ let drop_sub_from_doc dv sub =
   let fkeys = Hashtbl.fold (fun k _ acc -> k :: acc) dv.fields [] in
   List.iter (fun f -> clear_field dv f sub) fkeys
 
-(* rebuild the winning document into minimongo (or remove it) and notify *)
+(* rebuild the winning document into minimongo (or remove it) and mark the view dirty *)
 let recompute t cv id dv =
   (* a MONGO collection keeps its Object_id _id (the wire/seed carry the hex as a string) *)
   let id_val = if cv.oid then Bson.Object_id id else Bson.String id in
@@ -189,11 +203,12 @@ let doc_of cv id =
       Hashtbl.replace cv.docs id dv;
       dv
 
-(* ---- the sub-tagged DDP data ops ----------------------------------------- *)
+(* ---- the sub-tagged DDP data ops ------------------------------------------
+   Internal *_u forms run under [t.lock]; the public ops below wrap them in [mutate]. *)
 
 (* quiescence bookkeeping: [seed] marks a doc tentative for its sub; a live [added]/[changed] confirms
    (clears) it; [quiesce] (on the sub's first [ready]) drops whatever stayed tentative. *)
-let mark_tentative t sub collection id =
+let mark_tentative_u t sub collection id =
   let set =
     match Hashtbl.find_opt t.tentative sub with
     | Some s -> s
@@ -204,11 +219,11 @@ let mark_tentative t sub collection id =
   in
   Hashtbl.replace set (collection, id) ()
 
-let confirm t sub collection id =
+let confirm_u t sub collection id =
   match Hashtbl.find_opt t.tentative sub with Some s -> Hashtbl.remove s (collection, id) | None -> ()
 
 (* added: this sub now includes [id] in [collection] with [fields] *)
-let added t ~sub ~collection ~id ~fields =
+let added_u t ~sub ~collection ~id ~fields =
   let _ = ensure_sub t sub in
   let cv = ensure_collection t collection in
   let dv = doc_of cv id in
@@ -217,10 +232,10 @@ let added t ~sub ~collection ~id ~fields =
   List.iter (fun (f, v) -> set_field dv f sub prec v) fields;
   track t sub collection id;
   recompute t cv id dv;
-  confirm t sub collection id
+  confirm_u t sub collection id
 
-(* changed: this sub updated [fields] / unset [cleared] of an existing doc *)
-let changed t ~sub ~collection ~id ~fields ~cleared =
+(* changed: this sub updated [fields] / unset [cleared] of a doc *)
+let changed_u t ~sub ~collection ~id ~fields ~cleared =
   let _ = ensure_sub t sub in
   let cv = ensure_collection t collection in
   let dv = doc_of cv id in
@@ -234,10 +249,10 @@ let changed t ~sub ~collection ~id ~fields ~cleared =
   List.iter (fun f -> clear_field dv f sub) cleared;
   track t sub collection id;
   recompute t cv id dv;
-  confirm t sub collection id
+  confirm_u t sub collection id
 
 (* removed: this sub no longer includes [id] *)
-let removed t ~sub ~collection ~id =
+let removed_u t ~sub ~collection ~id =
   match Hashtbl.find_opt t.collections collection with
   | None -> ()
   | Some cv -> (
@@ -245,49 +260,61 @@ let removed t ~sub ~collection ~id =
       | None -> ()
       | Some dv -> drop_sub_from_doc dv sub; untrack t sub collection id; recompute t cv id dv)
 
+let added t ~sub ~collection ~id ~fields = mutate t (fun () -> added_u t ~sub ~collection ~id ~fields)
+
+let changed t ~sub ~collection ~id ~fields ~cleared =
+  mutate t (fun () -> changed_u t ~sub ~collection ~id ~fields ~cleared)
+
+let removed t ~sub ~collection ~id = mutate t (fun () -> removed_u t ~sub ~collection ~id)
+
 (* sub_stopped: drop everything this sub contributed (O(that sub's docs)) *)
 let sub_stopped t sub =
-  match Hashtbl.find_opt t.subs sub with
-  | None -> ()
-  | Some info ->
-      Hashtbl.iter
-        (fun _ (collection, id) ->
-          match Hashtbl.find_opt t.collections collection with
-          | Some cv -> (
-              match Hashtbl.find_opt cv.docs id with
-              | Some dv -> drop_sub_from_doc dv sub; recompute t cv id dv
+  mutate t (fun () ->
+      match Hashtbl.find_opt t.subs sub with
+      | None -> ()
+      | Some info ->
+          Hashtbl.iter
+            (fun _ (collection, id) ->
+              match Hashtbl.find_opt t.collections collection with
+              | Some cv -> (
+                  match Hashtbl.find_opt cv.docs id with
+                  | Some dv -> drop_sub_from_doc dv sub; recompute t cv id dv
+                  | None -> ())
               | None -> ())
-          | None -> ())
-        info.contributed;
-      Hashtbl.remove t.subs sub;
-      Hashtbl.remove t.tentative sub
+            info.contributed;
+          Hashtbl.remove t.subs sub;
+          Hashtbl.remove t.tentative sub)
 
-(* ---- queries ------------------------------------------------------------- *)
+(* ---- queries --------------------------------------------------------------- *)
 
 let fetch t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array =
-  let cv = ensure_collection t name in
-  Array.of_list (C.fetch (C.find cv.store ?selector ?sort ?skip ?limit ?fields ()))
+  let st = store t name in
+  Array.of_list (C.fetch (C.find st ?selector ?sort ?skip ?limit ?fields ()))
 
 (* aggregation over a collection, with $lookup / $unionWith foreign collections resolved across the
-   client's OTHER collections — the same multi-collection joins the server does, now on the client *)
+   client's OTHER collections — the same multi-collection joins the server does, now on the client.
+   One lock acquisition = a consistent multi-collection snapshot (the pipeline is pure compute; the
+   inner minimongo calls take only their own leaf locks). *)
 let aggregate t name (pipeline : Bson.t list) : Bson.t array =
-  let cv = ensure_collection t name in
-  (* resolve a $lookup/$unionWith foreign collection, MEMOIZED by its [version]: a primary-only change
-     reuses the foreign's last fetch instead of re-materializing it on every recompute *)
-  let lookup other =
-    match Hashtbl.find_opt t.collections other with
-    | None -> []
-    | Some o -> (
-        match o.agg_cache with
-        | Some (v, docs) when v = o.version -> docs
-        | _ ->
-            let docs = C.fetch (C.find o.store ()) in
-            o.agg_cache <- Some (o.version, docs);
-            docs)
-  in
-  Array.of_list (C.aggregate cv.store ~lookup pipeline)
+  with_lock t (fun () ->
+      let cv = ensure_collection t name in
+      (* resolve a foreign collection, MEMOIZED by its [version]: a primary-only change reuses the
+         foreign's last fetch instead of re-materializing it on every recompute *)
+      let lookup other =
+        match Hashtbl.find_opt t.collections other with
+        | None -> []
+        | Some o -> (
+            match o.agg_cache with
+            | Some (v, docs) when v = o.version -> docs
+            | _ ->
+                let docs = C.fetch (C.find o.store ()) in
+                o.agg_cache <- Some (o.version, docs);
+                docs)
+      in
+      Array.of_list (C.aggregate cv.store ~lookup pipeline))
 
-(* SSR / hydration seed: install docs into a collection as if from one sub *)
+(* SSR / hydration seed: install docs into a collection as if from one sub. One atomic section, so
+   the whole burst fires each touched collection ONCE (O(W), not O(W²) re-snapshots). *)
 let seed t ~sub ~collection (docs : Bson.t list) =
   let id_of kvs =
     match List.assoc_opt "_id" kvs with Some (Bson.String s) | Some (Bson.Object_id s) -> Some s | _ -> None
@@ -304,22 +331,21 @@ let seed t ~sub ~collection (docs : Bson.t list) =
         | _ -> false)
       docs
   in
-  if mongo then (ensure_collection t collection).oid <- true;
-  (* SECOND pass: coalesce the whole burst into one notify per touched collection (avoids O(W^2)) *)
-  batch t @@ fun () ->
-  List.iter
-    (fun d ->
-      match d with
-      | Bson.Document kvs -> (
-          (* a string OR Object_id _id is accepted; a doc with no usable _id is skipped (never "") *)
-          match id_of kvs with
-          | None -> ()
-          | Some id ->
-              let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
-              added t ~sub ~collection ~id ~fields;
-              mark_tentative t sub collection id (* SSR seed: tentative until the live snapshot confirms *))
-      | _ -> ())
-    docs
+  mutate t (fun () ->
+      if mongo then (ensure_collection t collection).oid <- true;
+      List.iter
+        (fun d ->
+          match d with
+          | Bson.Document kvs -> (
+              (* a string OR Object_id _id is accepted; a doc with no usable _id is skipped (never "") *)
+              match id_of kvs with
+              | None -> ()
+              | Some id ->
+                  let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
+                  added_u t ~sub ~collection ~id ~fields;
+                  mark_tentative_u t sub collection id (* tentative until the live snapshot confirms *))
+          | _ -> ())
+        docs)
 
 (* on a sub's first [ready], drop any doc it SEEDED but the live snapshot didn't re-confirm — the
    quiescence pass that keeps SSR fast-render from leaving stale rows behind.
@@ -331,17 +357,19 @@ let seed t ~sub ~collection (docs : Bson.t list) =
    the native change-stream driver (ready-after-data). A backend that emitted [ready] before its
    replay would violate the contract and could drop a valid seeded doc here. *)
 let quiesce t sub =
-  match Hashtbl.find_opt t.tentative sub with
-  | None -> ()
-  | Some set ->
-      Hashtbl.iter (fun (collection, id) () -> removed t ~sub ~collection ~id) set;
-      Hashtbl.remove t.tentative sub
+  mutate t (fun () ->
+      match Hashtbl.find_opt t.tentative sub with
+      | None -> ()
+      | Some set ->
+          Hashtbl.iter (fun (collection, id) () -> removed_u t ~sub ~collection ~id) set;
+          Hashtbl.remove t.tentative sub)
 
 (* on reconnect: re-mark everything [sub] currently holds as tentative, so the resubscription's fresh
    snapshot (which re-adds the still-present docs, confirming them) plus the [ready] {!quiesce} drops
    whatever the server stopped sending during the outage — the same quiescence pass that heals the
    SSR seed, reused to heal the cache after a dropped socket. *)
 let resync_begin t sub =
-  match Hashtbl.find_opt t.subs sub with
-  | None -> ()
-  | Some info -> Hashtbl.iter (fun _ (collection, id) -> mark_tentative t sub collection id) info.contributed
+  with_lock t (fun () ->
+      match Hashtbl.find_opt t.subs sub with
+      | None -> ()
+      | Some info -> Hashtbl.iter (fun _ (collection, id) -> mark_tentative_u t sub collection id) info.contributed)
