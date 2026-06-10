@@ -173,17 +173,36 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
   let error ?(reason = "") code = raise (Error { code; reason })
 
+  (* Lock discipline (multicore — the server runs one Eio domain per core): every module-global
+     table in this functor is guarded by a short lock covering ONLY lookups and commits — never a
+     user callback, never IO, never another non-leaf lock — so deadlock is impossible by shape.
+     Handlers and observers always run OUTSIDE the locks. *)
+  let with_lock m f =
+    Mutex.lock m;
+    match f () with
+    | v ->
+        Mutex.unlock m;
+        v
+    | exception e ->
+        Mutex.unlock m;
+        raise e
+
+  (* guards _methods + _pubs + _collections (registration is cold; lookups are a few ns) *)
+  let _reg_lock = Mutex.create ()
+
   (* ---- methods ---- *)
   type invocation = { user_id : string option; is_simulation : bool }
   type method_handler = invocation -> doc list -> doc
 
   let _methods : (string, method_handler) Hashtbl.t = Hashtbl.create 16
-  let methods defs = List.iter (fun (n, h) -> Hashtbl.replace _methods n h) defs
+
+  let methods defs =
+    with_lock _reg_lock (fun () -> List.iter (fun (n, h) -> Hashtbl.replace _methods n h) defs)
 
   let apply ?(user_id = None) ?(is_simulation = false) name (args : doc list) : doc =
-    match Hashtbl.find_opt _methods name with
+    match with_lock _reg_lock (fun () -> Hashtbl.find_opt _methods name) with
     | None -> error ~reason:(Printf.sprintf "Method '%s' not found" name) "404"
-    | Some h -> h { user_id; is_simulation } args
+    | Some h -> h { user_id; is_simulation } args (* the handler itself runs outside the lock *)
 
   let call ?(user_id = None) name args = apply ~user_id name args
 
@@ -255,11 +274,19 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
        two handles onto one shared observe. fetch_and_add is the one safe primitive here. *)
     let _uid_counter = Atomic.make 0
 
-    let create ?(id_generation = STRING) ?transform ?(name = "") backend =
-      if name <> "" then Hashtbl.replace _collections name backend;
+    let create ?(id_generation = STRING) ?transform ?name backend =
+      let uid = Atomic.fetch_and_add _uid_counter 1 in
+      (* an unnamed (or empty-named) collection gets a UNIQUE synthetic name: it is never registered
+         for $lookup, but beats / the DDP wire still need a collection identity — and unique-per-
+         handle means two anonymous collections can never collide in a client's cache (the old ""
+         sentinel made them all one wire identity). "_anon…" is reserved for this. *)
+      let name, registered =
+        match name with Some s when s <> "" -> (s, true) | _ -> ("_anon" ^ string_of_int uid, false)
+      in
+      if registered then with_lock _reg_lock (fun () -> Hashtbl.replace _collections name backend);
       {
         backend;
-        uid = Atomic.fetch_and_add _uid_counter 1;
+        uid;
         name;
         id_generation;
         transform;
@@ -276,7 +303,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     (* drop a named collection from the registry — for a long-running server that creates dynamically
        named collections (e.g. per-tenant), so they (and their $lookup-resolvability) are reclaimed
        rather than pinned for the process lifetime *)
-    let forget nm = Hashtbl.remove _collections nm
+    let forget nm = with_lock _reg_lock (fun () -> Hashtbl.remove _collections nm)
 
     let mint_id c (d : doc) : string * doc =
       let kvs = Query.Diff.kvs_of d in
@@ -325,8 +352,12 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
        $unionWith foreign collections resolve (by name) from this instance's registry, so in-memory
        joins span collections — and a native (mongod) backend ignores the resolver and joins itself. *)
     let aggregate c pipeline =
+      (* the registry lookup is locked; the foreign B.find runs OUTSIDE it (it takes the foreign
+         collection's own lock) — locks never nest, so A→B and B→A joins can't deadlock *)
       let lookup from =
-        match Hashtbl.find_opt _collections from with Some bk -> B.find bk (Backend.query ()) | None -> []
+        match with_lock _reg_lock (fun () -> Hashtbl.find_opt _collections from) with
+        | Some bk -> B.find bk (Backend.query ())
+        | None -> []
       in
       B.aggregate c.backend ~lookup pipeline
     let distinct c ~key ?(selector = Bson.Document []) () = B.distinct c.backend key selector
@@ -447,7 +478,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     Collection.find coll ~selector ~sort ~skip ~limit ~fields ()
 
   let _pubs : (string, doc list -> cursor_kind) Hashtbl.t = Hashtbl.create 16
-  let publish name f = Hashtbl.replace _pubs name f
+  let publish name f = with_lock _reg_lock (fun () -> Hashtbl.replace _pubs name f)
 
   type subscription = {
     documents : unit -> (string * doc) list;
@@ -464,10 +495,13 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     Bson.Document (("_id", idv) :: Query.Diff.kvs_of fields)
 
   let subscribe name : subscription =
-    match Hashtbl.find_opt _pubs name with
+    match with_lock _reg_lock (fun () -> Hashtbl.find_opt _pubs name) with
     | None -> failwith (Printf.sprintf "subscribe: no publication %S" name)
     | Some f ->
-        (* merge box: collection name -> (id -> doc) *)
+        (* merge box: collection name -> (id -> doc). A multi-collection publication is fed by
+           several observes whose deltas may arrive on different fibers, and the getters read from
+           the caller's — one box-local lock covers both (the callbacks do nothing else under it). *)
+        let box_lock = Mutex.create () in
         let boxes : (string, (string, doc) Hashtbl.t) Hashtbl.t = Hashtbl.create 8 in
         let box_for coll =
           match Hashtbl.find_opt boxes coll with
@@ -480,15 +514,17 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
           let id_gen = Collection.(cur.coll.id_generation) in
           let h =
             Collection.observe_changes cur
-              ~added:(fun id fields -> Hashtbl.replace (box_for coll) id (with_id id_gen id fields))
+              ~added:(fun id fields ->
+                with_lock box_lock (fun () -> Hashtbl.replace (box_for coll) id (with_id id_gen id fields)))
               ~changed:(fun id fields cleared ->
-                let b = box_for coll in
-                let base =
-                  match Hashtbl.find_opt b id with Some d -> d | None -> Bson.Document []
-                in
-                Hashtbl.replace b id
-                  (Query.Diff.merge_doc base ~updated:(Query.Diff.kvs_of fields) ~removed:cleared))
-              ~removed:(fun id -> Hashtbl.remove (box_for coll) id)
+                with_lock box_lock (fun () ->
+                    let b = box_for coll in
+                    let base =
+                      match Hashtbl.find_opt b id with Some d -> d | None -> Bson.Document []
+                    in
+                    Hashtbl.replace b id
+                      (Query.Diff.merge_doc base ~updated:(Query.Diff.kvs_of fields) ~removed:cleared)))
+              ~removed:(fun id -> with_lock box_lock (fun () -> Hashtbl.remove (box_for coll) id))
               ()
           in
           stoppers := h.stop :: !stoppers
@@ -497,107 +533,163 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
          | Cursor c -> observe_one c
          | Cursors cs -> List.iter observe_one cs);
         let docs_of coll =
-          match Hashtbl.find_opt boxes coll with
-          | Some b -> Hashtbl.fold (fun k v acc -> (k, v) :: acc) b []
-          | None -> []
+          with_lock box_lock (fun () ->
+              match Hashtbl.find_opt boxes coll with
+              | Some b -> Hashtbl.fold (fun k v acc -> (k, v) :: acc) b []
+              | None -> [])
         in
         {
           documents =
             (fun () ->
-              Hashtbl.fold
-                (fun _ b acc -> Hashtbl.fold (fun k v a -> (k, v) :: a) b acc)
-                boxes []);
+              with_lock box_lock (fun () ->
+                  Hashtbl.fold
+                    (fun _ b acc -> Hashtbl.fold (fun k v a -> (k, v) :: a) b acc)
+                    boxes []));
           documents_of = docs_of;
-          collections = (fun () -> Hashtbl.fold (fun k _ acc -> k :: acc) boxes []);
+          collections =
+            (fun () -> with_lock box_lock (fun () -> Hashtbl.fold (fun k _ acc -> k :: acc) boxes []));
           is_ready = (fun () -> true);
           stop = (fun () -> List.iter (fun s -> s ()) !stoppers);
         }
 
-  let publications () = Hashtbl.fold (fun k _ acc -> k :: acc) _pubs []
-  let method_names () = Hashtbl.fold (fun k _ acc -> k :: acc) _methods []
+  let publications () = with_lock _reg_lock (fun () -> Hashtbl.fold (fun k _ acc -> k :: acc) _pubs [])
+  let method_names () = with_lock _reg_lock (fun () -> Hashtbl.fold (fun k _ acc -> k :: acc) _methods [])
 
   (* ---- the observe multiplexer (RX9) ---------------------------------------
      ONE backend observe per (collection-handle, query), shared across every subscription with that
      exact query: N sessions watching the same feed cost one observe + one selector eval per mutation
-     (fanned to all N), not N. Keyed by the collection's uid (so same-named / unnamed handles never
-     collide) + the canonical query key. Refcounted — the last subscriber out stops the observe and
-     drops the entry. Single Eio domain: a subscribe replays current state then registers, with no
-     mutation interleaving in between, so a late joiner can't miss or double-apply a delta. *)
+     (fanned to all N), not N. Keyed by (uid, canonical query) — a typed tuple, so same-named /
+     anonymous handles can never collide and no separator convention is needed. Refcounted — the
+     last subscriber out stops the observe and drops the entry.
+
+     CONCURRENCY: the sinks ride a {!Fanout} — beats enqueue under [mlock] atomically with the
+     [live]-table update (so a late joiner's snapshot is exactly the delivered prefix) and deliver
+     outside all locks, in order, buffered for joiners mid-replay. Lock order is strictly
+     _mux_lock → mlock → (fanout's own); the backend observe is built and stopped outside both. *)
+  module Fanout = Minimongo.Fanout
+
   type mux = {
-    mutable handle : live_handle;
-    subs : (int, beat -> unit) Hashtbl.t;
-    live : (string, (string * doc) list) Hashtbl.t; (* id -> current field set, for late-joiner replay *)
+    fan : beat Fanout.t; (* the subscriber sinks *)
+    mlock : Mutex.t; (* guards [live] + [handle], atomic with the fan enqueue *)
+    live : (string, (string, doc) Hashtbl.t) Hashtbl.t; (* id -> field table (late-joiner replay) *)
+    mutable handle : live_handle option; (* None while the backend observe is still being built *)
     collection : string;
-    mutable subc : int;
   }
 
-  let _muxes : (string, mux) Hashtbl.t = Hashtbl.create 64
+  let _mux_lock = Mutex.create ()
+  let _muxes : (int * string, mux) Hashtbl.t = Hashtbl.create 64
 
   (* active shared observes — an operational gauge of how effectively the multiplexer is collapsing
      subscriptions (one entry per distinct (collection-handle, query), regardless of subscriber count) *)
-  let live_query_count () = Hashtbl.length _muxes
+  let live_query_count () = with_lock _mux_lock (fun () -> Hashtbl.length _muxes)
 
-  (* merge a [changed] delta into a doc's stored field set (drop [cleared], overwrite/add [fields]) *)
-  let _mux_merge fields_now fields cleared =
-    let kept = List.filter (fun (k, _) -> not (List.mem k cleared)) fields_now in
-    List.fold_left (fun acc (k, v) -> (k, v) :: List.filter (fun (k', _) -> k' <> k) acc) kept fields
-
-  (* subscribe [on] to the shared observe for [cur]; returns an unsubscribe that refcounts the mux *)
+  (* subscribe [on] to the shared observe for [cur]; returns an idempotent unsubscribe that
+     refcounts the mux *)
   let mux_subscribe (cur : Collection.cursor) ~on : unit -> unit =
     let coll = Collection.(cur.coll.name) in
-    let key = string_of_int Collection.(cur.coll.uid) ^ "\x00" ^ Query_key.of_query ~collection:coll cur.q in
-    let mux, fresh =
-      match Hashtbl.find_opt _muxes key with
-      | Some mux -> (mux, false)
-      | None ->
-          let mux =
-            { handle = { stop = (fun () -> ()) }; subs = Hashtbl.create 8; live = Hashtbl.create 64;
-              collection = coll; subc = 0 }
-          in
-          Hashtbl.replace _muxes key mux;
-          (mux, true)
+    let key = (Collection.(cur.coll.uid), Query_key.of_query ~collection:coll cur.q) in
+    (* find-or-create AND sink registration run under the table lock, so a concurrent teardown's
+       count-check-and-remove can never interleave with a joiner *)
+    let mux, fresh, sub, replay =
+      with_lock _mux_lock (fun () ->
+          match Hashtbl.find_opt _muxes key with
+          | Some mux ->
+              (* late joiner: snapshot [live] atomically with a BUFFERING registration — beats landing
+                 after this instant queue up and flush, in order, after the snapshot replay *)
+              with_lock mux.mlock (fun () ->
+                  let sub = Fanout.subscribe mux.fan ~ready:false on in
+                  let replay =
+                    Hashtbl.fold
+                      (fun id tbl acc -> (id, Hashtbl.fold (fun k v a -> (k, v) :: a) tbl []) :: acc)
+                      mux.live []
+                  in
+                  (mux, false, sub, replay))
+          | None ->
+              let mux =
+                { fan = Fanout.create (); mlock = Mutex.create (); live = Hashtbl.create 64;
+                  handle = None; collection = coll }
+              in
+              Hashtbl.replace _muxes key mux;
+              (* the first subscriber is live from the start: the only producer into this fan is the
+                 backend observe built below, so nothing can be missed or reordered *)
+              (mux, true, Fanout.subscribe mux.fan ~ready:true on, []))
     in
-    let sid = mux.subc in
-    mux.subc <- sid + 1;
+    (* drop this mux's table entry iff it still owns it (a teardown+rebuild may have replaced it) *)
+    let evict_if_owner () =
+      match Hashtbl.find_opt _muxes key with
+      | Some m when m == mux -> Hashtbl.remove _muxes key
+      | _ -> ()
+    in
     (if fresh then begin
-       (* register BEFORE observing so the synchronous initial replay's [added]s reach [on] (and fill
-          [live]) before this returns — the caller's ready-after-return contract (RX7) depends on it *)
-       Hashtbl.replace mux.subs sid on;
-       let fan b = Hashtbl.iter (fun _ f -> f b) mux.subs in
+       (* build the shared backend observe OUTSIDE all locks. Its synchronous replay flows through
+          [beat] into the fan and reaches this first subscriber before this returns (RX7:
+          ready-after-return). A same-key subscriber arriving mid-replay is buffering: it gets the
+          prefix from its [live] snapshot and the rest from its buffer — complete either way. *)
+       let beat update mk =
+         with_lock mux.mlock (fun () ->
+             update ();
+             Fanout.enqueue mux.fan mk);
+         Fanout.pump mux.fan
+       in
+       let set_fields tbl fs = List.iter (fun (k, v) -> Hashtbl.replace tbl k v) fs in
        let h =
          Collection.observe_changes cur
            ~added:(fun id fields ->
              let fs = Query.Diff.kvs_of fields in
-             Hashtbl.replace mux.live id fs;
-             fan (Added { collection = coll; id; fields = fs }))
+             beat
+               (fun () ->
+                 let tbl = Hashtbl.create 8 in
+                 set_fields tbl fs;
+                 Hashtbl.replace mux.live id tbl)
+               (Added { collection = coll; id; fields = fs }))
            ~changed:(fun id fields cleared ->
              let fs = Query.Diff.kvs_of fields in
-             Hashtbl.replace mux.live id (_mux_merge (try Hashtbl.find mux.live id with Not_found -> []) fs cleared);
-             fan (Changed { collection = coll; id; fields = fs; cleared }))
+             beat
+               (fun () ->
+                 match Hashtbl.find_opt mux.live id with
+                 | Some tbl ->
+                     List.iter (Hashtbl.remove tbl) cleared;
+                     set_fields tbl fs
+                 | None ->
+                     let tbl = Hashtbl.create 8 in
+                     set_fields tbl fs;
+                     Hashtbl.replace mux.live id tbl)
+               (Changed { collection = coll; id; fields = fs; cleared }))
            ~removed:(fun id ->
-             Hashtbl.remove mux.live id;
-             fan (Removed { collection = coll; id }))
+             beat (fun () -> Hashtbl.remove mux.live id) (Removed { collection = coll; id }))
            ()
        in
-       mux.handle <- h
+       (* publish the handle; if every subscriber left while we were building, tear down now *)
+       let orphaned =
+         with_lock _mux_lock (fun () ->
+             with_lock mux.mlock (fun () -> mux.handle <- Some h);
+             if Fanout.count mux.fan = 0 then (evict_if_owner (); true) else false)
+       in
+       if orphaned then h.stop ()
      end
      else begin
-       (* late joiner: replay the current merged state to THIS sub only, then ride the shared stream *)
-       Hashtbl.iter (fun id fields -> on (Added { collection = mux.collection; id; fields })) mux.live;
-       Hashtbl.replace mux.subs sid on
+       (* deliver the snapshot OUTSIDE the locks, then flush whatever buffered meanwhile. A beat the
+          snapshot already covers re-delivers harmlessly (the client merge box is idempotent). *)
+       List.iter (fun (id, fields) -> on (Added { collection = mux.collection; id; fields })) replay;
+       Fanout.ready mux.fan sub
      end);
-    (* idempotent: a double-stop must NOT re-run teardown — otherwise the second call could see
-       [subs] emptied by a co-subscriber leaving in between and stop the shared observe (or drop the
-       _muxes entry) while a live subscriber still rides it *)
+    (* idempotent: a stale double-stop can't tear down (or evict) a mux it no longer belongs to *)
     let stopped = ref false in
     fun () ->
       if not !stopped then begin
         stopped := true;
-        Hashtbl.remove mux.subs sid;
-        if Hashtbl.length mux.subs = 0 then begin
-          mux.handle.stop ();
-          Hashtbl.remove _muxes key
-        end
+        let to_stop =
+          with_lock _mux_lock (fun () ->
+              Fanout.unsubscribe mux.fan sub;
+              if Fanout.count mux.fan = 0 then begin
+                evict_if_owner ();
+                with_lock mux.mlock (fun () -> mux.handle)
+              end
+              else None)
+        in
+        (* the backend observe is stopped OUTSIDE the mux locks (it takes the collection's own);
+           when [handle] is still None the builder's orphan check (above) stops it instead *)
+        match to_stop with Some h -> h.stop () | None -> ()
       end
 
   (* Run a publication's cursors with field-level observe deltas delivered as beats (the [collection]

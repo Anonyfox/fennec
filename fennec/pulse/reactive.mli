@@ -80,7 +80,10 @@ module type REACTIVE = sig
     type cursor
 
     (** [create ?id_generation ?transform ?name backend] wraps a backend collection. [transform] is
-        applied to user-visible documents (not to stored ones). *)
+        applied to user-visible documents (not to stored ones). [name] registers the collection for
+        cross-collection [$lookup] and is its identity on the DDP wire; omitted (or [""]), the handle
+        gets a UNIQUE synthetic ["_anon…"] name — never registered, never colliding with another
+        anonymous handle in a client's cache (["_anon"]-prefixed names are reserved for this). *)
     val create :
       ?id_generation:id_generation ->
       ?transform:(doc -> doc) ->
@@ -88,7 +91,7 @@ module type REACTIVE = sig
       backend_collection ->
       t
 
-    (** The collection's name. *)
+    (** The collection's name (the given one, or its synthetic ["_anon…"] identity). *)
     val name : t -> string
 
     (** [forget name] drops a named collection from this instance's [$lookup] registry — reclaim it

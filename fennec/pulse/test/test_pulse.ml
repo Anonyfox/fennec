@@ -257,6 +257,56 @@ let%test "mux: a stale double-stop is idempotent — it cannot evict a fresh sam
   s2.stop ();
   ok && R.live_query_count () = before
 
+let%test "collections: two anonymous collections get distinct synthetic names (no \"\" wire collision)" =
+  let a = C.create (Minimongo.create ()) and b = C.create (Minimongo.create ()) in
+  let na = C.name a and nb = C.name b in
+  na <> nb && na <> "" && nb <> ""
+
+let%test "mux (multicore): concurrent same-key subscribers across domains all see every doc; teardown drains" =
+  let c = coll "mux_mc" in
+  for k = 0 to 19 do
+    ignore (C.insert c (doc [ ("_id", B.str (string_of_int k)) ]))
+  done;
+  R.publish "mux_mc_p" (fun _ -> R.Cursor (C.find c ()));
+  let before = R.live_query_count () in
+  let writing = Atomic.make true in
+  let writer =
+    Domain.spawn (fun () ->
+        for k = 20 to 119 do
+          ignore (C.insert c (doc [ ("_id", B.str (string_of_int k)) ]))
+        done;
+        Atomic.set writing false)
+  in
+  (* 3 domains subscribe to the SAME query mid-write-storm: snapshot + buffered stream must cover
+     every doc for each. Delivery is asynchronous under contention (a write may return before its
+     event is delivered — the active drainer carries it), so each subscriber WAITS for its view to
+     converge rather than assuming synchronous delivery; the bound turns a genuine loss into a fail. *)
+  let counts =
+    List.init 3 (fun _ ->
+        Domain.spawn (fun () ->
+            let seen = Hashtbl.create 256 in
+            let h =
+              R.run_publication "mux_mc_p" ~params:[]
+                ~on:(function
+                  | Reactive.Added { id; _ } -> Hashtbl.replace seen id ()
+                  | _ -> ())
+            in
+            while Atomic.get writing do
+              Domain.cpu_relax ()
+            done;
+            let spins = ref 0 in
+            while Hashtbl.length seen < 120 && !spins < 50_000_000 do
+              incr spins;
+              Domain.cpu_relax ()
+            done;
+            h.stop ();
+            Hashtbl.length seen))
+  in
+  let seen_counts = List.map Domain.join counts in
+  Domain.join writer;
+  (* every subscriber converged on all 120 docs; the mux table drained back to baseline *)
+  List.for_all (fun n -> n = 120) seen_counts && R.live_query_count () = before
+
 let%test "mux: a publication feeding Cursors [] is a no-op stream (ready, zero beats, no observe)" =
   R.publish "mux_empty_p" (fun _ -> R.Cursors []);
   let before = R.live_query_count () in
