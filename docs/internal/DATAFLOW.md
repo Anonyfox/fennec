@@ -5,7 +5,9 @@ Status: **as-built (living record)** — the data line described here is shipped
 Minimongo) through publications, over DDP, into a browser's reactive cache, and onto the screen — and
 how that work is sliced into packages and orchestrated by the CLI. (Beyond the original plan, now
 also built: parameterized publications, in-memory cross-collection `$lookup`, the client `Beat` type,
-seed↔live + reconnect resync/quiescence, fiber-local SSR isolation, and client reconnect.) It is grounded in the working prototype in the adjacent `ocaml-light`
+seed↔live + reconnect resync/quiescence, fiber-local SSR isolation, client reconnect, multicore
+safety (§5c), live windowed publications, and the full methods story — typed `Method.t` values,
+connection identity, the write fence, and opt-in latency compensation (§9, METHODS.md).) It is grounded in the working prototype in the adjacent `ocaml-light`
 repo (the `mongo/`, `meteor/core`, `meteor/ddp`, `meteor/client` trees) and in fennec's current
 architecture (Fur signals, the Eio HTTP/WS server, the `build`/`dev`/`test` CLI, `fennec_buildkit`).
 
@@ -74,9 +76,10 @@ in the `fennec` framework** + a **client data layer on Fur** + **CLI help for mo
    **helps install / locate / launch** a system mongod (fetch the official prebuilt binary; the
    `ocaml-light/comet` orchestration already does a version of this — we rebuild it better). Real
    mongo is opt-in; `:memory:` covers the common dev/test loop.
-3. **Latency compensation (optimistic UI) is deferred.** v1 is **server-only** method dispatch.
-   We leave explicit placeholders/comments where client method stubs + the `updated` rollback
-   barrier will go, and **the DX story for it is an open design discussion** (§9) — many options.
+3. **Latency compensation (optimistic UI) SHIPPED — opt-in per method** (`Method.define ?stub`,
+   §9 + METHODS.md). The DX discussion resolved to the explicit stub on a shared typed value;
+   the rollback barrier is the merge store's precedence fallthrough behind the write fence. And by
+   decree: **methods are the ONLY client write path — allow/deny was deleted, not deprecated.**
 4. **`fennec-mongo` is its own package** (compiled mongo-client C + bson, plus Minimongo). The
    **`fennec` framework package depends on it** and bolts the Meteor-style reactive API on top.
 
@@ -329,19 +332,30 @@ today.
 
 ---
 
-## 9. Latency compensation (DEFERRED — placeholders only)
+## 9. Latency compensation (AS-BUILT — see docs/internal/METHODS.md for the canonical guide)
 
-v1 ships **server-only** methods: the client `call`s, the server executes, the client gets `result`
-+ `updated`. No optimistic UI. We mark the seam explicitly so the future work is obvious:
+Shipped, opt-in per method, on top of the typed method layer. The DX decision landed on the explicit
+`?stub` argument of a SHARED `Method.define` value (one declaration both sides link; handlers stay
+separate — they do auth/secrets/server-only work). The mechanics reuse proven machinery end to end:
 
-- where the **client method stub** would run (a registered simulation against the client's Minimongo,
-  producing optimistic writes tagged to the in-flight method id),
-- where the **`updated` barrier** would reconcile (on `updated`, drop the method's optimistic writes
-  and let the authoritative server data stand — the rollback),
-- and the **DX question** (the open discussion): how a userland method declares its client
-  simulation cleanly. Options to weigh later — a shared `let%method` that compiles to both ends; an
-  explicit `~stub` argument; a separate client-only registration; auto-replaying the same handler
-  against Minimongo when `is_simulation`. **Decide the DX before building it.**
+- the **stub** runs immediately in the browser against `Sim.writes` — a virtual subscription from
+  the merge store's NEGATIVE precedence band, so optimistic fields win instantly and a later sim
+  wins over an earlier one; deletes tombstone via `sim_hide` (precedence can't express absence);
+- the **`updated` barrier** is one `sub_stopped`: the per-field precedence fallthrough IS the
+  rollback (no bespoke undo). The server emits `updated` through the WRITE FENCE
+  (`Fanout.on_drained` → `Backend.fence` → `Reactive.fence` → the session), so the reveal can never
+  overtake the method's own data deltas — exact in-memory, best-effort over mongod (no resume-token
+  plumbing yet; the marked seam);
+- **insert ids converge**: the call carries a `randomSeed`; both sides mint from the same
+  (seed, collection) splitmix64 stream (pure OCaml, bit-identical native/jsoo), bound server-side
+  FIBER-LOCALLY for the handler's extent — the optimistic row and the real row are one row.
+  (STRING-id collections converge; a MONGO ObjectId insert swaps once at reveal.)
+- **at-least-once**: unacknowledged method frames re-send verbatim on reconnect, after the
+  resubscriptions — Meteor's semantics, documented (write idempotency is the app's concern).
+
+Methods are THE client write path — allow/deny was deleted by decree, and `set_user_id` (the login
+hook) plus per-connection `user_id` thread through every invocation. Deferred: `unblock`,
+Alea-exact seeds for stock-Meteor optimistic clients, publication-side `userId`.
 
 ---
 

@@ -72,6 +72,14 @@ viewer. And the whole vertical is **multicore-safe** — the server runs one Eio
 the data layer holds one structural discipline throughout (locks guard snapshots/commits; events
 deliver outside all locks, in commit order), proven by multi-domain stress tests.
 
+**Writes go through methods — the one blessed path** (no allow/deny, by decree). A method is one
+typed value shared by server and client (`Method.define name ~args ~result` — the codec IS the
+validation; drift is a compile error), with **opt-in optimistic UI** (`?stub`): the stub's writes win
+instantly via the client cache's precedence band, the server's `updated` (behind a write fence)
+reveals truth, and seeded id streams make the optimistic row and the real row one row. Methods are
+serial per connection and re-send on reconnect (at-least-once). The guide:
+[`../docs/internal/METHODS.md`](../docs/internal/METHODS.md).
+
 **Coming from Meteor, your daily words don't change — only the namespace.** `Pulse.publish` /
 `subscribe` / `method` / `call`, `find`, `insert` / `update` / `remove`, and `Ddp` / `Mongo` /
 `Minimongo` all stay literal: Pulse rides on those honest, Meteor-compatible substrates, so the
