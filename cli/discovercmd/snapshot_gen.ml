@@ -242,7 +242,12 @@ let label_from_window mention_index fallback window =
   let score line =
     let mentions = first_api_mentions mention_index line |> List.length in
     let marker =
-      if str_contains line "send_chunked" then 80
+      if str_contains line "let%http" then 5000
+      else if str_contains line "send_chunked" then 5000
+      else if str_contains line "~multipart" || str_contains line "multipart upload" then 5000
+      else if str_contains line "pipe_matched" || str_contains line "Basic_auth" || str_contains line "basic_auth" then 5000
+      else if str_contains line "LOCAL state" || str_contains line "Fur.signal" || str_contains line "signal" then 4500
+      else if str_contains line "mutable files" || str_contains line "Multipart.part" || str_contains line "multipart uploads" then 4500
       else
       if
         str_contains line "let%test"

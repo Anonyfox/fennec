@@ -205,8 +205,12 @@ let starter_for = function
   | Matched_auth | Generic -> None
 
 let next_for_query task (uses : public_item list) =
-  let why = match uses with i :: _ -> [ "fennec discover --why " ^ i.id ] | [] -> [] in
-  why @ [ Printf.sprintf "fennec discover --more %S" task ]
+  ignore task;
+  match uses with
+  | [] -> []
+  | i :: rest ->
+    ("fennec discover --why " ^ i.id)
+    :: (rest |> take 2 |> List.map (fun (i : public_item) -> "fennec discover --why " ^ i.id))
 
 let plan_summary kind task uses =
   match kind with
@@ -439,10 +443,24 @@ let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
   +. (r.score *. 3.0)
   +. (match e.kind with Test -> 8.0 | Example -> 6.0 | Route -> 5.0 | Doctest -> 4.0 | Hazard -> -.20.0)
 
-let evidence_presentable terms selected_ids (e : evidence) =
+let evidence_presentable kind terms selected_ids (e : evidence) =
   let linked = List.exists (fun api -> Hashtbl.mem selected_ids api) e.apis in
   let visible_text = String.concat " " [ e.label; e.text; e.source.path; evidence_kind_to_string e.kind ] in
-  linked || token_hits terms visible_text >= 2
+  let has x = contains_sub ~needle:x visible_text in
+  let kind_match =
+    match kind with
+    | Upload -> has "multipart" || has "upload" || has "form-data"
+    | Chunked_stream -> has "send_chunked" || has "chunk" || has "/api/stream"
+    | Http_test ->
+      has "let%http" || has "fennec_hunt.http" || has "http suite" || has "expect:[" || has "check "
+    | Matched_auth -> has "basic_auth" || has "basic auth" || has "pipe_matched"
+    | Local_state -> has "counter" || has "local state" || has "signal"
+    | Session -> has "session"
+    | Response_cookie -> has "cookie" || has "set-cookie"
+    | Router -> has "route" || has "router" || has "typed path"
+    | Generic -> true
+  in
+  kind_match && (linked || token_hits terms visible_text >= 2)
 
 let find_api = Retrieve.find_api
 
@@ -583,16 +601,23 @@ let query snapshot ~more task =
     |> List.filter (fun r -> Hashtbl.mem selected r.Retrieve.item.id)
   in
   let evidence : evidence list =
+    let evidence_kind = infer_plan_kind terms evidence_uses [] in
     let max_per_source = if more then 2 else 1 in
     let selected_ids = Hashtbl.create (List.length evidence_uses * 2) in
     List.iter (fun (i : public_item) -> Hashtbl.replace selected_ids i.id ()) evidence_uses;
     Retrieve.evidence snapshot terms selected_results
     |> List.map (fun r -> (r.Retrieve.ev, evidence_card_score terms selected_ids r))
-    |> List.filter (fun (e, _) -> more || evidence_presentable terms selected_ids e)
+    |> List.filter (fun (e, _) -> more || evidence_presentable evidence_kind terms selected_ids e)
     |> List.sort (fun (_, a) (_, b) -> compare b a)
     |> List.map fst
     |> limit_evidence_per_source max_per_source
-    |> take (if more then 8 else 2)
+    |> take
+         (if more then 8
+          else if mentions terms [ "vs"; "versus"; "choose"; "when" ] then 2
+          else
+            match evidence_kind with
+            | Upload | Chunked_stream | Matched_auth -> 2
+            | _ -> 3)
   in
   let top = match api_results with x :: _ -> Some x | [] -> None in
   let second = match api_results with _ :: x :: _ -> Some x | _ -> None in
