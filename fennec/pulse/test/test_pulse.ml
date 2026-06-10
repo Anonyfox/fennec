@@ -118,10 +118,9 @@ let%test "methods: the invocation carries user_id and can rebind it via set_user
   let _ = R.apply ~set_user_id:(fun u -> rebound := u) "login" [] in
   anon && as_user && !rebound = Some "alice"
 (* ── the typed method layer: one shared value; the codec IS the validation ── *)
-module MT = Fennec_pulse_method
 
 let%test "typed methods: handle decodes args + encodes result; a malformed call is a 400 BEFORE the handler" =
-  let m = MT.Method.define "typed_sum" ~args:(MT.Codec.a2 MT.Codec.int MT.Codec.int) ~result:MT.Codec.int in
+  let m = Method.define "typed_sum" ~args:(Codec.a2 Codec.int Codec.int) ~result:Codec.int in
   let ran = ref 0 in
   R.handle m (fun _ (a, b) ->
       incr ran;
@@ -131,17 +130,31 @@ let%test "typed methods: handle decodes args + encodes result; a malformed call 
   ok && bad = Some "400" && !ran = 1
 
 let%test "codec: roundtrips, EJSON float-ints, decode errors carry the shape" =
-  let open MT.Codec in
+  let open Codec in
   (match (list int).dec ((list int).enc [ 1; 2; 3 ]) with Ok [ 1; 2; 3 ] -> true | _ -> false)
   && (match (option string).dec Bson.Null with Ok None -> true | _ -> false)
   && (match int.dec (Bson.Float 7.0) with Ok 7 -> true | _ -> false)
   && (match string.dec (Bson.Int 3) with Error e -> e = "expected string, got int" | Ok _ -> false)
   && (match (a2 int bool).dec_args [ B.int 1 ] with Error _ -> true | Ok _ -> false)
 
+let%test "codec: record codecs (obj2 + req/opt) roundtrip; errors name the field; None omits the key" =
+  let c =
+    Codec.(
+      obj2 (req "title" string) (opt "note" string)
+        ~make:(fun title note -> (title, note))
+        ~split:Fun.id)
+  in
+  (match c.Codec.dec (c.Codec.enc ("a", Some "n")) with Ok ("a", Some "n") -> true | _ -> false)
+  && (match c.Codec.enc ("a", None) with Bson.Document [ ("title", _) ] -> true | _ -> false)
+  && (match c.Codec.dec (B.doc [ ("title", B.str "x") ]) with Ok ("x", None) -> true | _ -> false)
+  && (match c.Codec.dec (B.doc [ ("note", B.str "n") ]) with
+     | Error e -> e = "missing field title"
+     | Ok _ -> false)
+
 let%test "seed streams: same (seed, scope) mints the SAME ids both sides; another scope diverges" =
-  let s1 = MT.Method.Seed.stream ~seed:"abc" ~scope:"tasks" in
-  let s2 = MT.Method.Seed.stream ~seed:"abc" ~scope:"tasks" in
-  let s3 = MT.Method.Seed.stream ~seed:"abc" ~scope:"other" in
+  let s1 = Method.Seed.stream ~seed:"abc" ~scope:"tasks" in
+  let s2 = Method.Seed.stream ~seed:"abc" ~scope:"tasks" in
+  let s3 = Method.Seed.stream ~seed:"abc" ~scope:"other" in
   let id_of s = Query.Id.random_id ~rng:s () in
   let a = id_of s1 and b = id_of s2 and c = id_of s3 in
   a = b && a <> c && id_of s1 = id_of s2 (* the streams stay in lockstep, not just their head *)

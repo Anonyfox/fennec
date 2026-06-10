@@ -7,4 +7,5 @@
 (library
  (name fennec_pulse_method)
  (public_name fennec.pulse.method)
+ (wrapped false)
  (libraries fennec-mongo.bson))

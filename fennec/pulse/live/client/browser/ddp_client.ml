@@ -13,7 +13,6 @@ module MS = Fennec_pulse_live.Merge_store
 module Live = Fennec_pulse_live.Live
 module Subkey = Fennec_pulse_live.Subkey
 module Seed = Fennec_pulse_live.Seed
-module Mth = Fennec_pulse_method
 
 (* the key the SSR embedded this subscription's hydration docs under (Fur's seed table) *)
 let seed_key name params = "ddp:" ^ Subkey.key name params
@@ -250,7 +249,7 @@ let call t ~name ?(params = []) () = ignore (call_result t ~name ~params ())
    A declared [?stub] runs IMMEDIATELY as an optimistic simulation against the client cache — the
    UI updates now; the server's [updated] reveals truth (Updated handler above). The call carries a
    randomSeed so the server's seeded handler mints the SAME insert ids as the stub (convergence). *)
-let call_m t (m : ('a, 'r) Mth.Method.t) (a : 'a) : ('r, string * string) result option Fur.signal =
+let call_m t (m : ('a, 'r) Method.t) (a : 'a) : ('r, string * string) result option Fur.signal =
   let sig_ = Fur.signal None in
   let resolve r =
     Fur.set sig_
@@ -258,17 +257,17 @@ let call_m t (m : ('a, 'r) Mth.Method.t) (a : 'a) : ('r, string * string) result
          (match r with
          | Error e -> Error e
          | Ok v -> (
-             match (Mth.Method.result m).Mth.Codec.dec v with
+             match (Method.result m).Codec.dec v with
              | Ok r -> Ok r
              | Error e -> Error ("client-decode", e))))
   in
-  let params = (Mth.Method.args m).Mth.Codec.enc_args a in
-  (match Mth.Method.stub m with
-  | None -> ignore (send_method t ~name:(Mth.Method.name m) ~params ~random_seed:None resolve)
+  let params = (Method.args m).Codec.enc_args a in
+  (match Method.stub m with
+  | None -> ignore (send_method t ~name:(Method.name m) ~params ~random_seed:None resolve)
   | Some stub ->
       let seed = Query.Id.random_id () in
       let mid =
-        send_method t ~name:(Mth.Method.name m) ~params ~random_seed:(Some (Bson.String seed)) resolve
+        send_method t ~name:(Method.name m) ~params ~random_seed:(Some (Bson.String seed)) resolve
       in
       let simid = "sim:" ^ mid in
       (* a throwing stub is logged and skipped — the call still went to the server (truth) *)

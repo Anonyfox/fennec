@@ -49,7 +49,7 @@ module type REACTIVE = sig
     doc list ->
     doc
 
-  val handle : ('a, 'r) Fennec_pulse_method.Method.t -> (invocation -> 'a -> 'r) -> unit
+  val handle : ('a, 'r) Method.t -> (invocation -> 'a -> 'r) -> unit
   val set_seeded_id_provider : (string -> (int -> int) option) -> unit
 
   type id_generation = STRING | MONGO
@@ -225,14 +225,13 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
   (* the TYPED method layer: attach a handler to a shared Method.t value. A decode failure becomes a
      400 BEFORE the handler runs — the codec is the validation; the result encodes on the way out. *)
-  let handle (m : ('a, 'r) Fennec_pulse_method.Method.t) (f : invocation -> 'a -> 'r) : unit =
-    let module M = Fennec_pulse_method in
+  let handle (m : ('a, 'r) Method.t) (f : invocation -> 'a -> 'r) : unit =
     methods
-      [ ( M.Method.name m,
+      [ ( Method.name m,
           fun inv params ->
-            match (M.Method.args m).M.Codec.dec_args params with
+            match (Method.args m).Codec.dec_args params with
             | Error e -> error "400" ~reason:("invalid arguments: " ^ e)
-            | Ok a -> (M.Method.result m).M.Codec.enc (f inv a) ) ]
+            | Ok a -> (Method.result m).Codec.enc (f inv a) ) ]
 
   let call ?(user_id = None) name args = apply ~user_id name args
 

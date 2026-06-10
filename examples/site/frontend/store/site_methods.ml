@@ -5,12 +5,11 @@
    before the handler runs). This module is pure and shared: it compiles into the SSR binary and the
    JS bundle alike. *)
 
-module M = Fennec_pulse_method
 
 (* addTask: title -> the new task's _id. The stub is the opt-in optimistic half: it predicts the
    handler's one insert against the client cache, so the row appears INSTANTLY; the server's
    [updated] then reveals truth — and because both sides mint the insert id from the call's seed,
    the optimistic row and the real one are the same row (no flicker). *)
-let add_task : (string, string) M.Method.t =
-  M.Method.define "addTask" ~args:(M.Codec.a1 M.Codec.string) ~result:M.Codec.string
-    ~stub:(fun sim title -> ignore (sim.M.Method.insert "tasks" (Bson.doc [ ("title", Bson.str title) ])))
+let add_task : (string, string) Method.t =
+  Method.define "addTask" ~args:(Codec.a1 Codec.string) ~result:Codec.string
+    ~stub:(fun sim title -> ignore (sim.Method.insert "tasks" (Bson.doc [ ("title", Bson.str title) ])))

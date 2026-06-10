@@ -254,17 +254,16 @@ let%test "Sim.writes: insert mints the seeded id, update runs the real modifier,
   let s = MS.create () in
   MS.added s ~sub:"real" ~collection:"tasks" ~id:"t1" ~fields:[ ("n", B.int 1) ];
   let w = Fennec_pulse_live.Sim.writes s ~sim:"sim:m" ~seed:"seed1" in
-  let module Mth = Fennec_pulse_method in
-  let id = w.Mth.Method.insert "tasks" (B.doc [ ("title", B.str "hello") ]) in
+  let id = w.Method.insert "tasks" (B.doc [ ("title", B.str "hello") ]) in
   (* the minted id is exactly the (seed, collection)-stream's prediction *)
-  let predicted = Query.Id.random_id ~rng:(Mth.Method.Seed.stream ~seed:"seed1" ~scope:"tasks") () in
-  let upd = w.Mth.Method.update "tasks" (B.doc [ ("_id", B.str "t1") ]) (B.doc [ ("$inc", B.doc [ ("n", B.int 41) ]) ]) in
+  let predicted = Query.Id.random_id ~rng:(Method.Seed.stream ~seed:"seed1" ~scope:"tasks") () in
+  let upd = w.Method.update "tasks" (B.doc [ ("_id", B.str "t1") ]) (B.doc [ ("$inc", B.doc [ ("n", B.int 41) ]) ]) in
   let n_now =
     match MS.fetch s "tasks" ~selector:(B.doc [ ("_id", B.str "t1") ]) () with
     | [| d |] -> B.get d "n" = Some (B.Int 42)
     | _ -> false
   in
-  let rm = w.Mth.Method.remove "tasks" (B.doc [ ("_id", B.str "t1") ]) in
+  let rm = w.Method.remove "tasks" (B.doc [ ("_id", B.str "t1") ]) in
   let gone = Array.length (MS.fetch s "tasks" ~selector:(B.doc [ ("_id", B.str "t1") ]) ()) = 0 in
   id = predicted && upd = 1 && n_now && rm = 1 && gone
   && Array.length (MS.fetch s "tasks" ()) = 1 (* the optimistic insert remains *)
@@ -307,10 +306,9 @@ let%test "server-wins: a REJECTED method reverts the WHOLE simulation (insert + 
   MS.added s ~sub:"real" ~collection:"c" ~id:"a" ~fields:[ ("v", B.int 1) ];
   MS.added s ~sub:"real" ~collection:"c" ~id:"b" ~fields:[ ("v", B.int 2) ];
   let w = Fennec_pulse_live.Sim.writes s ~sim:"sim:m" ~seed:"sx" in
-  let module Mth = Fennec_pulse_method in
-  ignore (w.Mth.Method.insert "c" (B.doc [ ("v", B.int 3) ]));
-  ignore (w.Mth.Method.update "c" (B.doc [ ("_id", B.str "a") ]) (B.doc [ ("$set", B.doc [ ("v", B.int 99) ]) ]));
-  ignore (w.Mth.Method.remove "c" (B.doc [ ("_id", B.str "b") ]));
+  ignore (w.Method.insert "c" (B.doc [ ("v", B.int 3) ]));
+  ignore (w.Method.update "c" (B.doc [ ("_id", B.str "a") ]) (B.doc [ ("$set", B.doc [ ("v", B.int 99) ]) ]));
+  ignore (w.Method.remove "c" (B.doc [ ("_id", B.str "b") ]));
   let during =
     let docs = MS.fetch s "c" () in
     Array.length docs = 2 (* a (modified) + the optimistic insert; b hidden *)

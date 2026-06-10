@@ -45,6 +45,37 @@ val conv : ('a -> ('b, string) result) -> ('b -> 'a) -> 'a t -> 'b t
 (** [field d name c] reads field [name] of document [d] with [c] (error mentions the field). *)
 val field : Bson.t -> string -> 'a t -> ('a, string) result
 
+(** One declared field of a record (document) codec — build with {!req} / {!opt}. *)
+type 'a field
+
+(** [req name c] — a required field; decode fails (→ 400) when it is missing or malformed. *)
+val req : string -> 'a t -> 'a field
+
+(** [opt name c] — an optional field: absent or [Null] decodes to [None]; [None] encodes by omitting
+    the key. *)
+val opt : string -> 'a t -> 'a option field
+
+(** Record codecs without ppx — declare each field once, assemble with [make]/[split]:
+    {[ let task = Codec.(obj2 (req "title" string) (req "done" bool)
+                           ~make:(fun title done_ -> { title; done_ })
+                           ~split:(fun t -> (t.title, t.done_))) ]}
+    A field's decode error reaches the caller with the field name in the reason. *)
+val obj1 : 'a field -> make:('a -> 'r) -> split:('r -> 'a) -> 'r t
+
+val obj2 : 'a field -> 'b field -> make:('a -> 'b -> 'r) -> split:('r -> 'a * 'b) -> 'r t
+
+val obj3 :
+  'a field -> 'b field -> 'c field -> make:('a -> 'b -> 'c -> 'r) -> split:('r -> 'a * 'b * 'c) -> 'r t
+
+val obj4 :
+  'a field ->
+  'b field ->
+  'c field ->
+  'd field ->
+  make:('a -> 'b -> 'c -> 'd -> 'r) ->
+  split:('r -> 'a * 'b * 'c * 'd) ->
+  'r t
+
 (** A whole positional parameter list. *)
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }
 

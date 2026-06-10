@@ -11,17 +11,16 @@
    to the extent the client has the docs. Pure (no browser dependency), so simulations are unit
    tested natively. *)
 
-module Mth = Fennec_pulse_method
 module MS = Merge_store
 
-let writes (box : MS.t) ~sim ~seed : Mth.Method.sim_writes =
+let writes (box : MS.t) ~sim ~seed : Method.sim_writes =
   MS.begin_sim box sim;
   let streams : (string, int -> int) Hashtbl.t = Hashtbl.create 4 in
   let rng coll =
     match Hashtbl.find_opt streams coll with
     | Some r -> r
     | None ->
-        let r = Mth.Method.Seed.stream ~seed ~scope:coll in
+        let r = Method.Seed.stream ~seed ~scope:coll in
         Hashtbl.replace streams coll r;
         r
   in
@@ -57,4 +56,4 @@ let writes (box : MS.t) ~sim ~seed : Mth.Method.sim_writes =
     Array.iter (fun d -> MS.sim_hide box ~sub:sim ~collection:coll ~id:(Query.Diff.doc_id d)) docs;
     Array.length docs
   in
-  { Mth.Method.insert; update; remove }
+  { Method.insert; update; remove }

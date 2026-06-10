@@ -54,7 +54,7 @@ val call : t -> name:string -> ?params:Bson.t list -> unit -> unit
     fire-and-forget form (the data a method changes still flows back via the open subscription). *)
 val call_result : t -> name:string -> ?params:Bson.t list -> unit -> (Bson.t, string * string) result option Fur.signal
 
-(** [call_m t m args] invokes a TYPED method ({!Fennec_pulse_method.Method.t} — the same shared value
+(** [call_m t m args] invokes a TYPED method ({!Method.t} — the same shared value
     the server attached its handler to, so the name/args/result cannot drift). Arguments encode
     through the method's codec; the outcome signal resolves to the DECODED result ([None] in flight,
     [Some (Ok v)] / [Some (Error (code, reason))]; a result the codec rejects surfaces as
@@ -62,7 +62,7 @@ val call_result : t -> name:string -> ?params:Bson.t list -> unit -> (Bson.t, st
     client cache as an optimistic simulation (latency compensation): the UI updates now, and the
     server's [updated] replaces the simulation with truth — including converging insert [_id]s via
     the call's random seed. On the SSR/native client this sends nothing and stays [None]. *)
-val call_m : t -> ('a, 'r) Fennec_pulse_method.Method.t -> 'a -> ('r, string * string) result option Fur.signal
+val call_m : t -> ('a, 'r) Method.t -> 'a -> ('r, string * string) result option Fur.signal
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes as the server pushes changes. Read it with {!Fur.get} inside a component. *)

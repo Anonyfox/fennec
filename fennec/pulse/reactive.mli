@@ -67,10 +67,10 @@ module type REACTIVE = sig
     doc
 
   (** [handle m f] attaches the server handler to a shared typed method value
-      ({!Fennec_pulse_method.Method.t}, declared once in code both sides link). The codec is the
+      ({!Method.t}, declared once in code both sides link). The codec is the
       validation: a parameter-decode failure becomes a ["400"] {!Error} before [f] runs, and the
       result encodes on the way out. The typed twin of {!methods}. *)
-  val handle : ('a, 'r) Fennec_pulse_method.Method.t -> (invocation -> 'a -> 'r) -> unit
+  val handle : ('a, 'r) Method.t -> (invocation -> 'a -> 'r) -> unit
 
   (** Internal server-glue seam (installed once by [fennec.pulse.server]): a per-call lookup from
       collection name to the method's seeded id stream, so a handler's inserts mint the SAME ids the

@@ -82,7 +82,7 @@ let%test "latency compensation: a seeded method mints the SAME insert id the cli
        (Msg.Method { method_ = "rt_conv_add"; params = []; id = "mc"; random_seed = Some (B.str "seedX") }));
   (* the client stub would mint from the SAME (seed, collection) stream — both sides converge *)
   let predicted =
-    Query.Id.random_id ~rng:(Fennec_pulse_method.Method.Seed.stream ~seed:"seedX" ~scope:"conv") ()
+    Query.Id.random_id ~rng:(Method.Seed.stream ~seed:"seedX" ~scope:"conv") ()
   in
   List.exists (function Msg.Added { collection = "conv"; id; _ } -> id = predicted | _ -> false) (emitted out)
 

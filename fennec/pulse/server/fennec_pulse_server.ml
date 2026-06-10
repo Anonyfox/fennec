@@ -30,7 +30,6 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
      per-collection streams for the handler's dynamic extent — concurrent methods on other fibers and
      domains each see their own. Outside an Eio run (unit tests) the fiber effect is unhandled, so a
      plain global stands in (single-fiber there — the DD7 pattern). *)
-  module Mth = Fennec_pulse_method
 
   type _seed_streams = string * (string, int -> int) Hashtbl.t (* seed + per-collection streams *)
 
@@ -51,7 +50,7 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
               (match Hashtbl.find_opt tbl coll with
               | Some r -> r
               | None ->
-                  let r = Mth.Method.Seed.stream ~seed ~scope:coll in
+                  let r = Method.Seed.stream ~seed ~scope:coll in
                   Hashtbl.replace tbl coll r;
                   r))
 

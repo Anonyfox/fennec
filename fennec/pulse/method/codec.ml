@@ -75,6 +75,68 @@ let field (d : Bson.t) (name : string) (c : 'a t) : ('a, string) result =
       | None -> Error ("missing field " ^ name))
   | v -> expected "document" v
 
+(* ---- record (document) codecs --------------------------------------------
+   The beginner-flat way to codec a record: declare each field once, then [objN] with [make]/[split].
+   No ppx, no intermediate types at the call site:
+
+     let task = Codec.(obj2 (req "title" string) (req "done" bool)
+                         ~make:(fun title done_ -> { title; done_ })
+                         ~split:(fun t -> (t.title, t.done_)))                                    *)
+
+type 'a field = {
+  f_enc : 'a -> (string * Bson.t) option; (* None = omit the key (an absent optional) *)
+  f_dec : Bson.t -> ('a, string) result;
+}
+
+let req name c =
+  { f_enc = (fun v -> Some (name, c.enc v));
+    f_dec = (fun d -> field d name c) }
+
+let opt name c =
+  { f_enc = (function Some v -> Some (name, c.enc v) | None -> None);
+    f_dec =
+      (fun d ->
+        match d with
+        | Bson.Document kvs -> (
+            match List.assoc_opt name kvs with
+            | None | Some Bson.Null -> Ok None
+            | Some v -> ( match c.dec v with Ok a -> Ok (Some a) | Error e -> Error (name ^ ": " ^ e)))
+        | v -> expected "document" v) }
+
+let doc_of fields = Bson.Document (List.filter_map Fun.id fields)
+
+let obj1 fa ~make ~split =
+  { enc = (fun r -> doc_of [ fa.f_enc (split r) ]);
+    dec = (fun d -> Result.map make (fa.f_dec d)) }
+
+let obj2 fa fb ~make ~split =
+  { enc =
+      (fun r ->
+        let a, b = split r in
+        doc_of [ fa.f_enc a; fb.f_enc b ]);
+    dec = (fun d -> Result.bind (fa.f_dec d) (fun a -> Result.map (make a) (fb.f_dec d))) }
+
+let obj3 fa fb fc ~make ~split =
+  { enc =
+      (fun r ->
+        let a, b, c = split r in
+        doc_of [ fa.f_enc a; fb.f_enc b; fc.f_enc c ]);
+    dec =
+      (fun d ->
+        Result.bind (fa.f_dec d) (fun a ->
+            Result.bind (fb.f_dec d) (fun b -> Result.map (make a b) (fc.f_dec d)))) }
+
+let obj4 fa fb fc fd ~make ~split =
+  { enc =
+      (fun r ->
+        let a, b, c, dd = split r in
+        doc_of [ fa.f_enc a; fb.f_enc b; fc.f_enc c; fd.f_enc dd ]);
+    dec =
+      (fun d ->
+        Result.bind (fa.f_dec d) (fun a ->
+            Result.bind (fb.f_dec d) (fun b ->
+                Result.bind (fc.f_dec d) (fun c -> Result.map (make a b c) (fd.f_dec d))))) }
+
 (* ---- positional parameter lists (DDP method params) ---- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }
