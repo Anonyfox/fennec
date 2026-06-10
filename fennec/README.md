@@ -68,7 +68,9 @@ the server and (over its subscribed subset) on the client. The client **reconnec
 a dropped socket; methods report success/failure via `Pulse.call_result`; publications are
 parameterized (`subscribe ~params`). At scale, every subscription to the same query rides **one shared
 backend observe** (refcounted), so a broadcast feed costs one selector eval per change, not one per
-viewer.
+viewer. And the whole vertical is **multicore-safe** — the server runs one Eio domain per core, and
+the data layer holds one structural discipline throughout (locks guard snapshots/commits; events
+deliver outside all locks, in commit order), proven by multi-domain stress tests.
 
 **Coming from Meteor, your daily words don't change — only the namespace.** `Pulse.publish` /
 `subscribe` / `method` / `call`, `find`, `insert` / `update` / `remove`, and `Ddp` / `Mongo` /

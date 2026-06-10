@@ -218,6 +218,39 @@ Ports `ocaml-light/meteor/core` (transport-agnostic; depends only on the mongo p
 - **Userland API** sits beside today's `Fennec.serve` / `Endpoint`: an app declares collections,
   publishes, and methods; `serve` wires the DDP endpoint automatically in dev/prod.
 
+### 5c. Concurrency model (multicore, as-built)
+
+The prod server runs **one Eio domain per core** (`run_server ~additional_domains`), so every layer
+of the data vertical is multicore-safe — by ONE structural discipline, not scattered guards:
+
+> **Locks guard snapshots and commits — never callbacks, never IO, never nested.**
+> Deadlock is impossible by shape (no lock ordering to maintain); re-entrancy needs no reentrant
+> locks (observers run with no lock held); a delivery that suspends on socket IO blocks only itself.
+
+Events ride **`Minimongo.Fanout`** — an ordered fan-out monitor: an event enqueues ATOMICALLY with
+the commit that caused it (under the producer's lock), and a single drainer delivers outside all
+locks, in commit order. A new subscriber registers *buffering* under the same lock acquisition as
+its snapshot, replays, then flips ready — events landing mid-replay buffer, never lost or reordered.
+The buffer's prefix may overlap the snapshot, so consumers are **idempotent under re-delivery**
+(the mux's live table overwrites identically; the client merge box re-adds idempotently — the same
+tolerance reconnect-resync already relies on). One documented consequence: under concurrent writers
+a mutation may return before its event is delivered (the active drainer carries it).
+
+Where each layer stands: **minimongo** — per-collection lock, change stream on Fanout, aggregate
+snapshots then runs its pipeline (and the cross-collection `$lookup` resolver) outside the lock, so
+collection locks never nest. **reactive** — registries behind one lock; the mux's beats enqueue
+atomically with its late-joiner `live` table under the mux lock ((uid, query) tuple keys; anonymous
+collections get unique `_anon<uid>` wire names). **merge store** — one lock per store; listener
+fires strictly after release (a listener may re-enter `fetch`). **driver live** — registry lock with
+IO (fetch/watch/stream-stop, which all SUSPEND on Eio) strictly outside it; subscriber registration
+and cache snapshot in one section; ordered observe is single-flight with a run-again flag.
+**Ws.send** — already serialized: every frame goes through a domain-safe `Eio.Stream` outbox drained
+by one writer fiber, and permessage-deflate opens a fresh zlib stream per message. What stays
+deliberately unlocked: single mutable scalar reads (e.g. a Fur signal value from a shared SSR
+client) — memory-safe under OCaml's model, at worst momentarily stale; all *structural* state is
+locked. Proven by multi-domain hammer tests at each layer (exact final counts, legal per-id
+transition sequences, zero duplicates in subscriber views, mux table draining to baseline).
+
 ---
 
 ## 6. DDP — the wire + server session (on fennec's existing server)

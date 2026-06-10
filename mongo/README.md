@@ -7,7 +7,10 @@ JavaScript (js_of_ocaml).
 
 No indexes to declare — every query is a brute-force scan over the documents, so geo, `$regex`, and
 aggregation just work. Ideal for **tests, dev, and the browser**; reach for a real `mongod` only when
-you need the storage engine, not its query features. The precise API is inline in the `.mli`s.
+you need the storage engine, not its query features. **Thread-safe on OCaml 5 multicore**: reads
+snapshot and mutations commit under a per-collection lock, and change events deliver in commit order
+outside all locks (via the bundled `Minimongo.Fanout` monitor) — observers may re-entrantly mutate,
+and a slow observer blocks nothing. The precise API is inline in the `.mli`s.
 
 ## Quickstart
 
