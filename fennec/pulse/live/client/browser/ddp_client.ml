@@ -12,7 +12,9 @@
    → re-send the buffered methods verbatim, oldest first (at-least-once). A HEARTBEAT (DDP ping every
    15s, 10s pong deadline) detects silent network death (wifi gone, no FIN) and force-closes the
    socket so the reconnect loop takes over; [status]/[pending_writes] are Fur signals for offline
-   affordances. Scope: the running page — buffers do not survive a reload (by design). Browser-only. *)
+   affordances. With [?persist] (the PWA tiers) the cache AND the write outbox survive reloads:
+   snapshots restore as seeds (tentative → quiesced by the next live ready), the outbox re-issues
+   with fresh ids + original seeds, and stubs replay byte-identically. Browser-only. *)
 
 open Js_of_ocaml
 module Msg = Fennec_ddp.Message
@@ -20,9 +22,15 @@ module MS = Fennec_pulse_live.Merge_store
 module Live = Fennec_pulse_live.Live
 module Subkey = Fennec_pulse_live.Subkey
 module Seed = Fennec_pulse_live.Seed
+module Outbox = Fennec_pulse_live.Outbox
 
 (* the key the SSR embedded this subscription's hydration docs under (Fur's seed table) *)
 let seed_key name params = "ddp:" ^ Subkey.key name params
+
+let set_timeout cb ms =
+  ignore
+    (Js.Unsafe.fun_call (Js.Unsafe.pure_js_expr "setTimeout")
+       [| Js.Unsafe.inject (Js.wrap_callback cb); Js.Unsafe.inject ms |])
 
 (* one deduped subscription: identical (name, params) share this state (and its [ready] signal),
    refcounted so the server sub is torn down only when the last holder stops. [name]/[params] are
@@ -62,9 +70,43 @@ type t = {
   status_sig : [ `Connected | `Connecting | `Waiting ] Fur.signal; (* for offline affordances *)
   pending_sig : int Fur.signal; (* buffered/unacknowledged method count ("saving… N pending") *)
   mutable awaiting_pong : bool; (* heartbeat: set on ping, cleared by ANY incoming frame *)
+  (* PWA persistence (tier 2+3): the storage namespace, None = off. Sub snapshots persist (debounced
+     + on ready) under "sub:<key>"; the write outbox under "outbox" (mid-paired in memory, codec'd
+     without mids — fresh ids remint on restore). *)
+  persist : string option;
+  mutable outbox : (string * Outbox.entry) list; (* (mid, entry), newest first; mirrors unacked *)
+  mutable persist_scheduled : bool; (* the snapshot debounce flag *)
   mutable closed : bool; (* set by [close]: stops the reconnect loop (and lets a fired timer bail) *)
   mutable ws : Js.Unsafe.any option; (* the live socket, so [close] can shut it *)
 }
+
+(* persist the outbox NOW (writes are precious; no debounce) *)
+let persist_outbox t =
+  match t.persist with
+  | None -> ()
+  | Some ns -> Kv.put ~ns "outbox" (Outbox.encode (List.rev_map snd t.outbox))
+
+(* persist every live sub's snapshot (the SEED format — restores via the normal seed path) *)
+let persist_subs t =
+  match t.persist with
+  | None -> ()
+  | Some ns ->
+      Hashtbl.iter
+        (fun key (st : sub_state) ->
+          let groups = MS.snapshot_sub (Live.store t.live) ~sub:st.id in
+          Kv.put ~ns ("sub:" ^ key) (Seed.encode groups))
+        t.subs
+
+(* debounced: data deltas arrive in bursts; one snapshot a second is plenty *)
+let schedule_persist t =
+  if t.persist <> None && not t.persist_scheduled then begin
+    t.persist_scheduled <- true;
+    set_timeout
+      (fun () ->
+        t.persist_scheduled <- false;
+        if not t.closed then persist_subs t)
+      1_000
+  end
 
 let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set st.ready_sig true | None -> ()
 
@@ -77,12 +119,14 @@ let handle t raw =
   | None -> Firebug.console##warn (Js.string ("fennec/ddp: dropped an undecodable frame: " ^ raw))
   | Some m ->
       let box = Live.store t.live in
-      if not (Fennec_pulse_live.Wire_route.apply_delta box m) then
+      if Fennec_pulse_live.Wire_route.apply_delta box m then schedule_persist t
+      else
         match m with
         | Msg.Connected { session } -> t.session_id <- Some session (* for session resume on reconnect *)
         | Msg.Ready { subs } ->
             (* quiescence: drop seeded/stale docs the live snapshot didn't re-confirm, then mark ready *)
-            List.iter (fun id -> MS.quiesce box id; mark_ready t id) subs
+            List.iter (fun id -> MS.quiesce box id; mark_ready t id) subs;
+            persist_subs t (* a clean truth point: snapshot immediately, not debounced *)
         | Msg.Nosub { id; error } ->
             (* a FAILED sub (error=Some) — GC the docs it contributed so they don't linger; an
                error=None nosub is the server's Unsub ack (already cleaned on stop). Either way, stop
@@ -93,6 +137,8 @@ let handle t raw =
         | Msg.Result { id; error; result } ->
             (* acknowledged: never re-sent, and resolve the awaiting caller (call_result/call_m) *)
             t.unacked <- List.filter (fun (i, _) -> i <> id) t.unacked;
+            t.outbox <- List.filter (fun (i, _) -> i <> id) t.outbox;
+            persist_outbox t;
             Fur.set t.pending_sig (List.length t.unacked);
             (match Hashtbl.find_opt t.methods_pending id with
             | Some resolve ->
@@ -117,7 +163,27 @@ let handle t raw =
         | Msg.Failed _ -> () (* DDP version mismatch — nothing to renegotiate; proceed best-effort *)
         | _ -> ()
 
-let connect ?(path = "/websocket") () : t =
+(* the one method-send path: mint the id, register the resolver, record the frame as unacknowledged
+   (the reconnect path re-sends it verbatim), and put it on the wire if the socket is open — methods
+   never ride the pre-open queue, so a frame can't go out twice *)
+let send_method t ~name ~params ~random_seed (resolve : (Bson.t, string * string) result -> unit) :
+    string =
+  t.methodc <- t.methodc + 1;
+  let id = "m" ^ string_of_int t.methodc in
+  let frame = Msg.encode (Msg.Method { method_ = name; params; id; random_seed }) in
+  Hashtbl.replace t.methods_pending id resolve;
+  t.unacked <- (id, frame) :: t.unacked;
+  (* the persistent outbox (PWA): writes survive a reload as (name, params, seed) *)
+  (if t.persist <> None then begin
+     let seed = match random_seed with Some (Bson.String s) -> Some s | _ -> None in
+     t.outbox <- (id, { Outbox.name; params; seed }) :: t.outbox;
+     persist_outbox t
+   end);
+  Fur.set t.pending_sig (List.length t.unacked);
+  t.send_if_open frame;
+  id
+
+let connect ?(path = "/websocket") ?persist () : t =
   let loc = Js.Unsafe.get Dom_html.window (Js.string "location") in
   let protocol = Js.to_string (Js.Unsafe.get loc (Js.string "protocol")) in
   let host = Js.to_string (Js.Unsafe.get loc (Js.string "host")) in
@@ -127,8 +193,36 @@ let connect ?(path = "/websocket") () : t =
     { live = Live.create (); subs = Hashtbl.create 16; by_id = Hashtbl.create 16;
       subc = 0; methodc = 0; session_id = None; methods_pending = Hashtbl.create 16; unacked = [];
       send_if_open = (fun _ -> ()); sims = Hashtbl.create 8; status_sig = Fur.signal `Connecting;
-      pending_sig = Fur.signal 0; awaiting_pong = false; closed = false; ws = None }
+      pending_sig = Fur.signal 0; awaiting_pong = false; persist; outbox = []; persist_scheduled = false;
+      closed = false; ws = None }
   in
+  (* PWA outbox restore (tier 3): every write that survived the reload re-issues with a FRESH id
+     and its ORIGINAL seed, and its stub re-runs (Method.stub_replay) — the deterministic seed
+     streams remint identical optimistic ids, so the rows reappear exactly as they were, BEFORE the
+     socket even opens. Results are fire-and-forget post-reload (the resolvers died with the page). *)
+  (match persist with
+  | None -> ()
+  | Some ns ->
+      let entries = Outbox.decode (Option.value (Kv.get ~ns "outbox") ~default:"") in
+      Kv.del ~ns "outbox";
+      List.iter
+        (fun (e : Outbox.entry) ->
+          let mid =
+            send_method t ~name:e.Outbox.name ~params:e.Outbox.params
+              ~random_seed:(Option.map (fun x -> Bson.String x) e.Outbox.seed)
+              (fun _ -> ())
+          in
+          match e.Outbox.seed with
+          | Some seed -> (
+              match Method.stub_replay e.Outbox.name with
+              | Some replay ->
+                  let simid = "sim:" ^ mid in
+                  (try replay e.Outbox.params (Fennec_pulse_live.Sim.writes (Live.store t.live) ~sim:simid ~seed)
+                   with _ -> ());
+                  Hashtbl.replace t.sims mid simid
+              | None -> ())
+          | None -> ())
+        entries);
   (* NO offline frame queue, deliberately: the server session dies with the socket, so every frame
      category is rebuilt from client state on reconnect (subs from t.subs, methods from unacked) —
      queueing raw frames would only double-send. [send_if_open] silently drops when not open. *)
@@ -234,7 +328,20 @@ let subscribe t ~name ?(params = []) () : subscription =
             (fun (collection, docs) -> try MS.seed (Live.store t.live) ~sub:st.id ~collection docs with _ -> ())
             (Seed.decode payload);
           Fur.set st.ready_sig true
-        | None -> ());
+        | None -> (
+            (* PWA warm boot (tier 2): restore the last persisted snapshot as a seed — tentative
+               until the next live [ready] re-confirms; quiescence prunes what died while away *)
+            match t.persist with
+            | None -> ()
+            | Some ns -> (
+                match Kv.get ~ns ("sub:" ^ key) with
+                | None -> ()
+                | Some payload ->
+                    List.iter
+                      (fun (collection, docs) ->
+                        try MS.seed (Live.store t.live) ~sub:st.id ~collection docs with _ -> ())
+                      (Seed.decode payload);
+                    Fur.set st.ready_sig true)));
         (* offline: dropped silently — the onopen handshake re-sends every live sub from t.subs *)
         t.send_if_open (Msg.encode (Msg.Sub { id = st.id; name; params }));
         st
@@ -260,20 +367,6 @@ let use_subscribe t ~name ?(params = []) () : bool Fur.signal =
   let sub = subscribe t ~name ~params () in
   Fur.on_cleanup sub.stop;
   sub.ready
-
-(* the one method-send path: mint the id, register the resolver, record the frame as unacknowledged
-   (the reconnect path re-sends it verbatim), and put it on the wire if the socket is open — methods
-   never ride the pre-open queue, so a frame can't go out twice *)
-let send_method t ~name ~params ~random_seed (resolve : (Bson.t, string * string) result -> unit) :
-    string =
-  t.methodc <- t.methodc + 1;
-  let id = "m" ^ string_of_int t.methodc in
-  let frame = Msg.encode (Msg.Method { method_ = name; params; id; random_seed }) in
-  Hashtbl.replace t.methods_pending id resolve;
-  t.unacked <- (id, frame) :: t.unacked;
-  Fur.set t.pending_sig (List.length t.unacked);
-  t.send_if_open frame;
-  id
 
 (* [call_result] invokes a method and returns a signal that resolves to its outcome — [None] while
    in flight, then [Some (Ok value)] or [Some (Error (code, reason))] (e.g. a method's 403). *)
@@ -328,3 +421,7 @@ let aggregate t = Live.aggregate t.live
 (* offline affordances: the connection state and the buffered-write count, as Fur signals *)
 let status t = t.status_sig
 let pending_writes t = t.pending_sig
+
+(* wipe this client's persisted namespace (snapshots + outbox) — the identity-change hook: call it
+   on logout/user-switch so one user's cache never leaks to the next *)
+let purge_storage t = match t.persist with Some ns -> Kv.purge ~ns | None -> ()

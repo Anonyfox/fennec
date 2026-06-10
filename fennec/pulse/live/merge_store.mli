@@ -83,6 +83,13 @@ val quiesce : t -> string -> unit
     SSR seed. *)
 val resync_begin : t -> string -> unit
 
+(** [snapshot_sub t ~sub] extracts the subscription's current contribution, grouped by collection —
+    the SEED format, so a persisted snapshot restores through the same seed → tentative → quiesce
+    path SSR hydration uses (the next live [ready] prunes what died offline). Only the sub's own
+    field values are taken, never another sub's (or a simulation's) overlays. The PWA persistence
+    primitive. *)
+val snapshot_sub : t -> sub:string -> (string * Bson.t list) list
+
 (** [begin_sim t sub] registers [sub] as an optimistic SIMULATION: its precedence comes from a
     negative, descending band, so its field writes (the normal {!added}/{!changed} under this sub)
     win over every real subscription instantly, and a later simulation wins over an earlier one.

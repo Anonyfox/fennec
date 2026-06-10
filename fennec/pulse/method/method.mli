@@ -35,6 +35,12 @@ val result : (_, 'r) t -> 'r Codec.t
 (** The optional optimistic browser-side simulation, if one was declared. *)
 val stub : ('a, _) t -> (sim_writes -> 'a -> unit) option
 
+(** [stub_replay name] — the registered stub for a method NAME, in replayable form (decode the
+    persisted wire params, run the stub): a reloaded page's persisted outbox can re-run its
+    simulations even though closures don't survive a reload. [None] when the method has no stub (or
+    isn't defined in this build). Registered automatically by {!define}. *)
+val stub_replay : string -> (Bson.t list -> sim_writes -> unit) option
+
 (** Deterministic id streams for latency compensation: the client sends a random seed with the call;
     both sides mint insert ids from the same (seed, collection) stream, so the optimistic document
     and the server's real one share an [_id] and converge to a single row (no flicker). The

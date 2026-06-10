@@ -21,7 +21,29 @@ type ('a, 'r) t = {
   stub : (sim_writes -> 'a -> unit) option;
 }
 
-let define ?stub name ~args ~result = { name; args; result; stub }
+(* the stub-replay registry (PWA tier 3): a persisted outbox entry carries only (name, params, seed)
+   — closures don't survive a reload — so [define] registers a replayer that decodes the persisted
+   params and re-runs the stub. With the deterministic seed streams, a restored simulation reminted
+   after a reload is byte-identical to the original. *)
+let _registry : (string, (Bson.t list -> sim_writes -> unit) option) Hashtbl.t = Hashtbl.create 32
+let _reg_lock = Mutex.create ()
+
+let define ?stub name ~args ~result =
+  Mutex.lock _reg_lock;
+  Hashtbl.replace _registry name
+    (Option.map
+       (fun s (params : Bson.t list) (sim : sim_writes) ->
+         match args.Codec.dec_args params with Ok a -> s sim a | Error _ -> ())
+       stub);
+  Mutex.unlock _reg_lock;
+  { name; args; result; stub }
+
+let stub_replay name =
+  Mutex.lock _reg_lock;
+  let r = match Hashtbl.find_opt _registry name with Some v -> v | None -> None in
+  Mutex.unlock _reg_lock;
+  r
+
 let name m = m.name
 let args m = m.args
 let result m = m.result

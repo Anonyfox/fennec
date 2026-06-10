@@ -119,6 +119,7 @@
   admin_app
   site_styles
   site_store
+  fennec.pwa
   fennec.pulse.server
   fennec.pulse
   fennec.pulse.method

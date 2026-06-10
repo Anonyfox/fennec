@@ -14,9 +14,21 @@ type t
     LAST holder stops (which also clears that subscription's documents from the store). *)
 type subscription = { ready : bool Fur.signal; stop : unit -> unit }
 
-(** [connect ?path ()] opens a WebSocket to [path] (default [/websocket]) on the current origin and
-    sends [connect]. Returns immediately; data arrives asynchronously into {!find}. *)
-val connect : ?path:string -> unit -> t
+(** [connect ?path ?persist ()] opens a WebSocket to [path] (default [/websocket]) on the current
+    origin and sends [connect]. Returns immediately; data arrives asynchronously into {!find}.
+    [persist] (a storage namespace, usually the app name) turns on PWA-grade persistence: each
+    subscription's data snapshots to local storage (debounced + at every [ready]) and restores on
+    the next boot as a seed — warm data instantly, even fully offline, reconciled by the next live
+    [ready] (quiescence prunes what died) — and the WRITE OUTBOX survives reloads: buffered methods
+    re-issue with fresh ids and their original seeds, their stubs replaying byte-identically
+    ({!Fennec_pulse_method.Method.stub_replay} + the deterministic seed streams). Call
+    {!purge_storage} on logout/user-switch. *)
+val connect : ?path:string -> ?persist:string -> unit -> t
+
+(** [purge_storage t] wipes this client's persisted namespace (snapshots + outbox) — the
+    identity-change hook: call it on logout/user-switch so one user's cache never leaks to the
+    next. A no-op without [?persist] and on SSR/native. *)
+val purge_storage : t -> unit
 
 (** [close t] tears the client down: it stops the auto-reconnect loop and shuts the live socket, so a
     finished client (page teardown, a throwaway SPA-route client) doesn't keep a reconnect timer

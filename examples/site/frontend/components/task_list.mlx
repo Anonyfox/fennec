@@ -13,7 +13,7 @@
 .add-task:hover { opacity: .9 }
 |scss}]
 
-let client = Ddp_client.connect ~path:"/ddp" ()
+let client = Ddp_client.connect ~path:"/ddp" ~persist:"web" ()
 let added = ref 0
 
 let title_of doc = match Bson.get doc "title" with Some (Bson.String s) -> s | _ -> "(untitled)"

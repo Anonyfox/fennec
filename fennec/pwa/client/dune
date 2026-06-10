@@ -1,0 +1,14 @@
+; The browser half of fennec.pwa: a Fur signal over the generated registration script's
+; `fennec:sw-update` event, plus the user-confirmed update trigger. Tiny on purpose — all SW logic
+; lives in the GENERATED worker/registration (fennec.pwa); this only bridges it into Fur.
+
+(library
+ (name fennec_pwa_client)
+ (public_name fennec.pwa.client)
+ (wrapped false)
+ (modes byte)
+ (libraries fennec.fur js_of_ocaml)
+ (preprocess
+  (pps js_of_ocaml-ppx))
+ (flags
+  (:standard -w -a)))

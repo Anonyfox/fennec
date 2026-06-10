@@ -77,13 +77,21 @@ let setup_realtime ~sw =
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)
+(* the web app as an installable PWA: generated manifest + service worker (precise precache of the
+   app's own bundle assets; content-addressed cache version → atomic swap per deploy) *)
+let web_pwa =
+  Pwa.v "Fennec Site" ~theme_color:"#0f172a"
+    ~icons:[ Pwa.icon ~sizes:"512x512" "/icon-512.png" ]
+
 let common =
   [ Paw.Logger.make (); Paw.Security_headers.make (); powered_by;
     Fennec.static ~name:"webroot" ~assets:Assets.lookup ]
 
 let web =
   Endpoint.make ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
-  |> Endpoint.pipe (realtime_ddp :: common)
+  |> Endpoint.pipe
+       (Pwa.paw web_pwa ~assets:Assets.lookup ~precache:[ "/_apps/web/main.js"; "/_apps/web/main.css" ]
+       :: realtime_ddp :: common)
   |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true,"app":"web"}|})
   |> Endpoint.get "/api/greeting" (fun c -> Conn.text c greeting)
   |> Endpoint.get "/api/browser-only" (fun c -> Conn.text c browser_only)

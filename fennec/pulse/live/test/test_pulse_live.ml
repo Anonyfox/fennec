@@ -268,6 +268,49 @@ let%test "Sim.writes: insert mints the seeded id, update runs the real modifier,
   id = predicted && upd = 1 && n_now && rm = 1 && gone
   && Array.length (MS.fetch s "tasks" ()) = 1 (* the optimistic insert remains *)
 
+(* ── PWA persistence primitives: snapshot_sub (tier 2) + the outbox codec & stub replay (tier 3) ── *)
+let%test "snapshot_sub: round-trips through the seed path; takes only the sub's own fields; tentative on restore" =
+  let s = MS.create () in
+  MS.added s ~sub:"a" ~collection:"tasks" ~id:"t1" ~fields:[ ("title", B.str "x") ];
+  MS.added s ~sub:"a" ~collection:"notes" ~id:"n1" ~fields:[ ("body", B.str "y") ];
+  (* another sub overlays a field on t1 — the snapshot of "a" must NOT carry it *)
+  MS.added s ~sub:"other" ~collection:"tasks" ~id:"t1" ~fields:[ ("extra", B.int 9) ];
+  let groups = MS.snapshot_sub s ~sub:"a" in
+  let restored = MS.create () in
+  List.iter (fun (collection, docs) -> MS.seed restored ~sub:"a" ~collection docs) groups;
+  let t1 = MS.fetch restored "tasks" ~selector:(B.doc [ ("_id", B.str "t1") ]) () in
+  let n1 = MS.fetch restored "notes" () in
+  Array.length t1 = 1
+  && B.get t1.(0) "title" = Some (B.String "x")
+  && B.get t1.(0) "extra" = None (* the other sub's overlay stayed out *)
+  && Array.length n1 = 1
+  (* restored docs are TENTATIVE: a quiesce with no re-confirmation prunes them (died while away) *)
+  && (MS.quiesce restored "a";
+      Array.length (MS.fetch restored "tasks" ()) = 0)
+
+let%test "outbox codec: round-trips entries (seed optional); malformed payloads decode to []" =
+  let open Fennec_pulse_live.Outbox in
+  let entries =
+    [ { name = "addTask"; params = [ B.str "hi" ]; seed = Some "s1" };
+      { name = "ping"; params = []; seed = None } ]
+  in
+  decode (encode entries) = entries && decode "garbage" = [] && decode "{}" = []
+
+let%test "stub replay: a persisted (name, params, seed) re-runs the stub with byte-identical ids" =
+  let m =
+    Method.define "replay_add" ~args:(Codec.a1 Codec.string) ~result:Codec.string
+      ~stub:(fun sim title -> ignore (sim.Method.insert "tasks" (B.doc [ ("title", B.str title) ])))
+  in
+  ignore m;
+  let s = MS.create () in
+  (match Method.stub_replay "replay_add" with
+  | Some replay -> replay [ B.str "hello" ] (Fennec_pulse_live.Sim.writes s ~sim:"sim:r" ~seed:"sd")
+  | None -> ());
+  let predicted = Query.Id.random_id ~rng:(Method.Seed.stream ~seed:"sd" ~scope:"tasks") () in
+  match MS.fetch s "tasks" () with
+  | [| d |] -> B.get d "_id" = Some (B.String predicted) && B.get d "title" = Some (B.String "hello")
+  | _ -> false
+
 (* ── server-wins under BUGGY stubs: the reveal (sub_stopped) is the arbiter, whatever the stub did ── *)
 let%test "server-wins: a PHANTOM optimistic insert (server never created it) vanishes at reveal" =
   let s = MS.create () in

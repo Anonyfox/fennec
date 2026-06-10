@@ -376,6 +376,50 @@ let quiesce t sub =
           Hashtbl.iter (fun (collection, id) () -> removed_u t ~sub ~collection ~id) set;
           Hashtbl.remove t.tentative sub)
 
+(* ---- persistence snapshot (PWA tier 2) --------------------------------------
+   Extract ONE subscription's current contribution, grouped by collection — exactly the SEED format,
+   so a snapshot persisted offline restores through the same seed → tentative → quiesce path SSR
+   hydration uses (the live reconnect then re-confirms survivors and prunes the dead). Only the
+   SUB'S OWN field values are taken (its entries in each precedence list), so restoring re-creates
+   what this sub would have been sent — not other subs' (or a simulation's) overlays. *)
+let snapshot_sub t ~(sub : string) : (string * Bson.t list) list =
+  with_lock t (fun () ->
+      match Hashtbl.find_opt t.subs sub with
+      | None -> []
+      | Some info ->
+          let by_coll : (string, Bson.t list ref) Hashtbl.t = Hashtbl.create 4 in
+          Hashtbl.iter
+            (fun _ (collection, id) ->
+              match Hashtbl.find_opt t.collections collection with
+              | None -> ()
+              | Some cv -> (
+                  match Hashtbl.find_opt cv.docs id with
+                  | None -> ()
+                  | Some dv ->
+                      if Hashtbl.mem dv.exists_in sub then begin
+                        let fields =
+                          Hashtbl.fold
+                            (fun f entries acc ->
+                              match List.find_opt (fun e -> e.sub = sub) entries with
+                              | Some e -> (f, e.value) :: acc
+                              | None -> acc)
+                            dv.fields []
+                        in
+                        let id_val = if cv.oid then Bson.Object_id id else Bson.String id in
+                        let doc = Bson.Document (("_id", id_val) :: fields) in
+                        let bucket =
+                          match Hashtbl.find_opt by_coll collection with
+                          | Some r -> r
+                          | None ->
+                              let r = ref [] in
+                              Hashtbl.replace by_coll collection r;
+                              r
+                        in
+                        bucket := doc :: !bucket
+                      end))
+            info.contributed;
+          Hashtbl.fold (fun coll docs acc -> (coll, !docs) :: acc) by_coll [])
+
 (* ---- optimistic simulation (latency compensation) --------------------------
    A method stub's writes ride a SIM SUB: a virtual subscription from the negative precedence band,
    so its field values win over every real subscription instantly — and "rollback" when the server's

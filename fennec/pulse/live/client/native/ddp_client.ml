@@ -20,12 +20,15 @@ let _pubs : (string, Bson.t list -> (string * Bson.t list) list) Hashtbl.t = Has
 let publish ~name f = Hashtbl.replace _pubs name f
 let seed_key name params = "ddp:" ^ Subkey.key name params
 
-let connect ?path () =
-  ignore path;
+let connect ?path ?persist () =
+  ignore (path, persist);
   { live = Live.create () }
 
 (* SSR has no socket / reconnect loop, so tearing down is a no-op *)
 let close (_ : t) = ()
+
+(* persistence is a browser concern; nothing to purge server-side *)
+let purge_storage (_ : t) = ()
 
 (* SSR assumes connectivity for the first paint (no offline banner flash server-side) *)
 let status (_ : t) : [ `Connected | `Connecting | `Waiting ] Fur.signal = Fur.signal `Connected
