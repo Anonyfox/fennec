@@ -3,7 +3,8 @@
 ; from both sides, so name typos / arity drift / codec drift are compile errors, not runtime 404s.
 ; Deliberately tiny and dependency-light (bson only): linking it into a browser bundle costs nothing,
 ; and adding the hundredth method stays a one-value compile. No ppx, no functors — combinator values.
+
 (library
  (name fennec_pulse_method)
  (public_name fennec.pulse.method)
- (libraries bson))
+ (libraries fennec-mongo.bson))

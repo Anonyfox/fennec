@@ -6,6 +6,7 @@
 ;
 ; The ppx ([let%prop]) emits [Fennec_hunt_prop.*]; the main fennec-hunt re-exports this as
 ; [Fennec_hunt.Prop] (like Fennec_hunt.Unit re-exports fennec-hunt.unit).
+
 (library
  (name fennec_hunt_prop)
  (public_name fennec-hunt.prop)

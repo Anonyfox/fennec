@@ -2,6 +2,7 @@
 ;   esbuild -> Go c-archive (libfennec_esbuild.a + .h)
 ;   css/scss -> Rust staticlib (libfennec_css.a)
 ; Cached on the native/ source tree, so it only re-runs when the shims change.
+
 (rule
  (targets libfennec_esbuild.a libfennec_esbuild.h libfennec_css.a)
  (deps
@@ -12,6 +13,7 @@
 ; The exact system libraries this platform must link. Kept as its OWN
 ; single-target rule (not bundled with the archive rule) so that
 ; (c_library_flags (:include ...)) resolves it on every dune version.
+
 (rule
  (target link_flags.sexp)
  (action
@@ -23,6 +25,7 @@
 ; native static archives. Not published on its own (no public_name); the CLI is
 ; the distributable. The in-process OCaml API stays usable for the framework's
 ; own future packages and tests.
+
 (library
  (name fennec_buildkit)
  (modes native)

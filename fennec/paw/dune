@@ -1,10 +1,13 @@
 ; Paw — the connection primitive. conn + typed assigns + paw (conn->conn) +
 ; pipeline + route verbs. Pure (Stdlib + fennec.core http types); native (conns
 ; are server-only). The Eio server and prebuilt paws build on this.
+
 (library
  (name fennec_paw)
  (public_name fennec.paw)
  (modes byte native)
  (libraries fennec.core fennec-hunt.unit)
- (inline_tests (backend fennec-hunt.runner))
- (preprocess (pps fennec-hunt.ppx)))
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

@@ -2,6 +2,7 @@
 ; links the native stub (an empty store → `find` renders []), the JS bundle links the browser impl
 ; (a real Js_of_ocaml WebSocket). So an SSR'd page can use Ddp_client unchanged and it "just works"
 ; in both modes — empty on the server, live after hydration. ddp_client.mli here is the contract.
+
 (library
  (name fennec_pulse_live_client)
  (public_name fennec.pulse.live.client)
@@ -9,6 +10,10 @@
  (virtual_modules ddp_client)
  (default_implementation fennec.pulse.live.client.native)
  (modes byte native)
- (libraries fennec.fur fennec-mongo.bson fennec-mongo.bson_json fennec.pulse.method)
+ (libraries
+  fennec.fur
+  fennec-mongo.bson
+  fennec-mongo.bson_json
+  fennec.pulse.method)
  (flags
   (:standard -w -a)))

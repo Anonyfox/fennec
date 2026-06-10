@@ -1,7 +1,14 @@
 ; Tests for the fennec-mongo pure trio, using fennec's inline test tooling (let%test + let%prop).
 ; Kept HERE rather than inline in the libraries so bson/query/minimongo stay dependency-free and
 ; cross-compile cleanly to JavaScript (the test deps — fennec-hunt.unit/.prop — are native-only).
+
 (test
  (name test_mongo)
- (libraries fennec-mongo.bson fennec-mongo.query fennec-mongo.minimongo fennec-hunt.unit fennec-hunt.prop)
- (preprocess (pps fennec-hunt.ppx)))
+ (libraries
+  fennec-mongo.bson
+  fennec-mongo.query
+  fennec-mongo.minimongo
+  fennec-hunt.unit
+  fennec-hunt.prop)
+ (preprocess
+  (pps fennec-hunt.ppx)))

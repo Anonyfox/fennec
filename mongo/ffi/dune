@@ -4,6 +4,7 @@
 ; flags are produced by config/discover.ml — which builds the vendored mongo-c-driver as static
 ; archives (so the final binary is self-contained), or degrades to stubs (HAVE_MONGOC=0) where it
 ; can't, keeping the build matrix green.
+
 (library
  (name fennec_mongo_ffi)
  (public_name fennec-mongo.ffi)
@@ -22,5 +23,7 @@
   (:build_sh ../vendor/build.sh)
   ../vendor/mcd.tar.gz)
  (action
-  (setenv FENNEC_MONGO_BUILD_SH %{build_sh}
+  (setenv
+   FENNEC_MONGO_BUILD_SH
+   %{build_sh}
    (run %{gen}))))

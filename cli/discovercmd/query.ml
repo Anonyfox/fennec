@@ -111,14 +111,265 @@ let confidence_reason = function
 
 let mentions terms xs = List.exists (fun x -> List.mem x terms) xs
 
-let generic_steps evidence =
-  if List.exists (fun e -> e.kind = Route) evidence then
+let path_in uses path =
+  List.exists (fun (i : public_item) -> i.path = path || starts_with i.path (path ^ ".")) uses
+
+let lead_path = function
+  | item :: _ -> item.path
+  | [] -> ""
+
+let lead_is uses path =
+  let p = lead_path uses in
+  p = path || starts_with p (path ^ ".")
+
+let has_use uses path = path_in uses path
+
+let terms_match terms xs = List.exists (fun x -> List.mem x terms) xs
+
+type plan_kind =
+  | Matched_auth
+  | Response_cookie
+  | Session
+  | Upload
+  | Chunked_stream
+  | Http_test
+  | Local_state
+  | Router
+  | Generic
+
+let infer_plan_kind terms uses evidence =
+  let wants_test = terms_match terms [ "test"; "tests"; "assert"; "assertion"; "expect" ] in
+  let has_route_evidence = List.exists (fun e -> e.kind = Route) evidence in
+  let conn_lead = lead_is uses "Fennec.Conn" in
+  if has_use uses "Fennec.Paw.Basic_auth" && has_use uses "Fennec.Endpoint" then Matched_auth
+  else if conn_lead && terms_match terms [ "cookie"; "cookies" ] then Response_cookie
+  else if lead_is uses "Fennec.Paw.Session" || has_use uses "Fennec.Paw.Session" then Session
+  else if
+    (lead_is uses "Fennec.Conn.files" || lead_is uses "Fennec.Conn.file")
+    || (has_use uses "Fennec.Conn.files" && terms_match terms [ "upload"; "uploads"; "multipart"; "form" ])
+  then Upload
+  else if
+    (lead_is uses "Fennec.Conn.send_chunked" || lead_is uses "Fennec.Conn.stream")
+    || (has_use uses "Fennec.Conn.send_chunked" && terms_match terms [ "stream"; "streams"; "chunk"; "chunks"; "chunked"; "sse" ])
+  then Chunked_stream
+  else if (lead_is uses "Fennec_hunt.Http" || has_use uses "Fennec_hunt.Http") && wants_test then Http_test
+  else if lead_is uses "Fur" && terms_match terms [ "counter"; "local"; "state" ] then Local_state
+  else if lead_is uses "Fur.Router" || has_route_evidence then Router
+  else Generic
+
+let first_use uses =
+  match uses with
+  | item :: _ -> item.path
+  | [] -> "the highest-ranked public API"
+
+let default_summary task uses =
+  Printf.sprintf "Start with %s for %s." (first_use uses) task
+
+let starter_for = function
+  | Response_cookie ->
+    Some
+      "let conn = Fennec.Conn.set_cookie conn \"seen\" \"1\" in\n\
+       let conn = Fennec.Conn.delete_cookie conn \"old\" in\n\
+       conn"
+  | Session ->
+    Some
+      "let session = Fennec.Paw.Session.make ~secret:\"...\" ()\n\
+       \n\
+       (* Add the session paw early, then read/write session values downstream. *)"
+  | Upload ->
+    Some
+      "match Fennec.Conn.file conn \"upload\" with\n\
+       | Some part -> Fennec.Conn.text conn part.data\n\
+       | None -> Fennec.Conn.text ~status:400 conn \"missing upload\""
+  | Chunked_stream ->
+    Some
+      "Fennec.Conn.send_chunked conn ~content_type:\"text/event-stream\" (fun emit ->\n\
+       \  emit \"data: ready\\n\\n\")"
+  | Http_test ->
+    Some
+      "open Fennec_hunt.Http\n\
+       \n\
+       let%http \"health\" = fun () ->\n\
+       \  check \"GET /health\" (fun () ->\n\
+       \    get \"/health\" ~expect:[status 200])"
+  | Router ->
+    Some
+      "(* app/products/id_.mlx becomes a dynamic route such as /products/:id. *)\n\
+       let href = Fur.Router.path router \"/products/%s\" product_id"
+  | Local_state ->
+    Some
+      "let count = Fur.signal 0\n\
+       \n\
+       (* Render with Fur.get count; update from browser event handlers. *)\n\
+       Fur.update count succ"
+  | Matched_auth | Generic -> None
+
+let next_for_query task (uses : public_item list) =
+  let why = match uses with i :: _ -> [ "fennec discover --why " ^ i.id ] | [] -> [] in
+  why @ [ Printf.sprintf "fennec discover --more %S" task ]
+
+let plan_summary kind task uses =
+  match kind with
+  | Matched_auth ->
+    "Protect real routes with matched-route middleware: define the endpoint, then attach Basic_auth in the matched phase."
+  | Response_cookie ->
+    "Use Fennec.Conn response-cookie helpers for one-off browser cookies; use sessions for signed request-to-request state."
+  | Session ->
+    "Use Fennec.Paw.Session for signed cookie-backed session state such as login data, flash values, or preferences."
+  | Upload ->
+    "Use Fennec.Conn.files or Fennec.Conn.file to read uploaded multipart/form-data parts in the request handler."
+  | Chunked_stream ->
+    "Use Fennec.Conn.send_chunked to answer with a streamed chunked response body; use HTTP/browser tests only to prove it reassembles."
+  | Local_state ->
+    "Use Fur.signal for local component state; SSR renders the initial value and browser handlers update it after hydration."
+  | Http_test ->
+    "Use Fennec_hunt.Http for endpoint-level HTTP tests: register a suite, make requests, and assert the response."
+  | Router ->
+    "Use Fur.Router and generated route/path facts for dynamic routes and compiler-checked in-app links."
+  | Generic -> default_summary task uses
+
+let plan_why kind evidence =
+  let proof =
+    if List.exists (fun (e : evidence) -> e.kind = Test) evidence then [ "A matching test backs the recommendation." ]
+    else if evidence <> [] then [ "A framework example backs the recommendation." ]
+    else []
+  in
+  let reason =
+    match kind with
+    | Matched_auth ->
+      [
+        "Matched middleware protects existing routes without turning unrelated misses into auth failures.";
+        "The endpoint API owns host/app routing, while Basic_auth is the reusable paw.";
+      ]
+    | Response_cookie ->
+      [
+        "Conn cookie helpers write Set-Cookie response headers without answering the request.";
+        "Request cookie readers and response cookie writers are separate on purpose.";
+      ]
+    | Session ->
+      [
+        "The session paw signs the browser cookie and exposes session values downstream.";
+        "It is the right abstraction for request-to-request state, unlike one-off response cookies.";
+      ]
+    | Upload ->
+      [
+        "Conn.files exposes parsed multipart file parts from the incoming request body.";
+        "The Hunt multipart helpers are for tests that submit uploads, not for reading uploads in handlers.";
+      ]
+    | Chunked_stream ->
+      [
+        "send_chunked is the answerer that streams chunks without buffering the full body.";
+        "Conn.stream and Hunt response-body helpers are observation surfaces around the streamed response.";
+      ]
+    | Local_state ->
+      [
+        "Fur.signal is local UI state owned by a component or page.";
+        "Fur.get reads during render; Fur.update changes the value from event handlers.";
+      ]
+    | Http_test ->
+      [
+        "HTTP tests exercise the app through real requests and focused response assertions.";
+        "The public surface is Fennec_hunt.Http, not its internal For_test helpers.";
+      ]
+    | Router ->
+      [
+        "Route files produce route patterns and typed path/link helpers.";
+        "The router keeps app navigation compiler-checked instead of stringly scattered.";
+      ]
+    | Generic -> [ "The selected APIs and evidence have the strongest public match for this task." ]
+  in
+  take 3 (reason @ proof)
+
+let answer_for_plan task terms uses evidence =
+  let kind = infer_plan_kind terms uses evidence in
+  {
+    summary = plan_summary kind task uses;
+    why = plan_why kind evidence;
+    starter = starter_for kind;
+    copy_next = next_for_query task uses;
+  }
+
+let compare_axis terms left right =
+  let has x = List.mem x terms in
+  if
+    (has "local" || has "state")
+    && (starts_with left.path "Fur" || starts_with right.path "Fur")
+    && (starts_with left.path "Pulse.Live" || starts_with right.path "Pulse.Live")
+  then
+    ( "state scope",
+      "Use Fur.signal for local browser/component state such as counters, toggles, tabs, and input drafts.",
+      "Use Pulse.Live for server-backed data that should update across clients, such as task lists or notifications." )
+  else
+    ( "fit",
+      "Use this when its public API and evidence match the task more directly.",
+      "Use this when its public API and evidence better match the adjacent concern." )
+
+let answer_for_compare terms left right =
+  let axis, left_when, right_when = compare_axis terms left right in
+  let summary =
+    if axis = "state scope" then
+      "Choose Fur.signal for local UI state; choose Pulse.Live for server-backed realtime data shared across clients."
+    else
+      Printf.sprintf "Compare %s and %s by which public surface fits the task evidence." left.path right.path
+  in
+  {
+    summary;
+    why = [ left_when; right_when ];
+    starter = None;
+    copy_next = [ "fennec discover --why " ^ left.id; "fennec discover --why " ^ right.id ];
+  }
+
+let plan_steps terms uses evidence =
+  match infer_plan_kind terms uses evidence with
+  | Matched_auth ->
+    [
+      "Define the endpoint/app route surface with Fennec.Endpoint.";
+      "Attach Basic_auth in the matched phase so unrelated misses still behave like misses.";
+      "Use the system/http evidence as the regression shape.";
+    ]
+  | Response_cookie ->
+    [
+      "Read request cookies with Conn.cookie/cookies only when you need browser-sent values.";
+      "Write response cookies with Conn.set_cookie and expire them with Conn.delete_cookie.";
+      "Use Session instead when the value is signed request-to-request application state.";
+    ]
+  | Session ->
+    [
+      "Create the session paw with a strong secret and add it early in the pipeline.";
+      "Read and mutate session values downstream through the session API.";
+      "Use plain Conn.set_cookie only for one-off response cookies.";
+    ]
+  | Upload ->
+    [
+      "Handle the multipart request in a paw or endpoint handler.";
+      "Read all uploaded parts with Conn.files, or a named upload with Conn.file.";
+      "Use Fennec_hunt.Http multipart helpers only in the regression test.";
+    ]
+  | Chunked_stream ->
+    [
+      "Answer the request with Conn.send_chunked.";
+      "Emit each chunk from the producer callback; use text/event-stream for SSE.";
+      "Cover it with HTTP or browser evidence that reads the complete response body.";
+    ]
+  | Local_state ->
+    [
+      "Create a Fur.signal for state owned by this component/page.";
+      "Read it during render with Fur.get.";
+      "Update it from browser handlers with Fur.set or Fur.update.";
+    ]
+  | Http_test ->
+    [
+      "Open Fennec_hunt.Http in an HTTP test file.";
+      "Register a let%http suite and group checks with check.";
+      "Make requests with get/post and assert responses with status, JSON, body, cookie, or timing helpers.";
+    ]
+  | Router ->
     [
       "Start from the generated route shape shown in the evidence.";
       "Use the public routing/link API from the recommendation list.";
       "Keep route modules as normal Dune modules so edits stay local and typed.";
     ]
-  else
+  | Generic ->
     [
       "Start from the highest-ranked public API below.";
       "Use `--why` on that API before editing if the signature is unfamiliar.";
@@ -164,28 +415,27 @@ let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
   +. (r.score *. 3.0)
   +. (match e.kind with Test -> 8.0 | Example -> 6.0 | Route -> 5.0 | Doctest -> 4.0 | Hazard -> -.20.0)
 
-let next_for_query task (uses : public_item list) =
-  let why = match uses with i :: _ -> [ "fennec discover --why " ^ i.id ] | [] -> [] in
-  why @ [ Printf.sprintf "fennec discover --more %S" task ]
-
 let find_api = Retrieve.find_api
 
 let compare_card snapshot task terms uses evidence =
   match Select.compare_pair ~task ~terms ~uses ~public_items:snapshot.public_items with
   | None -> None
   | Some (left, right) ->
+    let axis, left_when, right_when = compare_axis terms left right in
+    let answer = answer_for_compare terms left right in
     Some
       (Compare
          {
            task;
+           answer;
            left;
            right;
-           axis = "fit";
-           left_when = "Use this when its public API and evidence match the task more directly.";
-           right_when = "Use this when its public API and evidence better match the adjacent concern.";
+           axis;
+           left_when;
+           right_when;
            evidence;
            confidence = Medium;
-           next = [ "fennec discover --why " ^ left.id; "fennec discover --why " ^ right.id ];
+           next = answer.copy_next;
          })
 
 let browse snapshot module_path ~more =
@@ -334,7 +584,8 @@ let query snapshot ~more task =
       Plan
         {
           task;
-          steps = generic_steps evidence;
+          answer = answer_for_plan task terms uses evidence;
+          steps = plan_steps terms uses evidence;
           uses;
           evidence;
           avoid = avoid_notes evidence;
@@ -346,7 +597,8 @@ let query snapshot ~more task =
     Plan
       {
         task;
-        steps = generic_steps evidence;
+        answer = answer_for_plan task terms uses evidence;
+        steps = plan_steps terms uses evidence;
         uses;
         evidence;
         avoid = avoid_notes evidence;

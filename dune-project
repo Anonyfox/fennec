@@ -42,6 +42,14 @@
   (eio
    (>= 1.0))
   eio_main
+  tls
+  tls-eio
+  x509
+  ca-certs
+  domain-name
+  zarith
+  ptime
+  mirage-crypto-rng
   digestif
   base64
   zlib
@@ -79,6 +87,8 @@
   (eio
    (>= 1.0))
   eio_main
+  (ppxlib
+   (>= 0.28))
   (yojson
    (>= 2.0))
   (base64
@@ -86,6 +96,7 @@
   (re
    (>= 1.10))
   ; TLS transport for https targets (accept-any-cert default — testing your own server)
+  tls
   (tls-eio
    (>= 2.0))
   (x509

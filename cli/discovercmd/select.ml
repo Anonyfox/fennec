@@ -129,6 +129,10 @@ let exact_task_anchor terms (i : public_item) =
   else if has "live" && p = "Pulse.Live.find" then 60.0
   else if has "cookie" && has "set" && p = "Fennec.Conn.set_cookie" then 90.0
   else if has "cookie" && has "delete" && p = "Fennec.Conn.delete_cookie" then 88.0
+  else if (has "upload" || has "multipart") && p = "Fennec.Conn.files" then 170.0
+  else if (has "upload" || has "multipart") && p = "Fennec.Conn.file" then 150.0
+  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Fennec.Conn.send_chunked" then 180.0
+  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Fennec.Conn.stream" then 70.0
   else if has "dynamic" && has "route" && p = "Fur.Router" then 80.0
   else 0.0
 
@@ -159,6 +163,10 @@ let score_item terms seed_ids api_rank (i : public_item) =
 
 let family_cap terms fam =
   if fam = "Fennec.Conn" && List.mem "cookie" terms then 3
+  else if
+    fam = "Fennec.Conn"
+    && List.exists (fun term -> List.mem term terms) [ "upload"; "multipart"; "stream"; "chunk"; "chunks"; "chunked" ]
+  then 2
   else if fam = "Fennec.Endpoint" && (List.mem "matched" terms || List.mem "route" terms) then 3
   else if fam = "Fennec.Paw.Basic_auth" then 2
   else if fam = "Fur" && (List.mem "counter" terms || List.mem "state" terms) then 3

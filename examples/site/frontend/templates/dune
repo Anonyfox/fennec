@@ -1,2 +1,8 @@
-(library (name site_templates) (wrapped false) (libraries fennec.fur fennec.fur.html)
- (preprocess (pps fennec.fur.ppx)) (flags (:standard -w -a -open Fur)))
+(library
+ (name site_templates)
+ (wrapped false)
+ (libraries fennec.fur fennec.fur.html)
+ (preprocess
+  (pps fennec.fur.ppx))
+ (flags
+  (:standard -w -a -open Fur)))

@@ -6,12 +6,15 @@
 ;
 ; These drive the REAL `fennec dev`, so they live on their own runner (NOT @runtest) — fennec
 ; builds it one-shot and runs the artifact directly, never nesting dune.
+
 (library
  (name site_system_suites)
- (modules (:standard \ run))
+ (modules
+  (:standard \ run))
  (libraries fennec-hunt)
  (library_flags (-linkall))
- (preprocess (pps fennec-hunt.ppx)))
+ (preprocess
+  (pps fennec-hunt.ppx)))
 
 (executable
  (name run)

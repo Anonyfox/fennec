@@ -1,5 +1,16 @@
 ; Shared single-file components. Each .mlx colocates its [%%style] block; style_extract
 ; (see ../styles) collects them. site_store gives Todo_list/Stats the global state module.
-(library (name site_components) (wrapped false)
- (libraries fennec.fur fennec.fur.html site_store fennec.pulse.live.client fennec-mongo.bson)
- (preprocess (pps fennec.fur.ppx)) (flags (:standard -w -a -open Fur)))
+
+(library
+ (name site_components)
+ (wrapped false)
+ (libraries
+  fennec.fur
+  fennec.fur.html
+  site_store
+  fennec.pulse.live.client
+  fennec-mongo.bson)
+ (preprocess
+  (pps fennec.fur.ppx))
+ (flags
+  (:standard -w -a -open Fur)))

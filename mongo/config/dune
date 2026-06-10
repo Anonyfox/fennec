@@ -1,6 +1,7 @@
 ; Configure-time discovery for the native mongo driver: builds the vendored mongo-c-driver as static
 ; archives (vendor/build.sh) and writes the compiler/linker flags the ffi library includes. Degrades
 ; (HAVE_MONGOC=0, no link libs) where the build can't run, so the matrix never breaks.
+
 (executable
  (name discover)
  (libraries dune-configurator))

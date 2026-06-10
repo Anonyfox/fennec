@@ -35,9 +35,11 @@ depends: [
   "dune" {>= "3.16" & >= "3.16"}
   "eio" {>= "1.0"}
   "eio_main"
+  "ppxlib" {>= "0.28"}
   "yojson" {>= "2.0"}
   "base64" {>= "3.0"}
   "re" {>= "1.10"}
+  "tls"
   "tls-eio" {>= "2.0"}
   "x509" {>= "1.0"}
   "domain-name"

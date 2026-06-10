@@ -4,10 +4,25 @@
 
 (library
  (name fennec_discover_core)
- (modules source_ref discover_model normalize doc_extract route_facts snapshot snapshot_gen retrieve select query render_text render_json golden)
+ (modules
+  source_ref
+  discover_model
+  normalize
+  doc_extract
+  route_facts
+  snapshot
+  snapshot_gen
+  retrieve
+  select
+  query
+  render_text
+  render_json
+  golden)
  (libraries ppxlib digestif yojson fennec-hunt.unit)
- (inline_tests (backend fennec-hunt.runner))
- (preprocess (pps fennec-hunt.ppx)))
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))
 
 (executable
  (name gen_snapshot)
@@ -28,12 +43,15 @@
   (source_tree %{project_root}/cli/testcmd)
   %{project_root}/cli/fennec.ml)
  (action
-  (with-stdout-to snapshot_data.ml
+  (with-stdout-to
+   snapshot_data.ml
    (run ./gen_snapshot.exe %{project_root}))))
 
 (library
  (name fennec_discover)
  (modules discover snapshot_data)
  (libraries fennec_discover_core yojson fennec-hunt.unit)
- (inline_tests (backend fennec-hunt.runner))
- (preprocess (pps fennec-hunt.ppx)))
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

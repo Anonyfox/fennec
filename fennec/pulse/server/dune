@@ -1,10 +1,18 @@
 ; DDP-over-WebSocket server wiring: bridges a reactive data instance (fennec.pulse) to a DDP session
 ; (fennec.ddp) and serves it over the Eio server's websocket channel (fennec.server). The bridge is
 ; delta-driven — publications feed the session's sink straight from observe_changes. See DATAFLOW §5.
+
 (library
  (name fennec_pulse_server)
  (public_name fennec.pulse.server)
  ; -67: the functor parameter R drives behavior (publications/methods), not the result types
  (flags
   (:standard -w -67))
- (libraries fennec.core fennec.paw fennec.server fennec.pulse fennec.ddp fennec-mongo.bson eio))
+ (libraries
+  fennec.core
+  fennec.paw
+  fennec.server
+  fennec.pulse
+  fennec.ddp
+  fennec-mongo.bson
+  eio))

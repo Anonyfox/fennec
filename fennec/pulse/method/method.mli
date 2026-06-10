@@ -13,6 +13,7 @@ type sim_writes = {
   remove : string -> Bson.t -> int;
 }
 
+(** A method descriptor with argument type ['a] and result type ['r]. *)
 type ('a, 'r) t
 
 (** [define ?stub name ~args ~result] declares a method. [stub] is the opt-in optimistic half: it
@@ -22,9 +23,16 @@ type ('a, 'r) t
 val define :
   ?stub:(sim_writes -> 'a -> unit) -> string -> args:'a Codec.args -> result:'r Codec.t -> ('a, 'r) t
 
+(** The stable wire name sent over DDP. *)
 val name : _ t -> string
+
+(** The positional argument codec used by callers and handlers. *)
 val args : ('a, _) t -> 'a Codec.args
+
+(** The result codec used to encode handler output and decode client replies. *)
 val result : (_, 'r) t -> 'r Codec.t
+
+(** The optional optimistic browser-side simulation, if one was declared. *)
 val stub : ('a, _) t -> (sim_writes -> 'a -> unit) option
 
 (** Deterministic id streams for latency compensation: the client sends a random seed with the call;

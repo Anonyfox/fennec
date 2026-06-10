@@ -95,9 +95,17 @@ type source_claim = {
   source : Source_ref.t;
 }
 
+type answer = {
+  summary : string;
+  why : string list;
+  starter : string option;
+  copy_next : string list;
+}
+
 type card =
   | Plan of {
       task : string;
+      answer : answer;
       steps : string list;
       uses : public_item list;
       evidence : evidence list;
@@ -108,6 +116,7 @@ type card =
     }
   | Compare of {
       task : string;
+      answer : answer;
       left : public_item;
       right : public_item;
       axis : string;

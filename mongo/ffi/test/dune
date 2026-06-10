@@ -1,9 +1,14 @@
 ; Native driver end-to-end against a REAL mongod (launched by the lifecycle manager), through the
 ; statically-linked libmongoc. Skips (passes) when the native driver wasn't built (Ffi.available
 ; false) or no mongod is installed, so the matrix stays green everywhere.
+
 (test
  (name test_ffi)
- (libraries fennec-mongo.ffi fennec-mongo.bson_json fennec-mongo.mongod fennec-mongo.bson
-   fennec-hunt.unit)
+ (libraries
+  fennec-mongo.ffi
+  fennec-mongo.bson_json
+  fennec-mongo.mongod
+  fennec-mongo.bson
+  fennec-hunt.unit)
  (preprocess
   (pps fennec-hunt.ppx)))

@@ -1,6 +1,8 @@
 ; DDP codec + session + sockjs tests, using fennec's inline test tooling. Pure, no socket — the
 ; session is exercised by feeding it messages and capturing what it emits.
+
 (test
  (name test_ddp)
  (libraries fennec.ddp fennec-mongo.bson fennec-hunt.unit)
- (preprocess (pps fennec-hunt.ppx)))
+ (preprocess
+  (pps fennec-hunt.ppx)))

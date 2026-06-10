@@ -3,6 +3,7 @@
 ; Js.Json — pure OCaml string processing over fennec-mongo's Bson — so the whole protocol compiles
 ; identically to native (server) AND JavaScript (browser). The session takes publications/methods
 ; as caller-supplied closures, so it stays pure and depends on nothing but Bson. See DATAFLOW.md §6.
+
 (library
  (name fennec_ddp)
  (public_name fennec.ddp)

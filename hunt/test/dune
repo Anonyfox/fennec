@@ -2,6 +2,7 @@
 ; in-memory fake backend (no real browser), deterministic. test_http also links fennec.core,
 ; SOLELY to assert the env-contract mirror (Test_proto vs Dev_proto) agrees — a drift guard;
 ; the hunt LIBRARY itself never depends on the framework.
+
 (tests
  (names test test_http)
  (modules test test_http fake)
@@ -9,14 +10,17 @@
 
 ; Dogfood: the inline Unit runtime + ppx, tested end-to-end. Uses the ppx to expand
 ; let%test / let%test_unit, registers tests, runs them. Proves the full pipeline.
+
 (test
  (name test_unit)
  (modules test_unit)
  (libraries fennec-hunt fennec-hunt.unit)
- (preprocess (pps fennec-hunt.ppx)))
+ (preprocess
+  (pps fennec-hunt.ppx)))
 
 ; Proves the System layer's primitives (process group teardown, waits, fs, ports).
 ; Spawns only sh/sleep — no nested dune, so it's safe under `dune test`.
+
 (test
  (name test_system)
  (modules test_system)
@@ -24,8 +28,10 @@
 
 ; Dogfood: the `let%prop` property cut, end-to-end through the ppx + inline Unit runtime.
 ; Only needs fennec-hunt (Fennec_hunt.Prop funnels qcheck-core), proving downstream wiring.
+
 (test
  (name test_prop)
  (modules test_prop)
  (libraries fennec-hunt fennec-hunt.unit fennec-hunt.prop)
- (preprocess (pps fennec-hunt.ppx)))
+ (preprocess
+  (pps fennec-hunt.ppx)))

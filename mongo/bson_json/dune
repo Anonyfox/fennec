@@ -3,6 +3,7 @@
 ; the codec is precise regardless of the JSON number representation, and Decimal128 is just a
 ; string libbson interprets) and parses both canonical and relaxed forms back. Pure (Bson + the
 ; fennec-mongo JSON primitive) — native and browser.
+
 (library
  (name fennec_mongo_bson_json)
  (public_name fennec-mongo.bson_json)

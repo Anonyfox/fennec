@@ -2,9 +2,12 @@
 ; multipart, MIME, dates, semantics) and the pure dev/livereload bits. No Eio here —
 ; Stdlib only (+ unix for dates), so it stays shareable. The Eio server adapter lives
 ; in fennec/server (native-only).
+
 (library
  (name fennec_core)
  (public_name fennec.core)
  (libraries unix fennec-hunt.unit fennec-hunt.prop)
- (inline_tests (backend fennec-hunt.runner))
- (preprocess (pps fennec-hunt.ppx)))
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

@@ -1,8 +1,13 @@
 ; Round-trip + wire-form tests for the extended-JSON codec: every Bson type survives to_string ∘
 ; of_string (by numeric-aware Bson.equal), the canonical wrapped forms are emitted exactly, relaxed
 ; input parses, non-finite floats survive, and malformed input is handled without raising.
+
 (test
  (name test_bson_json)
- (libraries fennec-mongo.bson_json fennec-mongo.bson fennec-mongo.json fennec-hunt.unit)
+ (libraries
+  fennec-mongo.bson_json
+  fennec-mongo.bson
+  fennec-mongo.json
+  fennec-hunt.unit)
  (preprocess
   (pps fennec-hunt.ppx)))

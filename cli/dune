@@ -1,6 +1,7 @@
 ; The `fennec` binary. Statically links the native bundlers via the internal
 ; fennec_buildkit library, so the released executable is fully self-contained:
 ; consumers download one binary and need no Go, Rust, or Node toolchain.
+
 (executable
  (name fennec)
  (public_name fennec)
@@ -8,4 +9,12 @@
  (modes native)
  ; fennec-mongo.mongod is the pure-Unix mongod *lifecycle* launcher (no libmongoc / C) — it keeps
  ; the `fennec` binary self-contained while enabling `dev --mongo` / `test --mongo`.
- (libraries fennec_buildkit cmdliner unix fennec_dev fennec_testcmd fennec_docs fennec_discover fennec-mongo.mongod))
+ (libraries
+  fennec_buildkit
+  cmdliner
+  unix
+  fennec_dev
+  fennec_testcmd
+  fennec_docs
+  fennec_discover
+  fennec-mongo.mongod))

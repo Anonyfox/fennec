@@ -1,6 +1,13 @@
 ; Unit tests for the fennec_dev library's pure/testable parts. Tests for crash_limiter,
 ; diagnostics, instance, report, run, artifact, dev_proto, discover, port, server_proc,
 ; suites, and ui moved inline into their source modules.
+
 (tests
- (names test_dune_watch test_pidfile test_assets test_tty test_pool test_reaper)
+ (names
+  test_dune_watch
+  test_pidfile
+  test_assets
+  test_tty
+  test_pool
+  test_reaper)
  (libraries fennec_dev fennec.core fennec_testcmd))

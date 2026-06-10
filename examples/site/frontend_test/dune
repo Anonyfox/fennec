@@ -2,6 +2,7 @@
 ; In their own dir, not inside frontend/ (its route_gen rule + data_only_dirs apps
 ; would otherwise interfere). Links the components lib directly (it is wrapped false,
 ; so Counter/Nav/Hero are top-level modules).
+
 (test
  (name test_components)
  (modules test_components)

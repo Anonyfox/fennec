@@ -3,6 +3,7 @@
 ; generation. Used by Minimongo and (later) the native Live engine. Pure OCaml — `re` is the only
 ; dependency beyond Bson and is itself pure, so the library still cross-compiles to JavaScript.
 ; Inline tests live in ../test.
+
 (library
  (name query)
  (public_name fennec-mongo.query)

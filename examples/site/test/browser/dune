@@ -5,12 +5,15 @@
 ; module so each registers; the one-line `run` executable is the entry. fennec builds it one-shot
 ; and runs it PER suite file (--only-file) against that file's own isolated app instance.
 ; NOT @runtest — so a bare `dune test` never needs Chrome.
+
 (library
  (name site_browser_suites)
- (modules (:standard \ run))
+ (modules
+  (:standard \ run))
  (libraries fennec-hunt)
  (library_flags (-linkall))
- (preprocess (pps fennec-hunt.ppx)))
+ (preprocess
+  (pps fennec-hunt.ppx)))
 
 (executable
  (name run)

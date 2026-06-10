@@ -1,3 +1,10 @@
-(library (name fennec_fur_platform_browser) (public_name fennec.fur.platform_browser)
- (implements fennec_fur_platform) (modes byte) (libraries js_of_ocaml)
- (preprocess (pps js_of_ocaml-ppx)) (flags (:standard -w -a)))
+(library
+ (name fennec_fur_platform_browser)
+ (public_name fennec.fur.platform_browser)
+ (implements fennec_fur_platform)
+ (modes byte)
+ (libraries js_of_ocaml)
+ (preprocess
+  (pps js_of_ocaml-ppx))
+ (flags
+  (:standard -w -a)))

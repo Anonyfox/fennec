@@ -21,6 +21,14 @@ depends: [
   "dune" {>= "3.16" & >= "3.16"}
   "eio" {>= "1.0"}
   "eio_main"
+  "tls"
+  "tls-eio"
+  "x509"
+  "ca-certs"
+  "domain-name"
+  "zarith"
+  "ptime"
+  "mirage-crypto-rng"
   "digestif"
   "base64"
   "zlib"

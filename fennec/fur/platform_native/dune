@@ -1,2 +1,8 @@
-(library (name fennec_fur_platform_native) (public_name fennec.fur.platform_native)
- (implements fennec_fur_platform) (libraries eio) (modes byte native) (flags (:standard -w -a)))
+(library
+ (name fennec_fur_platform_native)
+ (public_name fennec.fur.platform_native)
+ (implements fennec_fur_platform)
+ (libraries eio)
+ (modes byte native)
+ (flags
+  (:standard -w -a)))

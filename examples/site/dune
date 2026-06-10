@@ -15,58 +15,123 @@
 ; no npm deps to resolve). It is --included into the web root below, at its served path.
 
 ; ---- per-app CSS — compile the app's entry stylesheet (@use pulls colocated parts) ----
+
 (rule
  (target web.css)
- (deps (glob_files_rec frontend/*.scss))
- (action (run %{bin:fennec} build --out-name web.css -o . frontend/apps/web/main.scss)))
+ (deps
+  (glob_files_rec frontend/*.scss))
+ (action
+  (run
+   %{bin:fennec}
+   build
+   --out-name
+   web.css
+   -o
+   .
+   frontend/apps/web/main.scss)))
 
 (rule
  (target admin.css)
- (deps (glob_files_rec frontend/*.scss))
- (action (run %{bin:fennec} build --out-name admin.css -o . frontend/apps/admin/main.scss)))
+ (deps
+  (glob_files_rec frontend/*.scss))
+ (action
+  (run
+   %{bin:fennec}
+   build
+   --out-name
+   admin.css
+   -o
+   .
+   frontend/apps/admin/main.scss)))
 
 ; ---- assemble the SERVED web root: each bundle at its /_apps/<name>/ served path,
 ; which the SSR template references verbatim, + the shared public/ tree ----
+
 (rule
- (targets (dir webroot))
- (deps client/web.bc.js client/admin.bc.js web.css admin.css (source_tree public))
+ (targets
+  (dir webroot))
+ (deps
+  client/web.bc.js
+  client/admin.bc.js
+  web.css
+  admin.css
+  (source_tree public))
  (action
-  (run %{bin:fennec} build -o webroot
-   --include client/web.bc.js:_apps/web/main.js --include web.css:_apps/web/main.css
-   --include client/admin.bc.js:_apps/admin/main.js --include admin.css:_apps/admin/main.css
-   --public public)))
+  (run
+   %{bin:fennec}
+   build
+   -o
+   webroot
+   --include
+   client/web.bc.js:_apps/web/main.js
+   --include
+   web.css:_apps/web/main.css
+   --include
+   client/admin.bc.js:_apps/admin/main.js
+   --include
+   admin.css:_apps/admin/main.css
+   --public
+   public)))
 
 ; ---- prod embed module (release bakes the web root in; dev = empty stub) ----
+
 (rule
  (target assets.ml)
- (enabled_if (= %{profile} release))
+ (enabled_if
+  (= %{profile} release))
  (deps webroot)
- (action (run %{bin:fennec} build -o webroot --embed assets.ml)))
+ (action
+  (run %{bin:fennec} build -o webroot --embed assets.ml)))
 
 (rule
  (target assets.ml)
- (enabled_if (<> %{profile} release))
+ (enabled_if
+  (<> %{profile} release))
  (action
-  (with-stdout-to assets.ml (echo "let lookup (_ : string) : string option = None\n"))))
+  (with-stdout-to
+   assets.ml
+   (echo "let lookup (_ : string) : string option = None\n"))))
 
-(alias (name all) (deps webroot))
-(alias (name default) (deps webroot))
+(alias
+ (name all)
+ (deps webroot))
+
+(alias
+ (name default)
+ (deps webroot))
 
 ; the dev loop target: bytecode server + assembled web root, rebuilt on edit.
 ;   fennec dev --target @examples/site/dev _build/default/examples/site/server.bc
-(alias (name dev) (deps server.bc webroot))
+
+(alias
+ (name dev)
+ (deps server.bc webroot))
 
 (executable
  ; dev builds the bytecode server (server.bc); release builds native server.exe.
  (name server)
  (modes byte exe)
  (modules server assets)
- (libraries fennec fennec.fur.server web_app admin_app site_styles site_store fennec.pulse.server fennec.pulse fennec.pulse.method
-   fennec.pulse.mongo fennec.ddp fennec.pulse.live.client fennec-mongo.bson fennec-mongo.minimongo))
+ (libraries
+  fennec
+  fennec.fur.server
+  web_app
+  admin_app
+  site_styles
+  site_store
+  fennec.pulse.server
+  fennec.pulse
+  fennec.pulse.method
+  fennec.pulse.mongo
+  fennec.ddp
+  fennec.pulse.live.client
+  fennec-mongo.bson
+  fennec-mongo.minimongo))
 
 ; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test
 ; machinery or its yojson dep. A pure-OCaml guard reads the native server.exe and fails if
 ; any forbidden module-name appears. Runs under `dune runtest`, so a regression trips CI. ----
+
 (executable
  (name check_lean)
  (modules check_lean))

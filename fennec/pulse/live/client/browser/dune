@@ -1,11 +1,19 @@
 ; Browser implementation of the DDP client: a real Js_of_ocaml WebSocket dialing /websocket, feeding
 ; sub-tagged deltas into the live merge store. Linked into the JS bundle.
+
 (library
  (name fennec_pulse_live_client_browser)
  (public_name fennec.pulse.live.client.browser)
  (implements fennec.pulse.live.client)
  (modes byte)
- (libraries fennec.pulse.live fennec.ddp fennec.fur fennec-mongo.bson fennec-mongo.query fennec.pulse.method js_of_ocaml)
+ (libraries
+  fennec.pulse.live
+  fennec.ddp
+  fennec.fur
+  fennec-mongo.bson
+  fennec-mongo.query
+  fennec.pulse.method
+  js_of_ocaml)
  (preprocess
   (pps js_of_ocaml-ppx))
  (flags

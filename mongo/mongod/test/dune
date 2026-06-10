@@ -2,6 +2,7 @@
 ; mongod is present, so CI without MongoDB stays green. The no-dangling test runs a helper process
 ; (reap_child) that starts a mongod and exits WITHOUT stopping it, then asserts the at_exit reaper
 ; killed it — proving the "no dangling processes" guarantee.
+
 (executable
  (name reap_child)
  (modules reap_child)

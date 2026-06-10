@@ -7,42 +7,60 @@ let short_doc ?(limit = 140) = function
     if String.length one <= limit then one else String.sub one 0 (limit - 1) ^ "..."
 
 let item_line (i : public_item) =
-  Printf.sprintf "  %s  %s" i.id (Source_ref.to_string i.source)
+  let doc = short_doc ~limit:86 i.doc in
+  let detail = if doc = "" then kind_to_string i.kind else doc in
+  Printf.sprintf "  %-34s %s  (%s)" i.path detail (Source_ref.to_string i.source)
 
 let evidence_line (e : evidence) =
-  Printf.sprintf "  %s  %s" e.id (Source_ref.to_string e.source)
+  Printf.sprintf "  %s  %s" e.label (Source_ref.to_string e.source)
 
 let render_list title lines =
   match lines with
   | [] -> []
   | xs -> (title ^ ":") :: xs
 
+let render_starter = function
+  | None -> []
+  | Some code -> [ "Starter:"; "```ocaml" ] @ String.split_on_char '\n' code @ [ "```" ]
+
 let render = function
-  | Plan { task; steps; uses; evidence; avoid; confidence; reason; next } ->
+  | Plan { task; answer; steps; uses; evidence; avoid; confidence; reason; next } ->
     let step_lines = List.mapi (fun i s -> Printf.sprintf "  %d. %s" (i + 1) s) steps in
     String.concat "\n"
       ([
          "Task: " ^ task;
          "";
+         "Answer:";
+         "  " ^ answer.summary;
+       ]
+      @ [ "" ]
+      @ render_list "Why" (List.map (fun s -> "  - " ^ s) answer.why)
+      @ [ "" ]
+      @ render_starter answer.starter
+      @ [ "" ]
+      @ [
          "Recommended path:";
        ]
       @ step_lines
       @ [ "" ]
       @ render_list "Use" (List.map item_line uses)
       @ [ "" ]
-      @ render_list "Best evidence" (List.map evidence_line evidence)
+      @ render_list "Receipts" (List.map evidence_line evidence)
       @ [ "" ]
       @ render_list "Avoid unless" (List.map (fun s -> "  " ^ s) avoid)
       @ [
           "";
           Printf.sprintf "Confidence: %s - %s" (confidence_to_string confidence) reason;
         ]
-      @ render_list "Next" (List.map (fun s -> "  " ^ s) next)
+      @ render_list "Next" (List.map (fun s -> "  " ^ s) (if answer.copy_next = [] then next else answer.copy_next))
       @ [ "" ])
-  | Compare { task; left; right; axis; left_when; right_when; evidence; confidence; next } ->
+  | Compare { task; answer; left; right; axis; left_when; right_when; evidence; confidence; next } ->
     String.concat "\n"
       ([
          "Task: " ^ task;
+         "";
+         "Answer:";
+         "  " ^ answer.summary;
          "";
          "Compare: " ^ axis;
          "Use " ^ left.path ^ " when:";
@@ -51,12 +69,12 @@ let render = function
          "  " ^ right_when;
          "";
        ]
-      @ render_list "Evidence" (List.map evidence_line evidence)
+      @ render_list "Receipts" (List.map evidence_line evidence)
       @ [
           "";
           Printf.sprintf "Confidence: %s" (confidence_to_string confidence);
         ]
-      @ render_list "Next" (List.map (fun s -> "  " ^ s) next)
+      @ render_list "Next" (List.map (fun s -> "  " ^ s) (if answer.copy_next = [] then next else answer.copy_next))
       @ [ "" ])
   | Browse { module_path; summary; items; evidence; next } ->
     let item_lines =

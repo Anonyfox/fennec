@@ -3,7 +3,14 @@
 ; over a real mongod UNCHANGED (same seam Minimongo implements in memory). observe_changes is real
 ; change streams (Live), not polling. Native only (the driver links the C FFI + Eio) — the
 ; browser/SSR use fennec.pulse with the in-memory backend instead.
+
 (library
  (name fennec_pulse_mongo)
  (public_name fennec.pulse.mongo)
- (libraries fennec.pulse fennec-mongo.driver fennec-mongo.ffi fennec-mongo.bson fennec-mongo.query eio))
+ (libraries
+  fennec.pulse
+  fennec-mongo.driver
+  fennec-mongo.ffi
+  fennec-mongo.bson
+  fennec-mongo.query
+  eio))

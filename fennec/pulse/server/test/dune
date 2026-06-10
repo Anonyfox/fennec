@@ -1,8 +1,18 @@
 ; Full-stack DDP-server test driven by a FAKE Ws_channel (just the callback record): proves
 ; frame -> decode -> session -> glue -> reactive -> encode -> frame end to end, with no Eio / no
 ; real socket. The live server round-trip is a separate system test.
+
 (test
  (name test_pulse_server)
- (libraries fennec.pulse.server fennec.pulse fennec.pulse.method fennec.ddp fennec.core fennec-mongo.bson fennec-mongo.minimongo fennec-mongo.query
-   fennec-hunt.unit)
- (preprocess (pps fennec-hunt.ppx)))
+ (libraries
+  fennec.pulse.server
+  fennec.pulse
+  fennec.pulse.method
+  fennec.ddp
+  fennec.core
+  fennec-mongo.bson
+  fennec-mongo.minimongo
+  fennec-mongo.query
+  fennec-hunt.unit)
+ (preprocess
+  (pps fennec-hunt.ppx)))

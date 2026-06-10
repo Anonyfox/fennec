@@ -2,5 +2,13 @@
 ; Also registers the inline test rules (let%test / let%test_unit) from fennec-hunt.ppx.rules,
 ; so a library using (pps fennec.fur.ppx) gets BOTH MLX sugar AND inline tests in ONE ppx
 ; process — no need to also list fennec-hunt.ppx.
-(library (name fennec_fur_ppx) (public_name fennec.fur.ppx) (kind ppx_rewriter)
- (libraries ppxlib fennec_hunt_ppx_rules) (preprocess (pps ppxlib.metaquot)) (flags (:standard -w -a)))
+
+(library
+ (name fennec_fur_ppx)
+ (public_name fennec.fur.ppx)
+ (kind ppx_rewriter)
+ (libraries ppxlib fennec-hunt.ppx.rules)
+ (preprocess
+  (pps ppxlib.metaquot))
+ (flags
+  (:standard -w -a)))
