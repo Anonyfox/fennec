@@ -14,4 +14,6 @@
   fennec-mongo.bson_json
   fennec.fur
   fennec.ddp
-  fennec.pulse.method))
+  fennec.pulse.method
+  fennec.pulse.codec
+  fennec.pulse.collection))

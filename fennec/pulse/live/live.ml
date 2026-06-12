@@ -55,6 +55,37 @@ let find t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array Fur.signa
   Fur.on_cleanup stop;
   result
 
+(* the TYPED reactive read over a collection declaration: the same live signal as [find], decoded
+   at the boundary with the skip policy — documents that no longer match the declared shape are
+   skipped (foreign garbage, legacy docs), warned ONCE per doc id so dev sees it without the UI
+   ever crashing on it. *)
+let _warned : (string, unit) Hashtbl.t = Hashtbl.create 8
+
+let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur.signal =
+  let name = Def.name def in
+  let codec = Def.codec def in
+  let selector = match Q.all where with [] -> None | q -> Some (Q.to_bson q) in
+  let v = version_signal t name in
+  let snap () =
+    Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
+    |> Array.to_list
+    |> List.filter_map (fun d ->
+           match Codec.decode codec d with
+           | Ok x -> Some x
+           | Error es ->
+               let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in
+               if not (Hashtbl.mem _warned key) then begin
+                 Hashtbl.replace _warned key ();
+                 prerr_endline ("fennec/typed: skipping malformed doc " ^ key ^ " — " ^ Codec.errors_to_string es)
+               end;
+               None)
+    |> Array.of_list
+  in
+  let result = Fur.signal [||] in
+  let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
+  Fur.on_cleanup stop;
+  result
+
 (* the foreign collections a pipeline reads via $lookup.from / $unionWith — so [aggregate]'s signal
    recomputes when one of THEM changes too, not just the primary collection (else a join goes stale) *)
 let foreign_collections (pipeline : Bson.t list) : string list =

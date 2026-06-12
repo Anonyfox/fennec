@@ -14,6 +14,6 @@
   fennec.fur
   fennec-mongo.bson
   fennec-mongo.bson_json
-  fennec.pulse.method)
+  fennec.pulse.method fennec.pulse.collection fennec.pulse.codec)
  (flags
   (:standard -w -a)))

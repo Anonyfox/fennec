@@ -94,6 +94,13 @@ val call_result : t -> name:string -> ?params:Bson.t list -> unit -> (Bson.t, st
     the call's random seed. On the SSR/native client this sends nothing and stays [None]. *)
 val call_m : t -> ('a, 'r) Method.t -> 'a -> ('r, string * string) result option Fur.signal
 
+(** The TYPED live query over a collection declaration: the same reactive signal as {!find},
+    decoded at the boundary (malformed docs skipped + warned once — the UI never crashes on foreign
+    garbage); [~where] is a typed clause list read as AND. The component-facing read of the typed
+    collection layer. *)
+val find_c :
+  t -> 'a Def.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
+
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes as the server pushes changes. Read it with {!Fur.get} inside a component. *)
 val find :

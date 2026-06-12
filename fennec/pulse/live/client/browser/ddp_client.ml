@@ -591,6 +591,7 @@ let call_m t (m : ('a, 'r) Method.t) (a : 'a) : ('r, string * string) result opt
 let publish ~name (_ : Bson.t list -> (string * Bson.t list) list) = ignore name
 
 let find t = Live.find t.live
+let find_c t = Live.find_c t.live
 let aggregate t = Live.aggregate t.live
 
 (* offline affordances: the connection state and the buffered-write count, as Fur signals *)

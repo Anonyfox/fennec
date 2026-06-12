@@ -330,6 +330,37 @@ let%test "stub replay: a persisted (name, params, seed) re-runs the stub with by
   | [| d |] -> B.get d "_id" = Some (B.String predicted) && B.get d "title" = Some (B.String "hello")
   | _ -> false
 
+(* ── the TYPED client boundary: live typed reads (skip policy) + typed validating stubs ── *)
+type item = { id : string; label : string }
+
+let item_def =
+  Def.v "items_t"
+    Codec.(
+      seal
+        (record (fun id label -> { id; label })
+        |> field doc_id (fun x -> x.id)
+        |> field (req "label" (min_len 2 string)) (fun x -> x.label)))
+
+let%test "find_c: typed live signal decodes the cache, skips foreign garbage, recomputes reactively" =
+  let lv = Live.create () in
+  let r = Live.find_c lv item_def () in
+  MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"1" ~fields:[ ("label", B.str "Alpha") ];
+  MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"junk" ~fields:[ ("label", B.int 9) ];
+  (match Fur.peek r with [| { id = "1"; label = "Alpha" } |] -> true | _ -> false)
+  && (MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"2" ~fields:[ ("label", B.str "Beta") ];
+      Array.length (Fur.peek r) = 2)
+
+let%test "Sim.insert_t: validates with the server's checks; valid values mint the seeded id" =
+  let s = MS.create () in
+  let w = Fennec_pulse_live.Sim.writes s ~sim:"sim:t" ~seed:"sd" in
+  (match Fennec_pulse_live.Sim.insert_t w item_def { id = ""; label = "x" } with
+  | exception Failure m -> String.length m > 0 (* the stub-failure containment will log this *)
+  | _ -> false)
+  && (let id = Fennec_pulse_live.Sim.insert_t w item_def { id = ""; label = "Good" } in
+      let predicted = Query.Id.random_id ~rng:(Method.Seed.stream ~seed:"sd" ~scope:"items_t") () in
+      id = predicted
+      && match Fur.peek (Live.find_c (Live.create ()) item_def ()) with [||] -> true | _ -> false)
+
 (* ── server-wins under BUGGY stubs: the reveal (sub_stopped) is the arbiter, whatever the stub did ── *)
 let%test "server-wins: a PHANTOM optimistic insert (server never created it) vanishes at reveal" =
   let s = MS.create () in

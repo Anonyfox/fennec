@@ -12,7 +12,7 @@
   fennec.fur
   fennec-mongo.bson
   fennec-mongo.query
-  fennec.pulse.method
+  fennec.pulse.method fennec.pulse.collection fennec.pulse.codec
   js_of_ocaml)
  (preprocess
   (pps js_of_ocaml-ppx))

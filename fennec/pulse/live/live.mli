@@ -24,6 +24,12 @@ val store : t -> Merge_store.t
     dedup is built in; the scheduler only decides WHEN the batch runs. *)
 val set_scheduler : ((unit -> unit) -> unit) -> unit
 
+(** The TYPED reactive read over a collection declaration — the same live signal as {!find},
+    decoded at the boundary with the skip policy (malformed docs skipped, warned once per id; the
+    UI never crashes on foreign garbage). [~where] is a clause list read as AND. *)
+val find_c :
+  t -> 'a Def.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
+
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;
     the underlying watch is torn down on the component's cleanup.

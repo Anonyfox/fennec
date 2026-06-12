@@ -11,6 +11,6 @@
   fennec.pulse.live
   fennec.fur
   fennec-mongo.bson
-  fennec.pulse.method)
+  fennec.pulse.method fennec.pulse.collection fennec.pulse.codec)
  (flags
   (:standard -w -a)))

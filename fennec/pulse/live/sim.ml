@@ -13,6 +13,17 @@
 
 module MS = Merge_store
 
+(* the TYPED optimistic insert: the stub validates with the SAME battery the server enforces —
+   instant offline form errors with zero duplicated logic; an invalid value raises (caught by the
+   stub-failure containment: logged, simulation skipped, the server still decides) *)
+let insert_t (w : Method.sim_writes) (def : 'a Def.t) (v : 'a) : string =
+  match Codec.encode_checked (Def.codec def) v with
+  | Ok (Bson.Document kvs) ->
+      let kvs = List.filter (function "_id", Bson.String "" -> false | _ -> true) kvs in
+      w.Method.insert (Def.name def) (Bson.Document kvs)
+  | Ok _ -> invalid_arg "Sim.insert_t: codec must encode a document"
+  | Error es -> failwith ("invalid document: " ^ Codec.errors_to_string es)
+
 let writes (box : MS.t) ~sim ~seed : Method.sim_writes =
   MS.begin_sim box sim;
   let streams : (string, int -> int) Hashtbl.t = Hashtbl.create 4 in

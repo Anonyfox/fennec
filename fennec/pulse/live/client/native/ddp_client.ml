@@ -65,4 +65,5 @@ let call_m _ (m : ('a, 'r) Method.t) (a : 'a) :
   ignore (m, a);
   Fur.signal None
 let find t = Live.find t.live
+let find_c t = Live.find_c t.live
 let aggregate t = Live.aggregate t.live
