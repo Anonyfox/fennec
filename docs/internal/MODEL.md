@@ -13,17 +13,26 @@ One model module, by convention, shared (compiles into server and browser bundle
 OCaml record plus one deriving attribute (the official surface):
 
 ```ocaml
-(* store/task.ml — this is the WHOLE model *)
-type t = {
-  id    : string;       [@id]                                       (* "_id", ObjectId coerced *)
-  title : string;       [@check fun s -> String.length s <= 200]
-  done_ : bool;         [@key "done"]
-  tags  : string list;  [@default []]                               (* absent decodes as [] *)
-}
+(* store/task.ml — this is the WHOLE model (common case: ZERO field annotations) *)
+type t = { id : string; title : string; done_ : bool; tags : string list }
 [@@fennec.model "tasks"]
 
 let () = Model.index model [ Index.asc Fields.done_; Index.unique [ Index.asc Fields.title ] ]
 ```
+
+Convention over annotation — the deriver applies the rules a reader would guess:
+
+- a field named `id`/`_id` maps to `"_id"` with ObjectId coercion (no [@id] needed);
+- a trailing underscore is ALWAYS an OCaml keyword escape (`done_`, `type_`, `end_` — `done` is a
+  reserved word, the underscore is the standard community convention, not ours), so the deriver
+  auto-strips it for the wire key: `done_` → `"done"`. House style: prefer non-colliding domain
+  words first (`completed` beats `done_`); escape only when the vocabulary genuinely collides;
+- `option` fields decode absent as `None`; `list` fields decode absent as `[]` (Mongo-idiomatic);
+- the collection name stays an EXPLICIT string — deriving it from the module name needs English
+  pluralization inflection, a Rails scar (surprising on person/status) we refuse to import.
+
+Attributes exist only for deviations: `[@check fun s -> ...]` (validation), `[@key "wireName"]`
+(a wire key that isn't a keyword escape), `[@default v]` (a non-obvious default).
 
 One writing site, zero duplication, and the record stays 100% vanilla OCaml: dot access, pattern
 matching, merlin hover/completion all work natively (no synthetic types). The deriver — one small
@@ -140,7 +149,8 @@ with a worse replacement already in the stack.
    |> seal`). (Pure; heavy unit tests.)
 2. **The `[@@fennec.model]` deriver** — a small framework-owned ppxlib rewriter targeting the
    record-builder; expansion golden-tested (ppx output = the hand-written form, byte-compared);
-   attributes: [@id] [@key] [@check] [@default].
+   convention rules (id → "_id", trailing-underscore strip, option/list absent-tolerance) tested
+   alongside the deviation attributes ([@key] [@check] [@default]).
 3. **`$jsonSchema` derivation** (pure generation, golden tests) + minimongo write-validation hook
    + driver `collMod` install at define-time.
 4. **`Model.define` + typed reads/writes server-side** over the existing Collection, `Q`/`M`/
