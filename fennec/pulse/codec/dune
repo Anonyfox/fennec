@@ -1,0 +1,12 @@
+; The SHAPE LANGUAGE — Pulse's foundation for saying what a value IS. One GADT type representation
+; inside; plain combinators outside. From one declaration the framework derives: the codec
+; (validating decode with path-collected errors), encode-side validation, normalizers, derived
+; pretty-printing, and a neutral introspection [view] that downstream renderers ($jsonSchema in the
+; collection lib, OpenAPI later, the admin UI later) consume without this lib knowing them.
+; Deps: bson only — jsoo-safe, shared verbatim by server and browser. Methods and collections are
+; disjoint consumers that WORK ON shapes; neither owns this. Unwrapped: userland says `Codec.string`.
+(library
+ (name fennec_pulse_codec)
+ (public_name fennec.pulse.codec)
+ (wrapped false)
+ (libraries fennec-mongo.bson))

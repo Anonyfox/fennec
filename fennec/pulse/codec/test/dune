@@ -1,0 +1,5 @@
+; The shape language's unit battery — pure, native, exhaustive over the catalog.
+(test
+ (name test_codec)
+ (libraries fennec.pulse.codec fennec-hunt.unit)
+ (preprocess (pps fennec-hunt.ppx)))
