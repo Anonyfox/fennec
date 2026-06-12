@@ -104,10 +104,44 @@ that one representation the framework derives, now and later:
 4. Later, for free: **OpenAPI emission** from method declarations, and the **admin UI** (a generic
    live CRUD screen needs exactly: field names, types, and codecs — the Django-admin primitives).
 
-Predicates (`Codec.check`) split deliberately: structural facts go into `$jsonSchema`; arbitrary
-checks run at the boundary on BOTH sides — which means **an optimistic stub validates with the
-same check the server enforces**: instant, offline-capable form errors with zero duplicated
-validation logic. Ecto changesets without the second language.
+5. **Pretty-printing, derived by default**: the ty knows every field name and shape, so each model
+   gets `pp`/`show` for free — nested documents, lists, options, all indented. Userland logging is
+   `Log.info (Task.show task)`, no annotation, no Format incantations; `Bson.pp` gets the same
+   nested treatment for the dynamic layer, and `Decode_error.pp` renders validation failures
+   readably (the agent fastlane surfaces the same rendering).
+
+## Validation semantics — opt-in, stackable, airtight by path
+
+Checks are opt-in (`[@check]` / `Codec.check`) and STACK: multiple attributes (or nested combinator
+checks) compose in declaration order, each with its own message. Two kinds, deliberately:
+
+- **Structured refinements** — `min_len`/`max_len`/`pattern`/`min`/`max`/`one_of` — carry their
+  meaning in the ty, so they ALSO translate into the mongod `$jsonSchema` validator (minLength,
+  pattern, minimum, enum…): the database itself enforces them against foreign writers.
+- **Arbitrary predicates** — `check (fun v -> ...) ~msg` — run at every app boundary but cannot be
+  pushed into mongod (no lambdas in $jsonSchema). Documented honestly as app-side-only.
+
+Errors COLLECT: validation returns every failing field with its message(s), not first-fail — forms
+need the full list (`Decode_error.t` is a non-empty list of (field path, message)).
+
+Airtight means every path a value can travel is covered — enumerated:
+
+1. **Method args (client → server)**: codec decode runs all checks → a 400/422 naming each failing
+   field, before the handler runs. (Exists today for shape; checks ride the same gate.)
+2. **Server writes** (`Model.insert`/`update`): checks run on ENCODE too — a typed value whose
+   refinements fail raises `Model.Invalid` which the method layer translates to a 422 Result
+   automatically. An invalid value cannot reach the database through the typed layer, period.
+3. **Optimistic stubs**: a stub writing through the model runs the SAME checks — a failing stub is
+   contained by the existing stub-failure machinery (logged, simulation skipped, server decides).
+   For instant form feedback BEFORE calling: `Model.validate model v : (unit, Decode_error.t) result`
+   — the same checks, synchronously, offline-capable, zero duplicated logic.
+4. **Foreign writers** (other processes on the same mongod): structured refinements enforced by the
+   installed `$jsonSchema`; arbitrary predicates are not (named honestly above).
+5. **Reads of legacy/garbage docs**: decode runs checks; a doc that predates a tightened rule
+   surfaces under the skip-count-warn policy — visible in dev, never a silent mis-render.
+
+Ecto changesets without the second language — and unlike changesets, the same declaration validates
+on the client, in the stub, at the wire, in the handler, and (structurally) in the database.
 
 ## Taste decisions (each one a Meteor scar avoided)
 
