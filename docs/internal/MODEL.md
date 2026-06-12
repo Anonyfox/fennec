@@ -6,8 +6,32 @@ themed names are for fennec-original layers, literal names for the Meteor-compat
 Collection / Method / publish / subscribe). The semantic nature of this layer is DECLARATIVE —
 "this is a task, it has this shape, and there is a collection of them" — and `collection` says
 exactly that. No themed umbrella: the deriver generates a per-model module, so userland writes
-`Task.insert` / `Task.find` and never names the machinery's library at all (it lives as
-`fennec.pulse.model`, descriptive, invisible).
+`Task.insert` / `Task.find` and never names the machinery's library at all.
+
+**Code organization (settled — by ontology, not colocation).** Four primitives, two runtime
+"works-on" arrows (methods → collections, publications → collections — app-code relationships,
+never library deps):
+
+- `fennec.data` (NEW, TOP-LEVEL — sibling to core/fur/pulse): `Codec`, the shape language — ty,
+  combinators, checks, field handles, derived pp, introspection. Deps: bson only; jsoo-safe.
+  Shapes describe VALUES and belong to no consumer: methods use them, collections use them, a paw
+  validating a request body may use them. (Codec moves OUT of the method lib — it was born there
+  by historical accident, not ontology.)
+- `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.data.
+- `fennec.pulse` (Reactive) — the dynamic engine and substrate. Unchanged.
+- `fennec.pulse.collection` (NEW, virtual — the Ddp_client pattern): the typed collection runtime.
+  `Q`/`M`/`Index`/`Schema` live HERE (collection vocabulary, meaningless without one), plus the
+  typed verbs delegating to the substrate. Native impl → Reactive.Collection; browser impl → Live
+  reads + sim-writes (the decree preserved). $jsonSchema emission here; its INSTALL rides the
+  backend boot path next to index-ensure. Renderers live with their consumers — fennec.data only
+  exposes introspection (a future OpenAPI renderer lives with the API surface, not in data).
+- `fennec.pulse.collection.ppx` — the [@@fennec.collection] deriver targeting the above.
+
+**Named open design point (phase 4):** Reactive is a functor; the generated Task module is SHARED
+code and cannot reference the server's RData instance. The deriver output therefore splits: the
+pure part (codec/fields/name/schema) is shared and instance-free; the server ATTACHES it to an
+instance at boot (one line, next to publish); the browser binds to the concrete Live client. The
+attach seam gets designed deliberately in that phase, not improvised.
 
 **The generated surface is the Meteor verb set, typed.** The 1:1 Meteor mapping ALREADY EXISTS on
 the dynamic substrate (`Reactive.Collection`: insert, find/cursor (fetch/map/for_each/count/observe),
