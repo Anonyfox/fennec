@@ -9,33 +9,45 @@ layer: **let OCaml play its strengths inside; keep the surface a beginner writes
 
 ## What the dev writes (the entire surface)
 
-One model module, by convention, shared (compiles into server and browser bundle alike):
+One model module, by convention, shared (compiles into server and browser bundle alike) — a PLAIN
+OCaml record plus one deriving attribute (the official surface):
 
 ```ocaml
-(* store/task.ml *)
-type t = { id : string; title : string; done_ : bool; tags : string list }
+(* store/task.ml — this is the WHOLE model *)
+type t = {
+  id    : string;       [@id]                                       (* "_id", ObjectId coerced *)
+  title : string;       [@check fun s -> String.length s <= 200]
+  done_ : bool;         [@key "done"]
+  tags  : string list;  [@default []]                               (* absent decodes as [] *)
+}
+[@@fennec.model "tasks"]
 
-(* field handles: each is BOTH a codec fragment AND a typed reference usable in
-   selectors, modifiers, indexes, and projections *)
-let id    = Codec.doc_id                  (* "_id", String|ObjectId coerced *)
-let title = Codec.req "title" Codec.(check ~msg:"too long" (fun s -> String.length s <= 200) string)
-let done_ = Codec.req "done" Codec.bool
-let tags  = Codec.opt_list "tags" Codec.string   (* absent decodes as [] *)
-
-let model : t Model.t =
-  Model.define "tasks"
-    Codec.(obj4 id title done_ tags
-             ~make:(fun id title done_ tags -> { id; title; done_; tags })
-             ~split:(fun x -> (x.id, x.title, x.done_, x.tags)))
-    ~indexes:[ Index.asc done_; Index.unique [ Index.asc title ] ]
+let () = Model.index model [ Index.asc Fields.done_; Index.unique [ Index.asc Fields.title ] ]
 ```
 
-Yes, the field names appear three times (type, handle, make/split). That is OCaml's irreducible
-cost without ppx — and it is **checked duplication**: any drift between the three is a compile
-error, so it is annoying exactly once (at authoring, which generators and agents do) and safe
-forever. Meteor's SimpleSchema had one writing site and zero static checking — the opposite trade,
-and the one they regretted. We do NOT reach for a deriving ppx: compile speed is a feature
-(hundreds of models downstream), and magic is a tax every reader pays.
+One writing site, zero duplication, and the record stays 100% vanilla OCaml: dot access, pattern
+matching, merlin hover/completion all work natively (no synthetic types). The deriver — one small
+framework-owned ppxlib rewriter (the same machinery the jsoo ppx already links; fennec already owns
+syntax where it pays: mlx, [%%style]) — generates the `Fields` module of typed handles, the
+GADT-backed codec, and the `Model.define`. **The combinators remain the truth; the ppx is only the
+pen**: its expansion is documented, auditable, and hand-writable.
+
+The hand-written fallback (also what the ppx targets) is the record-builder form — linear, one line
+per field, no positional make/split tuples:
+
+```ocaml
+let model = Model.(
+  record (fun id title done_ tags -> { id; title; done_; tags })
+  |> field  "_id"   doc_id        (fun t -> t.id)
+  |> field  "title" string        (fun t -> t.title)
+  |> field  "done"  bool          (fun t -> t.done_)
+  |> fieldd "tags"  (list string) ~default:[] (fun t -> t.tags)
+  |> seal "tasks")
+```
+
+Use it when the deriver doesn't fit (computed fields, exotic codecs); it is the same checked
+machinery, just written by hand. Meteor's SimpleSchema had one writing site and zero static
+checking; we get one writing site WITH the compiler — the trade they wanted and couldn't have.
 
 Everything downstream of `define` is then typed:
 
@@ -124,13 +136,17 @@ with a worse replacement already in the stack.
 ## Phases (bottom-up, each provable)
 
 1. **Codec core rebuild on the GADT `ty`** — same public combinators, plus introspection;
-   field-named errors throughout; `check`; `doc_id`; `opt_list`. (Pure; heavy unit tests.)
-2. **`$jsonSchema` derivation** (pure string/Bson generation, golden tests) + minimongo
-   write-validation hook + driver `collMod` install at define-time.
-3. **`Model.define` + typed reads/writes server-side** over the existing Collection, `Q`/`M`/
+   field-named errors throughout; `check`; `doc_id`; the record-builder form (`record |> field
+   |> seal`). (Pure; heavy unit tests.)
+2. **The `[@@fennec.model]` deriver** — a small framework-owned ppxlib rewriter targeting the
+   record-builder; expansion golden-tested (ppx output = the hand-written form, byte-compared);
+   attributes: [@id] [@key] [@check] [@default].
+3. **`$jsonSchema` derivation** (pure generation, golden tests) + minimongo write-validation hook
+   + driver `collMod` install at define-time.
+4. **`Model.define` + typed reads/writes server-side** over the existing Collection, `Q`/`M`/
    `Index` handles, index ensure at boot.
-4. **Client: typed live `find`/`project` + skip-count-warn policy + typed stub writes.**
-5. **Example app converts to a model module; TERRAIN/METHODS/README updates; the `Bson.get`
+5. **Client: typed live `find`/`project` + skip-count-warn policy + typed stub writes.**
+6. **Example app converts to a model module; TERRAIN/METHODS/README updates; the `Bson.get`
    defensive dance deleted from the example.**
 
 The acceptance bar: the example component contains zero `Bson.get` calls, a field rename is a
