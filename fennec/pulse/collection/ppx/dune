@@ -1,0 +1,11 @@
+; The [@@fennec.collection "name"] deriver — the official surface of the typed collection layer.
+; SEMANTICS-FREE by decree: it generates exactly the hand-written builder form (Fields module +
+; codec + Def), golden-tested for behavioral equality against a hand-written twin. Convention over
+; annotation: id/_id -> doc_id; a trailing underscore is an OCaml keyword escape (stripped for the
+; wire key); list/option tolerate absence. Attributes only for deviations: [@key] [@check].
+(library
+ (name fennec_collection_ppx)
+ (public_name fennec.pulse.collection.ppx)
+ (kind ppx_rewriter)
+ (libraries ppxlib)
+ (preprocess (pps ppxlib.metaquot)))
