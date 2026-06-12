@@ -191,21 +191,89 @@ information; emitting OpenAPI from method declarations is buildable and unbuilt.
 **Where we're at parity in kind, behind in polish:** template/editor DX (SvelteKit, Blazor),
 guides-and-tutorial culture (Rails, Django, Laravel), error-message friendliness.
 
-**Where we're genuinely behind (the post-Accounts roadmap, in rough value order):**
-1. **Generators/scaffolding** — `rails g` is the first-week experience; a `fennec g resource`
-   emitting the Method/handler/component triple is cheap and high-leverage.
-2. **Background jobs** — no queue/retry/schedule story (Sidekiq/Oban/Horizon/Solid Queue all set
-   the bar). Must exist for pro apps.
-3. **Admin UI** — Django's flagship; Pulse's live find + typed methods are exactly the primitives
-   to generate one.
-4. **Multi-node fan-out** — Phoenix PubSub's cluster story; our seam is a Fanout bridge over a
-   shared bus.
-5. **Mailers, file storage, i18n** — the Rails/Laravel batteries we lack.
-6. **OpenAPI emission** from method declarations (the FastAPI lesson).
-7. **Observability** — Actuator-grade metrics/health/tracing OOTB.
-8. **The ecosystem/AI-familiarity deficit** — unfixable by code: LLMs and new hires speak Rails and
-   Next fluently; OCaml+mlx is low-resource. Countermeasures: examples corpus, guides, and DX so
-   regular that little needs to be known.
+**Where we're genuinely behind, with the deliberate ordering:**
+- **Generators/scaffolding** — real gap vs `rails g`, deliberately LAST: generators codify surface,
+  and ours is still moving. Until then the agent fastlane + discover (below) cover the same need.
+- **Background jobs, mailers, storage, i18n, OpenAPI, deeper observability** — later features, not
+  the current story. Named, not forgotten.
+- **Multi-node fan-out — explicit NON-GOAL.** The scaling story is: a high-performance baseline ×
+  vertical scaling on the multicore effects runtime (one process saturates a big box; the observe
+  multiplexer makes live-query cost per-query, not per-viewer). When horizontal is ever needed, it
+  is the boring kind: more servers behind a load balancer — and fennec is unusually good at boring
+  LB because servers are STATELESS per session by design: a client landing on a different node
+  heals completely from client state (resubscribe + delta resync + outbox flush; sticky sessions
+  not required), and with mongod change streams every node observes the database directly — the
+  database IS the bus, no Redis adapter, no cluster protocol.
+- **Resilience model, vs BEAM's "let it crash":** fennec's answer is typed error elimination first,
+  fiber containment second. A method exception → a 500 Result (connection lives); a publication
+  exception → Nosub (client stops loading); a callback exception is contained inside the Fanout
+  drainer; a dead socket tears down its session's observers (proven, RX2). The blast radius of a
+  crash is one fiber/one request — and crucially there are almost no long-lived stateful processes
+  TO supervise, because state lives in collections, not in process heaps. That is the precise
+  counter-position to supervision trees: Phoenix needs them because state lives in processes; we
+  removed the patient instead of building the hospital.
+
+## AI-first development — the deliberate second audience
+
+fennec explicitly optimizes for two developers: the human and the coding agent. Two shipped
+features make the agent a first-class citizen rather than a tolerated guest:
+
+**`fennec dev --agent --attach` (the fastlane).** One guarded post-tool hook bridges the dev loop
+into the agent harness: after every edit, the agent's next model step receives the dev verdict —
+build result, affected surface (backend/component/route/styles/tests), unit-test tally, focused
+compiler diagnostics with a code frame, and last-good serving state. The agent stops tailing logs,
+stops running `dune build` after every edit, stops guessing whether the change took: the framework
+closes its feedback loop natively, deadline-bounded, with `fennec agent status` as cheap recovery.
+
+**`fennec discover "<task>"` (pre-edit orientation).** A source-derived, evidence-backed
+orientation card for task-shaped questions ("build login with signed cookies", "SSR page with a
+client counter"): which public path to use, which examples prove it, what to inspect next. It
+attacks the agent failure mode directly — stale training priors, hallucinated APIs, expensive blind
+`rg` exploration — by replacing familiarity with instrumentation. Because fennec owns its source
+(`.mli` docs, examples, tests, the dune graph), the index is generated truth, not curated prose.
+
+**What this does to the "exotic language" penalty:** the honest assessment. The penalty is real —
+LLMs write Rails and Next from memory; they cannot write mlx from memory. But the penalty's COST
+model changes completely under instrumentation: an agent in a Rails repo writes plausible code and
+discovers wrongness at runtime (if ever); an agent in a fennec repo writes its first attempt from a
+discover card, gets a typed compiler verdict injected within seconds, and converges in one or two
+cycles. Strict types + instant ground-truth feedback is exactly the loop agents thrive in —
+OCaml's strictness flips from adoption liability to vibecoding asset. What remains genuinely
+unsolved: zero-shot generation quality outside the loop (a one-shot snippet on a forum will be
+worse than a one-shot Next snippet), and that is a corpus problem time and examples mitigate, not a
+design problem. No other framework ships a native agent harness; the closest analogs (llms.txt,
+MCP docs servers, repo maps) are docs-entry conventions, not loop closure.
+
+## DX across the scale spectrum — how it actually feels
+
+**Tier 1: ship-fast solo — landing page + a little logic, hours to prod.**
+The honest ranking today: Next+Vercel and Rails 8 win the first hour (`npx create-next-app` /
+`rails new` + a deploy product); fennec has no `create-fennec-app` yet and an opam toolchain warmup,
+so minute 0–30 is slower. From the first deploy on, the order inverts: fennec prod is `scp` one
+static binary to any box — auto-HTTPS (ACME), PWA, offline, multitenancy included — no Vercel bill,
+no node_modules, no Ruby runtime, and the experiment that grows up never hits a rewrite cliff
+(the landing page and the eventual product are the same architecture). Verdict: behind on
+first-hour ceremony, ahead on first-deploy and every hour after.
+
+**Tier 2: the product app — 2–8 people, real users, app-like features.**
+fennec's strongest tier, and it isn't close. The moment a product needs live data + optimistic UI +
+offline — i.e. the moment it becomes an *app* — Next teams assemble the five-library stack and own
+its reconciliation bugs; Rails teams discover Turbo patches don't give them a queryable client
+cache; Phoenix teams write JS hooks for client interactivity and lose state on disconnects. In
+fennec these are the zero-glue baseline, refactors are compiler-walked across the whole vertical,
+and `fennec test` runs unit→browser→system in one command. The day-to-day feel: features are
+mostly *declarations* (a Method, a publish, a component), and the scary parts (sync, conflicts,
+reconnects) are someone else's proven code — ours.
+
+**Tier 3: logic-heavy enterprise platform.**
+The types compound: at hundreds of methods, wire integrity at compile time is the difference
+between refactoring weekly and refactoring never (only Blazor offers this, at WASM-payload and
+SignalR-is-just-transport cost). OCaml's variants + exhaustive matching + functors model gnarly
+domains better than anything in Rails/Django/Laravel-land, and the resilience model above holds
+under the load. The thin parts at this tier are the periphery — jobs/observability/i18n (later
+features) and integration breadth (Kafka/SAP/etc. clients — Java and C# ecosystems are deeper) —
+plus hiring, which the agent-first story partially converts from "find OCaml devs" into "your
+agents are productive on day one, your seniors review."
 
 ## How iteration *feels*, side by side
 
@@ -221,5 +289,7 @@ guides-and-tutorial culture (Rails, Django, Laravel), error-message friendliness
 
 The one-sentence version: **fennec's bet is that the data layer is the framework** — everyone else
 makes it the app's problem (or, in Meteor's case, made it the framework's problem first and stopped
-evolving). The bet's cost is ecosystem loneliness; its payoff is that the hardest parts of a modern
-app (sync, offline, optimism, types across the wire) are guarantees instead of glue.
+evolving). The bet's cost is ecosystem loneliness — which the agent fastlane + discover are built
+to convert from a familiarity problem into an instrumentation problem; its payoff is that the
+hardest parts of a modern app (sync, offline, optimism, types across the wire) are guarantees
+instead of glue, for human and agent developers alike.
