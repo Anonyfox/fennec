@@ -1,4 +1,31 @@
-# MODEL — typed data modeling over collections (design)
+# MODEL — typed collections (design)
+
+**Naming (settled):** the decorator is `[@@fennec.collection]` — VERBATIM Meteor vocabulary, per the
+established house rule ("coming from Meteor, your daily words don't change — only the namespace";
+themed names are for fennec-original layers, literal names for the Meteor-compatible family:
+Collection / Method / publish / subscribe). The semantic nature of this layer is DECLARATIVE —
+"this is a task, it has this shape, and there is a collection of them" — and `collection` says
+exactly that. No themed umbrella: the deriver generates a per-model module, so userland writes
+`Task.insert` / `Task.find` and never names the machinery's library at all (it lives as
+`fennec.pulse.model`, descriptive, invisible).
+
+**The generated surface is the Meteor verb set, typed.** The 1:1 Meteor mapping ALREADY EXISTS on
+the dynamic substrate (`Reactive.Collection`: insert, find/cursor (fetch/map/for_each/count/observe),
+find_one, count, update ~multi ~upsert, remove, aggregate, distinct, transforms) — all direct-style
+Eio, returning plain values, no async/await anywhere. The deriver wraps exactly those verbs per
+model, so call sites read like Meteor with the plural dropped:
+
+```ocaml
+let id = Task.insert { id = ""; title; done_ = false; tags = [] }   (* : string — no await *)
+let open_ = Task.find ~where:Q.[ eq Fields.done_ false ] ()          (* typed cursor *)
+Task.update ~where:Q.[ eq Fields.id id ] M.[ set Fields.done_ true ]
+let n = Task.count ()
+```
+
+Client side, the decree holds unchanged: typed READS everywhere (`Task.find` is the live typed
+query over the cache); WRITES go through methods — `Task.insert` exists server-side and inside
+optimistic stubs (the sim variant), never as a free client write (Meteor's client-side
+collection.insert was the allow/deny path we banned).
 
 Status: **design, pre-implementation.** The last untyped hole in the vertical: today every userland
 touchpoint speaks `Bson.t` — field names as bare strings, per-component defensive matching, silent
@@ -15,9 +42,9 @@ OCaml record plus one deriving attribute (the official surface):
 ```ocaml
 (* store/task.ml — this is the WHOLE model (common case: ZERO field annotations) *)
 type t = { id : string; title : string; done_ : bool; tags : string list }
-[@@fennec.model "tasks"]
+[@@fennec.collection "tasks"]
 
-let () = Model.index model [ Index.asc Fields.done_; Index.unique [ Index.asc Fields.title ] ]
+let () = Collection.index collection [ Index.asc Fields.done_; Index.unique [ Index.asc Fields.title ] ]
 ```
 
 Convention over annotation — the deriver applies the rules a reader would guess:
