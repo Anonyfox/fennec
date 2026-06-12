@@ -1,0 +1,5 @@
+; Golden tests over the $jsonSchema rendering — pure Bson structure assertions.
+(test
+ (name test_collection)
+ (libraries fennec.pulse.collection fennec.pulse.codec fennec-hunt.unit)
+ (preprocess (pps fennec-hunt.ppx)))
