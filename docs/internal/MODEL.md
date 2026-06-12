@@ -12,19 +12,20 @@ exactly that. No themed umbrella: the deriver generates a per-model module, so u
 "works-on" arrows (methods → collections, publications → collections — app-code relationships,
 never library deps):
 
-- `fennec.data` (NEW, TOP-LEVEL — sibling to core/fur/pulse): `Codec`, the shape language — ty,
-  combinators, checks, field handles, derived pp, introspection. Deps: bson only; jsoo-safe.
-  Shapes describe VALUES and belong to no consumer: methods use them, collections use them, a paw
-  validating a request body may use them. (Codec moves OUT of the method lib — it was born there
-  by historical accident, not ontology.)
-- `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.data.
+- `fennec.pulse.codec` (NEW sibling under pulse — Pulse IS the data brand, all data lives under
+  it): `Codec`, the shape language — ty, combinators, checks, field handles, derived pp,
+  introspection. Deps: bson only; jsoo-safe. Shapes describe VALUES and belong to no consumer
+  WITHIN pulse: methods use them, collections use them — and anything outside pulse (a paw
+  validating a request body) deps this one sub-lib without pulling the engine. (Codec moves OUT of
+  the method lib — it was born there by historical accident, not ontology.)
+- `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.pulse.codec.
 - `fennec.pulse` (Reactive) — the dynamic engine and substrate. Unchanged.
 - `fennec.pulse.collection` (NEW, virtual — the Ddp_client pattern): the typed collection runtime.
   `Q`/`M`/`Index`/`Schema` live HERE (collection vocabulary, meaningless without one), plus the
   typed verbs delegating to the substrate. Native impl → Reactive.Collection; browser impl → Live
   reads + sim-writes (the decree preserved). $jsonSchema emission here; its INSTALL rides the
-  backend boot path next to index-ensure. Renderers live with their consumers — fennec.data only
-  exposes introspection (a future OpenAPI renderer lives with the API surface, not in data).
+  backend boot path next to index-ensure. Renderers live with their consumers — pulse.codec only
+  exposes introspection (a future OpenAPI renderer lives with the API surface, not in codec).
 - `fennec.pulse.collection.ppx` — the [@@fennec.collection] deriver targeting the above.
 
 **Named open design point (phase 4):** Reactive is a functor; the generated Task module is SHARED
