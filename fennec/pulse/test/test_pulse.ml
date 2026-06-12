@@ -398,4 +398,66 @@ let%test "mux: a publication feeding Cursors [] is a no-op stream (ready, zero b
   s.stop ();
   ok && R.live_query_count () = before
 
+(* ── the TYPED collection runtime: validating writes, skip-policy reads, Q/M end to end ── *)
+module T = Fennec_pulse.Typed.Make (R)
+
+type task = { id : string; title : string; done_ : bool; tags : string list }
+
+let f_id = Codec.doc_id
+let f_title = Codec.(req "title" (min_len 3 (trim string)))
+let f_done = Codec.(req "done" bool)
+let f_tags = Codec.(opt_list "tags" (slug string))
+
+let task_codec =
+  Codec.(
+    seal
+      (record (fun id title done_ tags -> { id; title; done_; tags })
+      |> field f_id (fun t -> t.id)
+      |> field f_title (fun t -> t.title)
+      |> field f_done (fun t -> t.done_)
+      |> field f_tags (fun t -> t.tags)))
+
+let task_def = Def.v "ttasks" task_codec ~indexes:[ Index.asc f_done ]
+
+let%test "typed: insert validates (Invalid collects); find round-trips; Q/M compile to real queries" =
+  let h = T.attach task_def (Minimongo.create ()) in
+  let id1 = T.insert h { id = ""; title = "  Buy milk "; done_ = false; tags = [ "errand" ] } in
+  let _ = T.insert h { id = ""; title = "Walk dog"; done_ = true; tags = [] } in
+  (match T.insert h { id = ""; title = "x"; done_ = false; tags = [ "Bad Tag" ] } with
+  | exception T.Invalid es -> List.length es = 2 (* short title AND non-slug tag — both collected *)
+  | _ -> false)
+  && (match T.find h ~where:Q.[ eq f_done false ] () with
+     | [ t ] -> t.title = "Buy milk" (* the trim normalizer ran on the write *) && t.id = id1
+     | _ -> false)
+  && (match T.find h ~where:[ Q.has f_tags "errand" ] () with [ t ] -> t.id = id1 | _ -> false)
+  && T.count h () = 2
+  && (T.update h ~where:Q.[ eq f_id id1 ] M.(all [ set f_done true; push f_tags "today" ]) = 1
+     && match T.find_one h ~where:Q.[ eq f_id id1 ] () with
+        | Some t -> t.done_ && t.tags = [ "errand"; "today" ]
+        | None -> false)
+  && T.remove h ~where:Q.[ eq f_done true ] = 2
+
+let%test "typed: the skip policy — foreign garbage is skipped by find, surfaced by find_results" =
+  let h = T.attach task_def (Minimongo.create ()) in
+  let _ = T.insert h { id = ""; title = "Good one"; done_ = false; tags = [] } in
+  (* a foreign writer pokes garbage straight into the substrate (the escape hatch) *)
+  let _ = R.Collection.insert (T.collection h) (B.doc [ ("title", B.int 42) ]) in
+  List.length (T.find h ()) = 1
+  && (let bad =
+        List.filter_map (function Error es -> Some es | Ok _ -> None) (T.find_results h ())
+      in
+      match bad with [ es ] -> List.exists (fun e -> e.Codec.path = [ "title" ]) es | _ -> false)
+  && T.count h () = 2 (* count is the substrate's truth — the skip is a READ policy, not a lie *)
+
+let%test "typed: cursor plugs into publish unchanged (the publication sees the typed window)" =
+  let h = T.attach task_def (Minimongo.create ()) in
+  let _ = T.insert h { id = ""; title = "Open A"; done_ = false; tags = [] } in
+  let _ = T.insert h { id = ""; title = "Done B"; done_ = true; tags = [] } in
+  R.publish "typed_open" (fun _ -> R.Cursor (T.cursor h ~where:Q.[ eq f_done false ] ()));
+  let seen = ref [] in
+  let han = R.run_publication "typed_open" ~params:[] ~on:(fun ev ->
+      match ev with Reactive.Added { id; _ } -> seen := id :: !seen | _ -> ()) in
+  han.Reactive.stop ();
+  List.length !seen = 1
+
 let () = exit (Fennec_hunt_unit.run ())

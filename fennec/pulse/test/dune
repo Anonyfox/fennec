@@ -6,6 +6,8 @@
  (libraries
   fennec.pulse
   fennec.pulse.method
+  fennec.pulse.collection
+  fennec.pulse.codec
   fennec-mongo.bson
   fennec-mongo.minimongo
   fennec-mongo.query

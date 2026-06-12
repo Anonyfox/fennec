@@ -466,6 +466,17 @@ let obj_of_builder (b : ('r, 'r) builder) : 'r obj =
 let seal (b : ('r, 'r) builder) : 'r t = of_ty (TObj (obj_of_builder b))
 let doc_id = req "_id" id
 
+(* accessors for the collection vocabulary (Q/M/Index build on field handles) *)
+let field_name f = f.fld_name
+let field_enc f v = enc_ty f.fld_ty v
+
+(* encode ONE element of a list field — total through any check/norm/conv wrapping: encode the
+   singleton list and unwrap (the list encoder is structural) *)
+let field_elem_enc (f : 'a list field) (v : 'a) : Bson.t =
+  match enc_ty f.fld_ty [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Codec.field_elem_enc"
+
+let field_validate f v = match check_ty f.fld_ty v with [] -> Ok () | es -> Error (List.map (at f.fld_name) es)
+
 (* ---- variants (tagged unions over a discriminator field) ----------------------------- *)
 
 type 'r vcase = 'r case

@@ -140,6 +140,19 @@ val dft : string -> 'a t -> 'a -> 'a field
 (** The ["_id"] field ([req "_id" id]). *)
 val doc_id : string field
 
+(** {2 Field accessors — what the collection vocabulary (Q/M/Index) builds on} *)
+
+val field_name : 'a field -> string
+
+(** Encode a value as this field stores it (checks/norms/convs respected). *)
+val field_enc : 'a field -> 'a -> Bson.t
+
+(** Encode ONE element of a list field (for [$push]-style modifiers). *)
+val field_elem_enc : 'a list field -> 'a -> Bson.t
+
+(** Run the field's own checks against a value (errors carry the field name). *)
+val field_validate : 'a field -> 'a -> (unit, error list) result
+
 type ('r, 'k) builder
 
 val record : 'k -> ('r, 'k) builder
