@@ -4,6 +4,6 @@
 (library
  (name site_store)
  (wrapped false)
- (libraries fennec.fur fennec.pulse.method fennec-mongo.bson)
+ (libraries fennec.fur fennec.pulse.method fennec.pulse.codec fennec.pulse.collection fennec.pulse.live fennec-mongo.bson)
  (flags
   (:standard -w -a -open Fur)))

@@ -59,21 +59,23 @@ let realtime_ddp = RT.paw ~path:"/ddp" ()
 (* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method.
    [Dynamic.from_env] is the whole backend choice — real mongo when the CLI's --mongo flag exported
    MONGO_URL, else the in-memory engine — no config branch here. *)
+module T = Fennec_pulse.Typed.Make (RData)
+
 let setup_realtime ~sw =
   let backend = D.from_env ~sw ~db:"fennec_example" ~name:"tasks" () in
-  let tasks = RData.Collection.create ~name:"tasks" backend in
-  List.iter
-    (fun t -> ignore (RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str t) ])))
-    [ "Buy milk"; "Walk the dog" ];
-  RData.publish "tasks" (fun _params -> RData.Cursor (RData.cursor tasks ()));
+  (* the TYPED collection: the shared declaration (Task.collection) bound to this instance — writes
+     validate (an invalid value cannot reach the database), reads decode with the skip policy *)
+  let tasks = T.attach Task.collection backend in
+  List.iter (fun title -> ignore (T.insert tasks { Task.id = ""; title })) [ "Buy milk"; "Walk the dog" ];
+  RData.publish "tasks" (fun _params -> RData.Cursor (T.cursor tasks ()));
   (* SSR: hand the same docs to the SSR reactive so the first server-rendered paint already includes
      the tasks; the browser hydrates them flicker-free, then the live subscription re-confirms. *)
-  Ddp_client.publish ~name:"tasks" (fun _ -> [ ("tasks", RData.Collection.fetch (RData.Collection.find tasks ())) ]);
-  (* the TYPED method: the handler attaches to the SHARED declaration (Site_methods.add_task — the
-     same value the browser calls through), so name/args/result can never drift; a malformed call is
-     a 400 before this handler runs (the codec is the validation) *)
-  RData.handle Site_methods.add_task (fun _inv title ->
-      RData.Collection.insert tasks (Bson.doc [ ("title", Bson.str title) ]))
+  Ddp_client.publish ~name:"tasks" (fun _ ->
+      [ ("tasks", RData.Collection.fetch (RData.Collection.find (T.collection tasks) ())) ]);
+  (* the TYPED method over the TYPED collection: handler and stub share the declarations, so a
+     renamed field/method is a compile error in every file; a malformed call is a 400 before this
+     handler runs, and an invalid document raises before it writes *)
+  RData.handle Site_methods.add_task (fun _inv title -> T.insert tasks { Task.id = ""; title })
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)

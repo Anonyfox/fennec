@@ -52,7 +52,11 @@ query over the cache); WRITES go through methods — `Task.insert` exists server
 optimistic stubs (the sim variant), never as a free client write (Meteor's client-side
 collection.insert was the allow/deny path we banned).
 
-Status: **design, pre-implementation.** The last untyped hole in the vertical: today every userland
+Status: **phases 1–3, 5, 6 BUILT and proven** (fennec.pulse.codec GADT core · Schema · Q/M/Index/Def
++ Typed.Make server runtime · find_c/Sim.insert_t client boundary · the example converted — zero
+Bson.get in the component, full vertical through the browser e2e). Remaining: the [@@fennec.collection]
+deriver (P4 — generates the hand-written form the example now demonstrates) and the mongod
+validator/index INSTALL on the driver boot path (seam noted in Def.validator). Originally: The last untyped hole in the vertical: today every userland
 touchpoint speaks `Bson.t` — field names as bare strings, per-component defensive matching, silent
 drift on rename. This was Meteor's forever-weak spot (simple-schema / collection2 / astronomy: three
 generations of runtime bolt-ons fighting the absence of types, each wrapping writes and each with
