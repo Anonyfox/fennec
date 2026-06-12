@@ -143,6 +143,69 @@ Airtight means every path a value can travel is covered — enumerated:
 Ecto changesets without the second language — and unlike changesets, the same declaration validates
 on the client, in the stub, at the wire, in the handler, and (structurally) in the database.
 
+## The validation catalog — exhaustive, by type
+
+Every entry is a GADT node: composable, stackable, error-collecting, and translated into the mongod
+`$jsonSchema` where the column says so. Conveniences are named presets of the same nodes.
+
+| need | surface | $jsonSchema |
+|---|---|---|
+| string length / emptiness | `[@min_len n]` `[@max_len n]` `[@non_empty]` | minLength/maxLength |
+| string shape | `[@pattern "^[a-z0-9-]+$"]`; presets `[@email]` `[@url]` `[@slug]` | pattern |
+| enumeration | `[@one_of ["draft";"live"]]` | enum |
+| normalization | `[@trim]` `[@lowercase]` — runs BEFORE checks, on decode and encode | — |
+| numeric bounds | `[@min n]` `[@max n]` `[@positive]` `[@non_negative]` `[@multiple_of n]` | minimum/maximum/multipleOf |
+| float sanity | nan/inf REJECTED BY DEFAULT (`[@allow_nonfinite]` to opt out) | bsonType double |
+| dates | `int64` ms via `Codec.date`; `[@min]`/`[@max]`, `[@past]`/`[@future]` presets | minimum/maximum |
+| list shape | `[@min_items n]` `[@max_items n]` `[@unique_items]` | minItems/maxItems/uniqueItems |
+| list elements | element ty carries its own checks — composes for free | items |
+| optional keys | `'a option` — absent OR null decodes `None`; `None` encodes as KEY OMITTED (Mongo-idiomatic); checks apply to `Some` | required omission |
+| dynamic-key maps | `string String_map.t` (Mongo subdocs as dicts); `[@values <check>]` per value | additionalProperties |
+| nested records | a `[@@fennec.record]` type used as a field — recursive, errors carry the full path ("address.zip: …") | properties (recursive) |
+| polymorphic docs | OCaml VARIANTS over a discriminator: `[@@fennec.variant ~tag:"kind"]` — exhaustive matching on doc kinds, the OCaml-strength move | oneOf per case |
+| cross-field rules | record-level `[@@check fun t -> pred, "msg"]` (stackable) | — |
+| anything else | `[@check fun v -> pred]` with `~msg` | — |
+
+Named NON-members (each has a better home): **uniqueness** → `Index.unique` (a DB guarantee, not a
+predicate); **foreign-key existence** → app logic in the handler (a codec check must stay pure —
+no IO); **authorization** → methods (the blessed path, METHODS.md).
+
+The one worked example using most of the catalog:
+
+```ocaml
+(* store/listing.ml *)
+type address = { street : string; zip : string [@pattern "^[0-9]{5}$"]; country : string }
+[@@fennec.record]                                  (* nested: codec + fields, no collection *)
+
+type pricing =
+  | Fixed   of { amount : float [@positive] }
+  | Auction of { floor : float [@positive]; min_step : float [@min 0.5] }
+[@@fennec.variant ~tag:"kind"]                     (* {"kind":"fixed","amount":9.99} on the wire *)
+
+type t = {
+  id : string;
+  title : string;                 [@trim] [@min_len 3] [@max_len 120]
+  slug : string;                  [@slug]
+  contact : string;               [@lowercase] [@email]
+  status : string;                [@one_of ["draft"; "live"; "sold"]]
+  price : pricing;
+  tags : string list;             [@max_items 10] [@unique_items]
+  description : string option;    (* the Mongo-over-time field: absent in old docs → None *)
+  address : address;
+  starts : int64;                 [@future]
+  ends : int64;
+}
+[@@fennec.model "listings"]
+[@@check fun t -> t.starts < t.ends, "starts must precede ends"]
+```
+
+What this buys, concretely: `Model.validate model v` returns EVERY violation with its path
+(`address.zip: must match ^[0-9]{5}$` · `tags: duplicate items` · `starts must precede ends`);
+the same list renders in the stub (instant offline form errors), at the method gate (422), and in
+the handler; mongod itself rejects a foreign write with a bad zip or an unknown status; and
+`Listing.show v` pretty-prints the whole nested thing for free. Matching on `price` is exhaustive:
+add a `Subscription` case and the compiler lists every site that must handle it.
+
 ## Taste decisions (each one a Meteor scar avoided)
 
 - **`Model` is the recommended path; `Collection` remains the dynamic substrate** and the escape
