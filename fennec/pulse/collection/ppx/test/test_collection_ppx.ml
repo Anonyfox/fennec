@@ -181,4 +181,18 @@ let%test "[%q] / [%sort] / [%set]: expressions expand to the typed Q/Sort/M (sam
      = Sort.to_bson Sort.(by [ desc Fields.priority; asc Fields.title ])
   && M.to_bson [%set status = "done"] = M.to_bson M.(all [ set Fields.status "done" ])
 
+(* ── [%index] DSL — Meteor's Tasks.createIndex, typed, no Def/Index/asc/Fields tokens ── *)
+module Indexed = struct
+  type t = { id : string; email : string; team : string; rank : int } [@@deriving collection ~name:"indexed"]
+  let () = [%index unique email; team; desc rank; unique (team, email)]
+end
+
+let%test "[%index]: declares the right indexes (unique/asc/desc/compound) on the collection" =
+  let names = List.sort compare (List.map Index.name (Def.all_indexes Indexed.collection)) in
+  names = List.sort compare
+    [ Index.(name (unique (asc Indexed.Fields.email)));
+      Index.(name (asc Indexed.Fields.team));
+      Index.(name (desc Indexed.Fields.rank));
+      Index.(name (unique (compound [ asc Indexed.Fields.team; asc Indexed.Fields.email ]))) ]
+
 let () = exit (Fennec_hunt_unit.run ())

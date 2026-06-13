@@ -37,6 +37,10 @@ startup), but has three real gaps we close.
 
 ```ocaml
 type t = { id : string; email : string; team : string } [@@deriving collection ~name:"users"]
-let () = Index.declare collection Index.[ unique (asc Fields.email); asc Fields.team ]
+let () = [%index unique email; team]
 ```
-That's the whole story — declared once, reconciled at boot, enforced in-memory and in mongod.
+The `[%index …]` DSL (sibling of `[%q]`/`[%sort]`) reads bare field names: a field alone is an
+ascending single-key index, `unique x` marks it unique, `desc x` descends, a tuple `(a, b)` is a
+compound key — no `Def`/`Index`/`asc`/`Fields` tokens. It expands to the typed `Def.index collection
+[ … ]` (the hand-written escape, still available). That's the whole story — declared once,
+reconciled at boot, enforced in-memory and in mongod.

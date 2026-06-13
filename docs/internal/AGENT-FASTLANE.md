@@ -1,9 +1,13 @@
 # Agent Fastlane Dev Loop
 
-Fennec's human `fennec dev` loop is already the source of truth for build
-state, last-good serving, reload kind, affected surface, diagnostics, and unit
-test results. The agent fastlane adds one bridge: a post-tool hook can block on
-that dev-loop verdict and inject it into the next model step.
+Fennec's human `fennec dev` loop is already the source of truth for application
+build state, last-good serving, reload kind, affected surface, diagnostics, and
+unit test results. The agent fastlane adds one bridge: a post-tool hook can
+block on that dev-loop verdict and inject it into the next model step.
+
+Scope: this is for applications being developed with Fennec. It is not the
+framework-internal loop for editing this repository; Fennec framework and
+monorepo work uses direct focused `dune build` / `dune runtest` checks.
 
 The normal path is intentionally small:
 
@@ -19,11 +23,11 @@ repositories. Internally the installed hook runs:
 fennec agent hook --timeout 12
 ```
 
-After that, the agent edits normally. The first edit that reaches the hook
+After that, the agent edits the application normally. The first edit that reaches the hook
 injects a post-edit model block starting with
 `Fennec dev feedback after this tool`. Agents should consume that block as the
 dev verdict and should not tail logs, run `dune build`, run `dune runtest`, or
-use explicit wait commands after every edit.
+use explicit wait commands after every application edit.
 
 ## Hook Contract
 
@@ -133,8 +137,8 @@ fennec agent hook --timeout 12
 ```
 
 Interactive hook-capable sessions then get true evented feedback for native
-edits. Agents should treat that injected feedback as the normal compile/test
-signal, not add ad-hoc build/test probes after every edit.
+application edits. Agents should treat that injected feedback as the normal
+compile/test signal, not add ad-hoc build/test probes after every application edit.
 
 Compatibility note from local verification on 2026-06-09:
 
@@ -162,7 +166,7 @@ the same:
 
 ## Mechanical Verification
 
-Run focused tests after changing the event journal or generated guide:
+Run focused direct Dune tests after changing the event journal or generated guide:
 
 ```sh
 dune runtest cli/dev

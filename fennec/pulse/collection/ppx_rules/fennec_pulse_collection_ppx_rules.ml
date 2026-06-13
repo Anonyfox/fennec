@@ -374,6 +374,37 @@ let sort_expander =
       let keys = match e.pexp_desc with Pexp_tuple es -> List.map key es | _ -> [ key e ] in
       [%expr Sort.by [%e Ast_builder.Default.elist ~loc keys]])
 
+(* [%index unique email; title; desc created; unique (team, slug)] — declares the model's indexes,
+   reading bare field names (resolved against Fields in scope, like the other DSLs). A bare field is
+   an ascending single-key index; [unique x] marks it unique; [desc x] descends; a TUPLE is a
+   compound key. Expands to [Def.index collection [ … ]] — no Def/Index/asc/Fields tokens visible. *)
+let index_expander =
+  Extension.declare "index" Extension.Context.expression Ast_pattern.(single_expr_payload __)
+    (fun ~loc ~path:_ e ->
+      let module B = Ast_builder.Default in
+      let key e =
+        (* one key of an index → Index.asc/desc Fields.f *)
+        match e.pexp_desc with
+        | Pexp_ident { txt = Lident _; _ } -> [%expr Index.asc [%e field_handle ~loc (segs_of_field e)]]
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "desc"; _ }; _ }, [ (_, f) ]) ->
+            [%expr Index.desc [%e field_handle ~loc (segs_of_field f)]]
+        | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%index: a key is a field name or `desc field`"
+      in
+      let body e =
+        (* the index's key(s): a tuple is a compound key, otherwise a single key *)
+        match e.pexp_desc with
+        | Pexp_tuple es -> [%expr Index.compound [%e B.elist ~loc (List.map key es)]]
+        | _ -> key e
+      in
+      let one e =
+        match e.pexp_desc with
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "unique"; _ }; _ }, [ (_, inner) ]) ->
+            [%expr Index.unique [%e body inner]]
+        | _ -> body e
+      in
+      let rec items e = match e.pexp_desc with Pexp_sequence (a, b) -> items a @ items b | _ -> [ one e ] in
+      [%expr Def.index collection [%e B.elist ~loc (items e)]])
+
 let set_expander =
   Extension.declare "set" Extension.Context.expression Ast_pattern.(single_expr_payload __)
     (fun ~loc ~path:_ e ->
@@ -390,4 +421,5 @@ let set_expander =
    both fold these into their own [register_transformation ~rules], so a file pays ONE ppx process
    for mlx + tests + the collection deriver + projections + query/sort/set DSLs. *)
 let rules =
-  List.map Context_free.Rule.extension [ fields_expander; q_expander; sort_expander; set_expander ]
+  List.map Context_free.Rule.extension
+    [ fields_expander; q_expander; sort_expander; set_expander; index_expander ]

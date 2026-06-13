@@ -17,7 +17,7 @@ change is a **Beat**; Pulse keeps every client in **Rhythm**. The Meteor-compati
 (publish / subscribe / method / find, Mongo / Minimongo / DDP) is unchanged — only the namespace.
 
 Read alongside: `CLI-INTEROP.md` (the dune↔CLI boundary this extends) and
-`../TEST-CLI.md` (the `:memory:` default that keeps tests mongod-free).
+`../TEST-CLI.md` (the explicit `MONGO_URL=:memory:` test default that keeps tests mongod-free).
 
 ---
 
@@ -71,11 +71,13 @@ in the `fennec` framework** + a **client data layer on Fur** + **CLI help for mo
 1. **Real driver = libmongoc + libbson, statically linked in full** (the `fennec_buildkit`
    pattern: a build rule emits `libfennec_mongoc.a`, the OCaml lib links it via `foreign_archives`
    + `c_library_flags`). It is a *fair* external dep — lean, fast to build, carries its weight.
-   **Minimongo is the default backend for dev and test** (`:memory:`, zero deps, deterministic).
+   **Minimongo is the explicit test/backend-memory path** (`MONGO_URL=:memory:`, zero deps,
+   deterministic); normal runtime does not silently choose memory when `MONGO_URL` is missing.
 2. **mongod is system-installed**, never compiled by us (compiling mongo is far too slow). The CLI
    **helps install / locate / launch** a system mongod (fetch the official prebuilt binary; the
    `ocaml-light/comet` orchestration already does a version of this — we rebuild it better). Real
-   mongo is opt-in; `:memory:` covers the common dev/test loop.
+   Mongo is automatic in `fennec dev` when `mongod` is available and opt-in for real-Mongo tests;
+   `:memory:` covers the default app test loop.
 3. **Latency compensation (optimistic UI) SHIPPED — opt-in per method** (`Method.define ?stub`,
    §9 + METHODS.md). The DX discussion resolved to the explicit stub on a shared typed value;
    the rollback barrier is the merge store's precedence fallthrough behind the write fence. And by
@@ -96,7 +98,7 @@ A self-contained MongoDB story, useful outside fennec, published as one opam pac
 |---|---|---|---|
 | `fennec-mongo.bson` | `Bson` | native + **js** | the value type (closed variant: Null/Bool/Int/Int64/Float/String/Document/Array/ObjectId/Date/Binary/Regex/Decimal128/…); pure, dep-free |
 | `fennec-mongo.query` | `Matcher` `Modifier` `Projection` `Sorter` `Diff` `Id` | native + **js** | the pure query engine: selector ops ($eq/$ne/$gt/$in/$or/$elemMatch/…), update ops ($set/$inc/$push/…), projection, stable sort, doc diffing + LCS for ordered observe, id generation |
-| `fennec-mongo.mem` (**Minimongo**) | `Minimongo` | native + **js** | in-memory Mongo: find/insert/update/remove/count + `observe_changes`/`observe` (simulated events off mutations). Pure. **The default backend.** |
+| `fennec-mongo.mem` (**Minimongo**) | `Minimongo` | native + **js** | in-memory Mongo: find/insert/update/remove/count + `observe_changes`/`observe` (simulated events off mutations). Pure. The explicit `MONGO_URL=:memory:` backend used by default for app tests and browser/client caches. |
 | `fennec-mongo.json` | `Bson_json` | native only | Bson ⇄ MongoDB extended-JSON (Yojson-backed), the C-boundary format |
 | `fennec-mongo.driver` | `Client` `Database` `Collection` `Change_stream` `Live` `Server` | native only | the real driver: libmongoc FFI; CRUD/find/aggregate/count/distinct/indexes/command; change streams → field-level `observe_changes`; single-node replica-set fixture for tests |
 
@@ -200,8 +202,8 @@ Ports `ocaml-light/meteor/core` (transport-agnostic; depends only on the mongo p
   upsert/remove/find/find_one/count, with `id_generation` STRING|MONGO and per-collection/per-cursor
   `transform`, plus `allow`/`deny` + `insert_from_client`), `publish`, `subscribe`, `methods`,
   `ObjectID`, `EJSON`.
-- **Publications** are driven by `observe_changes`: `publish name (fun params -> cursor)` registers a
-  closure (`params` = the subscription's arguments). The DDP transport feeds a session's sink from
+- **Publications** are driven by `observe_changes`: `publish name (fun pub -> cursor)` registers a
+  closure (`pub.user_id` = native Accounts identity, `pub.params` = subscription arguments). The DDP transport feeds a session's sink from
   `run_publication`, which observes each cursor and emits field-level deltas as `beat`s — for BOTH the
   raw `/websocket` and the sockjs paths. **§5b decision (as-built):** the server is *stateless per
   session* — it forwards each observe delta **tagged with the sub id** (extended mode) rather than
@@ -316,13 +318,13 @@ Extends the `CLI-INTEROP.md` contract: **dune builds; the CLI supervises externa
 reacts to outputs.** mongod is exactly such an external process — supervised like the app server is
 today.
 
-- **`fennec test` → `:memory:` by default.** Minimongo, no mongod, deterministic, parallel-safe
-  (unchanged — the CLI's testing default). Real-mongo tests are opt-in (a flag / env that points at a
-  system mongod, with the single-node replica-set fixture for change streams).
-- **`fennec dev`** connects to a local mongod when the app's connection string is `mongodb://…`,
-  else runs `:memory:`. The CLI **helps** with mongod: detect a system install; if absent, fetch the
-  **official prebuilt** binary (SHA-verified, cached — never compiled) and offer to launch a
-  dev-scoped single-node replica set (change streams need an RS). This is a thin `fennec`-side helper
+- **`fennec test` → explicit `MONGO_URL=:memory:` by default.** Minimongo, no mongod,
+  deterministic, parallel-safe. `fennec test --mongo` starts a private single-node replica set per
+  suite and passes that suite its own URL.
+- **`fennec dev`** respects an explicit `MONGO_URL`; otherwise it auto-starts/adopts a local mongod
+  when `mongod` is available, using a stable dev port/data dir. If no mongod is available, the app
+  still boots with a clear missing-Mongo warning and database operations fail when used. This is a
+  thin `fennec`-side helper
   (a `mongo` setup/launch concern), not a build step.
 - **Never in the build graph.** mongod is runtime-only; `dune build` never touches it. The CLI is the
   reactor that starts/stops it for the dev/test lifecycle, same boundary as everything else.
@@ -489,12 +491,12 @@ it stays a clean standalone package.
    fennec-mongo → reactive → DDP → realtime server → jsoo client → merge store → Fur signal → DOM.
 7. **CLI mongod helper** — ✓ **DONE**. `mongo/mongod` (`fennec-mongo.mongod`, native/Unix) is
    the pure spawn+reap lifecycle (`find`/`install_hint`/`start ?replset`/`stop`/`with_ephemeral`;
-   no-dangling via a process registry + at_exit backstop). `fennec dev --mongo` / `fennec test
-   --mongo` (no new verb) launch a managed single-node **replica set** — `Mongo_rs`: `mongod
-   --replSet`, then initiate the set + wait for PRIMARY via the driver's `Server` (reuse mode adopts
-   the running process) — export `MONGO_URL`, and reap it on teardown. So real mongo with working
-   change streams is one flag away; `:memory:` Minimongo stays the default everywhere else. Proven:
-   `fennec test browser --mongo` runs the example's realtime over change streams, no dangling mongod.
+   no-dangling via a process registry + at_exit backstop). `fennec dev` auto-starts/adopts a managed
+   single-node **replica set** when `MONGO_URL` is unset and `mongod` is available; `fennec test
+   --mongo` launches one isolated replica set per suite. `Mongo_rs` runs `mongod --replSet`, then
+   initiates the set + waits for PRIMARY via the driver's `Server` (reuse mode adopts an already
+   running dev process), exports `MONGO_URL`, and reaps owned processes on teardown. Proven:
+   real-mongo tests run over change streams with no dangling mongod.
 8. **(Stretch) latency compensation** — only after the DX discussion (§9).
 
 ---
@@ -506,10 +508,11 @@ All resolved, applying the project's established principles:
 - **libmongoc sourcing — vendor + compile from pinned source** into the static archive (buildkit
   pattern; reproducible, no fetch). (§3.2)
 - **mongod CLI surface — no new verb.** Detection + launch fold into `fennec dev`; `fennec test`
-  stays `:memory:` by default with opt-in real-mongo; install help is a guided prompt. (§8)
-- **Change streams in dev — the CLI auto-stands-up a single-node replica set** when real-mongo is
-  used (change streams require an RS); `:memory:` Minimongo is the default everywhere else and needs
-  none.
+  sets `MONGO_URL=:memory:` by default with opt-in per-suite real Mongo; install help is a guided
+  prompt. (§8)
+- **Change streams in dev — the CLI auto-stands-up a single-node replica set** when `MONGO_URL` is
+  unset and `mongod` is available (change streams require an RS); missing Mongo is warned about and
+  never silently becomes memory.
 - **No npm package — opam only.** The npm bundle was a Melange/React-era need; fennec's jsoo client
   links the pure trio directly into its own client bundle, with **zero added per-edit cost** (dune
   separate compilation caches each lib's JS — measured one-time ~0.46s, hot loop ~0.11s; §3.3). A
