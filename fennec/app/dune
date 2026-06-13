@@ -10,6 +10,9 @@
   fennec.core
   fennec.paw
   fennec.server
+  fennec.fur
+  fennec.web
+  fennec.pulse.codec
   fennec-mongo.driver
   eio
   eio_main))

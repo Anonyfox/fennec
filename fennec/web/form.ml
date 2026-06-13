@@ -8,6 +8,12 @@
 module Conn = Fennec_paw.Conn
 module Csrf = Fennec_server.Csrf
 
+(* validation errors stashed on the conn by a failed write, so a re-rendered form shows them with no
+   threading (the Resource convention sets this; {!start} reads it) *)
+let errors_key : Codec.error list Fennec_paw.Assigns.key = Fennec_paw.Assigns.key "fennec.form.errors"
+
+let put_errors (c : Conn.t) (errs : Codec.error list) : Conn.t = Conn.assign c errors_key errs
+
 (* strip refinement wrappers down to the structural kind underneath *)
 let rec strip (v : Codec.view) : Codec.view =
   match v with Codec.V_check (_, inner) -> strip inner | v -> v
@@ -302,10 +308,17 @@ type ctx = {
    render (use {!values_of} on the entity for an edit form); [~secret] auto-mints a CSRF token (or
    pass [~csrf] directly); [~override] simulates PUT/PATCH/DELETE; [~multipart] sets the enctype for
    file uploads. After a failed submit the request body repopulates every field automatically. *)
-let start ?(method_ = `POST) ?(errors = []) ?(values = []) ?override ?csrf ?secret ?(multipart = false) ~action conn :
+let start ?method_:(method__ = `POST) ?errors ?(values = []) ?override ?csrf ?secret ?(multipart = false) ~action conn :
     ctx =
-  let csrf = match csrf with Some t -> Some t | None -> Option.map (fun s -> Csrf.token ~secret:s conn) secret in
-  { conn; errors; values; submitted = Conn.body_params conn <> []; action; method_; override; csrf; multipart }
+  (* CSRF token: explicit > paw-stashed (Csrf.token conn) > legacy ~secret *)
+  let csrf =
+    match csrf with
+    | Some t -> Some t
+    | None -> ( match secret with Some s -> Some (Csrf.token ~secret:s conn) | None -> Csrf.token_opt conn)
+  in
+  (* errors: explicit, else whatever a failed write stashed on the conn (the Resource convention) *)
+  let errors = match errors with Some e -> e | None -> Option.value ~default:[] (Conn.get conn errors_key) in
+  { conn; errors; values; submitted = Conn.body_params conn <> []; action; method_ = method__; override; csrf; multipart }
 
 let value_for (c : ctx) (name : string) : string =
   if c.submitted then Option.value ~default:"" (Conn.body_param c.conn name)
@@ -321,6 +334,12 @@ let bound (c : ctx) ?label ?kind (f : _ Codec.field) : Fur.vnode =
 let render (c : ctx) (children : Fur.vnode list) : Fur.vnode =
   form ~method_:c.method_ ~action:c.action ?csrf:c.csrf ?override:c.override ~multipart:c.multipart children
 
+(* the everyday form: open a bound form for [codec] (prefilled from [entity] on edit), build its
+   fields, and wrap them in the <form> — one call, no [start]/[render] threading, no [values_of]. *)
+let view ?override ?multipart c (codec : 'a Codec.t) ~action ?entity (build : ctx -> Fur.vnode list) : Fur.vnode =
+  let f = start c ~action ?override ?multipart ?values:(Option.map (values_of codec) entity) in
+  render f (build f)
+
 (* "first_name" → "First name" — a default label for an auto-generated field *)
 let humanize name =
   String.capitalize_ascii (String.map (fun c -> if c = '_' then ' ' else c) name)
@@ -332,7 +351,9 @@ let humanize name =
 let auto ?(values = []) ?(errors = []) (c : 'a Codec.t) : Fur.vnode list =
   match Codec.view c with
   | Codec.V_obj fields ->
-      List.map
+      (* the doc_id is server-owned (Resource fills it) — never scaffold an input for it *)
+      List.filter (fun (name, _, _) -> name <> "_id") fields
+      |> List.map
         (fun (name, required, shape) ->
           let value = Option.value ~default:"" (List.assoc_opt name values) in
           let errs =
@@ -354,7 +375,6 @@ let auto ?(values = []) ?(errors = []) (c : 'a Codec.t) : Fur.vnode list =
           in
           Fur.h "div" [ Fur.class_ "field" ]
             [ Fur.h "label" [ Fur.attr "for" name ] [ Fur.text (humanize name) ]; control; errors_block errs ])
-        fields
   | _ -> []
 
 (* ──────────────────────────── tests ──────────────────────────── *)

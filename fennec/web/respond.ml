@@ -27,10 +27,6 @@ let prefers_json (conn : Conn.t) : bool =
       in
       decide entries
 
-(* [negotiate conn ~html ~json] runs [json] when the client prefers JSON, else [html] — the one-line
-   way to make an action dual-format. *)
-let negotiate (conn : Conn.t) ~html ~json : Conn.t = if prefers_json conn then json conn else html conn
-
 (* answer with a raw BSON value as JSON *)
 let bson ?(status = 200) (conn : Conn.t) (b : Bson.t) : Conn.t = Conn.json ~status conn (Bson_json.to_string b)
 

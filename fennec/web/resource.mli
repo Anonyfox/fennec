@@ -1,39 +1,50 @@
-(** RESTful resources — the conventional 7 actions wired onto an {!Fennec_server.Endpoint} in one
-    call, Rails-style. Only the handlers you pass are registered (omission = no such route). Routes
-    are ordered so literals win ([/posts/new] before [/posts/:id]); [update] answers both PUT and
-    PATCH. HTML forms reach update/destroy via the [Method_override] paw ([_method=PUT|DELETE]) — add
-    it to the pipeline. Handlers read the id with [Action.path conn "id"].
+(** RESTful resources — the convention. One {!crud} call wires the 7 actions, installs the security
+    paws (session → method-override → CSRF), auto-loads the [:id] entity (404 if absent), owns the
+    server-assigned id, and auto-parses + validates the submitted form into the typed model
+    (re-rendering the form with per-field errors on failure). HTML only — JSON APIs are hand-built
+    with the {!Action}/{!Respond} building blocks.
 
-    Conventional routes for base ["/posts"]: index [GET /posts], new [GET /posts/new],
-    create [POST /posts], edit [GET /posts/:id/edit], show [GET /posts/:id],
-    update [PUT|PATCH /posts/:id], destroy [DELETE /posts/:id].
-
-    {[ let ep =
-         Endpoint.make ~name:"web" ()
-         |> Method_override.make () |> Endpoint.use
-         |> Resource.crud "/posts"
-              ~index:(fun c -> View.document c (Posts_view.index (all ())))
-              ~create:(fun c ->
-                match Form.parse Post.codec c with
-                | Ok p -> ignore (save p); Conn.redirect c "/posts"
-                | Error errs -> View.document ~status:422 c (Posts_view.form ~conn:c ~errors:errs))
-              ~show:(fun c -> match find (Action.path c "id") with Some p -> View.document c (Posts_view.show p) | None -> Conn.text ~status:404 c "Not found") ]} *)
+    {[ open Fennec.Fur
+       let form c note = page ~title:"Note" [ Form.view c Note.codec ~action:"/notes" ?entity:note
+                                                (fun f -> [ Form.bound f Note.Fields.title ~label:"Title"; Form.submit "Save" ]) ]
+       let mount ep =
+         resource Note.codec "/notes" ~secret ~load:Notes.find ~form
+           ~index:(fun c   -> respond c (View.index (Notes.all ())))
+           ~show:(fun  c n -> respond c (View.show n))
+           ~create:(fun c n -> ignore (Notes.create n); redirect c "/notes" ~flash:"Created")
+           ~update:(fun c n -> Notes.save n; redirect c ("/notes/" ^ n.id) ~flash:"Updated")
+           ~destroy:(fun c n -> Notes.remove n.id; redirect c "/notes" ~flash:"Deleted")
+           ep ]} *)
 
 module Endpoint = Fennec_server.Endpoint
 module Conn = Fennec_paw.Conn
 
-(** A resource action handler. Reads the id (where relevant) with [Action.path conn "id"]. *)
-type handler = Conn.t -> Conn.t
+(** Answer with an HTML page (renders the vnode to the response). *)
+val respond : ?status:int -> Conn.t -> Fur.vnode -> Conn.t
 
-(** Wire the conventional REST routes for [base] onto the endpoint. Pass only the actions you want. *)
+(** Redirect, optionally flashing a message into the session for the next page (post-redirect-get). *)
+val redirect : ?flash:string -> Conn.t -> string -> Conn.t
+
+(** Read + clear the flash set by a prior {!redirect} (returns the updated conn and the message). *)
+val flash : Conn.t -> Conn.t * string option
+
+(** Wire a RESTful resource for [base] onto the endpoint and install its security paws. [load] maps a
+    path id to the entity (member actions 404 when [None]); [form] renders the new/edit form (and is
+    re-rendered with errors on a failed write); [create]/[update] receive the already-parsed,
+    validated model (the server-owned id is injected — [~new_id] overrides the default generator);
+    handlers answer via {!respond}/{!redirect}. [new] and [edit] are derived from [form] + [load].
+    [secret] signs the session + CSRF. *)
 val crud :
-  ?index:handler ->
-  ?show:handler ->
-  ?new_:handler ->
-  ?create:handler ->
-  ?edit:handler ->
-  ?update:handler ->
-  ?destroy:handler ->
+  'a Codec.t ->
   string ->
+  secret:string ->
+  ?new_id:(unit -> string) ->
+  load:(string -> 'a option) ->
+  form:(Conn.t -> 'a option -> Fur.vnode) ->
+  index:(Conn.t -> Conn.t) ->
+  show:(Conn.t -> 'a -> Conn.t) ->
+  create:(Conn.t -> 'a -> Conn.t) ->
+  update:(Conn.t -> 'a -> Conn.t) ->
+  destroy:(Conn.t -> 'a -> Conn.t) ->
   Endpoint.t ->
   Endpoint.t

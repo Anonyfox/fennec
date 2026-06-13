@@ -9,12 +9,9 @@
 
 module Conn = Fennec_paw.Conn
 
-(** Whether the client prefers JSON (walks the Accept header in order; HTML is the default — browsers
-    and a missing Accept header). *)
+(** Whether the client prefers JSON (walks the Accept header in order; HTML is the default). A
+    JSON-API handler can branch on this; HTML and JSON are otherwise kept as separate code paths. *)
 val prefers_json : Conn.t -> bool
-
-(** [negotiate conn ~html ~json] runs [json] when the client prefers JSON, else [html]. *)
-val negotiate : Conn.t -> html:(Conn.t -> Conn.t) -> json:(Conn.t -> Conn.t) -> Conn.t
 
 (** Answer with a raw BSON value as JSON. *)
 val bson : ?status:int -> Conn.t -> Bson.t -> Conn.t

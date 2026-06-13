@@ -42,9 +42,6 @@ let%http "notes CRUD: the server-rendered middle layer end to end" = fun () ->
         ~form:[ ("title", ""); ("body", "ok"); ("priority", "9"); ("_csrf_token", tok) ]
         ~expect:[ status 422; body_contains "field-errors"; body_contains {|name="title"|} ]);
 
-  check "content negotiation: Accept application/json returns JSON" (fun () ->
-      get "/notes" ~headers:[ ("accept", "application/json") ] ~expect:[ status 200; is_json ]);
-
   check "update + delete via method override (PUT/DELETE from a POST form)" (fun () ->
       (* create, capturing the new id from the redirect Location *)
       get "/notes/new";

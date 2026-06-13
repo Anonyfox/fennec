@@ -46,6 +46,54 @@ module Accounts = Fennec_server.Accounts
     into 401/403 responses. *)
 module Endpoint = Fennec_server.Endpoint
 
+(** {1 Fur — the presentation layer}
+
+    One namespace ([open Fennec.Fur]) for everything that turns data into what a client sees:
+    components & signals (live SPA), SSR + dead server-rendered views ({!Fur.page}/{!Fur.document}),
+    typed forms ({!Fur.Form}), and the RESTful {!Fur.resource} convention. HTML is its job; JSON APIs
+    are hand-built with the {!Fur.Form}/{!Fur.Action}/{!Fur.Respond} building blocks. Includes the
+    isomorphic Fur core, so [h]/[text]/[signal]/[to_html] are here too. *)
+module Codec = Codec
+
+module Fur : sig
+  (* the [struct include] idiom keeps [vnode]/[attr]/[signal] EQUAL to the core Fur types (a bare
+     [module type of Fur] would re-abstract them and break interop with Form/View) *)
+  include module type of struct include Fur end
+
+  (** A conventional [<html>/<head>/<body>] page shell — pass to {!respond}. *)
+  val page : ?lang:string -> ?title:string -> ?head:vnode list -> ?styles:string -> vnode list -> vnode
+
+  (** Answer with an HTML page (renders the vnode to the response). *)
+  val respond : ?status:int -> Conn.t -> vnode -> Conn.t
+
+  (** Redirect, optionally flashing a message into the session for the next page. *)
+  val redirect : ?flash:string -> Conn.t -> string -> Conn.t
+
+  (** Read + clear the flash set by a prior {!redirect}. *)
+  val flash : Conn.t -> Conn.t * string option
+
+  (** Wire a RESTful resource (the 7 actions) + its security paws onto an endpoint. See
+      {!Fennec_web.Resource.crud}. *)
+  val resource :
+    'a Codec.t ->
+    string ->
+    secret:string ->
+    ?new_id:(unit -> string) ->
+    load:(string -> 'a option) ->
+    form:(Conn.t -> 'a option -> vnode) ->
+    index:(Conn.t -> Conn.t) ->
+    show:(Conn.t -> 'a -> Conn.t) ->
+    create:(Conn.t -> 'a -> Conn.t) ->
+    update:(Conn.t -> 'a -> Conn.t) ->
+    destroy:(Conn.t -> 'a -> Conn.t) ->
+    Endpoint.t ->
+    Endpoint.t
+
+  module Form : module type of Fennec_web.Form
+  module Action : module type of Fennec_web.Action
+  module Respond : module type of Fennec_web.Respond
+end
+
 (** {1 Paw — the pipeline primitive + prebuilt batteries}
 
     A paw is [Conn.t -> Conn.t]. Compose with {!Paw.seq}; the first to answer wins.

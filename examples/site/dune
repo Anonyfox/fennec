@@ -118,8 +118,7 @@
   fennec
   fennec.fur
   fennec.fur.server
-  fennec.server
-  fennec.web
+  fennec.pulse.codec
   web_app
   admin_app
   site_styles

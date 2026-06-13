@@ -20,6 +20,27 @@ module Dev_proto = Fennec_core.Dev_proto (* the CLI<->server dev wire (env names
 module Accounts = Fennec_server.Accounts
 module Mongo_runtime = Fennec_mongo_driver.Runtime
 
+(* The presentation layer — Fur. ONE namespace ([open Fennec.Fur]) for everything that turns data
+   into what a client sees: components & signals (live SPA), SSR + dead server-rendered views,
+   typed forms, and the RESTful [resource] convention. HTML is its job; JSON APIs are hand-built with
+   the [Form]/[Action]/[Respond] building blocks (different concern, not negotiated in). Includes the
+   isomorphic Fur core, so [page]/[h]/[text]/[signal]/[document] are all here too. *)
+module Codec = Codec (* the shape language — for hand-written codecs + the resource/form signatures *)
+
+module Fur = struct
+  include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
+
+  let page = Fennec_web.View.page
+  let respond = Fennec_web.Resource.respond
+  let redirect = Fennec_web.Resource.redirect
+  let flash = Fennec_web.Resource.flash
+  let resource = Fennec_web.Resource.crud
+
+  module Form = Fennec_web.Form
+  module Action = Fennec_web.Action
+  module Respond = Fennec_web.Respond
+end
+
 (* The verb namespace: the primitive + its algebra + the route verbs (from
    [Fennec_paw.Paw]) plus every prebuilt battery as a submodule. So userland reaches
    for [Paw.seq], [Paw.get], and [Paw.Logger.make ()] / [Paw.Session.make ~secret ()]

@@ -45,6 +45,10 @@ val field_errors : _ Codec.field -> Codec.error list -> string list
 (** The raw value the user just submitted for [name] — repopulate an input when re-rendering. *)
 val submitted : Conn.t -> string -> string
 
+(** Stash validation errors on the conn so a re-rendered form shows them with no threading (the
+    Resource convention calls this on a failed write; {!start} reads it when [~errors] is omitted). *)
+val put_errors : Conn.t -> Codec.error list -> Conn.t
+
 (** The canonical validation-error summary (zod's [flatten] / Ecto's [traverse_errors] shape):
     top-level (path-less) messages separated from per-field messages keyed by wire name (first-seen
     order preserved). The one shape for JSON error bodies and form rendering alike. *)
@@ -132,10 +136,10 @@ type ctx
     After a failed submit the request body repopulates every field automatically. *)
 val start :
   ?method_:[ `GET | `POST ] ->
-  ?errors:Codec.error list ->
+  ?errors:Codec.error list ->  (** omitted ⇒ read from the conn (a failed write stashed them) *)
   ?values:(string * string) list ->
   ?override:string ->
-  ?csrf:string ->
+  ?csrf:string ->  (** omitted ⇒ minted from the conn (the Csrf paw); falls back to [~secret] *)
   ?secret:string ->
   ?multipart:bool ->
   action:string ->
@@ -153,6 +157,20 @@ val bound :
 
 (** Wrap a bound form's fields in the [<form>] (action/method/CSRF/override all from the ctx). *)
 val render : ctx -> Fur.vnode list -> Fur.vnode
+
+(** The everyday form, in one call: open a bound form for [codec] (prefilled from [entity] on edit),
+    build its fields, wrap them in the [<form>]. No [start]/[render] threading, no [values_of].
+    {[ Form.view c Note.codec ~action:"/notes" ?entity:note
+         (fun f -> [ Form.bound f Note.Fields.title ~label:"Title"; Form.submit "Save" ]) ]} *)
+val view :
+  ?override:string ->
+  ?multipart:bool ->
+  Conn.t ->
+  'a Codec.t ->
+  action:string ->
+  ?entity:'a ->
+  (ctx -> Fur.vnode list) ->
+  Fur.vnode
 
 (** Auto-generate a field row PER top-level field straight from the codec's view — no field handles,
     no per-field code (Rails scaffold / DRF browsable API). Label is the humanized field name; input
