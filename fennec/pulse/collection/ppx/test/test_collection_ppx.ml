@@ -195,4 +195,17 @@ let%test "[%index]: declares the right indexes (unique/asc/desc/compound) on the
       Index.(name (desc Indexed.Fields.rank));
       Index.(name (unique (compound [ asc Indexed.Fields.team; asc Indexed.Fields.email ]))) ]
 
+(* [@@deriving model] — the DB-agnostic sibling: just Fields + codec, no name, no Mongo tail
+   (a form/API model needs only fennec.pulse.codec, not a collection). *)
+module Signup = struct
+  type t = { email : string; age : int } [@@deriving model]
+end
+
+let%test "deriving model: generates Fields + a working codec (no collection name needed)" =
+  Codec.field_name Signup.Fields.email = "email"
+  && Codec.field_name Signup.Fields.age = "age"
+  && (match Codec.decode Signup.codec (B.doc [ ("email", B.str "a@b"); ("age", B.int 5) ]) with
+     | Ok v -> v.Signup.email = "a@b" && v.Signup.age = 5
+     | Error _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

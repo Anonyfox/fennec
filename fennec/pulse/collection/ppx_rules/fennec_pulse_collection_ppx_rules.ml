@@ -131,58 +131,73 @@ let field_spec ~loc (ld : label_declaration) : expression =
     else if is_option then [%expr Codec.opt [%e w] [%e base]]
     else [%expr Codec.req [%e w] [%e base]]
 
+(* the SHARED core both derivers emit: [module Fields = …] (typed handles + embedded re-exports) and
+   [let codec = …] (the validating builder). DB-agnostic — references only [Codec]. *)
+let model_core ~loc (labels : label_declaration list) : structure =
+  let module B = Ast_builder.Default in
+  (* module Fields = struct
+       let f = <spec> …                         (* one handle per field *)
+       module <Cap g> = M.Fields …              (* per EMBEDDED field g : M.t — path navigation *)
+     end
+     The re-export submodule is named after the FIELD (capitalised), not the type, so two fields of
+     the same embedded type get distinct paths (e.g. [author] / [reviewer] both [Person.t]). *)
+  let field_items =
+    List.concat_map
+      (fun ld ->
+        let handle = [%stri let [%p B.pvar ~loc ld.pld_name.txt] = [%e field_spec ~loc ld]] in
+        match embedded_of ld.pld_type with
+        | None -> [ handle ]
+        | Some m ->
+            let sub =
+              B.pstr_module ~loc
+                (B.module_binding ~loc
+                   ~name:{ txt = Some (String.capitalize_ascii ld.pld_name.txt); loc }
+                   ~expr:(B.pmod_ident ~loc { txt = Ldot (m, "Fields"); loc }))
+            in
+            [ handle; sub ])
+      labels
+  in
+  let fields_mod =
+    B.pstr_module ~loc
+      (B.module_binding ~loc ~name:{ txt = Some "Fields"; loc } ~expr:(B.pmod_structure ~loc field_items))
+  in
+  (* record (fun a b … -> { a; b; … }) *)
+  let make =
+    List.fold_right
+      (fun ld acc -> B.pexp_fun ~loc Nolabel None (B.pvar ~loc ld.pld_name.txt) acc)
+      labels
+      (B.pexp_record ~loc
+         (List.map (fun ld -> ({ txt = Lident ld.pld_name.txt; loc }, B.evar ~loc ld.pld_name.txt)) labels)
+         None)
+  in
+  let builder =
+    List.fold_left
+      (fun acc ld ->
+        let get =
+          B.pexp_fun ~loc Nolabel None (B.pvar ~loc "x")
+            (B.pexp_field ~loc (B.evar ~loc "x") { txt = Lident ld.pld_name.txt; loc })
+        in
+        let f = B.pexp_ident ~loc { txt = Ldot (Lident "Fields", ld.pld_name.txt); loc } in
+        [%expr [%e acc] |> Codec.field [%e f] [%e get]])
+      [%expr Codec.record [%e make]] labels
+  in
+  let codec = [%stri let codec = Codec.seal [%e builder]] in
+  [ fields_mod; codec ]
+
+(* [@@deriving model]: the DB-agnostic model — just [Fields] + [codec], for forms / JSON APIs / any
+   shape that isn't a Mongo collection. The collection deriver below is this plus the Mongo tail. *)
+let expand_model ~ctxt (_rec : rec_flag) (tds : type_declaration list) : structure =
+  let loc = Expansion_context.Deriver.derived_item_loc ctxt in
+  match tds with
+  | [ { ptype_kind = Ptype_record labels; ptype_name; _ } ] when ptype_name.txt = "t" -> model_core ~loc labels
+  | _ -> Location.raise_errorf ~loc "fennec.model: expects a single record type named t"
+
 let expand ~ctxt (_rec : rec_flag) (tds : type_declaration list) (cname : string) : structure =
   let loc = Expansion_context.Deriver.derived_item_loc ctxt in
   match tds with
   | [ { ptype_kind = Ptype_record labels; ptype_name; _ } ] when ptype_name.txt = "t" ->
       let module B = Ast_builder.Default in
-      (* module Fields = struct
-           let f = <spec> …                         (* one handle per field *)
-           module <Cap g> = M.Fields …              (* per EMBEDDED field g : M.t — path navigation *)
-         end
-         The re-export submodule is named after the FIELD (capitalised), not the type, so two fields
-         of the same embedded type get distinct paths (e.g. [author] / [reviewer] both [Person.t]). *)
-      let field_items =
-        List.concat_map
-          (fun ld ->
-            let handle = [%stri let [%p B.pvar ~loc ld.pld_name.txt] = [%e field_spec ~loc ld]] in
-            match embedded_of ld.pld_type with
-            | None -> [ handle ]
-            | Some m ->
-                let sub =
-                  B.pstr_module ~loc
-                    (B.module_binding ~loc
-                       ~name:{ txt = Some (String.capitalize_ascii ld.pld_name.txt); loc }
-                       ~expr:(B.pmod_ident ~loc { txt = Ldot (m, "Fields"); loc }))
-                in
-                [ handle; sub ])
-          labels
-      in
-      let fields_mod =
-        B.pstr_module ~loc
-          (B.module_binding ~loc ~name:{ txt = Some "Fields"; loc } ~expr:(B.pmod_structure ~loc field_items))
-      in
-      (* record (fun a b … -> { a; b; … }) *)
-      let make =
-        List.fold_right
-          (fun ld acc -> B.pexp_fun ~loc Nolabel None (B.pvar ~loc ld.pld_name.txt) acc)
-          labels
-          (B.pexp_record ~loc
-             (List.map (fun ld -> ({ txt = Lident ld.pld_name.txt; loc }, B.evar ~loc ld.pld_name.txt)) labels)
-             None)
-      in
-      let builder =
-        List.fold_left
-          (fun acc ld ->
-            let get =
-              B.pexp_fun ~loc Nolabel None (B.pvar ~loc "x")
-                (B.pexp_field ~loc (B.evar ~loc "x") { txt = Lident ld.pld_name.txt; loc })
-            in
-            let f = B.pexp_ident ~loc { txt = Ldot (Lident "Fields", ld.pld_name.txt); loc } in
-            [%expr [%e acc] |> Codec.field [%e f] [%e get]])
-          [%expr Codec.record [%e make]] labels
-      in
-      let codec = [%stri let codec = Codec.seal [%e builder]] in
+      let core = model_core ~loc labels in
       let coll = [%stri let collection = Def.v [%e B.estring ~loc cname] codec] in
       (* the reactive READ verbs, directly on the model module — no functor, no view binding, the
          collection IS the object (Meteor's Tasks.find). Ambient connection (one per page); reads
@@ -193,7 +208,7 @@ let expand ~ctxt (_rec : rec_flag) (tds : type_declaration list) (cname : string
         Ddp_client.find_c (Ddp_client.default ()) collection ?where ?sort ?skip ?limit ()] in
       let project = [%stri let project p ?where ?sort ?skip ?limit () =
         Ddp_client.find_p (Ddp_client.default ()) collection p ?where ?sort ?skip ?limit ()] in
-      [ fields_mod; codec; coll; find; project ]
+      core @ [ coll; find; project ]
   | _ ->
       Location.raise_errorf ~loc "fennec.collection: expects a single record type named t"
 
@@ -211,6 +226,14 @@ let deriver =
                Location.raise_errorf
                  ~loc:(Expansion_context.Deriver.derived_item_loc ctxt)
                  "fennec.collection: the collection name is required — [@@deriving collection ~name:\"tasks\"]"))
+
+(* [@@deriving model] — the DB-agnostic sibling: [Fields] + [codec] only (no name, no Mongo verbs),
+   for forms / JSON APIs. Registered globally on module load like {!deriver}. *)
+let deriver_model =
+  Deriving.add "model"
+    ~str_type_decl:(Deriving.Generator.V2.make Deriving.Args.empty (fun ~ctxt (rf, tds) -> expand_model ~ctxt rf tds))
+
+let () = ignore deriver_model
 
 
 (* ---- the [%fields a; b; …] projection extension ---------------------------------------------
