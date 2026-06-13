@@ -23,7 +23,7 @@ let make () =
   let ready = Pulse.subscribe ~name:"tasks" () in
   (* the collection IS the object — no client, no handle. PROJECTED live read ships/types ONLY title
      (Meteor's { fields: { title: 1 } }); [t#title] works, [t#body] is a compile error. *)
-  let tasks = Tasks.project [%fields title] ~where:[%q title <> ""] ~sort:[%sort title asc] () in
+  let tasks = project [%fields title] ~where:[%q title <> ""] ~sort:[%sort title asc] () in
   let add_task () =
     incr added;
     (* the TYPED method call — a wrong argument type is a compile error (Meteor's Meteor.call) *)

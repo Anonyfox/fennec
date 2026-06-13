@@ -73,17 +73,18 @@ OCaml record plus one deriving attribute (the official surface):
 type t = { id : string; title : string; done_ : bool; tags : string list }
 [@@deriving collection ~name:"tasks"]
 
-(* the client view (Meteor's collection object) — bind once, then `open Task; Tasks.find …` *)
-module Tasks = Pulse.Collection (struct type doc = t  let collection = collection end)
 ```
+The deriver also puts the reactive READ verbs straight on the model module — `Task.find` /
+`Task.project` (Meteor's collection object), ambient connection, no functor, no view binding. The
+model file is the record + attributes + `[%index]` and nothing else.
 
 **The day-to-day surface is Meteor's, in plain OCaml** (no React/wire clutter):
 ```ocaml
 open Task                                  (* fields in scope + the Tasks view *)
 Pulse.connect ~path:"/ddp" ()              (* the one page connection — Meteor.connect *)
 let ready = Pulse.subscribe ~name:"tasks" ()                         (* Meteor.subscribe *)
-let live  = Tasks.find ~where:[%q done_ = false] ~sort:[%sort title asc] ()  (* Tasks.find(...) *)
-let cards = Tasks.project [%fields title] ()                          (* find(_, {fields}) *)
+let live  = Task.find ~where:[%q done_ = false] ~sort:[%sort title asc] ()   (* Tasks.find(...) *)
+let cards = Task.project [%fields title] ()                           (* find(_, {fields}) *)
 ignore (Pulse.call add_task "buy milk")                              (* Meteor.call *)
 ```
 

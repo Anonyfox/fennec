@@ -15,7 +15,3 @@ type t = {
 (* declared indexes — co-located, reconciled at boot (Meteor's Tasks.createIndex, typed) *)
 let () = [%index title]
 
-module Tasks = Pulse.Collection (struct
-  type doc = t
-  let collection = collection
-end)

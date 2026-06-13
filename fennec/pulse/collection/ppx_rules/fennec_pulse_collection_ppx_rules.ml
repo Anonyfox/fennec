@@ -184,7 +184,16 @@ let expand ~ctxt (_rec : rec_flag) (tds : type_declaration list) (cname : string
       in
       let codec = [%stri let codec = Codec.seal [%e builder]] in
       let coll = [%stri let collection = Def.v [%e B.estring ~loc cname] codec] in
-      [ fields_mod; codec; coll ]
+      (* the reactive READ verbs, directly on the model module — no functor, no view binding, the
+         collection IS the object (Meteor's Tasks.find). Ambient connection (one per page); reads
+         only (writes go through methods, by decree). A reactive cursor over the live cache: live in
+         the browser, SSR-seeded server-side. A server-handler one-shot read uses the typed handle
+         (T.find) — distinguished by type (this returns a Fur signal, not a list). *)
+      let find = [%stri let find ?where ?sort ?skip ?limit () =
+        Ddp_client.find_c (Ddp_client.default ()) collection ?where ?sort ?skip ?limit ()] in
+      let project = [%stri let project p ?where ?sort ?skip ?limit () =
+        Ddp_client.find_p (Ddp_client.default ()) collection p ?where ?sort ?skip ?limit ()] in
+      [ fields_mod; codec; coll; find; project ]
   | _ ->
       Location.raise_errorf ~loc "fennec.collection: expects a single record type named t"
 
