@@ -332,7 +332,7 @@ let fields_expander =
                   let sub = "__sub" ^ string_of_int depth ^ "_" ^ h in
                   [%expr
                     match Bson.get [%e doc] (Codec.field_name [%e handle prefix h]) with
-                    | None -> Error [ { Codec.path = [ [%e B.estring ~loc h] ]; msg = "is required" } ]
+                    | None -> Error [ Codec.err ~code:"required" [ [%e B.estring ~loc h] ] "is required" ]
                     | Some [%p B.pvar ~loc sub] ->
                         [%e build (prefix @ [ h ]) (B.evar ~loc sub) (depth + 1) tails]]
             in

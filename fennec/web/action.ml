@@ -12,7 +12,7 @@ let body (conn : Conn.t) : string = (Conn.req conn).Fennec_core.Http.body
    Validation/refinements apply exactly as for forms; errors come back per-field. *)
 let json (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
   match Bson_json.of_string_opt (body conn) with
-  | None -> Error [ { Codec.path = []; msg = "invalid JSON body" } ]
+  | None -> Error [ Codec.err ~code:"json" [] "invalid JSON body" ]
   | Some b -> Codec.decode c b
 
 (* substring test (no Str dependency) *)

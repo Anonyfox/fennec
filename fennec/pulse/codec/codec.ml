@@ -15,14 +15,23 @@
 
 (* ---- errors ------------------------------------------------------------------ *)
 
-type error = { path : string list; msg : string }
+(* [msg] is the human (English-default) message. [code] is a machine-readable rule id ("required",
+   "type", "min_len", "one_of", …) and [params] its interpolation values ([("n","80")]) — together
+   they let a downstream translator localize without re-parsing the string. *)
+type error = { path : string list; msg : string; code : string; params : (string * string) list }
+
+let mkerr ?(code = "") ?(params = []) ?(path = []) msg = { path; msg; code; params }
+let err ?(code = "") ?(params = []) path msg = mkerr ~code ~params ~path msg
 
 let error_to_string e =
   match e.path with [] -> e.msg | p -> String.concat "." p ^ ": " ^ e.msg
 
 let errors_to_string errs = String.concat "; " (List.map error_to_string errs)
 let at name e = { e with path = name :: e.path }
-let fail msg = Error [ { path = []; msg } ]
+let fail ?code ?params msg = Error [ mkerr ?code ?params msg ]
+
+(* re-render an error's [msg] through a translator (using its [code]/[params]/[path]); identity-safe. *)
+let translate (tr : error -> string) (e : error) : error = { e with msg = tr e }
 
 (* ---- the type representation -------------------------------------------------- *)
 
@@ -39,6 +48,30 @@ type hint =
   | H_min_items of int
   | H_max_items of int
   | H_unique_items
+
+(* a refinement's machine-readable error code + interpolation params, derived from its hint — so a
+   length/range/enum check reports ("max_len", [("n","80")]) without per-combinator wiring *)
+let code_of_hint = function
+  | H_none -> "check"
+  | H_min_len _ -> "min_len"
+  | H_max_len _ -> "max_len"
+  | H_pattern _ -> "pattern"
+  | H_enum _ -> "one_of"
+  | H_min _ -> "min"
+  | H_max _ -> "max"
+  | H_multiple_of _ -> "multiple_of"
+  | H_min_items _ -> "min_items"
+  | H_max_items _ -> "max_items"
+  | H_unique_items -> "unique_items"
+
+let fmt_num f = if Float.is_integer f then string_of_int (int_of_float f) else string_of_float f
+
+let params_of_hint = function
+  | H_min_len n | H_max_len n | H_min_items n | H_max_items n -> [ ("n", string_of_int n) ]
+  | H_pattern p -> [ ("pattern", p) ]
+  | H_enum xs -> [ ("values", String.concat ", " xs) ]
+  | H_min f | H_max f | H_multiple_of f -> [ ("n", fmt_num f) ]
+  | H_none | H_unique_items -> []
 
 type _ ty =
   | TString : string ty
@@ -92,7 +125,10 @@ let type_name (b : Bson.t) =
   | Bson.Object_id _ -> "objectid"
   | _ -> "value"
 
-let expected what got = fail (Printf.sprintf "expected %s, got %s" what (type_name got))
+let expected what got =
+  fail ~code:"type"
+    ~params:[ ("expected", what); ("got", type_name got) ]
+    (Printf.sprintf "expected %s, got %s" what (type_name got))
 
 let rec dec_ty : type a. a ty -> Bson.t -> (a, error list) result =
  fun ty b ->
@@ -218,14 +254,15 @@ let rec check_ty : type a. a ty -> a -> error list =
   match ty with
   | TString | TInt | TBool | TDate | TId | TBson | TUnit -> []
   | TFloat { allow_nonfinite } ->
-      if (not allow_nonfinite) && not (Float.is_finite v) then [ { path = []; msg = "non-finite float" } ] else []
+      if (not allow_nonfinite) && not (Float.is_finite v) then [ mkerr ~code:"finite" "non-finite float" ] else []
   | TList el -> List.concat (List.mapi (fun i x -> List.map (at (string_of_int i)) (check_ty el x)) v)
   | TOption el -> ( match v with Some x -> check_ty el x | None -> [])
   | TMap el -> List.concat (List.map (fun (k, x) -> List.map (at k) (check_ty el x)) v)
-  | TCheck (p, msg, _, inner) ->
+  | TCheck (p, msg, hint, inner) ->
       let inner_errs = check_ty inner v in
       (* the predicate sees the NORMALIZED value — decode/validate parity *)
-      if p (norm_ty inner v) then inner_errs else { path = []; msg } :: inner_errs
+      if p (norm_ty inner v) then inner_errs
+      else mkerr ~code:(code_of_hint hint) ~params:(params_of_hint hint) msg :: inner_errs
   | TNorm (f, inner) -> check_ty inner (f v)
   | TConv (inj, _, inner) -> check_ty inner (inj v)
   | TObj o ->
@@ -233,7 +270,7 @@ let rec check_ty : type a. a ty -> a -> error list =
         List.concat
           (List.map (fun (PF f) -> List.map (at f.f_name) (check_ty f.f_ty (f.f_get v))) o.o_fields)
       in
-      let rec_errs = List.filter_map (fun (p, msg) -> if p v then None else Some { path = []; msg }) o.o_checks in
+      let rec_errs = List.filter_map (fun (p, msg) -> if p v then None else Some (mkerr ~code:"check" msg)) o.o_checks in
       field_errs @ rec_errs
   | TVariant { cases; _ } -> (
       let rec go = function
@@ -428,7 +465,7 @@ let dec_field (f : 'a field) kvs : ('a, error list) result =
       | Some d -> Ok d
       (* path-tagged by field name (like the type-mismatch case above), so a missing required field
          is attributable to it — what per-field consumers (form feedback) need *)
-      | None -> Error [ { path = [ f.fld_name ]; msg = "is required" } ])
+      | None -> Error [ mkerr ~code:"required" ~path:[ f.fld_name ] "is required" ])
 
 (* [None]/default-empty encodes by omitting the key — Mongo-idiomatic absence *)
 let enc_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
@@ -498,7 +535,7 @@ let field_get (f : 'a field) (doc : Bson.t) : ('a, error list) result =
       match dec_field f kvs with
       | Error es -> Error es
       | Ok v -> ( match check_ty f.fld_ty v with [] -> Ok v | es -> Error (List.map (at f.fld_name) es)))
-  | _ -> Error [ { path = [ f.fld_name ]; msg = "expected document" } ]
+  | _ -> Error [ mkerr ~code:"type" ~path:[ f.fld_name ] "expected document" ]
 
 (* ---- variants (tagged unions over a discriminator field) ----------------------------- *)
 

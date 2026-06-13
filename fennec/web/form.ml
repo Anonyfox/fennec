@@ -54,7 +54,7 @@ let parse_assoc (c : 'a Codec.t) (data : (string * string) list) : ('a, Codec.er
       let coerce_errs = ref [] and failed = ref [] in
       let add_fail path msg =
         failed := path :: !failed;
-        coerce_errs := { Codec.path; msg } :: !coerce_errs
+        coerce_errs := Codec.err ~code:"coerce" path msg :: !coerce_errs
       in
       let values_of key = List.filter_map (fun (k, v) -> if k = key then Some v else None) data in
       (* build the BSON document field-by-field, recursing into embedded records via dotted keys.
@@ -95,7 +95,7 @@ let parse_assoc (c : 'a Codec.t) (data : (string * string) list) : ('a, Codec.er
           (* drop decode errors for fields that already have a coercion error (one message, not two) *)
           let es' = List.filter (fun (e : Codec.error) -> not (List.mem e.path !failed)) es in
           Error (List.rev !coerce_errs @ es'))
-  | _ -> Error [ { Codec.path = []; msg = "form codec must be a record" } ]
+  | _ -> Error [ Codec.err [] "form codec must be a record" ]
 
 (* where to read the submitted pairs from *)
 type source = Body | Query
@@ -456,10 +456,10 @@ let%test "file_input + multipart form set the right type and enctype" =
 let%test "summary groups errors by field and separates form-level ones" =
   let s =
     summary
-      [ { Codec.path = []; msg = "form bad" };
-        { Codec.path = [ "email" ]; msg = "is required" };
-        { Codec.path = [ "email" ]; msg = "is invalid" };
-        { Codec.path = [ "age" ]; msg = "too small" } ]
+      [ Codec.err [] "form bad";
+        Codec.err [ "email" ] "is required";
+        Codec.err [ "email" ] "is invalid";
+        Codec.err [ "age" ] "too small" ]
   in
   s.form_errors = [ "form bad" ]
   && s.field_errors = [ ("email", [ "is required"; "is invalid" ]); ("age", [ "too small" ]) ]

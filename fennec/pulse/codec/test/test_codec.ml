@@ -22,7 +22,9 @@ let%test "normalizers run before checks, both directions" =
   let c = Codec.(non_empty (trim string)) in
   (match Codec.decode c (B.str "  hi  ") with Ok "hi" -> true | _ -> false)
   && err (Codec.decode c (B.str "   "))
-  && Codec.validate c "   " = Error [ { Codec.path = []; msg = "must not be empty" } ]
+  && (match Codec.validate c "   " with
+     | Error [ e ] -> e.Codec.path = [] && e.Codec.msg = "must not be empty" && e.Codec.code = "min_len"
+     | _ -> false)
   && (match (Codec.lowercase Codec.string).Codec.enc "AbC" with B.String "abc" -> true | _ -> false)
 
 let%test "numeric refinements + float sanity (nan rejected by default, opt-out works)" =
@@ -174,5 +176,21 @@ let%test "view: variants reflect tag and per-case fields; opt fields reflect as 
   &&
   let c = Codec.(seal (record (fun a -> a) |> field (opt "x" string) (fun v -> v))) in
   match Codec.view c with Codec.V_obj [ ("x", false, Codec.V_option Codec.V_string) ] -> true | _ -> false
+
+(* ── structured error codes + params + i18n translate ── *)
+let%test "errors carry machine codes + params (for i18n) and translate remaps the message" =
+  let c = Codec.(req "title" (max_len 5 string)) in
+  match Codec.field_get c (B.doc [ ("title", B.str "way too long") ]) with
+  | Error [ e ] ->
+      e.Codec.code = "max_len" && List.assoc "n" e.Codec.params = "5"
+      && (* a translator keyed on code+params *)
+      (Codec.translate (fun e -> Printf.sprintf "trop long (max %s)" (List.assoc "n" e.Codec.params)) e).Codec.msg
+         = "trop long (max 5)"
+  | _ -> false
+
+let%test "a missing required field has code \"required\"; a type mismatch has code \"type\"" =
+  let c = Codec.(seal (record (fun a -> a) |> field (req "n" int) (fun v -> v))) in
+  (match Codec.decode c (B.doc []) with Error [ e ] -> e.Codec.code = "required" | _ -> false)
+  && match Codec.decode c (B.doc [ ("n", B.str "x") ]) with Error [ e ] -> e.Codec.code = "type" | _ -> false
 
 let () = exit (Fennec_hunt_unit.run ())

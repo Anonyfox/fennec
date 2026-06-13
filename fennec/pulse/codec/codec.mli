@@ -25,9 +25,19 @@
 
 (** {1 Errors} *)
 
-(** One violation: where (field path, outermost first) and why. Decoding/validation COLLECTS every
-    violation — forms need the full list, not first-fail. *)
-type error = { path : string list; msg : string }
+(** One violation. [path] is where (field path, outermost first); [msg] is the human (English-default)
+    message; [code] is a machine-readable rule id (["required"], ["type"], ["min_len"], ["max_len"],
+    ["pattern"], ["one_of"], ["min"], ["max"], ["finite"], ["check"], …) and [params] its
+    interpolation values (e.g. [[("n", "80")]]) — together they let a translator localize without
+    re-parsing [msg]. Decoding/validation COLLECTS every violation (forms need the full list). *)
+type error = { path : string list; msg : string; code : string; params : (string * string) list }
+
+(** Build an error (the [code]/[params] default to empty) — for code producing its own violations. *)
+val err : ?code:string -> ?params:(string * string) list -> string list -> string -> error
+
+(** Re-render an error's [msg] through a translator (which reads its [code]/[params]/[path]) — the
+    i18n hook: map a list of errors through [translate tr] before rendering/serializing. *)
+val translate : (error -> string) -> error -> error
 
 val error_to_string : error -> string
 val errors_to_string : error list -> string

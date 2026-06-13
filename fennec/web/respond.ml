@@ -71,7 +71,7 @@ let contains hay needle =
   nn = 0 || go 0
 
 let%test "error envelope uses the canonical form_errors/field_errors shape" =
-  let b = error_envelope [ { Codec.path = []; msg = "form is invalid" }; { Codec.path = [ "email" ]; msg = "is required" } ] in
+  let b = error_envelope [ Codec.err [] "form is invalid"; Codec.err [ "email" ] "is required" ] in
   let s = Bson_json.to_string b in
   contains s "form_errors" && contains s "form is invalid" && contains s "field_errors" && contains s "email"
   && contains s "is required"
