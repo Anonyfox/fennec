@@ -1,6 +1,17 @@
 (** The collection DECLARATION — pure and instance-free, shared by server and browser (what the
     [@@fennec.collection] deriver generates): name + shape + indexes. The server attaches it to a
-    reactive instance at boot; the browser binds it to the live client. *)
+    reactive instance at boot; the browser binds it to the live client. 
+
+    {[ (* store/task.ml — the WHOLE model in one file *)
+       type t = {
+         id : string;
+         title : string;   [@non_empty] [@max_len 200]
+         status : string;  [@one_of [ "todo"; "doing"; "done" ]]
+       }
+       [@@deriving collection ~name:"tasks"]
+       let () = [%index unique title]                         (* declared, reconciled at boot *)
+       (* downstream: Task.find ~where:[%q status = "doing"] () *) ]}
+*)
 
 type 'a t
 

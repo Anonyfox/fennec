@@ -2,7 +2,13 @@
     optional latency-compensation stub. Declare it once in shared code; the server attaches a
     handler to the value ([Reactive.handle]), the client calls through it ([Ddp_client.call_m]) —
     so a name typo, an arity change, or a codec drift is a {e compile} error across the whole app.
-    Methods are fennec's only client write path (there is no allow/deny, by decree). *)
+    Methods are fennec's only client write path (there is no allow/deny, by decree). 
+
+    {[ (* shared file — server and client reference this ONE value (no drift) *)
+       let add_task = Method.define "addTask" ~args:(Codec.a1 Codec.string) ~result:Codec.string
+       (* server: *) let () = RData.handle add_task (fun _inv title -> T.insert tasks { Task.id=""; title })
+       (* client: *) let _ = Pulse.call add_task "buy milk" ]}
+*)
 
 (** The write surface a stub runs against — the client cache, as an optimistic simulation layer that
     server truth replaces when the method's [updated] arrives. [insert] returns the minted [_id]

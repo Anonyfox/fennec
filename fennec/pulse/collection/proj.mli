@@ -2,7 +2,12 @@
     model's [Fields] handles. Carries the wire projection document AND a decoder that yields an
     OBJECT of exactly the projected methods (so the full record is never constructed; a
     projected-away field is unmentionable). A field absent from the model is a compile error at the
-    projection site (unbound [Fields.x]). *)
+    projection site (unbound [Fields.x]). 
+
+    {[ (* [%fields] — Meteor's { fields: {…} }, typed; yields an object of exactly those fields *)
+       let cards = Task.project [%fields title; author / name] ()   (* < title : …; author : < name : … > > *)
+       (* o#title works; o#body is a COMPILE error (not in the projection) *) ]}
+*)
 
 type 'o t
 

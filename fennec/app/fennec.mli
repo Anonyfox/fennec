@@ -6,7 +6,17 @@
     ({!static}, {!web_source}), and the single entry point ({!serve}).
 
     The framework's internals (dev-mode wiring, the CLI↔server protocol, livereload relay)
-    are NOT exported here — they are implementation details of {!serve}. *)
+    are NOT exported here — they are implementation details of {!serve}.
+
+    {[ (* an app: endpoints (Host-routed), a paw pipeline, the SSR app, one entry point *)
+       let web =
+         Endpoint.make ~name:"web" ~hosts:[ "*" ] ()
+         |> Endpoint.pipe [ Paw.Logger.make (); Paw.Security_headers.make () ]
+         |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true}|})
+         |> Endpoint.app (Fur_ssr.handler ~styles:Site_styles.css ~mounts:[ Web_app.Routes.mount ])
+
+       let () = Fennec.serve [ web ]                 (* plain HTTP *)
+       (* ~tls / ~acme for HTTPS; ~on_start:(fun ~sw ~sleep:_ -> …) for boot (e.g. Pulse setup) *) ]} *)
 
 (** {1 Core types} *)
 

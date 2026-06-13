@@ -1,6 +1,14 @@
 (** The ambient client facade — Meteor's [Meteor.subscribe] / [Meteor.call] / [Meteor.connect] over
     the ONE page connection recorded by {!connect}. No [client] threading; pairs with the per-model
-    [Pulse.Collection] views ([Tasks.find …]) to give the full Meteor surface. *)
+    [Pulse.Collection] views ([Tasks.find …]) to give the full Meteor surface. 
+
+    {[ (* the ambient client surface — Meteor's verbs, typed *)
+       open Task                              (* the model module ([@@deriving collection]) *)
+       let () = Pulse.connect ~path:"/ddp" ()              (* Meteor.connect *)
+       let ready = Pulse.subscribe ~name:"tasks" ()        (* Meteor.subscribe *)
+       let live  = Task.find ~where:[%q done_ = false] ~sort:[%sort title asc] ()   (* Tasks.find *)
+       let _ = Pulse.call add_task "buy milk"              (* Meteor.call (optimistic if ?stub) *) ]}
+*)
 
 (** Open the page connection (the one server a page talks to) and record it as the ambient default.
     Same options as {!Ddp_client.connect}; returns unit (use {!Ddp_client.default} for [close]). *)

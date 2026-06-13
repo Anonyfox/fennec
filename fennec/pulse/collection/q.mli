@@ -1,7 +1,14 @@
 (** Typed selectors over field handles — each combinator compiles to the Bson selector the engine
     already executes; field names/encodings come from the declaration (a renamed field is a compile
     error). Combine with {!all} (AND, the default reading of a list) / {!any} (OR); {!raw} keeps
-    the full Mongo operator surface reachable. *)
+    the full Mongo operator surface reachable. 
+
+    {[ open Task   (* brings the model's Fields into scope *)
+       (* the [%q] DSL (recommended) — reads as a condition: *)
+       let _ = Task.find ~where:[%q status = "doing" && priority >= 2 && assignee.email = "x"] ()
+       (* the explicit combinator form (escape hatch): *)
+       let _ = Q.[ eq Fields.status "doing"; gte Fields.priority 2 ] ]}
+*)
 
 type t = (string * Bson.t) list
 
