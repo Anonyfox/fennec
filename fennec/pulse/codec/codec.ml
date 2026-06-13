@@ -426,7 +426,9 @@ let dec_field (f : 'a field) kvs : ('a, error list) result =
   | None -> (
       match f.fld_default with
       | Some d -> Ok d
-      | None -> Error [ { path = []; msg = "missing field " ^ f.fld_name } ])
+      (* path-tagged by field name (like the type-mismatch case above), so a missing required field
+         is attributable to it — what per-field consumers (form feedback) need *)
+      | None -> Error [ { path = [ f.fld_name ]; msg = "is required" } ])
 
 (* [None]/default-empty encodes by omitting the key — Mongo-idiomatic absence *)
 let enc_field (f : 'a field) (v : 'a) : (string * Bson.t) option =

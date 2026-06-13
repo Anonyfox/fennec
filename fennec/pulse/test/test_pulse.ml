@@ -148,7 +148,7 @@ let%test "codec: record codecs (obj2 + req/opt) roundtrip; errors name the field
   && (match c.Codec.enc ("a", None) with Bson.Document [ ("title", _) ] -> true | _ -> false)
   && (match c.Codec.dec (B.doc [ ("title", B.str "x") ]) with Ok ("x", None) -> true | _ -> false)
   && (match c.Codec.dec (B.doc [ ("note", B.str "n") ]) with
-     | Error e -> e = "missing field title"
+     | Error e -> e = "title: is required"
      | Ok _ -> false)
 
 let%test "seed streams: same (seed, scope) mints the SAME ids both sides; another scope diverges" =

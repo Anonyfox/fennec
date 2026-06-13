@@ -1,0 +1,14 @@
+; fennec.web — the typed "middle layer" on Paw: forms, server-rendered views, typed request
+; actions, content negotiation, and RESTful resources. It owns NO new model — it projects the SAME
+; Codec shape (the one that powers collections + DDP methods) onto HTTP, so one declaration drives
+; the DB, the wire, the form, and the JSON API with no drift. Native (server-side) only.
+
+(library
+ (name fennec_web)
+ (public_name fennec.web)
+ (modes byte native)
+ (libraries fennec.paw fennec.pulse.codec fennec-mongo.bson)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))
