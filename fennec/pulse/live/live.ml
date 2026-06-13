@@ -7,9 +7,24 @@ type t = {
   store : Merge_store.t;
   vlock : Mutex.t; (* guards [versions] — an SSR-shared client may be read from several domains *)
   versions : (string, int Fur.signal) Hashtbl.t;
+  warned : (string, unit) Hashtbl.t;
+      (* malformed-doc ids already logged. PER INSTANCE (was a process global, which leaked across
+         tenants — one client's warning suppressed another's) and BOUNDED (reset when full) so a
+         long-lived SSR process seeing many distinct bad ids can't grow it without limit. *)
 }
 
-let create () = { store = Merge_store.create (); vlock = Mutex.create (); versions = Hashtbl.create 8 }
+let create () =
+  { store = Merge_store.create (); vlock = Mutex.create (); versions = Hashtbl.create 8; warned = Hashtbl.create 16 }
+
+(* log a malformed-doc skip at most once per id, bounding the set *)
+let warned_cap = 4096
+
+let warn_once t key msg =
+  if not (Hashtbl.mem t.warned key) then begin
+    if Hashtbl.length t.warned >= warned_cap then Hashtbl.reset t.warned;
+    Hashtbl.replace t.warned key ();
+    prerr_endline msg
+  end
 let store t = t.store
 
 (* The recompute SCHEDULER: how a store change reaches the Fur signals. Default = immediate (native,
@@ -59,28 +74,24 @@ let find t name ?selector ?sort ?skip ?limit ?fields () : Bson.t array Fur.signa
    at the boundary with the skip policy — documents that no longer match the declared shape are
    skipped (foreign garbage, legacy docs), warned ONCE per doc id so dev sees it without the UI
    ever crashing on it. *)
-let _warned : (string, unit) Hashtbl.t = Hashtbl.create 8
-
 let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur.signal =
   let name = Def.name def in
   let codec = Def.codec def in
   let selector = match Filter.all where with [] -> None | q -> Some (Filter.to_bson q) in
   let sort = Option.map Sort.to_bson sort in
   let v = version_signal t name in
+  (* single pass over the fetched array (was array→list→array, two extra allocations per recompute) *)
   let snap () =
     Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
-    |> Array.to_list
-    |> List.filter_map (fun d ->
+    |> Array.to_seq
+    |> Seq.filter_map (fun d ->
            match Codec.decode codec d with
            | Ok x -> Some x
            | Error es ->
                let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in
-               if not (Hashtbl.mem _warned key) then begin
-                 Hashtbl.replace _warned key ();
-                 prerr_endline ("fennec/typed: skipping malformed doc " ^ key ^ " — " ^ Codec.errors_to_string es)
-               end;
+               warn_once t key ("fennec/typed: skipping malformed doc " ^ key ^ " — " ^ Codec.errors_to_string es);
                None)
-    |> Array.of_list
+    |> Array.of_seq
   in
   let result = Fur.signal [||] in
   let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
@@ -95,18 +106,16 @@ let find_p t (name : string) (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit ()
   let v = version_signal t name in
   let snap () =
     Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
-    |> Array.to_list
-    |> List.filter_map (fun d ->
+    |> Array.to_seq
+    |> Seq.filter_map (fun d ->
            match Proj.decode p d with
            | Ok x -> Some x
            | Error es ->
                let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in
-               if not (Hashtbl.mem _warned key) then begin
-                 Hashtbl.replace _warned key ();
-                 prerr_endline ("fennec/typed: skipping malformed projection " ^ key ^ " — " ^ Codec.errors_to_string es)
-               end;
+               warn_once t key
+                 ("fennec/typed: skipping malformed projection " ^ key ^ " — " ^ Codec.errors_to_string es);
                None)
-    |> Array.of_list
+    |> Array.of_seq
   in
   let result = Fur.signal [||] in
   let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
