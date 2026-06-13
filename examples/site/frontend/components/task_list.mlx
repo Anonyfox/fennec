@@ -15,20 +15,19 @@
 
 open Task   (* the model: brings its fields into scope (queries read bare) AND its Tasks view *)
 
-let () = ignore (Ddp_client.connect ~path:"/ddp" ())   (* the one page connection (ambient) *)
+let () = Pulse.connect ~path:"/ddp" ()   (* the one page connection (ambient) *)
 let added = ref 0
 
 let make () =
-  (* [use_subscribe] subscribes for this component's lifetime (auto-unsubscribes on cleanup) and
-     returns a [ready] signal — false until the server confirms the subscription. *)
-  let ready = Ddp_client.use_subscribe (Ddp_client.default ()) ~name:"tasks" () in
+  (* subscribe for this component's lifetime (auto-stops on cleanup) — Meteor's Meteor.subscribe *)
+  let ready = Pulse.use_subscribe ~name:"tasks" () in
   (* the collection IS the object — no client, no handle. PROJECTED live read ships/types ONLY title
      (Meteor's { fields: { title: 1 } }); [t#title] works, [t#body] is a compile error. *)
   let tasks = Tasks.find_p [%fields title] ~where:[%q title <> ""] ~sort:[%sort title asc] () in
   let add_task () =
     incr added;
-    (* the TYPED call through the shared declaration — a wrong argument type is a compile error *)
-    ignore (Ddp_client.call_m (Ddp_client.default ()) Site_methods.add_task ("Task " ^ string_of_int !added))
+    (* the TYPED method call — a wrong argument type is a compile error (Meteor's Meteor.call) *)
+    ignore (Pulse.call Site_methods.add_task ("Task " ^ string_of_int !added))
   in
   fun () ->
     <div className="tasks">
