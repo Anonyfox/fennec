@@ -27,6 +27,64 @@ let check_attr =
     Ast_pattern.(single_expr_payload __)
     (fun e -> e)
 
+(* ---- validation attributes: the catalog inline on the record, so there is ONE model form -------
+   Each present attribute wraps the field's base codec with its combinator. No-payload flags
+   ([@non_empty] [@email] …), int payloads ([@max_len 140]), and expression payloads ([@one_of …]
+   [@min 1]). Numeric bounds pick min_i/min_f by the field's base type. *)
+let lc = Attribute.Context.label_declaration
+
+let flag name = Attribute.declare name lc Ast_pattern.(pstr nil) ()
+let inta name = Attribute.declare name lc Ast_pattern.(single_expr_payload (eint __)) (fun n -> n)
+let expra name = Attribute.declare name lc Ast_pattern.(single_expr_payload __) (fun e -> e)
+
+let a_non_empty = flag "non_empty"
+let a_email = flag "email"
+let a_url = flag "url"
+let a_slug = flag "slug"
+let a_trim = flag "trim"
+let a_lowercase = flag "lowercase"
+let a_positive = flag "positive"
+let a_min_len = inta "min_len"
+let a_max_len = inta "max_len"
+let a_one_of = expra "one_of"
+let a_matches = expra "matches"
+let a_min = expra "min"
+let a_max = expra "max"
+
+(* unwrap list/option to the leaf scalar kind, for numeric-bound combinator choice *)
+let rec base_kind (ct : core_type) =
+  match ct.ptyp_desc with
+  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> `Str
+  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> `Int
+  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> `Float
+  | Ptyp_constr ({ txt = Lident ("list" | "option"); _ }, [ el ]) -> base_kind el
+  | _ -> `Other
+
+(* the ordered wrapper chain a field's validation attributes contribute (innermost first) *)
+let validators ~loc (ld : label_declaration) : (expression -> expression) list =
+  let kind = base_kind ld.pld_type in
+  let opt a f = match Attribute.get a ld with Some v -> [ f v ] | None -> [] in
+  let num_bound which e =
+    match kind with
+    | `Int -> [%expr [%e if which = `Min then [%expr Codec.min_i] else [%expr Codec.max_i]] [%e e]]
+    | _ -> [%expr [%e if which = `Min then [%expr Codec.min_f] else [%expr Codec.max_f]] [%e e]]
+  in
+  List.concat
+    [ opt a_trim (fun () c -> [%expr Codec.trim [%e c]]);
+      opt a_lowercase (fun () c -> [%expr Codec.lowercase [%e c]]);
+      opt a_non_empty (fun () c -> [%expr Codec.non_empty [%e c]]);
+      opt a_min_len (fun n c -> [%expr Codec.min_len [%e Ast_builder.Default.eint ~loc n] [%e c]]);
+      opt a_max_len (fun n c -> [%expr Codec.max_len [%e Ast_builder.Default.eint ~loc n] [%e c]]);
+      opt a_email (fun () c -> [%expr Codec.email [%e c]]);
+      opt a_url (fun () c -> [%expr Codec.url [%e c]]);
+      opt a_slug (fun () c -> [%expr Codec.slug [%e c]]);
+      opt a_one_of (fun e c -> [%expr Codec.one_of [%e e] [%e c]]);
+      opt a_matches (fun e c -> [%expr Codec.pattern [%e e] [%e c]]);
+      opt a_positive (fun () c -> match kind with `Int -> [%expr Codec.positive_i [%e c]] | _ -> [%expr Codec.positive [%e c]]);
+      opt a_min (fun e c -> [%expr [%e num_bound `Min e] [%e c]]);
+      opt a_max (fun e c -> [%expr [%e num_bound `Max e] [%e c]]);
+      opt check_attr (fun e c -> [%expr Codec.check [%e e] [%e c]]) ]
+
 (* the base codec expression for a core type (primitives + list/option of primitives) *)
 let rec base_codec ~loc (ct : core_type) : expression option =
   match ct.ptyp_desc with
@@ -64,8 +122,8 @@ let field_spec ~loc (ld : label_declaration) : expression =
            embedded M.t whose module M also derives fennec_collection — else use the hand-written builder)"
           fname
   in
-  let base = List.fold_left (fun acc chk -> [%expr Codec.check [%e chk] [%e acc]]) base
-      (match Attribute.get check_attr ld with Some e -> [ e ] | None -> []) in
+  (* wrap the base codec with the field's validation attributes (innermost-first chain) *)
+  let base = List.fold_left (fun acc wrap -> wrap acc) base (validators ~loc ld) in
   if (fname = "id" || fname = "_id") && not (is_list || is_option) then [%expr Codec.doc_id]
   else
     let w = Ast_builder.Default.estring ~loc wire in
@@ -253,7 +311,83 @@ let fields_expander =
       in
       [%expr Proj.v ~fields:[%e fields_list] ~decode:(fun __d -> [%e decode_body])])
 
+(* ---- [%q …] / [%sort …] / [%set …] — write queries as expressions, not API calls -------------
+   Resolved against the model's [Fields] in scope (open Task, or Task.(…)). A bare ident is a field
+   (Fields.x); record-access [a.b] is a dotted path (Codec.dot, navigating the embedded Fields).
+   Everything expands to the typed Q/Sort/M calls, so a wrong field/value is still a compile error —
+   only the noise is gone. Richer matchers/modifiers (regex/has/inc/push) use Q/M directly. *)
+
+(* a field path expression (bare ident or a.b.c record-access) → the handle, dotted via Codec.dot *)
+let segs_of_field e =
+  let rec go e =
+    match e.pexp_desc with
+    | Pexp_ident { txt = Lident n; _ } -> [ n ]
+    | Pexp_field (inner, { txt = Lident n; _ }) -> go inner @ [ n ]
+    | _ -> Location.raise_errorf ~loc:e.pexp_loc "expected a field name or a.b path"
+  in
+  go e
+
+let field_handle ~loc segs =
+  let module B = Ast_builder.Default in
+  let rec chain modp = function
+    | [ s ] -> B.pexp_ident ~loc { txt = Ldot (modp, s); loc }
+    | s :: rest -> [%expr Codec.dot [%e B.pexp_ident ~loc { txt = Ldot (modp, s); loc }] [%e chain (Ldot (modp, String.capitalize_ascii s)) rest]]
+    | [] -> assert false
+  in
+  chain (Lident "Fields") segs
+
+let q_expander =
+  Extension.declare "q" Extension.Context.expression Ast_pattern.(single_expr_payload __)
+    (fun ~loc ~path:_ e ->
+      let fld e = field_handle ~loc (segs_of_field e) in
+      let cmp = function
+        | "=" -> Some [%expr Q.eq] | "<>" -> Some [%expr Q.ne] | "<" -> Some [%expr Q.lt]
+        | "<=" -> Some [%expr Q.lte] | ">" -> Some [%expr Q.gt] | ">=" -> Some [%expr Q.gte] | _ -> None
+      in
+      let rec q_of e =
+        match e.pexp_desc with
+        | Pexp_construct ({ txt = Lident "true"; _ }, None) -> [%expr Q.all []]
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "&&"; _ }; _ }, [ (_, l); (_, r) ]) ->
+            [%expr Q.all [ [%e q_of l]; [%e q_of r] ]]
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "||"; _ }; _ }, [ (_, l); (_, r) ]) ->
+            [%expr Q.any [ [%e q_of l]; [%e q_of r] ]]
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ }, [ (_, l); (_, r) ]) when cmp op <> None ->
+            [%expr [%e Option.get (cmp op)] [%e fld l] [%e r]]
+        | _ ->
+            Location.raise_errorf ~loc:e.pexp_loc
+              "%%q: use comparisons (= <> < <= > >=) and && / ||; for in/has/regex use Q directly"
+      in
+      [%expr [ [%e q_of e] ]])
+
+let sort_expander =
+  Extension.declare "sort" Extension.Context.expression Ast_pattern.(single_expr_payload __)
+    (fun ~loc ~path:_ e ->
+      let key e =
+        match e.pexp_desc with
+        | Pexp_apply (f, [ (_, { pexp_desc = Pexp_ident { txt = Lident dir; _ }; _ }) ]) ->
+            let h = field_handle ~loc (segs_of_field f) in
+            (match dir with
+             | "asc" -> [%expr Sort.asc [%e h]] | "desc" -> [%expr Sort.desc [%e h]]
+             | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%sort: direction must be asc or desc")
+        | _ -> [%expr Sort.asc [%e field_handle ~loc (segs_of_field e)]]
+      in
+      let keys = match e.pexp_desc with Pexp_tuple es -> List.map key es | _ -> [ key e ] in
+      [%expr Sort.by [%e Ast_builder.Default.elist ~loc keys]])
+
+let set_expander =
+  Extension.declare "set" Extension.Context.expression Ast_pattern.(single_expr_payload __)
+    (fun ~loc ~path:_ e ->
+      let one e =
+        match e.pexp_desc with
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "="; _ }; _ }, [ (_, l); (_, r) ]) ->
+            [%expr M.set [%e field_handle ~loc (segs_of_field l)] [%e r]]
+        | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%set: each clause is `field = value`; for inc/push/… use M"
+      in
+      let rec assigns e = match e.pexp_desc with Pexp_sequence (a, b) -> assigns a @ assigns b | _ -> [ one e ] in
+      [%expr M.all [%e Ast_builder.Default.elist ~loc (assigns e)]])
+
 (* exposed for composition into a SINGLE driver: fur.ppx (mlx components) and the thin standalone
    both fold these into their own [register_transformation ~rules], so a file pays ONE ppx process
-   for mlx + tests + the collection deriver + projections. *)
-let rules = [ Context_free.Rule.extension fields_expander ]
+   for mlx + tests + the collection deriver + projections + query/sort/set DSLs. *)
+let rules =
+  List.map Context_free.Rule.extension [ fields_expander; q_expander; sort_expander; set_expander ]

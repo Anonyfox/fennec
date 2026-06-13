@@ -87,8 +87,22 @@ Convention over annotation — the deriver applies the rules a reader would gues
 - the collection name stays an EXPLICIT string — deriving it from the module name needs English
   pluralization inflection, a Rails scar (surprising on person/status) we refuse to import.
 
-Attributes exist only for deviations: `[@check fun s -> ...]` (validation), `[@key "wireName"]`
-(a wire key that isn't a keyword escape), `[@default v]` (a non-obvious default).
+Validation is the inline attribute catalog (ONE model form — no hand-written builder needed):
+`[@non_empty] [@min_len n] [@max_len n] [@one_of [..]] [@matches "re"] [@email] [@url] [@slug]
+[@trim] [@lowercase] [@min n] [@max n] [@positive] [@check fun .. -> ..]`. `[@key "wire"]` overrides
+the wire key. Each wraps the field's codec; they stack and collect.
+
+**Queries read as expressions, not API calls** (the `[%q]`/`[%sort]`/`[%set]` DSLs, resolved against
+the model's `Fields` in scope — `open Task` or `Task.(…)`):
+```ocaml
+~where:[%q status = "doing" && priority >= 2 && assignee.email = "ada@x.io"]
+~sort:[%sort priority desc, title asc]
+[%set status = "done"]
+```
+They expand to byte-identical typed `Q`/`Sort`/`M` calls — a wrong field/value is still a compile
+error, only the `Q.`/`Fields.`/`eq`/`dot`/list noise is gone. `[%q]` covers `= <> < <= > >=` and
+`&& ||` (bare ident = field, `a.b` = dotted path); richer matchers (`in_`/`has`/`regex`) and
+modifiers (`inc`/`push`/…) use `Q`/`M` directly.
 
 One writing site, zero duplication, and the record stays 100% vanilla OCaml: dot access, pattern
 matching, merlin hover/completion all work natively (no synthetic types). The deriver — one small

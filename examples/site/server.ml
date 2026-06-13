@@ -45,8 +45,9 @@ let powered_by : Fennec.Paw.t =
    subscribes and renders it live; addTask inserts and the new doc is pushed back through the open
    subscription — server→client push, no refetch.
 
-   The backend is the runtime-selectable Dynamic one: real MongoDB when MONGO_URL is set (the CLI's
-   `--mongo` flag launches a managed mongod and sets it), else the in-memory engine. The driver is a
+   The backend is the runtime-selectable Dynamic one: real MongoDB for a real global Mongo URL
+   (the CLI's `--mongo` flag launches a managed mongod and sets MONGO_URL), or the in-memory engine
+   for the derived `:memory:` URL. The driver is a
    hard dependency — the dev/test server still runs as fast bytecode: dune builds libmongoc + the C
    stub ONCE, and the dev/test harness puts that stub dir on CAML_LD_LIBRARY_PATH (so the bytecode
    dlopens it), so per-edit only OCaml recompiles — no native, no relink. *)
@@ -57,8 +58,8 @@ module RT = Fennec_pulse_server.Make (RData)
 let realtime_ddp = RT.paw ~path:"/ddp" ()
 
 (* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method.
-   [Dynamic.from_env] is the whole backend choice — real mongo when the CLI's --mongo flag exported
-   MONGO_URL, else the in-memory engine — no config branch here. *)
+   [Dynamic.from_env] is the whole backend choice — it consumes the global Mongo URL
+   (`MONGO_URL` or derived `:memory:`), so there is no app config branch here. *)
 module T = Fennec_pulse.Typed.Make (RData)
 
 let setup_realtime ~sw =
@@ -67,7 +68,7 @@ let setup_realtime ~sw =
      validate (an invalid value cannot reach the database), reads decode with the skip policy *)
   let tasks = T.attach Task.collection backend in
   List.iter (fun title -> ignore (T.insert tasks { Task.id = ""; title; body = "" })) [ "Buy milk"; "Walk the dog" ];
-  RData.publish "tasks" (fun _params -> RData.Cursor (T.cursor tasks ()));
+  RData.publish "tasks" (fun _pub -> RData.Cursor (T.cursor tasks ()));
   (* SSR: hand the same docs to the SSR reactive so the first server-rendered paint already includes
      the tasks; the browser hydrates them flicker-free, then the live subscription re-confirms. *)
   Ddp_client.publish ~name:"tasks" (fun _ ->
@@ -115,6 +116,4 @@ let admin =
    watches the served bundles and pings the server's dev control socket, which relays
    a CSS hot-swap or full reload to the browser. The server watches nothing. *)
 let () = Fennec.serve ~on_start:(fun ~sw ~sleep:_ -> setup_realtime ~sw) [ web; admin ]
-
-
 

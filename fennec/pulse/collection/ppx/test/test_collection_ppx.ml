@@ -146,4 +146,39 @@ let%test "Codec.dot chains for deeper paths and keeps the leaf type" =
      | B.Document [ ("author.email", B.Document [ ("$in", B.Array _) ]) ] -> true
      | _ -> false)
 
+(* ── the friendly surface: validation attributes + [%q]/[%sort]/[%set] DSLs ── *)
+module Friendly = struct
+  type t = {
+    id : string;
+    title : string;   [@trim] [@non_empty] [@max_len 20]
+    status : string;  [@one_of [ "todo"; "doing"; "done" ]]
+    priority : int;   [@min 1] [@max 5]
+    email : string;   [@lowercase] [@email]
+  }
+  [@@deriving fennec_collection ~name:"friendly"]
+end
+
+let%test "validation attributes: the inline catalog enforces (one model form, no builder)" =
+  let open Friendly in
+  let bad = B.doc [ ("_id", B.str "z"); ("title", B.str ""); ("status", B.str "nope");
+                    ("priority", B.int 9); ("email", B.str "X@Y") ] in
+  (match Codec.decode codec bad with
+   | Error es -> List.length es >= 3   (* empty title + bad status + priority>5, all collected *)
+   | Ok _ -> false)
+  && (* trim + lowercase normalizers run *)
+  (match Codec.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "  Hi  "); ("status", B.str "todo");
+                                     ("priority", B.int 2); ("email", B.str "ADA@X.IO") ]) with
+   | Ok v -> v.title = "Hi" && v.email = "ada@x.io"
+   | Error _ -> false)
+
+let%test "[%q] / [%sort] / [%set]: expressions expand to the typed Q/Sort/M (same wire as explicit)" =
+  let open Friendly in
+  let q = [%q status = "doing" && priority >= 2] in
+  (* expands to a singleton clause list combining via Q.all *)
+  (match q with [ _ ] -> true | _ -> false)
+  && Q.to_bson (Q.all q) = Q.to_bson (Q.all Q.[ eq Fields.status "doing"; gte Fields.priority 2 ])
+  && Sort.to_bson [%sort priority desc, title asc]
+     = Sort.to_bson Sort.(by [ desc Fields.priority; asc Fields.title ])
+  && M.to_bson [%set status = "done"] = M.to_bson M.(all [ set Fields.status "done" ])
+
 let () = exit (Fennec_hunt_unit.run ())
