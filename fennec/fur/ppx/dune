@@ -7,7 +7,7 @@
  (name fennec_fur_ppx)
  (public_name fennec.fur.ppx)
  (kind ppx_rewriter)
- (libraries ppxlib fennec-hunt.ppx.rules)
+ (libraries ppxlib fennec-hunt.ppx.rules fennec.pulse.collection.ppx.rules)
  (preprocess
   (pps ppxlib.metaquot))
  (flags

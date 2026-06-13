@@ -1,0 +1,9 @@
+; The fennec.pulse.collection ppx RULES as a plain library — NOT a ppx_rewriter. The reusable core
+; (the [@@deriving fennec_collection] deriver + the [%fields] projection extension); both fur.ppx
+; and the standalone fennec.pulse.collection.ppx link it and register the same rules in their own
+; driver, so a file pays ONE ppx process regardless of which it uses.
+(library
+ (name fennec_pulse_collection_ppx_rules)
+ (public_name fennec.pulse.collection.ppx.rules)
+ (libraries ppxlib)
+ (preprocess (pps ppxlib.metaquot)))

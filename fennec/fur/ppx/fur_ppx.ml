@@ -187,5 +187,8 @@ let impl str =
   Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks str))))
 (* register the MLX transform (whole-structure) + the inline test rules (context-free) in
    ONE driver, so a library using (pps fennec.fur.ppx) pays ONE ppx process for both *)
+(* ONE driver for the whole component pipeline: MLX/JSX sugar (impl) + inline tests (hunt rules) +
+   the typed-collection deriver & [%fields] projections (collection rules). [(pps fennec.fur.ppx)]
+   alone gives all of it — no extra pps entry, no extra ppx subprocess. *)
 let () = Driver.register_transformation "iso_jsx" ~impl
-    ~rules:Fennec_hunt_ppx_rules.rules
+    ~rules:(Fennec_hunt_ppx_rules.rules @ Fennec_pulse_collection_ppx_rules.rules)

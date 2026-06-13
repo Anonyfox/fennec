@@ -1,4 +1,8 @@
-(* [@@fennec.collection "name"] — generates, for a plain record type t:
+(* The fennec.pulse.collection ppx RULES as a plain library (NOT a ppx_rewriter): both the
+   standalone fennec.pulse.collection.ppx AND fur.ppx import this and register the same rules in
+   their own driver, so downstream pays ONE ppx process. Exposes [deriver] (global) + [rules].
+
+   [@@fennec.collection "name"] — generates, for a plain record type t:
      module Fields = struct let <f> = Codec.req/opt/opt_list/doc_id … end
      let codec      = Codec.(seal (record (fun … -> {…}) |> field Fields.f (fun x -> x.f) |> …))
      let collection = Def.v "name" codec
@@ -96,6 +100,8 @@ let expand ~ctxt (_rec : rec_flag) (tds : type_declaration list) (cname : string
   | _ ->
       Location.raise_errorf ~loc "fennec.collection: expects a single record type named t"
 
+(* the deriver registers GLOBALLY on module load (forced when fur.ppx / the standalone references
+   this module), so [@@deriving fennec_collection] works in whichever single driver links us *)
 let deriver =
   Deriving.add "fennec_collection"
     ~str_type_decl:
@@ -182,4 +188,7 @@ let fields_expander =
       in
       [%expr Proj.v ~fields:[%e fields_list] ~decode:(fun __d -> [%e decode_body])])
 
-let () = Driver.register_transformation "fennec_fields" ~extensions:[ fields_expander ]
+(* exposed for composition into a SINGLE driver: fur.ppx (mlx components) and the thin standalone
+   both fold these into their own [register_transformation ~rules], so a file pays ONE ppx process
+   for mlx + tests + the collection deriver + projections. *)
+let rules = [ Context_free.Rule.extension fields_expander ]

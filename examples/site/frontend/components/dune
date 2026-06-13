@@ -13,6 +13,6 @@
   fennec.pulse.codec
   fennec.pulse.collection)
  (preprocess
-  (pps fennec.fur.ppx fennec.pulse.collection.ppx))
+  (pps fennec.fur.ppx))
  (flags
   (:standard -w -a -open Fur)))

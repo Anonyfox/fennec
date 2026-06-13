@@ -3,4 +3,4 @@
 (test
  (name test_collection_ppx)
  (libraries fennec.pulse.codec fennec.pulse.collection fennec-hunt.unit)
- (preprocess (pps fennec-hunt.ppx fennec.pulse.collection.ppx)))
+ (preprocess (pps fennec.fur.ppx)))
