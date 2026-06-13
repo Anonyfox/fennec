@@ -20,9 +20,16 @@ let _pubs : (string, Bson.t list -> (string * Bson.t list) list) Hashtbl.t = Has
 let publish ~name f = Hashtbl.replace _pubs name f
 let seed_key name params = "ddp:" ^ Subkey.key name params
 
+(* the ambient default — on the server (SSR) the "connection" is a seeded Live store; the per-model
+   Collection views read through it exactly as the browser does, so component source is identical *)
+let _default : t option ref = ref None
+let default () = match !_default with Some t -> t | None -> failwith "Ddp_client: call connect before querying"
+
 let connect ?path ?persist ?chrome () =
   ignore (path, persist, chrome);
-  { live = Live.create () }
+  let t = { live = Live.create () } in
+  _default := Some t;
+  t
 
 (* SSR has no socket / reconnect loop, so tearing down is a no-op *)
 let close (_ : t) = ()
@@ -68,3 +75,11 @@ let find t = Live.find t.live
 let find_c t = Live.find_c t.live
 let find_p t def = Live.find_p t.live (Def.name def)
 let aggregate t = Live.aggregate t.live
+
+module Collection (M : sig
+  type doc
+  val collection : doc Def.t
+end) = struct
+  let find ?where ?sort ?skip ?limit () = find_c (default ()) M.collection ?where ?sort ?skip ?limit ()
+  let find_p p ?where ?sort ?skip ?limit () = find_p (default ()) M.collection p ?where ?sort ?skip ?limit ()
+end

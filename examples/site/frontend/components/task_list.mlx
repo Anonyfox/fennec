@@ -13,24 +13,22 @@
 .add-task:hover { opacity: .9 }
 |scss}]
 
-open Task   (* bring the model's fields into scope: queries below read bare, no Task.(...) *)
+open Task   (* the model: brings its fields into scope (queries read bare) AND its Tasks view *)
 
-let client = Ddp_client.connect ~path:"/ddp" () (* persistence auto-adopts the PWA meta *)
+let () = ignore (Ddp_client.connect ~path:"/ddp" ())   (* the one page connection (ambient) *)
 let added = ref 0
 
 let make () =
   (* [use_subscribe] subscribes for this component's lifetime (auto-unsubscribes on cleanup) and
-     returns a [ready] signal — false until the server confirms the subscription, so we render a
-     loading line until the live data is present. *)
-  let ready = Ddp_client.use_subscribe client ~name:"tasks" () in
-  (* PROJECTED live read — ships/types ONLY title (Meteor's { fields: { title: 1 } }).
-     [t#title] works; [t#body] would be a COMPILE error — the field isn't on the projection. *)
-  let tasks = Ddp_client.find_p client collection [%fields title]
-                ~where:[%q title <> ""] ~sort:[%sort title asc] () in
+     returns a [ready] signal — false until the server confirms the subscription. *)
+  let ready = Ddp_client.use_subscribe (Ddp_client.default ()) ~name:"tasks" () in
+  (* the collection IS the object — no client, no handle. PROJECTED live read ships/types ONLY title
+     (Meteor's { fields: { title: 1 } }); [t#title] works, [t#body] is a compile error. *)
+  let tasks = Tasks.find_p [%fields title] ~where:[%q title <> ""] ~sort:[%sort title asc] () in
   let add_task () =
     incr added;
     (* the TYPED call through the shared declaration — a wrong argument type is a compile error *)
-    ignore (Ddp_client.call_m client Site_methods.add_task ("Task " ^ string_of_int !added))
+    ignore (Ddp_client.call_m (Ddp_client.default ()) Site_methods.add_task ("Task " ^ string_of_int !added))
   in
   fun () ->
     <div className="tasks">

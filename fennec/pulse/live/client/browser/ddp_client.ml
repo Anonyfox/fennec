@@ -326,6 +326,11 @@ let install_raf_scheduler () =
              [| Js.Unsafe.inject (Js.wrap_callback (fun _ -> k ())) |]))
   end
 
+(* the ONE page connection — a browser page talks to one server, so [connect] records it as the
+   ambient default that the per-model [Collection] views read through (no [client] threading) *)
+let _default : t option ref = ref None
+let default () = match !_default with Some t -> t | None -> failwith "Ddp_client: call connect before querying"
+
 let connect ?(path = "/websocket") ?persist ?chrome () : t =
   install_raf_scheduler ();
   let persist = match persist with Some _ as p -> p | None -> auto_persist () in
@@ -341,6 +346,7 @@ let connect ?(path = "/websocket") ?persist ?chrome () : t =
       pending_sig = Fur.signal 0; awaiting_pong = false; v2 = false; persist; outbox = [];
       persist_scheduled = false; dirty_subs = Hashtbl.create 8; closed = false; ws = None }
   in
+  _default := Some t; (* the ambient page connection *)
   (* PWA outbox restore (tier 3): every write that survived the reload re-issues with a FRESH id
      and its ORIGINAL seed, and its stub re-runs (Method.stub_replay) — the deterministic seed
      streams remint identical optimistic ids, so the rows reappear exactly as they were, BEFORE the
@@ -602,3 +608,14 @@ let pending_writes t = t.pending_sig
 (* wipe this client's persisted namespace (snapshots + outbox) — the identity-change hook: call it
    on logout/user-switch so one user's cache never leaks to the next *)
 let purge_storage t = match t.persist with Some ns -> Kv.purge ~ns | None -> ()
+
+(* The per-model client view: bind a collection once, then call verbs with no [client]/[collection]
+   threading — Meteor's `Tasks.find(...)`. Reads only (writes go through methods, by decree). All
+   reactive (Fur signals over the live cache; live in the browser, SSR-seeded server-side). *)
+module Collection (M : sig
+  type doc
+  val collection : doc Def.t
+end) = struct
+  let find ?where ?sort ?skip ?limit () = find_c (default ()) M.collection ?where ?sort ?skip ?limit ()
+  let find_p p ?where ?sort ?skip ?limit () = find_p (default ()) M.collection p ?where ?sort ?skip ?limit ()
+end

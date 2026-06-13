@@ -4,7 +4,7 @@
 (library
  (name site_store)
  (wrapped false)
- (libraries fennec.fur fennec.pulse.method fennec.pulse.codec fennec.pulse.collection fennec.pulse.live fennec-mongo.bson)
+ (libraries fennec.fur fennec.pulse.method fennec.pulse.codec fennec.pulse.collection fennec.pulse.live fennec.pulse.live.client fennec-mongo.bson)
  (preprocess (pps fennec.fur.ppx))   ; the one driver: mlx + tests + collection deriver + DSLs
  (flags
   (:standard -w -a -open Fur)))

@@ -9,3 +9,10 @@ type t = {
   body : string;   [@trim]
 }
 [@@deriving fennec_collection ~name:"tasks"]
+
+(* the client view of the collection — bind once here, then `open Task` and use `Tasks.find …`
+   anywhere with no client/handle threading (Meteor's `Tasks`). Reads only; writes are methods. *)
+module Tasks = Ddp_client.Collection (struct
+  type doc = t
+  let collection = collection
+end)

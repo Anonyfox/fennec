@@ -108,6 +108,26 @@ val find_c :
 val find_p :
   t -> 'a Def.t -> 'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 
+(** The ambient page connection recorded by {!connect} — the per-model {!Collection} views read
+    through it so day-to-day code threads no [client]. Raises if [connect] hasn't run. *)
+val default : unit -> t
+
+(** Bind a collection once, then query with NO [client]/[collection] threading — Meteor's
+    [Tasks.find(...)]. Reads only (writes go through methods, by decree); reactive (Fur signals over
+    the live cache — live in the browser, SSR-seeded server-side):
+    {[ open Task
+       module Tasks = Ddp_client.Collection (Task)
+       let open_ = Tasks.find ~where:[%q status = "doing"] ~sort:[%sort priority desc] () ]} *)
+module Collection (M : sig
+  type doc
+  val collection : doc Def.t
+end) : sig
+  val find :
+    ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
+  val find_p :
+    'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+end
+
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes as the server pushes changes. Read it with {!Fur.get} inside a component. *)
 val find :
