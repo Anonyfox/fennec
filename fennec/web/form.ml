@@ -6,6 +6,7 @@
    by wire name — exactly what re-rendering a form with inline feedback needs. *)
 
 module Conn = Fennec_paw.Conn
+module Csrf = Fennec_server.Csrf
 
 (* strip refinement wrappers down to the structural kind underneath *)
 let rec strip (v : Codec.view) : Codec.view =
@@ -156,15 +157,16 @@ let errors_block (msgs : string list) : Fur.vnode =
 
 (* A labeled field row: <label> + control + inline errors, in one call. [kind] picks the control;
    [value]/[errors] repopulate + annotate after a failed submit (use {!submitted}/{!field_errors}). *)
-let field ?(label = "") ?(kind = `Text) ?(value = "") ?(errors = []) (f : _ Codec.field) : Fur.vnode =
+let field ?(label = "") ?(kind = `Text) ?(value = "") ?(errors = []) ?(attrs = []) (f : _ Codec.field) : Fur.vnode =
   let control =
     match kind with
-    | `Text -> input ~type_:"text" ~value f
-    | `Email -> input ~type_:"email" ~value f
-    | `Password -> input ~type_:"password" ~value f
-    | `Number -> input ~type_:"number" ~value f
-    | `Textarea -> textarea ~value f
-    | `Checkbox -> checkbox ~checked:(truthy value) f
+    | `Text -> input ~type_:"text" ~value ~attrs f
+    | `Email -> input ~type_:"email" ~value ~attrs f
+    | `Password -> input ~type_:"password" ~value ~attrs f
+    | `Number -> input ~type_:"number" ~value ~attrs f
+    | `Date -> input ~type_:"date" ~value ~attrs f
+    | `Textarea -> textarea ~value ~attrs f
+    | `Checkbox -> checkbox ~checked:(truthy value) ~attrs f
   in
   let lbl = if label = "" then Fur.frag [] else label_for f label in
   Fur.h "div" [ Fur.class_ "field" ] [ lbl; control; errors_block errors ]
@@ -180,7 +182,103 @@ let form ?(method_ = `POST) ~action ?csrf ?override ?(attrs = []) (children : Fu
   in
   Fur.h "form" (Fur.attr "action" action :: Fur.attr "method" m :: attrs_of attrs) (hiddens @ children)
 
+(* ───────────────────────── the bound form (to_form) ─────────────────────────
+   A [ctx] carries the request (to repopulate values), the validation errors to show, and the form's
+   chrome (action / method / CSRF / override). [bound] then renders ONE field with everything filled
+   in automatically — value, per-field errors, inferred input type, and HTML5 constraint attributes
+   derived from the model's refinements — so the view never threads value/error/type by hand. *)
+
+(* render a model value as form-input strings (for prefilling an edit form) *)
+let rec bson_to_form_pairs name (b : Bson.t) : (string * string) list =
+  match b with
+  | Bson.String s -> [ (name, s) ]
+  | Bson.Int i -> [ (name, string_of_int i) ]
+  | Bson.Float f -> [ (name, if Float.is_integer f then string_of_int (int_of_float f) else string_of_float f) ]
+  | Bson.Bool b -> [ (name, if b then "on" else "") ]
+  | Bson.Date ms -> [ (name, Int64.to_string ms) ]
+  | Bson.Object_id s -> [ (name, s) ]
+  | Bson.Array xs -> List.concat_map (fun x -> bson_to_form_pairs name x) xs
+  | _ -> []
+
+let values_of (c : 'a Codec.t) (v : 'a) : (string * string) list =
+  match c.Codec.enc v with
+  | Bson.Document kvs -> List.concat_map (fun (k, b) -> bson_to_form_pairs k b) kvs
+  | _ -> []
+
+(* strip option/check/list wrappers to the leaf view kind *)
+let rec leaf_view (v : Codec.view) : Codec.view =
+  match v with Codec.V_check (_, i) | Codec.V_option i | Codec.V_list i -> leaf_view i | i -> i
+
+let rec is_optional (v : Codec.view) : bool =
+  match v with Codec.V_check (_, i) -> is_optional i | Codec.V_option _ -> true | _ -> false
+
+(* infer the input control from the field's leaf type (number/checkbox/date are reliable; email and
+   password aren't inferable from the shape alone, so pass [~kind] for those) *)
+let infer_kind (f : _ Codec.field) =
+  match leaf_view (Codec.field_view f) with
+  | Codec.V_bool -> `Checkbox
+  | Codec.V_int | Codec.V_float -> `Number
+  | Codec.V_date -> `Date
+  | _ -> `Text
+
+let fmt_float f = if Float.is_integer f then string_of_int (int_of_float f) else string_of_float f
+
+let hint_attrs = function
+  | Codec.H_min_len n -> [ ("minlength", string_of_int n) ]
+  | Codec.H_max_len n -> [ ("maxlength", string_of_int n) ]
+  | Codec.H_pattern p -> [ ("pattern", p) ]
+  | Codec.H_min f -> [ ("min", fmt_float f) ]
+  | Codec.H_max f -> [ ("max", fmt_float f) ]
+  | _ -> []
+
+(* the HTML5 constraint attributes a field's refinements imply (client-side validation for free, from
+   the same model the server validates against) *)
+let constraints (f : _ Codec.field) : (string * string) list =
+  let v = Codec.field_view f in
+  let rec collect acc = function
+    | Codec.V_check (h, i) -> collect (hint_attrs h @ acc) i
+    | Codec.V_option i | Codec.V_list i -> collect acc i
+    | _ -> acc
+  in
+  let cs = collect [] v in
+  if Codec.field_required f && not (is_optional v) then ("required", "required") :: cs else cs
+
+type ctx = {
+  conn : Conn.t;
+  errors : Codec.error list;
+  values : (string * string) list; (* prefill source for a fresh (edit) render *)
+  submitted : bool; (* did this request carry a form body? then repopulate from it *)
+  action : string;
+  method_ : [ `GET | `POST ];
+  override : string option;
+  csrf : string option;
+}
+
+(* [start conn ~action …] opens a bound form. [~errors] are shown inline; [~values] prefill a fresh
+   render (use {!values_of} on the entity for an edit form); [~secret] auto-mints a CSRF token (or
+   pass [~csrf] directly); [~override] simulates PUT/PATCH/DELETE. After a failed submit the request
+   body repopulates every field automatically (including values that failed to coerce). *)
+let start ?(method_ = `POST) ?(errors = []) ?(values = []) ?override ?csrf ?secret ~action conn : ctx =
+  let csrf = match csrf with Some t -> Some t | None -> Option.map (fun s -> Csrf.token ~secret:s conn) secret in
+  { conn; errors; values; submitted = Conn.body_params conn <> []; action; method_; override; csrf }
+
+let value_for (c : ctx) (name : string) : string =
+  if c.submitted then Option.value ~default:"" (Conn.body_param c.conn name)
+  else Option.value ~default:"" (List.assoc_opt name c.values)
+
+(* render ONE field of a bound form — value, errors, input type, and constraints all filled in *)
+let bound (c : ctx) ?label ?kind (f : _ Codec.field) : Fur.vnode =
+  let kind = match kind with Some k -> k | None -> infer_kind f in
+  field ?label ~kind ~value:(value_for c (Codec.field_name f)) ~errors:(field_errors f c.errors)
+    ~attrs:(constraints f) f
+
+(* wrap a bound form's fields in the <form> (action/method/CSRF/override all from the ctx) *)
+let render (c : ctx) (children : Fur.vnode list) : Fur.vnode =
+  form ~method_:c.method_ ~action:c.action ?csrf:c.csrf ?override:c.override children
+
 (* ──────────────────────────── tests ──────────────────────────── *)
+
+module H = Fennec_core.Http
 
 let contains hay needle =
   let nh = String.length hay and nn = String.length needle in
@@ -246,3 +344,46 @@ let%test "checkbox reflects checked state and submits \"on\"" =
   let f_sub = Codec.(req "subscribe" bool) in
   let on = Fur.to_html (checkbox ~checked:true f_sub) and off = Fur.to_html (checkbox ~checked:false f_sub) in
   contains on "checked=\"checked\"" && contains on "value=\"on\"" && not (contains off "checked")
+
+let%test "infer_kind reads the field's leaf type" =
+  infer_kind f_age = `Number
+  && infer_kind Codec.(req "ok" bool) = `Checkbox
+  && infer_kind Codec.(req "when" date) = `Date
+  && infer_kind f_email = `Text
+
+let%test "constraints derive HTML5 attributes from refinements + requiredness" =
+  let cs = constraints Codec.(req "title" (non_empty (max_len 80 string))) in
+  List.mem ("required", "required") cs && List.mem ("maxlength", "80") cs
+
+let%test "an optional field is not marked required" =
+  not (List.mem ("required", "required") (constraints Codec.(opt "nick" string)))
+
+let%test "bound: a fresh form prefills from ~values; input type + constraints are inferred" =
+  let conn = Conn.make (H.make_request ~meth:H.GET ~path:"/x" ()) in
+  let f = start conn ~action:"/signup" ~values:[ ("age", "30") ] in
+  let html = Fur.to_html (bound f f_age ~label:"Age") in
+  contains html "type=\"number\"" && contains html "value=\"30\"" && contains html {|<label for="age">Age</label>|}
+
+let%test "bound: after a failed submit the body repopulates and errors show" =
+  let conn =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/x"
+         ~headers:[ ("content-type", "application/x-www-form-urlencoded") ]
+         ~body:"email=bad&age=10" ())
+  in
+  let errs = match parse_assoc signup_codec [ ("email", "bad"); ("age", "10"); ("subscribe", "on") ] with Error e -> e | Ok _ -> [] in
+  let f = start conn ~action:"/signup" ~errors:errs in
+  let html = Fur.to_html (bound f f_email ~label:"Email") in
+  contains html "value=\"bad\"" (* repopulated *) && contains html "field-errors"
+
+let%test "render wraps fields with the ctx's action/method/csrf/override" =
+  let conn = Conn.make (H.make_request ~meth:H.GET ~path:"/x" ()) in
+  let f = start conn ~action:"/posts/1" ~override:"PUT" ~csrf:"tok" in
+  let html = Fur.to_html (render f [ submit "Save" ]) in
+  contains html "action=\"/posts/1\"" && contains html {|name="_method"|} && contains html "value=\"PUT\""
+  && contains html {|name="_csrf_token"|} && contains html "value=\"tok\""
+
+let%test "values_of encodes a model into form-input strings" =
+  let v = values_of signup_codec { email = "a@b"; age = 7; tags = [ "x"; "y" ]; subscribe = true } in
+  List.assoc "email" v = "a@b" && List.assoc "age" v = "7" && List.assoc "subscribe" v = "on"
+  && List.filter (fun (k, _) -> k = "tags") v = [ ("tags", "x"); ("tags", "y") ]

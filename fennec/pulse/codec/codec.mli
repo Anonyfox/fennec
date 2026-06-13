@@ -253,6 +253,14 @@ type view =
 
 val view : 'a t -> view
 
+(** The structural {!view} of one field's shape — a form renderer reads the leaf kind + refinement
+    {!hint}s from it to infer the input type and emit HTML5 constraint attributes
+    ([required]/[maxlength]/[min]/[pattern]…) without touching the GADT. *)
+val field_view : 'a field -> view
+
+(** Whether this field is required (drives the [required] attribute). *)
+val field_required : 'a field -> bool
+
 (** {1 Positional parameter lists (DDP method params)} *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }

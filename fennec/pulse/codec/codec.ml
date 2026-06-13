@@ -574,6 +574,11 @@ let rec view_of_ty : type a. a ty -> view = function
 
 let view c = view_of_ty c.ty
 
+(* the structural view of ONE field's shape — drives form input-type inference + HTML5 constraint
+   attributes (a renderer reads the leaf kind + refinement hints without touching the GADT) *)
+let field_view (f : 'a field) : view = view_of_ty f.fld_ty
+let field_required (f : 'a field) : bool = f.fld_required
+
 (* ---- positional parameter lists (DDP method params) — unchanged surface ----------------- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }

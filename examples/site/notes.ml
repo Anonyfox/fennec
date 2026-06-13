@@ -73,20 +73,18 @@ let show_view ~conn ?flash n =
       delete_form ~conn n.id;
       link "/notes" "Back" ]
 
-(* a field's current value: what was submitted (re-render after error) else the entity else empty *)
-let prefill conn note name from_note = match Conn.body_param conn name with Some v -> v | None -> ( match note with Some n -> from_note n | None -> "")
-
+(* The bound form (to_form): one [Form.start] + [Form.bound] per field. Value repopulation (submitted
+   input after an error, or the entity on edit), per-field errors, the input type (number/checkbox),
+   the HTML5 constraints (required/maxlength/min/max from the model's refinements), CSRF, and the
+   method override are ALL filled in automatically — the view declares nothing twice. *)
 let form_view ~conn ?override ?note ~action ~errors () =
-  let csrf = Csrf.token ~secret conn in
-  let err f = Form.field_errors f errors in
+  let f = Form.start conn ~secret ~action ?override ~errors ?values:(Option.map (Form.values_of codec) note) in
   View.page ~title:(if note = None then "New note" else "Edit note")
-    [ Form.form ~action ~csrf ?override
-        [ Form.field Fields.title ~label:"Title" ~value:(prefill conn note "title" (fun n -> n.title)) ~errors:(err Fields.title);
-          Form.field Fields.body ~label:"Body" ~kind:`Textarea ~value:(prefill conn note "body" (fun n -> n.body)) ~errors:(err Fields.body);
-          Form.field Fields.priority ~label:"Priority (0–5)" ~kind:`Number
-            ~value:(prefill conn note "priority" (fun n -> string_of_int n.priority)) ~errors:(err Fields.priority);
-          Form.field Fields.pinned ~label:"Pinned" ~kind:`Checkbox
-            ~value:(prefill conn note "pinned" (fun n -> if n.pinned then "on" else ""));
+    [ Form.render f
+        [ Form.bound f Fields.title ~label:"Title";
+          Form.bound f Fields.body ~label:"Body" ~kind:`Textarea;
+          Form.bound f Fields.priority ~label:"Priority (0–5)";
+          Form.bound f Fields.pinned ~label:"Pinned";
           Form.submit "Save" ] ]
 
 (* ── actions: content-negotiated (HTML for browsers, JSON for Accept: application/json) ── *)

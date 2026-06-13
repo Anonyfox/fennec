@@ -68,14 +68,69 @@ val submit : ?attrs:(string * string) list -> string -> Fur.vnode
 
 (** A labeled field row — [<label>] + control + inline error list — in one call. [kind] picks the
     control; [value]/[errors] repopulate + annotate after a failed submit (feed {!submitted} /
-    {!field_errors}). *)
+    {!field_errors}); [attrs] adds extra input attributes. *)
 val field :
   ?label:string ->
-  ?kind:[ `Text | `Email | `Password | `Number | `Textarea | `Checkbox ] ->
+  ?kind:[ `Text | `Email | `Password | `Number | `Date | `Textarea | `Checkbox ] ->
   ?value:string ->
   ?errors:string list ->
+  ?attrs:(string * string) list ->
   _ Codec.field ->
   Fur.vnode
+
+(** {1 The bound form ([to_form])}
+
+    A {!ctx} carries the request (for value repopulation), the errors to show, and the form chrome
+    (action/method/CSRF/override). {!bound} then renders ONE field with everything filled in
+    automatically — value, per-field errors, inferred input type, and HTML5 constraint attributes
+    derived from the model's refinements — so the view never threads value/error/type by hand.
+
+    {[ (* new + edit + re-render-after-error, all the same code *)
+       let f = Form.start conn ~secret ~action:"/posts" ~errors
+                 ?values:(if editing then Some (Form.values_of Post.codec post) else None) () in
+       View.document conn (View.page ~title:"Post"
+         (Form.render f
+            [ Form.bound f Post.Fields.title ~label:"Title";       (* type/required/maxlength inferred *)
+              Form.bound f Post.Fields.body ~label:"Body" ~kind:`Textarea;
+              Form.bound f Post.Fields.priority ~label:"Priority"; (* number + min/max from refinements *)
+              Form.bound f Post.Fields.published ~label:"Published"; (* checkbox inferred *)
+              Form.submit "Save" ])) ]} *)
+
+(** Encode a model value as form-input strings — prefill an edit form via {!start}'s [~values]. *)
+val values_of : 'a Codec.t -> 'a -> (string * string) list
+
+(** The HTML5 constraint attributes a field's refinements imply ([required]/[minlength]/[maxlength]/
+    [min]/[max]/[pattern]) — client-side validation from the same model the server validates. *)
+val constraints : _ Codec.field -> (string * string) list
+
+(** A bound form. *)
+type ctx
+
+(** Open a bound form. [~errors] show inline; [~values] prefill a fresh render (see {!values_of});
+    [~secret] auto-mints a CSRF token (or pass [~csrf]); [~override] simulates PUT/PATCH/DELETE.
+    After a failed submit the request body repopulates every field automatically. *)
+val start :
+  ?method_:[ `GET | `POST ] ->
+  ?errors:Codec.error list ->
+  ?values:(string * string) list ->
+  ?override:string ->
+  ?csrf:string ->
+  ?secret:string ->
+  action:string ->
+  Conn.t ->
+  ctx
+
+(** Render ONE field of a bound form — value, errors, input type, and constraints all filled in.
+    Pass [~kind] only to override the inferred control (e.g. [`Textarea], [`Email], [`Password]). *)
+val bound :
+  ctx ->
+  ?label:string ->
+  ?kind:[ `Text | `Email | `Password | `Number | `Date | `Textarea | `Checkbox ] ->
+  _ Codec.field ->
+  Fur.vnode
+
+(** Wrap a bound form's fields in the [<form>] (action/method/CSRF/override all from the ctx). *)
+val render : ctx -> Fur.vnode list -> Fur.vnode
 
 (** The [<form>] wrapper. [method_] is the HTML method; [override] simulates PUT/PATCH/DELETE via the
     [_method] field (pair with {!Fennec_server.Method_override}); [csrf] embeds the token in
