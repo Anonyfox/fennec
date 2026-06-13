@@ -131,4 +131,19 @@ let%test "dotted projection: siblings under one head merge into one nested objec
   let stored = B.doc [ ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "a@x.io") ]) ] in
   match Proj.decode proj stored with Ok o -> o#author#name = "Ada" && o#author#email = "a@x.io" | Error _ -> false
 
+(* ── typed dotted-path SELECTORS (Codec.dot) — symmetric to dotted projections ── *)
+let%test "Q.eq over Codec.dot: nested selector compiles to the dotted wire key, value type checked" =
+  let sel = Q.eq (Codec.dot Post.Fields.author Author.Fields.name) "Ada" in
+  (* Q.eq Post.Fields.title 5 would be a TYPE error; dot's leaf (name:string) enforces the value *)
+  match Q.to_bson sel with
+  | B.Document [ ("author.name", B.String "Ada") ] -> true
+  | _ -> false
+
+let%test "Codec.dot chains for deeper paths and keeps the leaf type" =
+  let f = Codec.dot Post.Fields.author Author.Fields.email in
+  Codec.field_name f = "author.email"
+  && (match Q.to_bson (Q.in_ f [ "a@x.io"; "b@x.io" ]) with
+     | B.Document [ ("author.email", B.Document [ ("$in", B.Array _) ]) ] -> true
+     | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

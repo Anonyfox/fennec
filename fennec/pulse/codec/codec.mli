@@ -140,6 +140,12 @@ val dft : string -> 'a t -> 'a -> 'a field
 (** The ["_id"] field ([req "_id" id]). *)
 val doc_id : string field
 
+(** [dot outer inner] navigates into an embedded record for a selector/modifier PATH: the result
+    has the dotted wire name (e.g. ["author.name"]) and the LEAF's shape — so
+    [Q.eq (Codec.dot Fields.author Author.Fields.name) v] compile-checks both field names AND the
+    value's type, purely value-level. Chains: [dot a (dot b c)] → ["a.b.c"]. *)
+val dot : _ field -> 'a field -> 'a field
+
 (** {2 Field accessors — what the collection vocabulary (Q/M/Index) builds on} *)
 
 val field_name : 'a field -> string

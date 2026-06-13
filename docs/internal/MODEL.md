@@ -310,6 +310,17 @@ need nested object synthesis. The positional `$` operator is unsupported engine-
 (documented). Transparent typed coverage of exclusion stays deferred (it can't produce a precise object type);
 everything else — inclusion, $slice, dotted-path nesting — is built.
 
+## Typed selectors & nested paths (Q)
+
+Query selectors are typed against the field handles, same guarantee as projections and methods:
+`Q.[ eq Fields.done_ false ]` — a wrong field name is an unbound `Fields.x` compile error, a wrong
+value type is a type error (`eq Fields.done_ "yes"` won't compile). Covered: `eq/ne/lt/lte/gt/gte/
+in_/exists/has`, composed with `all` (AND) / `any` (OR); exotic operators ride `Q.raw bson`.
+`lt`/`gt` are polymorphic (Mongo orders every BSON type — faithful, not a hole). **Nested-path
+selectors** use `Codec.dot` — pure value-level, no ppx: `Q.eq (Codec.dot Fields.author
+Author.Fields.name) "Ada"` joins the wire names to `"author.name"` and takes the LEAF's type, so
+both field names and the value type are compile-checked; it chains for deeper paths.
+
 ## Taste decisions (each one a Meteor scar avoided)
 
 - **`Model` is the recommended path; `Collection` remains the dynamic substrate** and the escape
