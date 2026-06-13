@@ -12,7 +12,7 @@ type t = {
   tags : string list;
   note : string; [@key "remark"]
 }
-[@@deriving fennec_collection ~name:"gtasks"]
+[@@deriving collection ~name:"gtasks"]
 
 (* the HAND-WRITTEN twin (what MODEL.md documents as the expansion) *)
 let twin =
@@ -93,12 +93,12 @@ let%test "projection: a missing projected field surfaces as a decode error (skip
 
 (* ── embedded records + dotted-path projections (nested object) ── *)
 module Author = struct
-  type t = { name : string; email : string } [@@deriving fennec_collection ~name:"_authors"]
+  type t = { name : string; email : string } [@@deriving collection ~name:"_authors"]
 end
 
 module Post = struct
   type t = { id : string; title : string; author : Author.t }
-  [@@deriving fennec_collection ~name:"posts"]
+  [@@deriving collection ~name:"posts"]
 end
 
 let%test "embedded record: the deriver nests the codec; the doc round-trips through Author.codec" =
@@ -155,7 +155,7 @@ module Friendly = struct
     priority : int;   [@min 1] [@max 5]
     email : string;   [@lowercase] [@email]
   }
-  [@@deriving fennec_collection ~name:"friendly"]
+  [@@deriving collection ~name:"friendly"]
 end
 
 let%test "validation attributes: the inline catalog enforces (one model form, no builder)" =

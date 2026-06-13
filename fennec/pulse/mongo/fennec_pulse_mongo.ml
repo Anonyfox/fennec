@@ -11,6 +11,7 @@ module Driver = Fennec_mongo_driver
 module Client = Driver.Client
 module Coll = Driver.Collection
 module Live = Driver.Live
+module Runtime = Driver.Runtime
 module Ffi = Fennec_mongo_ffi.Mongo_ffi
 module Diff = Query.Diff
 module Id = Query.Id
@@ -98,36 +99,42 @@ let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.han
 module Dynamic = struct
   module Mini = Backend.Mini
 
-  type collection = Mem of Minimongo.t | Native of Coll.t
+  type collection = Mem of Minimongo.t | Native of Coll.t | Missing of string
 
   let mem m = Mem m
   let real ?poll ~sw conn ~db ~name = Native (collection ?poll ~sw conn ~db ~name)
+  let missing message = Missing message
+  let unavailable message = failwith ("Fennec.Pulse.Mongo: " ^ message)
 
-  (* The convention the fennec CLI speaks: `fennec dev --mongo` / `fennec test --mongo` launch a
-     managed replica-set mongod and export its URL as MONGO_URL. [from_env] is the whole app-side
-     story — real mongo when it's set, a fresh in-memory engine otherwise. Build it in
-     [Fennec.serve ~on_start] so the [sw] it captures drives Live's change-stream daemons. *)
-  let mongo_url_env = "MONGO_URL"
+  (* The convention the fennec CLI speaks: MONGO_URL is the one database location. `fennec dev`
+     auto-starts/adopts a local mongod when possible; `fennec test` sets :memory: by default and
+     `fennec test --mongo` supplies a per-suite real URL. Missing MONGO_URL is not a hidden memory
+     fallback; operations fail clearly. Build it in [Fennec.serve ~on_start] so the [sw] it captures
+     drives Live's change-stream daemons. *)
+  let mongo_url_env = Runtime.mongo_url_env
 
   let from_env ?poll ~sw ~db ~name () =
-    match Sys.getenv_opt mongo_url_env with
-    | Some url when String.trim url <> "" -> real ?poll ~sw (connect url) ~db ~name
-    | _ -> mem (Minimongo.create ())
+    match Runtime.state () with
+    | Runtime.Missing -> missing (Runtime.unavailable_message ())
+    | Runtime.Memory -> mem (Minimongo.create ())
+    | Runtime.Mongo { uri; db = _ } -> real ?poll ~sw (connect uri) ~db ~name
 
-  let insert c d = match c with Mem m -> Mini.insert m d | Native r -> insert r d
-  let update c ~multi ~upsert s m = match c with Mem mm -> Mini.update mm ~multi ~upsert s m | Native r -> update r ~multi ~upsert s m
-  let remove c s = match c with Mem m -> Mini.remove m s | Native r -> remove r s
-  let find c q = match c with Mem m -> Mini.find m q | Native r -> find r q
-  let find_one c q = match c with Mem m -> Mini.find_one m q | Native r -> find_one r q
-  let count c s = match c with Mem m -> Mini.count m s | Native r -> count r s
+  let insert c d = match c with Mem m -> Mini.insert m d | Native r -> insert r d | Missing message -> unavailable message
+  let update c ~multi ~upsert s m =
+    match c with Mem mm -> Mini.update mm ~multi ~upsert s m | Native r -> update r ~multi ~upsert s m | Missing message -> unavailable message
+  let remove c s = match c with Mem m -> Mini.remove m s | Native r -> remove r s | Missing message -> unavailable message
+  let find c q = match c with Mem m -> Mini.find m q | Native r -> find r q | Missing message -> unavailable message
+  let find_one c q = match c with Mem m -> Mini.find_one m q | Native r -> find_one r q | Missing message -> unavailable message
+  let count c s = match c with Mem m -> Mini.count m s | Native r -> count r s | Missing message -> unavailable message
   let aggregate c ?(lookup = fun _ -> []) p =
-    match c with Mem m -> Mini.aggregate m ~lookup p | Native r -> aggregate r ~lookup p
-  let distinct c k s = match c with Mem m -> Mini.distinct m k s | Native r -> distinct r k s
+    match c with Mem m -> Mini.aggregate m ~lookup p | Native r -> aggregate r ~lookup p | Missing message -> unavailable message
+  let distinct c k s = match c with Mem m -> Mini.distinct m k s | Native r -> distinct r k s | Missing message -> unavailable message
 
   let observe_changes c q ~added ~changed ~removed =
     match c with
     | Mem m -> Mini.observe_changes m q ~added ~changed ~removed
     | Native r -> observe_changes r q ~added ~changed ~removed
+    | Missing message -> unavailable message
 
-  let fence c k = match c with Mem m -> Mini.fence m k | Native r -> fence r k
+  let fence c k = match c with Mem m -> Mini.fence m k | Native r -> fence r k | Missing message -> unavailable message
 end

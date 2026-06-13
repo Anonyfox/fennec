@@ -191,7 +191,7 @@ let expand ~ctxt (_rec : rec_flag) (tds : type_declaration list) (cname : string
 (* the deriver registers GLOBALLY on module load (forced when fur.ppx / the standalone references
    this module), so [@@deriving fennec_collection] works in whichever single driver links us *)
 let deriver =
-  Deriving.add "fennec_collection"
+  Deriving.add "collection"
     ~str_type_decl:
       (Deriving.Generator.V2.make
          Deriving.Args.(empty +> arg "name" (Ast_pattern.estring __))
@@ -201,7 +201,7 @@ let deriver =
            | None ->
                Location.raise_errorf
                  ~loc:(Expansion_context.Deriver.derived_item_loc ctxt)
-                 "fennec.collection: the collection name is required — [@@deriving fennec_collection ~name:\"tasks\"]"))
+                 "fennec.collection: the collection name is required — [@@deriving collection ~name:\"tasks\"]"))
 
 
 (* ---- the [%fields a; b; …] projection extension ---------------------------------------------

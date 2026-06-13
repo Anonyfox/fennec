@@ -46,8 +46,8 @@ let powered_by : Fennec.Paw.t =
    subscription — server→client push, no refetch.
 
    The backend is the runtime-selectable Dynamic one: real MongoDB for a real global Mongo URL
-   (the CLI's `--mongo` flag launches a managed mongod and sets MONGO_URL), or the in-memory engine
-   for the derived `:memory:` URL. The driver is a
+   (`fennec dev` auto-starts one when mongod is available; `fennec test --mongo` supplies one per
+   suite), or the in-memory engine for explicit MONGO_URL=:memory:. The driver is a
    hard dependency — the dev/test server still runs as fast bytecode: dune builds libmongoc + the C
    stub ONCE, and the dev/test harness puts that stub dir on CAML_LD_LIBRARY_PATH (so the bytecode
    dlopens it), so per-edit only OCaml recompiles — no native, no relink. *)
@@ -58,8 +58,8 @@ module RT = Fennec_pulse_server.Make (RData)
 let realtime_ddp = RT.paw ~path:"/ddp" ()
 
 (* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method.
-   [Dynamic.from_env] is the whole backend choice — it consumes the global Mongo URL
-   (`MONGO_URL` or derived `:memory:`), so there is no app config branch here. *)
+   [Dynamic.from_env] is the whole backend choice — it consumes the global Mongo state, so there is
+   no app config branch here. *)
 module T = Fennec_pulse.Typed.Make (RData)
 
 let setup_realtime ~sw =
@@ -116,4 +116,3 @@ let admin =
    watches the served bundles and pings the server's dev control socket, which relays
    a CSS hot-swap or full reload to the browser. The server watches nothing. *)
 let () = Fennec.serve ~on_start:(fun ~sw ~sleep:_ -> setup_realtime ~sw) [ web; admin ]
-

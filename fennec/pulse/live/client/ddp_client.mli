@@ -124,7 +124,7 @@ module Collection (M : sig
 end) : sig
   val find :
     ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
-  val find_p :
+  val project :
     'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 end
 

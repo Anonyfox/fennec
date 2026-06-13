@@ -11,8 +11,8 @@
 
 (** Whether the native driver was compiled in. [false] on a build where libmongoc was unavailable
     (the FFI degraded to stubs); then {!connect} and every op raise [Failure]. Most apps should NOT
-    branch on this — use {!Dynamic.from_env}, which selects the in-memory engine when no database is
-    configured, so the degrade is a config decision, not a runtime check. *)
+    branch on this — use {!Dynamic.from_env}, which consumes the global Mongo URL and selects the
+    in-memory engine only for the [":memory:"] sentinel. *)
 val available : unit -> bool
 
 (** A connection — a thread-safe client pool. *)
@@ -35,8 +35,9 @@ val collection : ?poll:float -> sw:Eio.Switch.t -> connection -> db:string -> na
 include Fennec_pulse.Backend.S with type collection := collection
 
 (** A runtime-selectable backend — in-memory or this native driver behind one
-    {!Fennec_pulse.Backend.S}, so an app chooses at boot (real mongo when configured, else
-    [:memory:]) with no type change downstream: [Reactive.Make (Fennec_pulse_mongo.Dynamic)]. *)
+    {!Fennec_pulse.Backend.S}, so an app chooses at boot from the global framework Mongo state
+    ([MONGO_URL] or explicit [":memory:"]) with no type change downstream:
+    [Reactive.Make (Fennec_pulse_mongo.Dynamic)]. *)
 module Dynamic : sig
   (** A collection that is either in-memory or mongo-backed. *)
   type collection
@@ -48,15 +49,15 @@ module Dynamic : sig
       top-level {!val:collection}). *)
   val real : ?poll:float -> sw:Eio.Switch.t -> connection -> db:string -> name:string -> collection
 
-  (** The environment variable the fennec CLI uses to hand an app its database: [fennec dev --mongo]
-      and [fennec test --mongo] launch a managed replica-set mongod and export its URL here. Value:
-      ["MONGO_URL"]. *)
+  (** The environment variable the fennec CLI uses to hand an app its database. [fennec dev]
+      auto-starts/adopts a local MongoDB when possible; [fennec test] sets [":memory:"] by default
+      and [fennec test --mongo] supplies a per-suite real Mongo URL. Value: ["MONGO_URL"]. *)
   val mongo_url_env : string
 
-  (** [from_env ?poll ~sw ~db ~name ()] — the one call an app needs to "use real mongo when it's
-      there": a {!real} collection when {!mongo_url_env} is set (as under [fennec dev --mongo]), else
-      a fresh in-memory {!mem} one — so app code carries no config branch. Build it in
-      [Fennec.serve ~on_start] (the captured [sw] drives Live's change-stream daemons). *)
+  (** [from_env ?poll ~sw ~db ~name ()] — the one call an app needs to consume the global Mongo URL:
+      a fresh in-memory {!mem} collection for explicit [":memory:"], a {!real} collection for a
+      real URI, or a collection whose operations fail clearly when no [MONGO_URL] is configured.
+      Build it in [Fennec.serve ~on_start] (the captured [sw] drives Live's change-stream daemons). *)
   val from_env : ?poll:float -> sw:Eio.Switch.t -> db:string -> name:string -> unit -> collection
 
   include Fennec_pulse.Backend.S with type collection := collection

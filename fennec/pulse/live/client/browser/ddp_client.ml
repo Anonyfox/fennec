@@ -617,5 +617,5 @@ module Collection (M : sig
   val collection : doc Def.t
 end) = struct
   let find ?where ?sort ?skip ?limit () = find_c (default ()) M.collection ?where ?sort ?skip ?limit ()
-  let find_p p ?where ?sort ?skip ?limit () = find_p (default ()) M.collection p ?where ?sort ?skip ?limit ()
+  let project p ?where ?sort ?skip ?limit () = find_p (default ()) M.collection p ?where ?sort ?skip ?limit ()
 end
