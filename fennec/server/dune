@@ -11,6 +11,10 @@
  (libraries
   fennec.core
   fennec.paw
+  fennec-mongo.bson
+  fennec-mongo.bson_json
+  fennec-mongo.minimongo
+  fennec-mongo.driver
   eio
   eio.unix
   eio_main

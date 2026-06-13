@@ -17,6 +17,8 @@ module Livereload = Fennec_server.Livereload
 module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
 module Dev_proto = Fennec_core.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
+module Accounts = Fennec_server.Accounts
+module Mongo_runtime = Fennec_mongo_driver.Runtime
 
 (* The verb namespace: the primitive + its algebra + the route verbs (from
    [Fennec_paw.Paw]) plus every prebuilt battery as a submodule. So userland reaches
@@ -36,6 +38,7 @@ module Paw = struct
   module Websocket = Fennec_server.Websocket
   module Static = Fennec_server.Static
   module Session = Fennec_server.Session
+  module Accounts = Fennec_server.Accounts
   module Csrf = Fennec_server.Csrf
 end
 
@@ -114,16 +117,21 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start (endpoints : Endpoint.t list) : unit =
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
+    (endpoints : Endpoint.t list) : unit =
   if not (Atomic.compare_and_set started false true) then
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
   let lr = Livereload.create () in
+  Mongo_runtime.warn_if_missing ();
   (* Livereload is a dev convenience; it reloads the page on a frontend edit. For an e2e or
      any controlled run it is pure nondeterminism (spontaneous navigations), so it can be
      turned off while still serving the dev (on-disk) web root: set FENNEC_DEV_LIVERELOAD=0. *)
   let livereload_on =
     is_dev && (match Sys.getenv_opt Dev_proto.env_dev_livereload with Some ("0" | "off" | "false" | "no") -> false | _ -> true)
+  in
+  let endpoints =
+    List.map (fun e -> Endpoint.prepend (Accounts.native_paw ()) e) endpoints
   in
   let endpoints =
     if livereload_on then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints

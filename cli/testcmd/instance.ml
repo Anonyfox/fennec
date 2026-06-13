@@ -12,6 +12,7 @@
    - [suite_env] points the suite at that instance ([FENNEC_TEST_URL]). *)
 
 module D = Fennec_core.Dev_proto
+module Runtime = Fennec_mongo_driver.Runtime
 
 (* per-suite port block: generous headroom for gateway + endpoint ports, human-readable in
    logs (suite 0 → 7000s, suite 1 → 7100s, …) *)
@@ -36,7 +37,12 @@ let allocate ~base (suites : string list) : t list =
         suite;
         port;
         url;
-        server_env = [ (D.env_port, string_of_int port); (D.env_dev_livereload, "0") ];
+        server_env =
+          [
+            (D.env_port, string_of_int port);
+            (D.env_dev_livereload, "0");
+            (Runtime.mongo_url_env, Runtime.memory_url);
+          ];
         suite_env = [ (D.env_test_url, url) ];
       })
     suites
@@ -61,6 +67,7 @@ let%test_unit "allocate: env and fields" =
   check "url matches the port" (a.url = "http://localhost:7000");
   check "server_env sets the port" (List.assoc D.env_port a.server_env = "7000");
   check "server_env disables livereload (determinism)" (List.assoc D.env_dev_livereload a.server_env = "0");
+  check "server_env sets explicit memory Mongo for default tests" (List.assoc Runtime.mongo_url_env a.server_env = Runtime.memory_url);
   check "suite_env targets the instance via FENNEC_TEST_URL" (List.assoc D.env_test_url a.suite_env = "http://localhost:7000");
   check "suite name carried" (a.suite = "a")
 

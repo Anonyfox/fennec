@@ -19,6 +19,14 @@ module Http = Fennec_core.Http
 (** Cookie parsing and serialization (see {!Fennec_core.Cookie}). *)
 module Cookie = Fennec_core.Cookie
 
+(** Accounts: the framework-native identity/session substrate. Password/email/OAuth/OIDC/SAML/
+    passkey/MFA/org/SCIM batteries, passwordless route helpers, passkey JSON ceremonies, OIDC
+    ID-token verification, Mongo-shaped persistence, and Meteor-shaped auth words live here.
+    Fennec installs Accounts everywhere: HTTP/SSR requests get {!Accounts.user_id}, live/DDP
+    sessions inherit that user id, and the built-in Accounts methods are registered automatically.
+    With no login cookie, identity is simply [None]. *)
+module Accounts = Fennec_server.Accounts
+
 (** {1 Endpoints — host routing, apps, and route-local middleware} *)
 
 (** Named apps routed by the request's Host header (see {!Fennec_server.Endpoint}).
@@ -136,6 +144,8 @@ module Paw : sig
       unit ->
       t
   end
+
+  module Accounts = Fennec_server.Accounts
 
   module Csrf : sig
     val make :
@@ -262,6 +272,11 @@ end
     [~tls] terminates HTTPS in-process with a BYO certificate (no reverse proxy) — see {!Tls}.
     [~acme] instead obtains + auto-renews Let's Encrypt certificates for the concrete domains — see
     {!Acme}. (Give one or the other; [~acme] takes precedence.)
+
+    Accounts is native: Fennec prepends the identity paw to every endpoint and live/DDP wiring
+    exposes [user_id] plus built-in Accounts methods without manual paws or method registration.
+    With no login, identity remains anonymous ([None]) and ["currentUser"] returns the anonymous
+    session payload.
 
     This is the single place that starts the server — a second call is a runtime error.
     The CLI's discovery ({!Discover}) finds this call site automatically. *)

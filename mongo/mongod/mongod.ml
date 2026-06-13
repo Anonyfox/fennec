@@ -1,6 +1,6 @@
 (* mongod lifecycle management — launch and supervise a real MongoDB server for dev/test, in pure
-   OCaml over Unix. Minimongo (:memory:) remains the default for dev/test; this is the path to a
-   real mongod when one is wanted (and the harness the libmongoc driver is exercised against).
+   OCaml over Unix. The framework test orchestrator uses explicit :memory: by default; this module
+   is the path to a real mongod when dev auto-management or --mongo tests want one.
 
    A launched instance gets its own data directory and TCP port, is waited on until it actually
    accepts connections (not merely spawned), and is stopped gracefully (SIGTERM, then SIGKILL after
@@ -49,8 +49,8 @@ let find ?(extra = []) () =
   List.find_opt is_executable (extra @ from_path @ common)
 
 let install_hint () =
-  "mongod was not found. Minimongo (:memory:) is the default for dev/test and needs no mongod; \
-   install MongoDB Community Server only if you want a real server:\n\
+  "mongod was not found. Fennec tests use MONGO_URL=:memory: by default and need no mongod; install \
+   MongoDB Community Server for dev auto-management or real-Mongo tests:\n\
   \  macOS:  brew tap mongodb/brew && brew install mongodb-community\n\
   \  Linux:  https://www.mongodb.com/docs/manual/administration/install-on-linux/\n\
    Then ensure `mongod` is on PATH (or pass its path explicitly)."

@@ -25,6 +25,35 @@ rest). Routes, static serving, the websocket upgrade, and the SSR app are all pa
 
 Write your own in a line: `let mine : Paw.t = fun c -> Conn.before_send c (…)`.
 
+`Accounts` is the native identity layer: signed-cookie browser sessions, `user_id`, `auth_context`,
+and `session_doc`/`session_paw` on HTTP/SSR, Pulse/DDP method rebinding, publication `user_id`,
+password login, custom strategies, and shared email/OIDC/SAML/passkey/OAuth/SCIM identity helpers
+that converge on one `login_with_identity` resolver for linking and JIT signup. Account management
+covers lifecycle status, username/profile/email mutation, password policy, password
+change/reset/enrollment, email verification, passwordless email links/OTP, passkey JSON ceremonies,
+OIDC JWKS/ID-token verification, SAML, SCIM endpoint provisioning, identity link/unlink/merge, MFA
+enrollment/step-up/backup codes, typed MFA-aware login completions, org membership/invites, route
+guards, and opt-in route helpers without baking in mail delivery or templates. Core flows append
+account/security audit events, and the identity/RBAC/audit pieces are designed to produce common
+enterprise due-diligence and compliance evidence without forcing that complexity on small apps.
+`fennec.accounts.client` gives Fur/Pulse apps Meteor-like client
+ergonomics (`current_user`, `current_user_id`, `current_logging_in`, `login_with_password`, token
+resume, signup/logout, password lifecycle, email verification, MFA completion) with typed `Logged_in` / `Mfa_required` /
+`{code; reason}` results instead of raw BSON guessing. Named provider presets cover the common social
+case through discoverable `OAuth.Providers.all` / `Oidc.Providers.all` catalogs plus named helpers
+for GitHub, Google, Microsoft Entra ID, Apple, Facebook, Discord, Slack, GitLab, LinkedIn, Okta,
+Auth0, Keycloak, and other common partners.
+Opt-in app-wide RBAC is native: typed `Accounts.Roles.Role.t` / `Permission.t` values, canonical
+`users.roles` storage, external string validation for SSO/SCIM mappings, and server-side
+`require_role` / `require_permission` guards that deny by default.
+Persistence is one Mongo-shaped `Accounts.Store.t`. The native framework path consumes the global
+Mongo state: real `MONGO_URL` for production, explicit `MONGO_URL=:memory:` for test instances, and
+a clear missing-Mongo warning/error state otherwise. `Store.minimongo ()` remains the fast reference
+backend for tests/examples, and `Store.mongo db` is the production Mongo backend, with users,
+identity links, challenges, passkeys, organizations, MFA enrollments, SCIM state, audit, and index
+setup under one handle. Design notes:
+[`docs/internal/ACCOUNTS.md`](../docs/internal/ACCOUNTS.md).
+
 ## Server — `fennec.server`
 
 A compact Eio HTTP/1.1 + WebSocket server: static serving (strong ETag / 304 / Range / HEAD), gzip +
@@ -60,8 +89,9 @@ js_of_ocaml bundle.
 DDP publications/subscriptions over WebSocket, a Mongo/minimongo query + observe engine with
 change-stream-backed **live queries**, and **SSR-with-live-data** (the server renders live data into
 the first paint, the browser hydrates flicker-free, then the subscription streams deltas). Every
-change is a **Beat**; Pulse keeps every client in **Rhythm**. In-memory by default; an optional native
-Mongo driver (`fennec-mongo`) for production.
+change is a **Beat**; Pulse keeps every client in **Rhythm**. The backend is selected from the
+global Mongo state: real `MONGO_URL` for production, explicit `MONGO_URL=:memory:` for tests, and
+`fennec dev` auto-starts/adopts a local MongoDB when `mongod` is available.
 
 Aggregation runs in-memory too, with cross-collection **`$lookup` / `$unionWith`** — the same joins on
 the server and (over its subscribed subset) on the client. The client **reconnects and resyncs** after

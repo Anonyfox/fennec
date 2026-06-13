@@ -1,0 +1,15 @@
+; Meteor-shaped browser/client Accounts facade over the existing Pulse DDP client.
+; Pure enough to compile native for tests/SSR, browser-capable through fennec.pulse.live.client's
+; virtual DDP implementation.
+
+(library
+ (name fennec_accounts_client)
+ (public_name fennec.accounts.client)
+ (libraries fennec.fur fennec.pulse.live.client fennec-mongo.bson)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx))
+ (modes byte native)
+ (flags
+  (:standard -w -a)))

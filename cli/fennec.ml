@@ -337,18 +337,17 @@ let dev_cmd =
   in
   let mongo_arg =
     let doc =
-      "Launch a managed MongoDB ($(b,mongod)) for the dev session and point the app at it via \
-       $(b,MONGO_URL), so the data layer uses the real driver instead of the in-memory engine. The \
-       instance is ephemeral, isolated, and reaped on exit (no dangling process); an absent mongod \
-       degrades to in-memory."
+      "Compatibility no-op. $(b,fennec dev) now automatically starts/adopts a managed local MongoDB \
+       when $(b,MONGO_URL) is unset and $(b,mongod) is available; an explicit $(b,MONGO_URL) always \
+       wins."
     in
     Arg.(value & flag & info [ "mongo" ] ~doc)
   in
   let agent_arg =
     let doc =
-      "Emit a machine-readable agent event journal alongside the human dev UI. Agents can then \
+      "Emit a machine-readable agent event journal alongside the human application dev UI. Agents can then \
        configure $(b,fennec agent hook --timeout 12) as a post-tool hook instead of parsing \
-       terminal output or running build/test probes after each edit."
+       terminal output or running build/test probes after each application edit."
     in
     Arg.(value & flag & info [ "agent" ] ~doc)
   in
@@ -356,7 +355,8 @@ let dev_cmd =
     let doc =
       "With $(b,--agent), try to attach the current coding harness dynamically by installing one \
        guarded post-tool hook that runs $(b,fennec agent hook --timeout 12). This writes \
-       user-level harness config, never repo files."
+       user-level harness config, never repo files. Intended for application development, not \
+       framework-internal monorepo work."
     in
     Arg.(value & flag & info [ "attach" ] ~doc)
   in
@@ -402,11 +402,7 @@ let dev_cmd =
          scratch — fast for an opam-installed fennec (only your app rebuilds), slow with vendored
          deps. Announced because it can pause a while. *)
       if clean then (Printf.printf "fennec dev: dune clean (full rebuild)…\n%!"; ignore (Sys.command "dune clean >/dev/null 2>&1"));
-      (* --mongo: a managed single-node replica-set mongod for the dev session (a replica set so
-         change streams work); MONGO_URL points the app (spawned below by the supervisor) at it. The
-         lifecycle's at_exit reaps it when dev exits (Ctrl-C → graceful shutdown → exit → stop +
-         clean the ephemeral data dir); an absent mongod degrades to the in-memory backend. *)
-      if mongo then ignore (Fennec_dev.Mongo_rs.launch ());
+      ignore mongo;
       let agent = agent || attach in
       let attach_agent ~root agent_dir =
         if attach then (
@@ -467,7 +463,7 @@ let dev_cmd =
       `S Manpage.s_examples;
       `Pre "  fennec dev                 # discover the server and run it";
       `Pre "  fennec dev --agent         # same, plus an agent event journal";
-      `Pre "  fennec dev --agent --attach # same, and attach the current coding harness";
+      `Pre "  fennec dev --agent --attach # app loop with current coding harness attached";
       `Pre "  fennec dev --dry-run       # show what would run";
       `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
@@ -628,7 +624,7 @@ let test_cmd =
   let private_arg = Arg.(value & flag & info [ "private" ] ~doc:"Docs cut: also check $(b,.ml) top-level definitions, not just $(b,.mli) exports.") in
   let promote_arg = Arg.(value & flag & info [ "promote" ] ~doc:"Docs cut: move each doc that lives only in a $(b,.ml) up into the sibling $(b,.mli), where it renders. Idempotent; the $(b,.mli) wins on conflict.") in
   let discover_arg = Arg.(value & flag & info [ "discover" ] ~doc:"Docs cut: also check the embedded discover snapshot against golden task queries.") in
-  let mongo_arg = Arg.(value & flag & info [ "mongo" ] ~doc:"Launch a managed MongoDB ($(b,mongod)) for the run and point the app at it via $(b,MONGO_URL), so the data layer uses the real driver instead of the in-memory engine. The instance is ephemeral, isolated, and torn down on exit (no dangling process); an absent mongod degrades to in-memory.") in
+  let mongo_arg = Arg.(value & flag & info [ "mongo" ] ~doc:"Use real MongoDB for http/browser app tests: launch one isolated managed $(b,mongod) replica set per suite and pass its URL as $(b,MONGO_URL). Without this flag, spawned app instances use explicit $(b,MONGO_URL=:memory:) for fast deterministic tests. If mongod is unavailable, the requested suite fails clearly.") in
   let go positionals grep max_failures no_fail_fast reporter jobs headed screenshots base_port strict private_ promote discover mongo =
     let opts ?(paths = []) suite =
       { R.suite; grep; max_failures; fail_fast = not no_fail_fast; reporter; jobs; headed;

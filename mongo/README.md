@@ -6,8 +6,8 @@ Minimongo collection with a reactive observe engine. The same source compiles na
 JavaScript (js_of_ocaml).
 
 No indexes to declare — every query is a brute-force scan over the documents, so geo, `$regex`, and
-aggregation just work. Ideal for **tests, dev, and the browser**; reach for a real `mongod` only when
-you need the storage engine, not its query features. **Thread-safe on OCaml 5 multicore**: reads
+aggregation just work. Ideal for **tests and the browser**; `fennec dev` auto-starts/adopts a real
+`mongod` when available, while explicit `MONGO_URL=:memory:` keeps tests dependency-free. **Thread-safe on OCaml 5 multicore**: reads
 snapshot and mutations commit under a per-collection lock, and change events deliver in commit order
 outside all locks (via the bundled `Minimongo.Fanout` monitor) — observers may re-entrantly mutate,
 and a slow observer blocks nothing. The precise API is inline in the `.mli`s.
@@ -59,11 +59,11 @@ let () =
 
 A native, statically-linked **libmongoc driver** (`fennec-mongo.ffi`), a managed `mongod` lifecycle
 (`fennec-mongo.mongod`), and an extended-JSON codec (`fennec-mongo.bson_json`). The driver is
-native-only and **degrade-safe** — if libmongoc can't be built, it falls back to the in-memory
-engine. The framework's `fennec.pulse.mongo` exposes both behind one `Backend.S` / `Dynamic`, so
+native-only and **degrade-safe** at build time — if libmongoc can't be built, the pure in-memory
+engine still works. The framework's `fennec.pulse.mongo` exposes both behind one `Backend.S` / `Dynamic`, so
 **Pulse** (the framework's reactive data layer — collections, DDP, live queries) runs over either
-with no type change; `fennec dev --mongo` /
-`fennec test --mongo` launch a managed mongod and wire it via `MONGO_URL`.
+with no type change; `fennec dev` auto-starts/adopts a managed local mongod when available and
+`fennec test --mongo` launches per-suite mongods, all wired through `MONGO_URL`.
 
 ## Native + browser
 

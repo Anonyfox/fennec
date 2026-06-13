@@ -7,7 +7,18 @@
 type t = { pid : int; log_path : string }
 
 let env_array (extra : (string * string) list) =
-  Array.append (Unix.environment ()) (Array.of_list (List.map (fun (k, v) -> k ^ "=" ^ v) extra))
+  let env = Hashtbl.create 64 in
+  let add raw =
+    match String.index_opt raw '=' with
+    | None -> ()
+    | Some i ->
+      let key = String.sub raw 0 i in
+      let value = String.sub raw (i + 1) (String.length raw - i - 1) in
+      Hashtbl.replace env key value
+  in
+  Array.iter add (Unix.environment ());
+  List.iter (fun (key, value) -> Hashtbl.replace env key value) extra;
+  Hashtbl.fold (fun key value acc -> (key ^ "=" ^ value) :: acc) env [] |> Array.of_list
 
 let spawn ~exe ~(env : (string * string) list) : t =
   (* post-build: put the project's C-stub dll dirs on CAML_LD_LIBRARY_PATH so the bytecode server

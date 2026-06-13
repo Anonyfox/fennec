@@ -54,7 +54,29 @@ let start ~exe ~env =
        bytecode server can dlopen them (e.g. the mongo driver); inherited by the spawned child *)
     Stublibs.ensure ();
     let rd, wr = Unix.pipe () in
-    let pid = Unix.create_process_env exe [| exe |] (Array.append (Unix.environment ()) env) Unix.stdin wr wr in
+    let merged_env =
+      let table = Hashtbl.create 64 in
+      let add raw =
+        match String.index_opt raw '=' with
+        | None -> ()
+        | Some i ->
+          let key = String.sub raw 0 i in
+          let value = String.sub raw (i + 1) (String.length raw - i - 1) in
+          Hashtbl.replace table key value
+      in
+      Array.iter add (Unix.environment ());
+      Array.iter
+        (fun raw ->
+          match String.index_opt raw '=' with
+          | None -> ()
+          | Some i ->
+            let key = String.sub raw 0 i in
+            let value = String.sub raw (i + 1) (String.length raw - i - 1) in
+            Hashtbl.replace table key value)
+        env;
+      Hashtbl.fold (fun key value acc -> (key ^ "=" ^ value) :: acc) table [] |> Array.of_list
+    in
+    let pid = Unix.create_process_env exe [| exe |] merged_env Unix.stdin wr wr in
     Unix.close wr;
     Some { pid; fd = rd; carry = Buffer.create 256 }
   with _ -> None

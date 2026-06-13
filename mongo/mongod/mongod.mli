@@ -1,6 +1,6 @@
 (** mongod lifecycle management (native): launch and supervise a real MongoDB server for dev/test in
-    pure OCaml over Unix. Minimongo ([:memory:]) stays the default for dev/test; this is the path to
-    a real [mongod] when one is wanted, and the harness the libmongoc driver is exercised against.
+    pure OCaml over Unix. Fennec tests use explicit [MONGO_URL=:memory:] by default; this is the path
+    to a real [mongod] for dev auto-management, real-Mongo tests, and the driver harness.
 
     A launched instance gets its own data directory and TCP port, is waited on until it actually
     {e accepts connections} (not merely spawned), and is stopped gracefully (SIGTERM, then SIGKILL

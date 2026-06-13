@@ -61,7 +61,8 @@ source-generated framework map what public path to use:
 fennec discover "build an SSR page with a local counter"
 ```
 
-During iteration, supported agents such as Codex and Claude Code can attach to the dev loop:
+During application iteration, supported agents such as Codex and Claude Code can attach to the dev
+loop:
 
 ```sh
 fennec dev --agent --attach
@@ -70,6 +71,9 @@ fennec dev --agent --attach
 After that, compiler diagnostics, reload kind, affected surface, and inline-test results arrive in
 the agent's next step automatically. Run plain `fennec` for the generated guide that explains the
 human and agent workflow from the installed binary.
+
+That attach loop is for apps built with Fennec. Contributors editing this framework repository use
+normal focused `dune build` / `dune runtest` checks.
 
 **New to OCaml?** You don't need to be an expert. The mental map: opam ≈ npm, dune ≈ your bundler,
 `.mlx` ≈ JSX, `signal` ≈ `useState`, paws ≈ middleware, `.mli` ≈ a `.d.ts`, and there's no `null`.

@@ -62,17 +62,22 @@ let fail_fast_limit ~fail_fast ~max_failures =
 
 module Discover = Fennec_dev.Discover
 module Port = Fennec_dev.Port
-module Mongod = Fennec_mongo_mongod.Mongod
+module Mongo_runtime = Fennec_mongo_driver.Runtime
+module Mongo_rs = Fennec_dev.Mongo_rs
 
-(* --mongo: launch a managed single-node replica-set mongod and export MONGO_URL, so the app's
-   Dynamic backend talks to a real database with working CHANGE STREAMS (Mongo_rs handles the spawn +
-   replSet initiate + wait-PRIMARY). The pid is tracked in the Reaper (Ctrl-C / SIGTERM kills it) and
-   the instance is stopped on teardown; the lifecycle's own at_exit is the backstop and its data dir
-   is ephemeral — so no mongod ever dangles. Absent/failed mongod degrades to in-memory. *)
+(* --mongo: launch one managed single-node replica-set mongod PER suite and export its URL only to
+   that suite's server process. That keeps real-Mongo tests parallel-safe: each suite owns a private
+   data directory and port, matching the default :memory: isolation. *)
 let start_mongo () =
-  match Fennec_dev.Mongo_rs.launch () with Some t -> Reaper.track (Mongod.pid t); Some t | None -> None
+  match Mongo_rs.start () with
+  | Ok t ->
+    Option.iter Reaper.track (Mongo_rs.pid t);
+    Ok t
+  | Error msg -> Error msg
 
-let stop_mongo = function None -> () | Some t -> Reaper.untrack (Mongod.pid t); (try Mongod.stop t with _ -> ())
+let stop_mongo t =
+  Option.iter Reaper.untrack (Mongo_rs.pid t);
+  try Mongo_rs.stop t with _ -> ()
 
 (* one-line preview of a (possibly long, possibly multi-line) command for diagnostics *)
 let preview ?(max = 120) s =
@@ -237,7 +242,7 @@ let read_file path =
    so a failure or exception never orphans the instance. *)
 (* the per-suite exit code: 0 = passed, 3 = the runner had no test matching --grep in THIS suite
    file (not a failure — the filter likely targets another file), anything else = failed. *)
-let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite : Suites.t) ~(inst : Instance.t) : int * string =
+let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~mongo ~stream ~(suite : Suites.t) ~(inst : Instance.t) : int * string =
   (* one shared runner exe per cut; restrict it to THIS suite's source file so it runs only that
      file's tests — against this suite's own dedicated instance (per-file isolation preserved). *)
   let args = "--only-file" :: suite.Suites.name :: args in
@@ -254,35 +259,49 @@ let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite 
       1
     | None ->
       ignore (Port.reclaim ~exe:server_exe inst.Instance.port (* clear a leftover of OURS, if any *));
-      let boot = Boot.spawn ~exe:server_exe ~env:inst.Instance.server_env in
-      Fun.protect
-        ~finally:(fun () -> Boot.stop boot; Boot.cleanup boot)
-        (fun () ->
-          match Boot.wait_ready boot ~port:inst.Instance.port ~timeout:30.0 with
-          | Error msg ->
-            emit (Printf.sprintf "  \027[31m\u{2717} instance for %s never came up: %s\027[0m\n" suite.Suites.name msg);
-            let log = Boot.read_log boot in
-            if log <> "" then emit (Printf.sprintf "     server log:\n%s\n" log);
-            1
-          | Ok () ->
-            let code =
-              if stream then run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:None
-              else begin
-                let tmp = Filename.temp_file "fennec-suite-" ".log" in
-                let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-                let code =
-                  Fun.protect
-                    ~finally:(fun () -> try Unix.close fd with _ -> ())
-                    (fun () -> run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
-                in
-                emit (read_file tmp);
-                (try Sys.remove tmp with _ -> ());
-                code
-              end
-            in
-            if code = 124 then
-              emit (Printf.sprintf "  \027[31m\u{2717} suite timed out after %.0fs — killed; other suites still run.\027[0m\n" suite_timeout);
-            code)
+      let run_with_env server_env =
+        let boot = Boot.spawn ~exe:server_exe ~env:server_env in
+        Fun.protect
+          ~finally:(fun () -> Boot.stop boot; Boot.cleanup boot)
+          (fun () ->
+            match Boot.wait_ready boot ~port:inst.Instance.port ~timeout:30.0 with
+            | Error msg ->
+              emit (Printf.sprintf "  \027[31m\u{2717} instance for %s never came up: %s\027[0m\n" suite.Suites.name msg);
+              let log = Boot.read_log boot in
+              if log <> "" then emit (Printf.sprintf "     server log:\n%s\n" log);
+              1
+            | Ok () ->
+              let code =
+                if stream then run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:None
+                else begin
+                  let tmp = Filename.temp_file "fennec-suite-" ".log" in
+                  let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+                  let code =
+                    Fun.protect
+                      ~finally:(fun () -> try Unix.close fd with _ -> ())
+                      (fun () -> run_suite_exe ~exe:runner_exe ~args ~env:inst.Instance.suite_env ~out:(Some fd))
+                  in
+                  emit (read_file tmp);
+                  (try Sys.remove tmp with _ -> ());
+                  code
+                end
+              in
+              if code = 124 then
+                emit (Printf.sprintf "  \027[31m\u{2717} suite timed out after %.0fs — killed; other suites still run.\027[0m\n" suite_timeout);
+              code)
+      in
+      if not mongo then run_with_env inst.Instance.server_env
+      else
+        match start_mongo () with
+        | Error msg ->
+          emit (Printf.sprintf "  \027[31m\u{2717} MongoDB requested but unavailable\027[0m\n%s\n" msg);
+          1
+        | Ok m ->
+          let server_env =
+            (Mongo_runtime.mongo_url_env, Mongo_rs.uri m)
+            :: List.remove_assoc Mongo_runtime.mongo_url_env inst.Instance.server_env
+          in
+          Fun.protect ~finally:(fun () -> stop_mongo m) (fun () -> run_with_env server_env)
   in
   (code, Buffer.contents buf)
 
@@ -292,7 +311,7 @@ let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~stream ~(suite 
    precisely because each has its own port + server — and each suite's output is captured and
    flushed as one atomic block, so nothing interleaves. Serial runs stream live, in order.
    Returns the number of failed suites (0 = all passed). *)
-let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~(args : string list) : int =
+let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~mongo ~(args : string list) : int =
   ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned dev watcher → no lock clash *)
   (* the per-suite instance is the bytecode server, which must dlopen its C stubs — `opam env`
      doesn't put them on CAML_LD_LIBRARY_PATH. Reuse fennec dev's fix (same as the system cut). *)
@@ -341,7 +360,7 @@ let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~(args : string list) : i
             (fun ((suite : Suites.t), (inst : Instance.t)) ->
               if over_limit () then None (* fail-fast reached — don't boot this one *)
               else begin
-                let code, block = run_one_suite ~server_exe:d.Discover.exe ~runner_exe ~args ~stream ~suite ~inst in
+                let code, block = run_one_suite ~server_exe:d.Discover.exe ~runner_exe ~args ~mongo ~stream ~suite ~inst in
                 if code <> 0 && code <> 3 then bump (); (* only real failures count toward fail-fast *)
                 if not stream then (Mutex.lock pm; print_string block; flush stdout; Mutex.unlock pm);
                 Some (suite.Suites.name, inst.Instance.port, code)
@@ -382,11 +401,13 @@ let effective_jobs (o : options) =
 
 let run_http (opts : options) : int =
   orchestrate ~cut:Http ~dir:"test/http" ~base:opts.base_port ~jobs:(effective_jobs opts)
-    ~limit:(fail_fast_limit ~fail_fast:opts.fail_fast ~max_failures:opts.max_failures) ~args:(suite_args ~cut:Http opts)
+    ~limit:(fail_fast_limit ~fail_fast:opts.fail_fast ~max_failures:opts.max_failures) ~mongo:opts.mongo
+    ~args:(suite_args ~cut:Http opts)
 
 let run_browser (opts : options) : int =
   orchestrate ~cut:Browser ~dir:"test/browser" ~base:opts.base_port ~jobs:(effective_jobs opts)
-    ~limit:(fail_fast_limit ~fail_fast:opts.fail_fast ~max_failures:opts.max_failures) ~args:(suite_args ~cut:Browser opts)
+    ~limit:(fail_fast_limit ~fail_fast:opts.fail_fast ~max_failures:opts.max_failures) ~mongo:opts.mongo
+    ~args:(suite_args ~cut:Browser opts)
 
 (* ──── system cut ──── *)
 
@@ -479,15 +500,6 @@ let run (opts : options) : int =
      Same fix the dev loop (Supervisor.run) and the system cut already use; doing it once here covers
      http/browser too. Idempotent. Keeps the dev/test loop fast (bytecode + a prebuilt dll), no native. *)
   Fennec_dev.Stublibs.ensure ();
-  (* --mongo launches a managed mongod + exports MONGO_URL for every spawned instance; stopped on
-     teardown (and reaped on Ctrl-C / at_exit). Off → the in-memory backend, unchanged. *)
-  let mongo = if opts.mongo then start_mongo () else None in
-  (* a launched mongod is shared (one database) across suites, so run suites SERIALLY — concurrent
-     suites would otherwise write the same collections out from under each other (nondeterministic).
-     In-memory backends are per-instance, so this only forces serial when a real mongod is in play.
-     Per-suite database isolation is a future enhancement that would lift this. *)
-  let opts = match mongo with Some _ -> { opts with jobs = Some 1 } | None -> opts in
-  Fun.protect ~finally:(fun () -> stop_mongo mongo) @@ fun () ->
   match opts.suite with
   | Unit -> run_unit ()
   | Http -> if run_http opts = 0 then 0 else 1

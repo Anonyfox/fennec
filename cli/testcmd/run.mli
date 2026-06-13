@@ -20,7 +20,7 @@ type options = {
   headed : bool;
   screenshots : string option;
   base_port : int;
-  mongo : bool;         (* --mongo: launch a managed mongod + export MONGO_URL (else in-memory) *)
+  mongo : bool;         (* --mongo: run app suites against per-suite managed MongoDB instances *)
   strict : bool;        (* docs cut: fail on a coverage gap (else warn) *)
   private_ : bool;      (* docs cut: also check .ml top-level defs *)
   promote : bool;       (* docs cut: move .ml-only docs into the .mli *)

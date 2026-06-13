@@ -6,4 +6,10 @@
  (name fennec)
  (public_name fennec)
  (modes byte native)
- (libraries fennec.core fennec.paw fennec.server eio eio_main))
+ (libraries
+  fennec.core
+  fennec.paw
+  fennec.server
+  fennec-mongo.driver
+  eio
+  eio_main))

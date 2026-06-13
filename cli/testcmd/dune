@@ -14,6 +14,7 @@
   fennec.core
   fennec_dev
   fennec-mongo.mongod
+  fennec-mongo.driver
   fennec-hunt.unit
   fennec-hunt.prop
   fennec_docs)

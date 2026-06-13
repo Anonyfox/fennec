@@ -1,5 +1,7 @@
 ; Unit tests for the PWA generation layer — pure string assertions, no browser, no server.
+
 (test
  (name test_pwa)
  (libraries fennec.pwa fennec-hunt.unit)
- (preprocess (pps fennec-hunt.ppx)))
+ (preprocess
+  (pps fennec-hunt.ppx)))

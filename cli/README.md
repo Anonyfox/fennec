@@ -37,11 +37,14 @@ Runs `dune build --watch` and supervises the server: a native fs-watcher reacts 
 restart the backend on a change, hot-swap CSS without a refresh. A felt loop around **~0.1 s**.
 Discovers the server (the one executable that calls `Fennec.serve`), binds the real port (dev ≈ prod,
 no proxy), and reaps the whole process group on teardown (no orphans, port reclaim).
+When `MONGO_URL` is unset, dev auto-starts/adopts a local MongoDB replica set if `mongod` is
+available; if not, the app still boots and database-backed features fail clearly when used.
 
-For coding agents, `fennec dev --agent --attach` installs one guarded user-level post-tool hook for
-supported harnesses. After edits, the devserver verdict is injected into the next model step, so
-agents do not need to remember ad-hoc `dune build` / `dune runtest` probes. Recovery is
-`fennec agent status`; low-level hook commands are not the normal workflow.
+For coding agents working on an app, `fennec dev --agent --attach` installs one guarded user-level
+post-tool hook for supported harnesses. After application edits, the devserver verdict is injected
+into the next model step, so agents do not need to remember ad-hoc `dune build` / `dune runtest`
+probes. Recovery is `fennec agent status`; low-level hook commands are not the normal workflow.
+Framework and monorepo work uses focused Dune checks instead.
 
 ## `fennec test`
 

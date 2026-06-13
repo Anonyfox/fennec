@@ -53,7 +53,7 @@ let%test "session: connect emits connected; ping emits pong" =
 let%test "session: sub runs the publication sub-tagged and emits ready" =
   let out = ref [] in
   let pubs = Hashtbl.create 1 in
-  Hashtbl.replace pubs "feed" (fun ~params:_ (sink : Session.sink) ->
+  Hashtbl.replace pubs "feed" (fun _ctx (sink : Session.sink) ->
       sink.added ~collection:"items" ~id:"1" ~fields:[ ("n", B.int 1) ];
       sink.ready ();
       { Session.stop = (fun () -> ()) });
@@ -101,10 +101,38 @@ let%test "session: a method's Method_error is reported, not collapsed to 500" =
       | _ -> false)
     !out
 
+let%test "session: publication receives the current user_id, including anonymous" =
+  let out = ref [] in
+  let pubs = Hashtbl.create 1 in
+  Hashtbl.replace pubs "who" (fun (ctx : Session.publication_ctx) (sink : Session.sink) ->
+      sink.added ~collection:"sessions" ~id:"1"
+        ~fields:[ ("userId", (match ctx.Session.user_id with Some uid -> B.str uid | None -> B.Null)) ];
+      sink.ready ();
+      { Session.stop = (fun () -> ()) });
+  let s =
+    Session.create ~user_id:"cookie-user" ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs
+      ~methods:(Hashtbl.create 1) ()
+  in
+  Session.dispatch s (Message.Sub { id = "sub1"; name = "who"; params = []; have = None });
+  List.exists
+    (function
+      | Message.Added { fields; _ } -> List.assoc_opt "userId" fields = Some (B.String "cookie-user")
+      | _ -> false)
+    !out
+  &&
+  let out = ref [] in
+  let s = Session.create ~session_id:"S2" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) () in
+  Session.dispatch s (Message.Sub { id = "sub2"; name = "who"; params = []; have = None });
+  List.exists
+    (function
+      | Message.Added { fields; _ } -> List.assoc_opt "userId" fields = Some B.Null
+      | _ -> false)
+    !out
+
 let%test "session: a throwing publication emits Nosub, not a hang" =
   let out = ref [] in
   let pubs = Hashtbl.create 1 in
-  Hashtbl.replace pubs "boom" (fun ~params:_ (_ : Session.sink) -> failwith "publication boom");
+  Hashtbl.replace pubs "boom" (fun _ctx (_ : Session.sink) -> failwith "publication boom");
   let s = Session.create ~session_id:"S" ~emit:(fun m -> out := m :: !out) ~pubs ~methods:(Hashtbl.create 1) () in
   Session.dispatch s (Message.Sub { id = "sub1"; name = "boom"; params = []; have = None });
   List.exists (function Message.Nosub { id = "sub1"; error = Some _ } -> true | _ -> false) !out

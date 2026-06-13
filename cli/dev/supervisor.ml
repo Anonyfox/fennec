@@ -97,6 +97,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
      explicitly so the supervisor and server agree, and so the banner can show the gateway URL. *)
   let dev_base = Option.value port ~default:4000 in
+  let mongo = Mongo_rs.ensure_dev ~root:(Sys.getcwd ()) ~base_port:dev_base () in
   let agent =
     match agent_dir with
     | None -> None
@@ -133,7 +134,9 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      The next run kills it via this pid, and its server then self-exits (getppid), freeing the
      port — so two `fennec dev`s can't coexist and serve a stale build. *)
   let record_pids () =
-    Pidfile.record pidfile (Unix.getpid () :: Dune_watch.pid !dw :: worker_pid :: (match !server with Up up -> [ Server_proc.pid up.proc ] | Down -> []))
+    let mongo_pid = match mongo with Some t -> Option.to_list (Mongo_rs.pid t) | None -> [] in
+    let server_pid = match !server with Up up -> [ Server_proc.pid up.proc ] | Down -> [] in
+    Pidfile.record pidfile ([ Unix.getpid (); Dune_watch.pid !dw; worker_pid ] @ mongo_pid @ server_pid)
   in
   let serving () = match !server with Up _ -> true | Down -> false in
 
@@ -188,6 +191,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     (match !server with Up up -> Server_proc.stop up.proc | Down -> ()); (* frees the port before we go *)
     Ui.stopped ui;
     emit_verdict Verdict.Stopped;
+    (match mongo with Some t -> Mongo_rs.stop t | None -> ());
     kill (Dune_watch.pid !dw);
     kill worker_pid;
     (try Sys.remove control_path with _ -> ());

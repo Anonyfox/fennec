@@ -18,8 +18,15 @@ type sink = {
 (** A handle to a running publication; [stop] tears it down. *)
 type handle = { stop : unit -> unit }
 
-(** A publication: given [params] and a {!sink}, start streaming and return a {!handle}. *)
-type publication = params:Bson.t list -> sink -> handle
+(** The per-subscription context a publication runs in. [user_id] is the connection's current
+    Accounts user (None = anonymous), and [params] are the client's subscription arguments. *)
+type publication_ctx = {
+  user_id : string option;
+  params : Bson.t list;
+}
+
+(** A publication: given a {!publication_ctx} and a {!sink}, start streaming and return a handle. *)
+type publication = publication_ctx -> sink -> handle
 
 (** The per-call context a method runs in: [user_id] is the connection's current user (None =
     anonymous), [set_user_id] rebinds it for the rest of the connection (a login method's job — the

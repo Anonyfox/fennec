@@ -17,7 +17,12 @@ type sink = {
 }
 
 type handle = { stop : unit -> unit }
-type publication = params:Bson.t list -> sink -> handle
+type publication_ctx = {
+  user_id : string option;
+  params : Bson.t list;
+}
+
+type publication = publication_ctx -> sink -> handle
 
 (* the per-call context a method runs in: the connection's current user (set by a prior method via
    [set_user_id] — e.g. a login method), and the client's randomSeed for deterministic id minting *)
@@ -123,7 +128,7 @@ let dispatch (t : t) (m : Msg.t) : unit =
           (* a publication that raises must not hang the client in "loading" (nor unwind the read
              loop) — surface it as a Nosub error, re-raising only the control exceptions *)
           let started =
-            try `Ok (pub ~params sink)
+            try `Ok (pub { user_id = t.user_id; params } sink)
             with (Stack_overflow | Out_of_memory) as e -> raise e | _ -> `Failed
           in
           match started with
