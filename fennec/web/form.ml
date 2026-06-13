@@ -251,14 +251,16 @@ let rec leaf_view (v : Codec.view) : Codec.view =
 let rec is_optional (v : Codec.view) : bool =
   match v with Codec.V_check (_, i) -> is_optional i | Codec.V_option _ -> true | _ -> false
 
-(* infer the input control from the field's leaf type (number/checkbox/date are reliable; email and
-   password aren't inferable from the shape alone, so pass [~kind] for those) *)
-let infer_kind (f : _ Codec.field) =
-  match leaf_view (Codec.field_view f) with
+(* infer the input control from a leaf view (number/checkbox/date are reliable; email and password
+   aren't inferable from the shape alone, so pass [~kind] for those) *)
+let kind_of_view (v : Codec.view) =
+  match leaf_view v with
   | Codec.V_bool -> `Checkbox
   | Codec.V_int | Codec.V_float -> `Number
   | Codec.V_date -> `Date
   | _ -> `Text
+
+let infer_kind (f : _ Codec.field) = kind_of_view (Codec.field_view f)
 
 let fmt_float f = if Float.is_integer f then string_of_int (int_of_float f) else string_of_float f
 
@@ -270,17 +272,19 @@ let hint_attrs = function
   | Codec.H_max f -> [ ("max", fmt_float f) ]
   | _ -> []
 
-(* the HTML5 constraint attributes a field's refinements imply (client-side validation for free, from
+(* the HTML5 constraint attributes a view's refinements imply (client-side validation for free, from
    the same model the server validates against) *)
-let constraints (f : _ Codec.field) : (string * string) list =
-  let v = Codec.field_view f in
+let constraints_of_view ~required (v : Codec.view) : (string * string) list =
   let rec collect acc = function
     | Codec.V_check (h, i) -> collect (hint_attrs h @ acc) i
     | Codec.V_option i | Codec.V_list i -> collect acc i
     | _ -> acc
   in
   let cs = collect [] v in
-  if Codec.field_required f && not (is_optional v) then ("required", "required") :: cs else cs
+  if required && not (is_optional v) then ("required", "required") :: cs else cs
+
+let constraints (f : _ Codec.field) : (string * string) list =
+  constraints_of_view ~required:(Codec.field_required f) (Codec.field_view f)
 
 type ctx = {
   conn : Conn.t;
@@ -316,6 +320,42 @@ let bound (c : ctx) ?label ?kind (f : _ Codec.field) : Fur.vnode =
 (* wrap a bound form's fields in the <form> (action/method/CSRF/override/enctype all from the ctx) *)
 let render (c : ctx) (children : Fur.vnode list) : Fur.vnode =
   form ~method_:c.method_ ~action:c.action ?csrf:c.csrf ?override:c.override ~multipart:c.multipart children
+
+(* "first_name" → "First name" — a default label for an auto-generated field *)
+let humanize name =
+  String.capitalize_ascii (String.map (fun c -> if c = '_' then ' ' else c) name)
+
+(* Auto-generate a field row PER top-level field straight from the codec's view — no field handles,
+   no per-field code (Rails scaffold / DRF browsable-API). Label is the humanized name; input type +
+   constraints are inferred; [values]/[errors] prefill + annotate. The typed {!bound} is the explicit
+   counterpart when you want compile-time field names + custom labels/kinds. *)
+let auto ?(values = []) ?(errors = []) (c : 'a Codec.t) : Fur.vnode list =
+  match Codec.view c with
+  | Codec.V_obj fields ->
+      List.map
+        (fun (name, required, shape) ->
+          let value = Option.value ~default:"" (List.assoc_opt name values) in
+          let errs =
+            List.filter_map (fun (e : Codec.error) -> match e.path with x :: _ when x = name -> Some e.msg | _ -> None) errors
+          in
+          let attrs = constraints_of_view ~required shape in
+          let id_name = [ Fur.attr "name" name; Fur.attr "id" name ] in
+          let control =
+            match kind_of_view shape with
+            | `Checkbox ->
+                Fur.h "input"
+                  (((Fur.attr "type" "checkbox" :: id_name) @ [ Fur.attr "value" "on" ]
+                   @ if truthy value then [ Fur.attr "checked" "checked" ] else [])
+                  @ attrs_of attrs)
+                  []
+            | k ->
+                let t = match k with `Number -> "number" | `Date -> "date" | _ -> "text" in
+                Fur.h "input" (((Fur.attr "type" t :: id_name) @ [ Fur.attr "value" value ]) @ attrs_of attrs) []
+          in
+          Fur.h "div" [ Fur.class_ "field" ]
+            [ Fur.h "label" [ Fur.attr "for" name ] [ Fur.text (humanize name) ]; control; errors_block errs ])
+        fields
+  | _ -> []
 
 (* ──────────────────────────── tests ──────────────────────────── *)
 
@@ -448,6 +488,13 @@ let%test "values_of encodes a model into form-input strings" =
   let v = values_of signup_codec { email = "a@b"; age = 7; tags = [ "x"; "y" ]; subscribe = true } in
   List.assoc "email" v = "a@b" && List.assoc "age" v = "7" && List.assoc "subscribe" v = "on"
   && List.filter (fun (k, _) -> k = "tags") v = [ ("tags", "x"); ("tags", "y") ]
+
+let%test "auto generates a labeled, typed, constrained input per field from the codec view" =
+  let html = Fur.to_html (Fur.frag (auto signup_codec ~values:[ ("age", "30") ])) in
+  contains html {|<label for="email">Email</label>|}
+  && contains html {|name="age"|} && contains html "type=\"number\"" && contains html "value=\"30\""
+  && contains html {|name="subscribe"|} && contains html "type=\"checkbox\""
+  && contains html "required" (* email is required → required attr *)
 
 let%test "file_input + multipart form set the right type and enctype" =
   let html = Fur.to_html (form ~action:"/up" ~multipart:true [ file_input ~name:"avatar" (); submit "Go" ]) in

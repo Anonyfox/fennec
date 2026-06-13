@@ -52,6 +52,26 @@ let error_envelope (errs : Codec.error list) : Bson.t =
 (* answer with the validation-error envelope (422 by default) *)
 let errors ?(status = 422) (conn : Conn.t) (errs : Codec.error list) : Conn.t = bson ~status conn (error_envelope errs)
 
+(* A typed handler outcome (ASP.NET TypedResults / a return-type union). Map it to a JSON response
+   with the right status via {!api} — a JSON-API handler returns one of these instead of hand-building
+   the Conn, so status codes stay consistent. *)
+type 'a outcome =
+  | Ok_ of 'a (* 200 + the value *)
+  | Created of 'a (* 201 + the value *)
+  | No_content (* 204 *)
+  | Not_found (* 404 *)
+  | Invalid of Codec.error list (* 422 + the error envelope *)
+  | Redirect of string (* 303 to a location *)
+
+let api (conn : Conn.t) (c : 'a Codec.t) (o : 'a outcome) : Conn.t =
+  match o with
+  | Ok_ v -> model conn c v
+  | Created v -> model ~status:201 conn c v
+  | No_content -> Conn.text ~status:204 conn ""
+  | Not_found -> bson ~status:404 conn (Bson.doc [ ("error", Bson.str "not found") ])
+  | Invalid errs -> errors conn errs
+  | Redirect loc -> Conn.redirect ~status:303 conn loc
+
 (* ──────────────────────────── tests ──────────────────────────── *)
 
 module H = Fennec_core.Http
@@ -75,3 +95,13 @@ let%test "error envelope uses the canonical form_errors/field_errors shape" =
   let s = Bson_json.to_string b in
   contains s "form_errors" && contains s "form is invalid" && contains s "field_errors" && contains s "email"
   && contains s "is required"
+
+type doc = { id : string }
+
+let doc_codec = Codec.(seal (record (fun id -> { id }) |> field (req "id" string) (fun d -> d.id)))
+let conn () = Conn.make (H.make_request ~meth:H.GET ~path:"/x" ())
+
+let%test "api maps typed outcomes to the right status codes" =
+  let st o = (Option.get (Conn.resp (api (conn ()) doc_codec o))).H.status in
+  st (Ok_ { id = "a" }) = 200 && st (Created { id = "a" }) = 201 && st No_content = 204
+  && st Not_found = 404 && st (Invalid [ Codec.err [ "id" ] "is required" ]) = 422 && st (Redirect "/here") = 303

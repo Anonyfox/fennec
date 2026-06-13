@@ -154,6 +154,13 @@ val bound :
 (** Wrap a bound form's fields in the [<form>] (action/method/CSRF/override all from the ctx). *)
 val render : ctx -> Fur.vnode list -> Fur.vnode
 
+(** Auto-generate a field row PER top-level field straight from the codec's view — no field handles,
+    no per-field code (Rails scaffold / DRF browsable API). Label is the humanized field name; input
+    type + HTML5 constraints are inferred; [values]/[errors] prefill + annotate. {!bound} is the
+    explicit counterpart (compile-time field names, custom labels/kinds). Pair with {!render}:
+    [Form.render f (Form.auto Post.codec)]. *)
+val auto : ?values:(string * string) list -> ?errors:Codec.error list -> 'a Codec.t -> Fur.vnode list
+
 (** The [<form>] wrapper. [method_] is the HTML method; [override] simulates PUT/PATCH/DELETE via the
     [_method] field (pair with {!Fennec_server.Method_override}); [csrf] embeds the token in
     [_csrf_token] (pair with the CSRF paw — mint with [Csrf.token] in the handler); [multipart] sets
