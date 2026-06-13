@@ -23,6 +23,10 @@ type outcome = Ok | Expired | Wrong_session | Invalid
     just [token conn]; pass [~secret] only to override or when calling without the paw in scope. *)
 val token : ?secret:string -> ?valid_for:float -> Fennec_paw.Conn.t -> string
 
+(** [Some] a token when the conn can mint one (the Csrf + Session paws ran), else [None] — a form
+    renderer embeds a CSRF field only when CSRF is active, without raising. *)
+val token_opt : ?valid_for:float -> Fennec_paw.Conn.t -> string option
+
 (** Validate a submitted token against the app [secret] and the session secret. *)
 val verify : secret:string -> Fennec_paw.Conn.t -> string -> outcome
 

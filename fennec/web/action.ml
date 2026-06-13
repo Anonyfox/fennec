@@ -1,6 +1,6 @@
 (* Typed request extraction — the input half of an action. JSON bodies decode straight through the
    Codec model (API input); path/query scalars coerce with the stdlib. HTML form bodies go through
-   {!Form.parse} (string coercion); this module is the JSON + scalar side. *)
+   {!Form.read} (string coercion); this module is the JSON + scalar side. *)
 
 module Conn = Fennec_paw.Conn
 module Bson_json = Fennec_mongo_bson_json.Bson_json
@@ -8,7 +8,7 @@ module Bson_json = Fennec_mongo_bson_json.Bson_json
 (* the raw request body *)
 let body (conn : Conn.t) : string = (Conn.req conn).Fennec_core.Http.body
 
-(* decode a JSON request body into a codec's type — the API-input counterpart of {!Form.parse}.
+(* decode a JSON request body into a codec's type — the API-input counterpart of {!Form.read}.
    Validation/refinements apply exactly as for forms; errors come back per-field. *)
 let json (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
   match Bson_json.of_string_opt (body conn) with
@@ -23,12 +23,12 @@ let contains hay needle =
 
 (* Parse the request into [codec]'s type from WHICHEVER format the client sent: a JSON body
    ([Content-Type: application/json]) decodes through {!json}; anything else is treated as an HTML
-   form body through {!Form.parse} (so [~inject]/[~ignore] apply). Lets ONE handler accept both a
+   form body through {!Form.read} (so [~inject]/[~ignore] apply). Lets ONE handler accept both a
    browser form POST and an API JSON POST. *)
 let input ?inject ?ignore (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
   match Conn.req_header conn "content-type" with
   | Some ct when contains (String.lowercase_ascii ct) "application/json" -> json c conn
-  | _ -> Form.parse ?inject ?ignore c conn
+  | _ -> Form.read ?inject ?ignore c conn
 
 (* path / query scalars *)
 let path (conn : Conn.t) (name : string) : string option = Conn.path_param conn name

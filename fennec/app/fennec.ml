@@ -30,15 +30,10 @@ module Codec = Codec (* the shape language — for hand-written codecs + the res
 module Fur = struct
   include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
 
-  let page = Fennec_web.View.page
-  let respond = Fennec_web.Resource.respond
-  let redirect = Fennec_web.Resource.redirect
-  let flash = Fennec_web.Resource.flash
-  let resource = Fennec_web.Resource.crud
-
-  module Form = Fennec_web.Form
-  module Action = Fennec_web.Action
-  module Respond = Fennec_web.Respond
+  module Handler = Fennec_web.Handler (* render a component to a static HTML response + redirect/flash/csrf *)
+  module Form = Fennec_web.Form (* typed form/query INPUT over the Codec model *)
+  module Action = Fennec_web.Action (* typed path/query scalars + JSON-body decode *)
+  module Respond = Fennec_web.Respond (* JSON output building blocks (hand-built APIs) *)
 end
 
 (* The verb namespace: the primitive + its algebra + the route verbs (from

@@ -110,6 +110,13 @@ let token ?secret ?(valid_for = 3600.) (c : Conn.t) : string =
   let payload = Printf.sprintf "%s|%.0f" masked (now () +. valid_for) in
   payload ^ "." ^ b64e (hmac ~secret payload)
 
+(* [token_opt c] is [Some] a token when the conn can mint one (the Csrf+Session paws ran), else
+   [None] — so a form renderer embeds a CSRF field only when CSRF is actually active, without raising. *)
+let token_opt ?valid_for (c : Conn.t) : string option =
+  match Conn.get c secret_key with
+  | None -> None
+  | Some _ -> ( try Some (token ?valid_for c) with Failure _ -> None)
+
 let _req ?(meth = H.GET) ?(headers = []) ?(body = "") path =
   H.make_request ~meth ~path ~headers ~body ()
 

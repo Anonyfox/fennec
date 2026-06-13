@@ -111,7 +111,7 @@
  ; dev builds the bytecode server (server.bc); release builds native server.exe.
  (name server)
  (modes byte exe)
- (modules server notes assets)
+ (modules server hello assets)
  (preprocess
   (pps fennec.fur.ppx))
  (libraries

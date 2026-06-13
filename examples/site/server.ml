@@ -79,6 +79,8 @@ let common =
   [ Paw.Logger.make (); Paw.Security_headers.make (); powered_by;
     Fennec.static ~name:"webroot" ~assets:Assets.lookup ]
 
+let hello_secret = "hello-handler-demo-secret-key-1234"
+
 let web =
   Endpoint.make ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
   |> Endpoint.pipe
@@ -91,9 +93,11 @@ let web =
   |> Endpoint.get "/api/stream"
        (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
   |> Endpoint.get "/api/download" (fun c -> Conn.send_file c ~path:download_path ())
-  (* the typed middle layer: a fully server-rendered, content-negotiated CRUD resource at /notes
-     (forms + validation + CSRF + method-override + flash), no client JS — see notes.ml *)
-  |> Notes.mount
+  (* the middle layer: a server-rendered HANDLER at /hello (typed form input + validation + CSRF +
+     flash, no client JS — see hello.ml). Session + CSRF paws back its flash + token. *)
+  |> Endpoint.pipe [ Paw.Session.make ~secret:hello_secret (); Paw.Csrf.make ~secret:hello_secret () ]
+  |> Endpoint.get "/hello" Hello.get
+  |> Endpoint.post "/hello" Hello.post
   |> Endpoint.app
        (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
           ~source:api_source ~mounts:[ Web_app.Routes.mount ])

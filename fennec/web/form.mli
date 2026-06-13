@@ -1,33 +1,27 @@
-(** Typed HTML forms over the SAME {!Codec} model that powers collections and DDP methods — one
-    declaration, no parallel validation story. An HTML form (or a GET filter form) submits
-    stringly-typed [(key, value)] pairs; {!parse} coerces them into the shape's BSON (driven by
-    {!Codec.view}) and runs the codec's full decode + validation, so the model's refinements
-    ([@non_empty], [@max_len], [@email], [@min], …) apply for free and failures come back as
-    per-field errors keyed by wire name — exactly what re-rendering a form with inline feedback wants.
+(** Typed form INPUT over the SAME {!Codec} model that powers collections and DDP methods — the input
+    half of a handler. {!read} coerces the stringly request a form (or query) submits into the shape's
+    BSON and runs the codec's full decode + validation, so the handler gets a typed value with the
+    model's refinements enforced and per-field errors for re-rendering. No HTML building — forms are
+    authored as plain [.mlx] markup; this module only reads the request.
 
-    {[ (* the post handler: parse, persist, redirect — or re-render with field errors (PRG) *)
-       let create conn =
-         match Form.parse Post.codec conn with
-         | Ok post -> ignore (save post); Conn.redirect conn "/posts"
-         | Error errs ->
-             let title_errs = Form.field_errors Post.Fields.title errs in
-             Conn.html ~status:422 conn (render_form ~conn ~errors:errs) ]} *)
+    {[ let post conn =
+         match Form.read Message.codec conn with
+         | Ok m -> ignore (Messages.create m); Handler.redirect conn "/thanks" ~flash:"Sent!"
+         | Error errs -> Handler.html ~status:422 conn (Contact_page.view ~errors:errs ()) ]} *)
 
 module Conn = Fennec_paw.Conn
 
-(** Where {!parse} reads the submitted pairs from: the request [Body] (a POSTed form, urlencoded or
-    multipart — the default) or the [Query] string (a GET filter/search form). *)
+(** Where {!read} takes the pairs from: the request [Body] (a POSTed form — the default) or the
+    [Query] string (a GET filter/search form). *)
 type source = Body | Query
 
-(** [parse ?from ?inject ?ignore codec conn] coerces the submitted pairs into [codec]'s type and
-    validates them. Repeated keys feed a list field; an absent checkbox reads as [false]; an absent
-    non-bool field defers to the codec's own required/optional/default rule. A coercion failure (e.g.
-    ["abc"] for an int) is reported per-field and its redundant "missing" decode error is suppressed.
-
-    [~inject] supplies server-controlled fields (id, owner, timestamps) the form must not carry — they
-    OVERRIDE any client-submitted value for the same key (mass-assignment safety). [~ignore] drops
-    named keys from the user input entirely. *)
-val parse :
+(** [read ?from ?inject ?ignore codec conn] coerces + validates the submitted pairs into [codec]'s
+    type. Repeated keys feed a list field; dotted keys ([author.name]) feed an embedded record; an
+    absent checkbox reads [false]; an absent non-bool field defers to the codec's
+    required/optional/default rule; a coercion failure is a per-field error (its redundant "missing"
+    decode error suppressed). [~inject] supplies server-controlled fields that OVERRIDE any
+    client-submitted value (mass-assignment safety); [~ignore] drops named keys from user input. *)
+val read :
   ?from:source ->
   ?inject:(string * string) list ->
   ?ignore:string list ->
@@ -35,160 +29,18 @@ val parse :
   Conn.t ->
   ('a, Codec.error list) result
 
-(** {!parse} over an explicit assoc list — the testable core (no {!Conn}). *)
+(** {!read} over an explicit assoc list — the testable core (no {!Conn}). *)
 val parse_assoc : 'a Codec.t -> (string * string) list -> ('a, Codec.error list) result
 
-(** The error messages attached to one field (matched by its wire name) — drives inline feedback.
+(** The error messages attached to one field (by wire name) — inline feedback when re-rendering.
     Pass a field handle from the model's generated [Fields] module. *)
 val field_errors : _ Codec.field -> Codec.error list -> string list
 
 (** The raw value the user just submitted for [name] — repopulate an input when re-rendering. *)
 val submitted : Conn.t -> string -> string
 
-(** Stash validation errors on the conn so a re-rendered form shows them with no threading (the
-    Resource convention calls this on a failed write; {!start} reads it when [~errors] is omitted). *)
-val put_errors : Conn.t -> Codec.error list -> Conn.t
-
 (** The canonical validation-error summary (zod's [flatten] / Ecto's [traverse_errors] shape):
-    top-level (path-less) messages separated from per-field messages keyed by wire name (first-seen
-    order preserved). The one shape for JSON error bodies and form rendering alike. *)
+    top-level (path-less) messages separated from per-field messages keyed by wire name. *)
 type error_summary = { form_errors : string list; field_errors : (string * string list) list }
 
 val summary : Codec.error list -> error_summary
-
-(** {1 Rendering}
-
-    Inputs bind to the SAME field handles {!parse} reads, so a renamed model field is a compile error
-    in BOTH directions — the form and its parser cannot drift. All produce {!Fur} vnodes (attribute
-    values + text are escaped), renderable as a dead view or composed into a live one.
-
-    {[ View.document conn (View.page ~title:"New post"
-         [ Form.form ~action:"/posts" ~csrf:(Csrf.token ~secret conn)
-             [ Form.field Post.Fields.title ~label:"Title"
-                 ~value:(Form.submitted conn "title") ~errors:(Form.field_errors Post.Fields.title errs);
-               Form.field Post.Fields.body ~label:"Body" ~kind:`Textarea;
-               Form.submit "Publish" ] ]) ]} *)
-
-(** A hidden input (carried value, CSRF token, method override). *)
-val hidden : name:string -> value:string -> Fur.vnode
-
-(** A [<label for=…>] bound to a field's wire name. *)
-val label_for : _ Codec.field -> string -> Fur.vnode
-
-(** A text-style [<input>] bound to a field ([type_] defaults to ["text"]). *)
-val input : ?type_:string -> ?value:string -> ?attrs:(string * string) list -> _ Codec.field -> Fur.vnode
-
-val textarea : ?value:string -> ?attrs:(string * string) list -> _ Codec.field -> Fur.vnode
-val checkbox : ?checked:bool -> ?attrs:(string * string) list -> _ Codec.field -> Fur.vnode
-
-(** A file-upload input. Files are NOT codec data, so this binds a plain [name] (not a field handle);
-    read the upload in the handler with [Conn.file conn name]. Requires a [~multipart] form. *)
-val file_input : ?attrs:(string * string) list -> name:string -> unit -> Fur.vnode
-
-(** A [<select>] bound to a field; [options] is [(value, label)] pairs, [selected] marks the current. *)
-val select :
-  ?selected:string -> ?attrs:(string * string) list -> options:(string * string) list -> _ Codec.field -> Fur.vnode
-
-val submit : ?attrs:(string * string) list -> string -> Fur.vnode
-
-(** A labeled field row — [<label>] + control + inline error list — in one call. [kind] picks the
-    control; [value]/[errors] repopulate + annotate after a failed submit (feed {!submitted} /
-    {!field_errors}); [attrs] adds extra input attributes. *)
-val field :
-  ?label:string ->
-  ?kind:[ `Text | `Email | `Password | `Number | `Date | `Textarea | `Checkbox ] ->
-  ?value:string ->
-  ?errors:string list ->
-  ?attrs:(string * string) list ->
-  _ Codec.field ->
-  Fur.vnode
-
-(** {1 The bound form ([to_form])}
-
-    A {!ctx} carries the request (for value repopulation), the errors to show, and the form chrome
-    (action/method/CSRF/override). {!bound} then renders ONE field with everything filled in
-    automatically — value, per-field errors, inferred input type, and HTML5 constraint attributes
-    derived from the model's refinements — so the view never threads value/error/type by hand.
-
-    {[ (* new + edit + re-render-after-error, all the same code *)
-       let f = Form.start conn ~secret ~action:"/posts" ~errors
-                 ?values:(if editing then Some (Form.values_of Post.codec post) else None) () in
-       View.document conn (View.page ~title:"Post"
-         (Form.render f
-            [ Form.bound f Post.Fields.title ~label:"Title";       (* type/required/maxlength inferred *)
-              Form.bound f Post.Fields.body ~label:"Body" ~kind:`Textarea;
-              Form.bound f Post.Fields.priority ~label:"Priority"; (* number + min/max from refinements *)
-              Form.bound f Post.Fields.published ~label:"Published"; (* checkbox inferred *)
-              Form.submit "Save" ])) ]} *)
-
-(** Encode a model value as form-input strings — prefill an edit form via {!start}'s [~values]. *)
-val values_of : 'a Codec.t -> 'a -> (string * string) list
-
-(** The HTML5 constraint attributes a field's refinements imply ([required]/[minlength]/[maxlength]/
-    [min]/[max]/[pattern]) — client-side validation from the same model the server validates. *)
-val constraints : _ Codec.field -> (string * string) list
-
-(** A bound form. *)
-type ctx
-
-(** Open a bound form. [~errors] show inline; [~values] prefill a fresh render (see {!values_of});
-    [~secret] auto-mints a CSRF token (or pass [~csrf]); [~override] simulates PUT/PATCH/DELETE.
-    After a failed submit the request body repopulates every field automatically. *)
-val start :
-  ?method_:[ `GET | `POST ] ->
-  ?errors:Codec.error list ->  (** omitted ⇒ read from the conn (a failed write stashed them) *)
-  ?values:(string * string) list ->
-  ?override:string ->
-  ?csrf:string ->  (** omitted ⇒ minted from the conn (the Csrf paw); falls back to [~secret] *)
-  ?secret:string ->
-  ?multipart:bool ->
-  action:string ->
-  Conn.t ->
-  ctx
-
-(** Render ONE field of a bound form — value, errors, input type, and constraints all filled in.
-    Pass [~kind] only to override the inferred control (e.g. [`Textarea], [`Email], [`Password]). *)
-val bound :
-  ctx ->
-  ?label:string ->
-  ?kind:[ `Text | `Email | `Password | `Number | `Date | `Textarea | `Checkbox ] ->
-  _ Codec.field ->
-  Fur.vnode
-
-(** Wrap a bound form's fields in the [<form>] (action/method/CSRF/override all from the ctx). *)
-val render : ctx -> Fur.vnode list -> Fur.vnode
-
-(** The everyday form, in one call: open a bound form for [codec] (prefilled from [entity] on edit),
-    build its fields, wrap them in the [<form>]. No [start]/[render] threading, no [values_of].
-    {[ Form.view c Note.codec ~action:"/notes" ?entity:note
-         (fun f -> [ Form.bound f Note.Fields.title ~label:"Title"; Form.submit "Save" ]) ]} *)
-val view :
-  ?override:string ->
-  ?multipart:bool ->
-  Conn.t ->
-  'a Codec.t ->
-  action:string ->
-  ?entity:'a ->
-  (ctx -> Fur.vnode list) ->
-  Fur.vnode
-
-(** Auto-generate a field row PER top-level field straight from the codec's view — no field handles,
-    no per-field code (Rails scaffold / DRF browsable API). Label is the humanized field name; input
-    type + HTML5 constraints are inferred; [values]/[errors] prefill + annotate. {!bound} is the
-    explicit counterpart (compile-time field names, custom labels/kinds). Pair with {!render}:
-    [Form.render f (Form.auto Post.codec)]. *)
-val auto : ?values:(string * string) list -> ?errors:Codec.error list -> 'a Codec.t -> Fur.vnode list
-
-(** The [<form>] wrapper. [method_] is the HTML method; [override] simulates PUT/PATCH/DELETE via the
-    [_method] field (pair with {!Fennec_server.Method_override}); [csrf] embeds the token in
-    [_csrf_token] (pair with the CSRF paw — mint with [Csrf.token] in the handler); [multipart] sets
-    [enctype="multipart/form-data"] for file uploads. *)
-val form :
-  ?method_:[ `GET | `POST ] ->
-  action:string ->
-  ?csrf:string ->
-  ?override:string ->
-  ?multipart:bool ->
-  ?attrs:(string * string) list ->
-  Fur.vnode list ->
-  Fur.vnode
