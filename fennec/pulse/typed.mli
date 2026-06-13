@@ -34,25 +34,33 @@ module Make (R : Reactive.REACTIVE) : sig
   (** The substrate's reactive cursor (sorted/windowed) — plugs into [publish] unchanged.
       [?project] trims to a {!Proj.t}'s fields on the wire (the publication ships only those). *)
   val cursor :
-    'a t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> ?project:_ Proj.t -> unit -> R.Collection.cursor
+    'a t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> ?project:_ Proj.t -> unit -> R.Collection.cursor
 
   (** A PROJECTED read: only the projection's fields cross the boundary, decoded into its object
       type (the full record is never built); malformed rows skipped. *)
   val find_p :
-    'a t -> 'o Proj.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'o list
+    'a t -> 'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o list
 
   (** Typed read; documents that fail decode are SKIPPED (the malformed-doc policy). *)
-  val find : 'a t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'a list
+  val find : 'a t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a list
 
   (** Every decode verdict, for code that must care about malformed documents. *)
   val find_results :
-    'a t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> ('a, Codec.error list) result list
+    'a t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> ('a, Codec.error list) result list
 
-  val find_one : 'a t -> ?where:Q.t list -> ?sort:Bson.t -> unit -> 'a option
+  val find_one : 'a t -> ?where:Q.t list -> ?sort:Sort.t -> unit -> 'a option
   val count : 'a t -> ?where:Q.t list -> unit -> int
 
   (** Typed modifier update over a typed selector ([multi] defaults to [true]). *)
   val update : 'a t -> ?multi:bool -> where:Q.t list -> M.t -> int
 
   val remove : 'a t -> where:Q.t list -> int
+
+  (** Typed upsert: update if matched, insert otherwise ([$setOnInsert] covers insert-only fields).
+      Returns (number affected, newly-minted id if it inserted). *)
+  val upsert : 'a t -> ?multi:bool -> where:Q.t list -> M.t -> int * string option
+
+  (** Distinct values of one field across matching docs, decoded to the field's type (undecodable
+      values skipped). *)
+  val distinct : 'a t -> 'b Codec.field -> ?where:Q.t list -> unit -> 'b list
 end

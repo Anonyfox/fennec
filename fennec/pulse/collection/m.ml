@@ -11,6 +11,15 @@ let inc_f f (x : float) = one "$inc" (Codec.field_name f, Bson.Float x)
 let push f v = one "$push" (Codec.field_name f, Codec.field_elem_enc f v)
 let add_to_set f v = one "$addToSet" (Codec.field_name f, Codec.field_elem_enc f v)
 let pull f v = one "$pull" (Codec.field_name f, Codec.field_elem_enc f v)
+let pull_all f vs = one "$pullAll" (Codec.field_name f, Bson.Array (List.map (Codec.field_elem_enc f) vs))
+let pop_first f = one "$pop" (Codec.field_name f, Bson.int (-1))
+let pop_last f = one "$pop" (Codec.field_name f, Bson.int 1)
+let min f v = one "$min" (Codec.field_name f, Codec.field_enc f v)
+let max f v = one "$max" (Codec.field_name f, Codec.field_enc f v)
+let mul f (n : int) = one "$mul" (Codec.field_name f, Bson.int n)
+let mul_f f (x : float) = one "$mul" (Codec.field_name f, Bson.Float x)
+let set_on_insert f v = one "$setOnInsert" (Codec.field_name f, Codec.field_enc f v)
+let rename f ~to_ = one "$rename" (Codec.field_name f, Bson.str (Codec.field_name to_))
 let raw (b : Bson.t) : t =
   match b with
   | Bson.Document kvs ->

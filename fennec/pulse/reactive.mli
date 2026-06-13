@@ -219,6 +219,13 @@ module type REACTIVE = sig
   (** What a publication returns: one cursor or several (a multi-collection publication). *)
   type cursor_kind = Cursor of Collection.cursor | Cursors of Collection.cursor list
 
+  (** The context a publication runs in. [user_id] is the Accounts user bound to the live
+      connection, or [None] for anonymous clients. [params] are the subscription arguments. *)
+  type publication = {
+    user_id : string option;
+    params : doc list;
+  }
+
   (** [cursor coll ?selector ?sort ?skip ?limit ?fields ()] is a convenience cursor builder for
       publications. *)
   val cursor :
@@ -231,10 +238,11 @@ module type REACTIVE = sig
     unit ->
     Collection.cursor
 
-  (** [publish name f] registers a publication: [f params] yields the cursor(s) to feed subscribers,
-      where [params] are the subscription's arguments (the client's [subscribe ~params]). Return a
-      cursor whose selector uses [params] for a parameterized publication. *)
-  val publish : string -> (doc list -> cursor_kind) -> unit
+  (** [publish name f] registers a publication: [f pub] yields the cursor(s) to feed subscribers,
+      where [pub.user_id] is the current Accounts identity and [pub.params] are the subscription
+      arguments. Return a cursor whose selector uses those fields for user-scoped or parameterized
+      live data. *)
+  val publish : string -> (publication -> cursor_kind) -> unit
 
   (** A live subscription: read the merged documents (all, or per collection), the collection names,
       readiness, and a [stop]. *)
@@ -262,16 +270,14 @@ module type REACTIVE = sig
   (** The names of the registered methods. *)
   val method_names : unit -> string list
 
-  (** [run_publication name ~params ~on] runs the named publication's cursors (built from [params] —
-      the subscription's arguments), delivering each field-level observe delta to [on] as a {!beat}
-      (the [collection] is per document), and returns a handle that stops every cursor. This is the
-      delta-driven entry a DDP session feeds its sink from — unlike {!subscribe} it keeps no merge
-      box. Each cursor is backed by a SHARED backend observe (the multiplexer): every subscription
-      with the same (collection, query) rides one observe, yet [on] still receives the full initial
-      state synchronously before this returns — a fresh observe replays it, a late joiner gets the
-      current state replayed — so emitting [ready] after return stays correct. An unknown publication
-      yields a no-op handle. *)
-  val run_publication : string -> params:doc list -> on:(beat -> unit) -> live_handle
+  (** [run_publication name ~user_id ~params ~on] runs the named publication's cursors, delivering
+      each field-level observe delta to [on] as a {!beat}. This is the delta-driven entry a DDP
+      session feeds its sink from; [user_id] is threaded from the native Accounts session. Each
+      cursor is backed by a SHARED backend observe (the multiplexer): every subscription with the
+      same (collection, query) rides one observe, yet [on] still receives the full initial state
+      synchronously before this returns. An unknown publication yields a no-op handle. *)
+  val run_publication :
+    string -> user_id:string option -> params:doc list -> on:(beat -> unit) -> live_handle
 
   (** Number of active SHARED backend observes — the observe multiplexer collapses every subscription
       with the same (collection, query) onto one, so this counts distinct live queries, not

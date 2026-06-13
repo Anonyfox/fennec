@@ -140,7 +140,12 @@ module type REACTIVE = sig
     unit ->
     Collection.cursor
 
-  val publish : string -> (doc list -> cursor_kind) -> unit
+  type publication = {
+    user_id : string option;
+    params : doc list;
+  }
+
+  val publish : string -> (publication -> cursor_kind) -> unit
 
   type subscription = {
     documents : unit -> (string * doc) list;
@@ -154,7 +159,8 @@ module type REACTIVE = sig
   val publications : unit -> string list
   val method_names : unit -> string list
 
-  val run_publication : string -> params:doc list -> on:(beat -> unit) -> live_handle
+  val run_publication :
+    string -> user_id:string option -> params:doc list -> on:(beat -> unit) -> live_handle
 
   (** number of active SHARED backend observes (the RX9 multiplexer) — an operational gauge of
       distinct live queries, not subscriptions *)
@@ -474,11 +480,16 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     | Cursor of Collection.cursor
     | Cursors of Collection.cursor list
 
+  type publication = {
+    user_id : string option;
+    params : doc list;
+  }
+
   let cursor coll ?(selector = Bson.Document []) ?(sort = Bson.Document [])
       ?(skip = 0) ?(limit = 0) ?(fields = Bson.Document []) () =
     Collection.find coll ~selector ~sort ~skip ~limit ~fields ()
 
-  let _pubs : (string, doc list -> cursor_kind) Hashtbl.t = Hashtbl.create 16
+  let _pubs : (string, publication -> cursor_kind) Hashtbl.t = Hashtbl.create 16
   let publish name f = with_lock _reg_lock (fun () -> Hashtbl.replace _pubs name f)
 
   type subscription = {
@@ -530,7 +541,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
           in
           stoppers := h.stop :: !stoppers
         in
-        (match f [] with
+        (match f { user_id = None; params = [] } with
          | Cursor c -> observe_one c
          | Cursors cs -> List.iter observe_one cs);
         let docs_of coll =
@@ -725,13 +736,13 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
      DDP session uses — no merge box; the caller emits [ready] after this returns (the shared observe
      replays existing docs synchronously — as a fresh observe's [added]s, or a late joiner's [live]
      replay — during this call). *)
-  let run_publication name ~params ~on : live_handle =
+  let run_publication name ~user_id ~params ~on : live_handle =
     match Hashtbl.find_opt _pubs name with
     | None -> { stop = (fun () -> ()) }
     | Some f ->
         let stoppers = ref [] in
         let observe_one cur = stoppers := mux_subscribe cur ~on :: !stoppers in
-        (match f params with Cursor c -> observe_one c | Cursors cs -> List.iter observe_one cs);
+        (match f { user_id; params } with Cursor c -> observe_one c | Cursors cs -> List.iter observe_one cs);
         { stop = (fun () -> List.iter (fun s -> s ()) !stoppers) }
 
   (* ---- EJSON structural ops (pure) ---- *)

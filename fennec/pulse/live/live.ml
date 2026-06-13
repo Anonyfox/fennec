@@ -65,6 +65,7 @@ let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur
   let name = Def.name def in
   let codec = Def.codec def in
   let selector = match Q.all where with [] -> None | q -> Some (Q.to_bson q) in
+  let sort = Option.map Sort.to_bson sort in
   let v = version_signal t name in
   let snap () =
     Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
@@ -90,6 +91,7 @@ let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur
    malformed rows skipped + warned once (same policy as find_c). [name] is the collection. *)
 let find_p t (name : string) (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit () : 'o array Fur.signal =
   let selector = match Q.all where with [] -> None | q -> Some (Q.to_bson q) in
+  let sort = Option.map Sort.to_bson sort in
   let v = version_signal t name in
   let snap () =
     Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()

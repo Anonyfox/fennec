@@ -8,13 +8,37 @@ module Msg = Fennec_ddp.Message
 module Session = Fennec_ddp.Session
 module Sockjs = Fennec_ddp.Sockjs
 module Ws = Fennec_core.Ws_channel
+module Accounts = Fennec_server.Accounts
+module B = Bson
 
 module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
+  let accounts_methods_registered : Accounts.t option ref = ref None
+
+  let register_native_accounts () =
+    let accounts = Accounts.current () in
+    if not (match !accounts_methods_registered with Some existing -> existing == accounts | None -> false) then begin
+        let module Runtime = struct
+          type doc = B.t
+          type invocation = R.invocation = {
+            user_id : string option;
+            is_simulation : bool;
+            set_user_id : string option -> unit;
+          }
+
+          exception Error = R.Error
+
+          let methods = R.methods
+        end in
+        let module Methods = Accounts.Methods (Runtime) in
+        Methods.register accounts;
+        accounts_methods_registered := Some accounts
+    end
+
   (* a publication in the session's sink-fed form, backed by the delta-driven run_publication *)
   let publication_of name : Session.publication =
-   fun ~params sink ->
+   fun ctx sink ->
     let h =
-      R.run_publication name ~params ~on:(function
+      R.run_publication name ~user_id:ctx.Session.user_id ~params:ctx.Session.params ~on:(function
         | Rx.Added { collection; id; fields } -> sink.Session.added ~collection ~id ~fields
         | Rx.Changed { collection; id; fields; cleared } ->
             sink.Session.changed ~collection ~id ~fields ~cleared
@@ -83,6 +107,7 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
      publications are registered after the first session connects; memoizing it would capture a stale
      snapshot and silently miss later registrations. The session's own mutable state is just its subs. *)
   let registries () =
+    register_native_accounts ();
     let pubs = Hashtbl.create 16 and methods = Hashtbl.create 16 in
     List.iter (fun n -> Hashtbl.replace pubs n (publication_of n)) (R.publications ());
     List.iter (fun n -> Hashtbl.replace methods n (method_of n)) (R.method_names ());
@@ -119,8 +144,12 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
           (Sockjs.unwrap frame));
     ch.Ws.on_close <- (fun () -> Session.close session)
 
-  let paw ?(path = "/websocket") ?(user_id = fun _ -> None) () =
+  let accounts_user_id c =
+    let c = Accounts.paw (Accounts.current ()) () c in
+    Accounts.user_id c
+
+  let paw ?(path = "/websocket") ?user_id () =
     fun c ->
-      let uid = user_id c in
+      let uid = match user_id with Some f -> f c | None -> accounts_user_id c in
       Fennec_server.Websocket.make path (fun ch -> serve ?user_id:uid ch) c
 end

@@ -39,11 +39,12 @@ module Make (R : Reactive.REACTIVE) = struct
     | Error es -> raise (Invalid es)
 
   (* [~where] is a LIST of clauses — Q.[ eq a 1; gt b 2 ] reads as AND (Q.all) *)
-let sel where = match Q.all where with [] -> None | q -> Some (Q.to_bson q)
+  let sel where = match Q.all where with [] -> None | q -> Some (Q.to_bson q)
+  let srt = Option.map Sort.to_bson
 
   let cursor t ?(where = []) ?sort ?skip ?limit ?project () =
     let fields = Option.map Proj.project_doc project in
-    R.Collection.find t.coll ?selector:(sel where) ?sort ?skip ?limit ?fields ()
+    R.Collection.find t.coll ?selector:(sel where) ?sort:(srt sort) ?skip ?limit ?fields ()
 
   (* a PROJECTED read: only the projection's fields cross the boundary, decoded into its object
      type; malformed rows skipped (the same policy as [find]) *)
@@ -59,7 +60,7 @@ let sel where = match Q.all where with [] -> None | q -> Some (Q.to_bson q)
     R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ()) |> List.map (Codec.decode (Def.codec t.def))
 
   let find_one t ?(where = []) ?sort () : 'a option =
-    match R.Collection.find_one t.coll ?selector:(sel where) ?sort () with
+    match R.Collection.find_one t.coll ?selector:(sel where) ?sort:(srt sort) () with
     | Some d -> ( match Codec.decode (Def.codec t.def) d with Ok v -> Some v | Error _ -> None)
     | None -> None
 
@@ -68,5 +69,17 @@ let sel where = match Q.all where with [] -> None | q -> Some (Q.to_bson q)
   let update t ?(multi = true) ~where m =
     R.Collection.update t.coll ~multi (Q.to_bson (Q.all where)) (M.to_bson m)
 
+  (* typed upsert: the modifier runs whether it matched or inserted ($setOnInsert covers
+     insert-only fields). Returns the engine's affected count + any newly-minted id. *)
+  let upsert t ?(multi = false) ~where m =
+    let r = R.Collection.upsert t.coll ~multi (Q.to_bson (Q.all where)) (M.to_bson m) in
+    (r.R.Collection.number_affected, r.R.Collection.inserted_id)
+
   let remove t ~where = R.Collection.remove t.coll (Q.to_bson (Q.all where))
+
+  (* distinct values of one field across the matching docs, decoded to the field's type (values
+     that don't decode are skipped — the read policy) *)
+  let distinct t (f : 'b Codec.field) ?(where = []) () : 'b list =
+    R.Collection.distinct t.coll ~key:(Codec.field_name f) ?selector:(sel where) ()
+    |> List.filter_map (fun v -> match Codec.field_get f (Bson.doc [ (Codec.field_name f, v) ]) with Ok x -> Some x | Error _ -> None)
 end

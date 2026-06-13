@@ -212,18 +212,45 @@ let%test "a publication receives its subscription params (parameterized cursor)"
   let posts = coll "posts_param" in
   let _ = C.insert posts (doc [ ("room", i 1); ("t", B.String "a") ]) in
   let _ = C.insert posts (doc [ ("room", i 2); ("t", B.String "b") ]) in
-  R.publish "byroom" (fun params ->
-      match params with
+  R.publish "byroom" (fun pub ->
+      match pub.R.params with
       | [ Bson.Document [ ("room", r) ] ] -> R.Cursor (R.cursor posts ~selector:(doc [ ("room", r) ]) ())
       | _ -> R.Cursor (R.cursor posts ()));
   (* run with room=1: only the room-1 doc is replayed as an Added beat *)
   let seen = ref [] in
   let h =
-    R.run_publication "byroom" ~params:[ Bson.Document [ ("room", i 1) ] ]
+    R.run_publication "byroom" ~user_id:None ~params:[ Bson.Document [ ("room", i 1) ] ]
       ~on:(function Reactive.Added { fields; _ } -> seen := fields :: !seen | _ -> ())
   in
   h.stop ();
   match !seen with [ fields ] -> List.assoc_opt "room" fields = Some (B.Int 1) | _ -> false
+
+let%test "a publication receives the native Accounts user_id" =
+  let owned = coll "owned_by_user" in
+  ignore (C.insert owned (doc [ ("owner", B.String "u1"); ("label", B.String "mine") ]));
+  ignore (C.insert owned (doc [ ("owner", B.String "u2"); ("label", B.String "theirs") ]));
+  R.publish "owned_by_me" (fun pub ->
+      match pub.R.user_id with
+      | None -> R.Cursors []
+      | Some user_id -> R.Cursor (C.find owned ~selector:(doc [ ("owner", B.String user_id) ]) ()));
+  let seen = ref [] in
+  let h =
+    R.run_publication "owned_by_me" ~user_id:(Some "u1") ~params:[]
+      ~on:(function
+        | Reactive.Added { fields; _ } -> (
+          match List.assoc_opt "label" fields with Some (B.String label) -> seen := label :: !seen | _ -> ())
+        | _ -> ())
+  in
+  h.stop ();
+  let seen_anon = ref [] in
+  let h =
+    R.run_publication "owned_by_me" ~user_id:None ~params:[]
+      ~on:(function
+        | Reactive.Added { fields; _ } -> seen_anon := fields :: !seen_anon
+        | _ -> ())
+  in
+  h.stop ();
+  !seen = [ "mine" ] && !seen_anon = []
 
 let%test "Collection.forget removes a collection from the $lookup registry" =
   let orders = coll "orders_fg" and customers = coll "customers_fg" in
@@ -258,10 +285,10 @@ let%test "mux: same-query subscriptions share ONE observe; a distinct query gets
   R.publish "mux_p" (fun _ -> R.Cursor (C.find c ()));
   R.publish "mux_q" (fun _ -> R.Cursor (C.find c ~selector:(doc [ ("v", i 1) ]) ()));
   let before = R.live_query_count () in
-  let s1 = R.run_publication "mux_p" ~params:[] ~on:(fun _ -> ()) in
-  let s2 = R.run_publication "mux_p" ~params:[] ~on:(fun _ -> ()) in
+  let s1 = R.run_publication "mux_p" ~user_id:None ~params:[] ~on:(fun _ -> ()) in
+  let s2 = R.run_publication "mux_p" ~user_id:None ~params:[] ~on:(fun _ -> ()) in
   (* same (collection, query) as s1 → shared *)
-  let s3 = R.run_publication "mux_q" ~params:[] ~on:(fun _ -> ()) in
+  let s3 = R.run_publication "mux_q" ~user_id:None ~params:[] ~on:(fun _ -> ()) in
   (* different query → its own observe *)
   let shared = R.live_query_count () = before + 2 in
   s1.stop ();
@@ -273,13 +300,13 @@ let%test "mux: a single mutation fans to ALL sharers, and a late joiner gets the
   let c = coll "mux_fan" in
   R.publish "mux_fan_p" (fun _ -> R.Cursor (C.find c ()));
   let got1 = ref 0 and got2 = ref 0 in
-  let s1 = R.run_publication "mux_fan_p" ~params:[] ~on:(fun _ -> incr got1) in
-  let s2 = R.run_publication "mux_fan_p" ~params:[] ~on:(fun _ -> incr got2) in
+  let s1 = R.run_publication "mux_fan_p" ~user_id:None ~params:[] ~on:(fun _ -> incr got1) in
+  let s2 = R.run_publication "mux_fan_p" ~user_id:None ~params:[] ~on:(fun _ -> incr got2) in
   let _ = C.insert c (doc [ ("v", i 9) ]) in
   (* one mutation → fanned to BOTH subscribers *)
   let fanned = !got1 >= 1 && !got2 >= 1 in
   let late = ref 0 in
-  let s3 = R.run_publication "mux_fan_p" ~params:[] ~on:(fun _ -> incr late) in
+  let s3 = R.run_publication "mux_fan_p" ~user_id:None ~params:[] ~on:(fun _ -> incr late) in
   (* late joiner gets the existing doc replayed (≥1 beat) without re-observing the backend *)
   let late_got = !late >= 1 in
   s1.stop ();
@@ -291,10 +318,10 @@ let%test "mux: a stale double-stop is idempotent — it cannot evict a fresh sam
   let c = coll "mux_evict" in
   R.publish "mux_evict_p" (fun _ -> R.Cursor (C.find c ()));
   let before = R.live_query_count () in
-  let s1 = R.run_publication "mux_evict_p" ~params:[] ~on:(fun _ -> ()) in
+  let s1 = R.run_publication "mux_evict_p" ~user_id:None ~params:[] ~on:(fun _ -> ()) in
   s1.stop ();
   (* mux torn down; a fresh subscription rebuilds it under the SAME key *)
-  let s2 = R.run_publication "mux_evict_p" ~params:[] ~on:(fun _ -> ()) in
+  let s2 = R.run_publication "mux_evict_p" ~user_id:None ~params:[] ~on:(fun _ -> ()) in
   s1.stop ();
   (* this STALE second stop of s1 must be a no-op — not evict s2's fresh mux *)
   let ok = R.live_query_count () = before + 1 in
@@ -330,7 +357,7 @@ let%test "mux (multicore): concurrent same-key subscribers across domains all se
         Domain.spawn (fun () ->
             let seen = Hashtbl.create 256 in
             let h =
-              R.run_publication "mux_mc_p" ~params:[]
+              R.run_publication "mux_mc_p" ~user_id:None ~params:[]
                 ~on:(function
                   | Reactive.Added { id; _ } -> Hashtbl.replace seen id ()
                   | _ -> ())
@@ -375,7 +402,7 @@ let%test "publication: a sorted+limited cursor maintains its top-N over the wire
   R.publish "win_p" (fun _ -> R.Cursor (C.find c ~sort:(doc [ ("score", i (-1)) ]) ~limit:2 ()));
   let live = Hashtbl.create 8 in
   let s =
-    R.run_publication "win_p" ~params:[]
+    R.run_publication "win_p" ~user_id:None ~params:[]
       ~on:(function
         | Reactive.Added { id; _ } -> Hashtbl.replace live id ()
         | Reactive.Removed { id; _ } -> Hashtbl.remove live id
@@ -393,7 +420,7 @@ let%test "mux: a publication feeding Cursors [] is a no-op stream (ready, zero b
   R.publish "mux_empty_p" (fun _ -> R.Cursors []);
   let before = R.live_query_count () in
   let n = ref 0 in
-  let s = R.run_publication "mux_empty_p" ~params:[] ~on:(fun _ -> incr n) in
+  let s = R.run_publication "mux_empty_p" ~user_id:None ~params:[] ~on:(fun _ -> incr n) in
   let ok = !n = 0 && R.live_query_count () = before in
   s.stop ();
   ok && R.live_query_count () = before
@@ -455,9 +482,31 @@ let%test "typed: cursor plugs into publish unchanged (the publication sees the t
   let _ = T.insert h { id = ""; title = "Done B"; done_ = true; tags = [] } in
   R.publish "typed_open" (fun _ -> R.Cursor (T.cursor h ~where:Q.[ eq f_done false ] ()));
   let seen = ref [] in
-  let han = R.run_publication "typed_open" ~params:[] ~on:(fun ev ->
+  let han = R.run_publication "typed_open" ~user_id:None ~params:[] ~on:(fun ev ->
       match ev with Reactive.Added { id; _ } -> seen := id :: !seen | _ -> ()) in
   han.Reactive.stop ();
   List.length !seen = 1
+
+(* ── the extended typed Mongo surface: Q (nin/regex/size/all), M (min/max/mul/pop/…), Sort, upsert ── *)
+let%test "extended typed surface: Q matchers, M modifiers, Sort, upsert, distinct all compile + run" =
+  let h = T.attach task_def (Minimongo.create ()) in
+  let _ = T.insert h { id = ""; title = "Apple"; done_ = false; tags = [ "fruit"; "red" ] } in
+  let _ = T.insert h { id = ""; title = "Banana"; done_ = true; tags = [ "fruit" ] } in
+  (* Q: nin / regex / size / contains_all *)
+  let q_nin = List.length (T.find h ~where:[ Q.nin f_title [ "Apple" ] ] ()) = 1 in
+  let q_re = match T.find h ~where:[ Q.regex f_title "^App" ] () with [ t ] -> t.title = "Apple" | _ -> false in
+  let q_all = List.length (T.find h ~where:[ Q.contains_all f_tags [ "fruit"; "red" ] ] ()) = 1 in
+  let q_size = List.length (T.find h ~where:[ Q.size f_tags 1 ] ()) = 1 in
+  (* Sort: typed keys *)
+  let sorted = List.map (fun t -> t.title) (T.find h ~sort:Sort.(by [ asc f_title ]) ()) = [ "Apple"; "Banana" ] in
+  (* M: pop / pull_all / set; typed selector *)
+  let _ = T.update h ~where:[ Q.eq f_title "Apple" ] M.(all [ set f_done true; pop_last f_tags ]) in
+  let popped = match T.find_one h ~where:[ Q.eq f_title "Apple" ] () with Some t -> t.tags = [ "fruit" ] && t.done_ | None -> false in
+  (* upsert: matched path updates; a fresh selector inserts *)
+  let n1, ins1 = T.upsert h ~where:[ Q.eq f_title "Cherry" ] M.(all [ set f_done false; set_on_insert f_title "Cherry" ]) in
+  let inserted = n1 = 1 && ins1 <> None && T.count h () = 3 in
+  (* distinct: typed values of a field *)
+  let titles = List.sort compare (T.distinct h f_title ()) in
+  q_nin && q_re && q_all && q_size && sorted && popped && inserted && titles = [ "Apple"; "Banana"; "Cherry" ]
 
 let () = exit (Fennec_hunt_unit.run ())

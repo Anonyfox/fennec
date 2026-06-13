@@ -46,6 +46,18 @@ let%test "method call returns a result over the channel" =
   ch.Ws.on_text (Msg.encode (Msg.Method { method_ = "rt_sum"; params = [ B.int 2; B.int 3 ]; id = "m1"; random_seed = None }));
   List.exists (function Msg.Result { id = "m1"; result = Some (B.Int 5); _ } -> true | _ -> false) (emitted out)
 
+let%test "native currentUser always exists and returns anonymous by default" =
+  let ch, out = fake_channel () in
+  D.serve ~session_id:"S-current-anon" ch;
+  ch.Ws.on_text
+    (Msg.encode (Msg.Method { method_ = "currentUser"; params = []; id = "m-current"; random_seed = None }));
+  List.exists
+    (function
+      | Msg.Result { id = "m-current"; result = Some (B.Document _ as doc); _ } ->
+        B.get doc "userId" = Some B.Null && B.get doc "user" = Some B.Null
+      | _ -> false)
+    (emitted out)
+
 let%test "initial user_id reaches the first Pulse method" =
   R.methods [ ("rt_whoami_initial", fun inv _ -> match inv.R.user_id with Some u -> B.str u | None -> B.Null) ];
   let ch, out = fake_channel () in

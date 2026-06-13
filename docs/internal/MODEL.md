@@ -315,7 +315,15 @@ everything else — inclusion, $slice, dotted-path nesting — is built.
 Query selectors are typed against the field handles, same guarantee as projections and methods:
 `Q.[ eq Fields.done_ false ]` — a wrong field name is an unbound `Fields.x` compile error, a wrong
 value type is a type error (`eq Fields.done_ "yes"` won't compile). Covered: `eq/ne/lt/lte/gt/gte/
-in_/exists/has`, composed with `all` (AND) / `any` (OR); exotic operators ride `Q.raw bson`.
+in_/nin/exists/has/contains_all/size/regex/not_`, composed with `all` (AND) / `any` (OR); niche
+operators ($elemMatch/$type/$mod/$near/$bits) ride `Q.raw bson`.
+
+Modifiers (`M`) are the full common update set, typed: `set/unset/inc/inc_f/mul/mul_f/min/max/
+push/add_to_set/pull/pull_all/pop_first/pop_last/set_on_insert/rename` (+ `M.raw`). Sort is typed
+too — `Sort.by [ asc Fields.title; desc Fields.created ]`, no stringly key. And every verb takes
+the typed forms: `find/find_one/count/update/remove/upsert/distinct` over `Q`+`Sort`+`M`
+(`update`/`upsert` thread the typed selector AND modifier; `distinct` decodes to the field's type).
+Aggregation pipelines stay raw `Bson list` (arbitrary stages — inherently untyped).
 `lt`/`gt` are polymorphic (Mongo orders every BSON type — faithful, not a hole). **Nested-path
 selectors** use `Codec.dot` — pure value-level, no ppx: `Q.eq (Codec.dot Fields.author
 Author.Fields.name) "Ada"` joins the wire names to `"author.name"` and takes the LEAF's type, so
