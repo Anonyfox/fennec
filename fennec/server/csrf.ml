@@ -20,6 +20,10 @@ let token_len = 18 (* per-session secret bytes *)
 let session_key = "_csrf_secret"
 let now () = Unix.gettimeofday ()
 
+(* the app signing secret the {!make} paw stashes on the conn, so {!token} needs no [~secret] at the
+   call site (the form-render path reads it from the request) *)
+let secret_key : string Fennec_paw.Assigns.key = Fennec_paw.Assigns.key "fennec.csrf.secret"
+
 (* ──── b64e ──── *)
 
 let b64e (s : string) : string = Base64.encode_string ~alphabet:Base64.uri_safe_alphabet ~pad:false s
@@ -87,9 +91,19 @@ let session_secret_opt (c : Conn.t) : string option =
 
 (* ──── token ──── *)
 
-(* a fresh, embeddable token: masked secret + expiry, signed with the app [secret] *)
-let token ~(secret : string) ?(valid_for = 3600.) (c : Conn.t) : string =
+(* a fresh, embeddable token: masked secret + expiry, signed with the app secret. The secret is read
+   from the conn (stashed by the {!make} paw) so a form-render call is just [token conn]; pass
+   [~secret] only to override (or in tests without the paw). *)
+let token ?secret ?(valid_for = 3600.) (c : Conn.t) : string =
   require_session c;
+  let secret =
+    match secret with
+    | Some s -> s
+    | None -> (
+        match Conn.get c secret_key with
+        | Some s -> s
+        | None -> failwith "Fennec.Paw.Csrf: no secret on the conn — add Paw.Csrf.make to the pipeline")
+  in
   let raw = session_secret c in
   let mask = secure_random token_len in
   let masked = b64e (mask ^ xor mask raw) in
@@ -192,6 +206,8 @@ let make ~(secret : string) ?(field = "_csrf_token") ?(header = "x-csrf-token")
          (String.length secret));
   fun c ->
   require_session c;
+  (* stash the secret so a downstream form-render can mint a token with just [Csrf.token conn] *)
+  let c = Conn.assign c secret_key secret in
   if List.mem (H.string_of_meth (Conn.meth c)) safe then c
   else
     let submitted =

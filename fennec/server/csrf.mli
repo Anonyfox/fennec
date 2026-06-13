@@ -10,17 +10,18 @@
         [ Paw.Session.make ~secret ();
           Paw.Csrf.make ~secret () ]
 
-      (* mint a token to embed in a form *)
-      let tok = Paw.Csrf.token ~secret conn
+      (* mint a token to embed in a form — secret comes from the paw, not the call site *)
+      let tok = Paw.Csrf.token conn
     ]} *)
 
 (** Why a token did or didn't validate. [Expired]/[Wrong_session] occur in normal use (an
     aged-out form or session); [Invalid] indicates a bad signature or forged payload. *)
 type outcome = Ok | Expired | Wrong_session | Invalid
 
-(** A fresh, embeddable token signed with the app [secret], valid for [valid_for] seconds
-    (default 3600). Mints the session secret on first use. *)
-val token : secret:string -> ?valid_for:float -> Fennec_paw.Conn.t -> string
+(** A fresh, embeddable token, valid for [valid_for] seconds (default 3600); mints the session secret
+    on first use. The signing secret is read from the conn (stashed by {!make}), so a form-render is
+    just [token conn]; pass [~secret] only to override or when calling without the paw in scope. *)
+val token : ?secret:string -> ?valid_for:float -> Fennec_paw.Conn.t -> string
 
 (** Validate a submitted token against the app [secret] and the session secret. *)
 val verify : secret:string -> Fennec_paw.Conn.t -> string -> outcome
