@@ -1,7 +1,7 @@
 ; TYPED COLLECTIONS — the boundary layer over the dynamic engine. This lib holds the collection
 ; VOCABULARY (meaningless without a collection, so it lives here, not in the shape lib): Schema
 ; ($jsonSchema rendered from Codec's view — the database itself enforces declared structure against
-; foreign writers), and (subsequent phases) Q/M/Index typed handles + the typed verbs delegating to
+; foreign writers), and (subsequent phases) Filter/M/Index typed handles + the typed verbs delegating to
 ; the substrate. Pure modules are jsoo-safe and shared. Unwrapped (the Pwa/Method precedent).
 (library
  (name fennec_pulse_collection)

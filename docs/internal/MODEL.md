@@ -21,7 +21,7 @@ never library deps):
 - `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.pulse.codec.
 - `fennec.pulse` (Reactive) — the dynamic engine and substrate. Unchanged.
 - `fennec.pulse.collection` (NEW, virtual — the Ddp_client pattern): the typed collection runtime.
-  `Q`/`M`/`Index`/`Schema` live HERE (collection vocabulary, meaningless without one), plus the
+  `Filter`/`M`/`Index`/`Schema` live HERE (collection vocabulary, meaningless without one), plus the
   typed verbs delegating to the substrate. Native impl → Reactive.Collection; browser impl → Live
   reads + sim-writes (the decree preserved). $jsonSchema emission here; its INSTALL rides the
   backend boot path next to index-ensure. Renderers live with their consumers — pulse.codec only
@@ -42,8 +42,8 @@ model, so call sites read like Meteor with the plural dropped:
 
 ```ocaml
 let id = Task.insert { id = ""; title; done_ = false; tags = [] }   (* : string — no await *)
-let open_ = Task.find ~where:Q.[ eq Fields.done_ false ] ()          (* typed cursor *)
-Task.update ~where:Q.[ eq Fields.id id ] M.[ set Fields.done_ true ]
+let open_ = Task.find ~where:Filter.[ eq Fields.done_ false ] ()          (* typed cursor *)
+Task.update ~where:Filter.[ eq Fields.id id ] M.[ set Fields.done_ true ]
 let n = Task.count ()
 ```
 
@@ -52,7 +52,7 @@ query over the cache); WRITES go through methods — `Task.insert` exists server
 optimistic stubs (the sim variant), never as a free client write (Meteor's client-side
 collection.insert was the allow/deny path we banned).
 
-Status: **phases 1–3, 5, 6 BUILT and proven** (fennec.pulse.codec GADT core · Schema · Q/M/Index/Def
+Status: **phases 1–3, 5, 6 BUILT and proven** (fennec.pulse.codec GADT core · Schema · Filter/M/Index/Def
 + Typed.Make server runtime · find_c/Sim.insert_t client boundary · the example converted — zero
 Bson.get in the component, full vertical through the browser e2e). Remaining: the [@@fennec.collection]
 deriver (P4 — generates the hand-written form the example now demonstrates) and the mongod
@@ -113,10 +113,10 @@ open Task
 ~sort:[%sort priority desc, title asc]
 [%set status = "done"]
 ```
-They expand to byte-identical typed `Q`/`Sort`/`M` calls — a wrong field/value is still a compile
-error, only the `Q.`/`Fields.`/`eq`/`dot`/list noise is gone. `[%q]` covers `= <> < <= > >=` and
+They expand to byte-identical typed `Filter`/`Sort`/`M` calls — a wrong field/value is still a compile
+error, only the `Filter.`/`Fields.`/`eq`/`dot`/list noise is gone. `[%q]` covers `= <> < <= > >=` and
 `&& ||` (bare ident = field, `a.b` = a dotted path into an embedded record); richer matchers
-(`in_`/`has`/`regex`) and modifiers (`inc`/`push`/…) use `Q`/`M` directly. **Scope rule (the one
+(`in_`/`has`/`regex`) and modifiers (`inc`/`push`/…) use `Filter`/`M` directly. **Scope rule (the one
 thing to know):** the DSLs resolve field names against the model in scope; `open Task` is the idiom,
 and with two models in one file you qualify the secondary one with `Task.(…)` — exactly like
 resolving any name clash between two opened modules.
@@ -150,17 +150,17 @@ Everything downstream of `define` is then typed:
 ```ocaml
 (* server *)
 let tid = Model.insert model { id = ""; title; done_ = false; tags = [] }  (* id minted when "" *)
-Model.publish model "tasks" (fun _ -> Model.cursor model ~where:Q.[ eq done_ false ] ())
+Model.publish model "tasks" (fun _ -> Model.cursor model ~where:Filter.[ eq done_ false ] ())
 
 (* methods: the model's codec IS an argument codec — no second declaration *)
 let add_task = Method.define "addTask" ~args:(Codec.a1 (Model.codec model)) ~result:Codec.string ...
 
 (* component — typed all the way into the view *)
-let tasks = Model.find client model ~where:Q.[ eq done_ false ] () in
+let tasks = Model.find client model ~where:Filter.[ eq done_ false ] () in
 (each (Fur.get tasks) (fun task -> <li key=task.id>(node task.title)</li>))
 
 (* writes through field handles — a renamed field is a compile error everywhere *)
-Model.update model ~where:Q.[ eq id tid ] M.[ set done_ true; push tags "urgent" ]
+Model.update model ~where:Filter.[ eq id tid ] M.[ set done_ true; push tags "urgent" ]
 ```
 
 `task.title` instead of `match Bson.get doc "title" with Some (Bson.String s) -> s | _ -> ...` —
@@ -187,7 +187,7 @@ that one representation the framework derives, now and later:
    hold anything": shape is enforced at the write boundary of every path, including paths that
    aren't us. Nobody has this from one declaration — Prisma's schema doesn't validate foreign
    writes, Mongoose validates only its own.
-3. **Typed field handles** (name + ty) powering `Q.`/`M.`/`Index.`/projections.
+3. **Typed field handles** (name + ty) powering `Filter.`/`M.`/`Index.`/projections.
 4. Later, for free: **OpenAPI emission** from method declarations, and the **admin UI** (a generic
    live CRUD screen needs exactly: field names, types, and codecs — the Django-admin primitives).
 
@@ -341,22 +341,22 @@ need nested object synthesis. The positional `$` operator is unsupported engine-
 (documented). Transparent typed coverage of exclusion stays deferred (it can't produce a precise object type);
 everything else — inclusion, $slice, dotted-path nesting — is built.
 
-## Typed selectors & nested paths (Q)
+## Typed selectors & nested paths (Filter)
 
 Query selectors are typed against the field handles, same guarantee as projections and methods:
-`Q.[ eq Fields.done_ false ]` — a wrong field name is an unbound `Fields.x` compile error, a wrong
+`Filter.[ eq Fields.done_ false ]` — a wrong field name is an unbound `Fields.x` compile error, a wrong
 value type is a type error (`eq Fields.done_ "yes"` won't compile). Covered: `eq/ne/lt/lte/gt/gte/
 in_/nin/exists/has/contains_all/size/regex/not_`, composed with `all` (AND) / `any` (OR); niche
-operators ($elemMatch/$type/$mod/$near/$bits) ride `Q.raw bson`.
+operators ($elemMatch/$type/$mod/$near/$bits) ride `Filter.raw bson`.
 
 Modifiers (`M`) are the full common update set, typed: `set/unset/inc/inc_f/mul/mul_f/min/max/
 push/add_to_set/pull/pull_all/pop_first/pop_last/set_on_insert/rename` (+ `M.raw`). Sort is typed
 too — `Sort.by [ asc Fields.title; desc Fields.created ]`, no stringly key. And every verb takes
-the typed forms: `find/find_one/count/update/remove/upsert/distinct` over `Q`+`Sort`+`M`
+the typed forms: `find/find_one/count/update/remove/upsert/distinct` over `Filter`+`Sort`+`M`
 (`update`/`upsert` thread the typed selector AND modifier; `distinct` decodes to the field's type).
 Aggregation pipelines stay raw `Bson list` (arbitrary stages — inherently untyped).
 `lt`/`gt` are polymorphic (Mongo orders every BSON type — faithful, not a hole). **Nested-path
-selectors** use `Codec.dot` — pure value-level, no ppx: `Q.eq (Codec.dot Fields.author
+selectors** use `Codec.dot` — pure value-level, no ppx: `Filter.eq (Codec.dot Fields.author
 Author.Fields.name) "Ada"` joins the wire names to `"author.name"` and takes the LEAF's type, so
 both field names and the value type are compile-checked; it chains for deeper paths.
 
@@ -365,10 +365,10 @@ both field names and the value type are compile-checked; it chains for deeper pa
 - **`Model` is the recommended path; `Collection` remains the dynamic substrate** and the escape
   hatch (aggregations, migrations-by-hand, weird documents). Two named layers, no wrapping of one
   by hidden monkey-patching (collection2's sin: it silently wrapped `insert` and broke composability).
-- **Selectors/modifiers are functions, not a parser**: `Q.eq f v`, `Q.all [...]`, `Q.lt`, `M.set`,
+- **Selectors/modifiers are functions, not a parser**: `Filter.eq f v`, `Filter.all [...]`, `Filter.lt`, `M.set`,
   `M.push`, `M.inc` — typed against each handle's `ty`, compiling down to the same Bson the engine
-  already executes. `Q.raw bson` keeps the full Mongo operator surface reachable. No string DSL, no
-  magic comparison operators by default (an optional `Q.O` for taste-holders).
+  already executes. `Filter.raw bson` keeps the full Mongo operator surface reachable. No string DSL, no
+  magic comparison operators by default (an optional `Filter.O` for taste-holders).
 - **Projections are tuples, not phantom records**: `Model.project client model P.(f2 title done_)`
   → `(string * bool) array signal`. Composable, no new type declarations, no partial-record lies.
   Full `find` returns whole `t`s (the live cache holds whole docs anyway).
@@ -404,7 +404,7 @@ with a worse replacement already in the stack.
    alongside the deviation attributes ([@key] [@check] [@default]).
 3. **`$jsonSchema` derivation** (pure generation, golden tests) + minimongo write-validation hook
    + driver `collMod` install at define-time.
-4. **`Model.define` + typed reads/writes server-side** over the existing Collection, `Q`/`M`/
+4. **`Model.define` + typed reads/writes server-side** over the existing Collection, `Filter`/`M`/
    `Index` handles, index ensure at boot.
 5. **Client: typed live `find`/`project` + skip-count-warn policy + typed stub writes.**
 6. **Example app converts to a model module; TERRAIN/METHODS/README updates; the `Bson.get`

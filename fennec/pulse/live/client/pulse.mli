@@ -33,7 +33,7 @@ module Collection (M : sig
   type doc
   val collection : doc Def.t
 end) : sig
-  val find : ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
+  val find : ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
   val project :
-    'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+    'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 end

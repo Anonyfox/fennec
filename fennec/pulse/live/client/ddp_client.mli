@@ -99,14 +99,14 @@ val call_m : t -> ('a, 'r) Method.t -> 'a -> ('r, string * string) result option
     garbage); [~where] is a typed clause list read as AND. The component-facing read of the typed
     collection layer. *)
 val find_c :
-  t -> 'a Def.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
+  t -> 'a Def.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
 
 (** The PROJECTED typed live query: [find_p client Task.collection [%fields title; done_] ()] yields
     [< title : string; done_ : bool > array] — Meteor's [{ fields: {…} }], type-checked. The
     projected object exposes ONLY the chosen fields (a projected-away field is a compile error, not
     [undefined]); the server ships only those fields too. *)
 val find_p :
-  t -> 'a Def.t -> 'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+  t -> 'a Def.t -> 'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 
 (** The ambient page connection recorded by {!connect} — the per-model {!Collection} views read
     through it so day-to-day code threads no [client]. Raises if [connect] hasn't run. *)
@@ -123,9 +123,9 @@ module Collection (M : sig
   val collection : doc Def.t
 end) : sig
   val find :
-    ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
+    ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
   val project :
-    'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+    'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 end
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents

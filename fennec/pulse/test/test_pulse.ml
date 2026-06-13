@@ -425,7 +425,7 @@ let%test "mux: a publication feeding Cursors [] is a no-op stream (ready, zero b
   s.stop ();
   ok && R.live_query_count () = before
 
-(* ── the TYPED collection runtime: validating writes, skip-policy reads, Q/M end to end ── *)
+(* ── the TYPED collection runtime: validating writes, skip-policy reads, Filter/M end to end ── *)
 module T = Fennec_pulse.Typed.Make (R)
 
 type task = { id : string; title : string; done_ : bool; tags : string list }
@@ -446,23 +446,23 @@ let task_codec =
 
 let task_def = Def.v "ttasks" task_codec ~indexes:[ Index.asc f_done ]
 
-let%test "typed: insert validates (Invalid collects); find round-trips; Q/M compile to real queries" =
+let%test "typed: insert validates (Invalid collects); find round-trips; Filter/M compile to real queries" =
   let h = T.attach task_def (Minimongo.create ()) in
   let id1 = T.insert h { id = ""; title = "  Buy milk "; done_ = false; tags = [ "errand" ] } in
   let _ = T.insert h { id = ""; title = "Walk dog"; done_ = true; tags = [] } in
   (match T.insert h { id = ""; title = "x"; done_ = false; tags = [ "Bad Tag" ] } with
   | exception T.Invalid es -> List.length es = 2 (* short title AND non-slug tag — both collected *)
   | _ -> false)
-  && (match T.find h ~where:Q.[ eq f_done false ] () with
+  && (match T.find h ~where:Filter.[ eq f_done false ] () with
      | [ t ] -> t.title = "Buy milk" (* the trim normalizer ran on the write *) && t.id = id1
      | _ -> false)
-  && (match T.find h ~where:[ Q.has f_tags "errand" ] () with [ t ] -> t.id = id1 | _ -> false)
+  && (match T.find h ~where:[ Filter.has f_tags "errand" ] () with [ t ] -> t.id = id1 | _ -> false)
   && T.count h () = 2
-  && (T.update h ~where:Q.[ eq f_id id1 ] M.(all [ set f_done true; push f_tags "today" ]) = 1
-     && match T.find_one h ~where:Q.[ eq f_id id1 ] () with
+  && (T.update h ~where:Filter.[ eq f_id id1 ] M.(all [ set f_done true; push f_tags "today" ]) = 1
+     && match T.find_one h ~where:Filter.[ eq f_id id1 ] () with
         | Some t -> t.done_ && t.tags = [ "errand"; "today" ]
         | None -> false)
-  && T.remove h ~where:Q.[ eq f_done true ] = 2
+  && T.remove h ~where:Filter.[ eq f_done true ] = 2
 
 let%test "typed: the skip policy — foreign garbage is skipped by find, surfaced by find_results" =
   let h = T.attach task_def (Minimongo.create ()) in
@@ -480,30 +480,30 @@ let%test "typed: cursor plugs into publish unchanged (the publication sees the t
   let h = T.attach task_def (Minimongo.create ()) in
   let _ = T.insert h { id = ""; title = "Open A"; done_ = false; tags = [] } in
   let _ = T.insert h { id = ""; title = "Done B"; done_ = true; tags = [] } in
-  R.publish "typed_open" (fun _ -> R.Cursor (T.cursor h ~where:Q.[ eq f_done false ] ()));
+  R.publish "typed_open" (fun _ -> R.Cursor (T.cursor h ~where:Filter.[ eq f_done false ] ()));
   let seen = ref [] in
   let han = R.run_publication "typed_open" ~user_id:None ~params:[] ~on:(fun ev ->
       match ev with Reactive.Added { id; _ } -> seen := id :: !seen | _ -> ()) in
   han.Reactive.stop ();
   List.length !seen = 1
 
-(* ── the extended typed Mongo surface: Q (nin/regex/size/all), M (min/max/mul/pop/…), Sort, upsert ── *)
-let%test "extended typed surface: Q matchers, M modifiers, Sort, upsert, distinct all compile + run" =
+(* ── the extended typed Mongo surface: Filter (nin/regex/size/all), M (min/max/mul/pop/…), Sort, upsert ── *)
+let%test "extended typed surface: Filter matchers, M modifiers, Sort, upsert, distinct all compile + run" =
   let h = T.attach task_def (Minimongo.create ()) in
   let _ = T.insert h { id = ""; title = "Apple"; done_ = false; tags = [ "fruit"; "red" ] } in
   let _ = T.insert h { id = ""; title = "Banana"; done_ = true; tags = [ "fruit" ] } in
-  (* Q: nin / regex / size / contains_all *)
-  let q_nin = List.length (T.find h ~where:[ Q.nin f_title [ "Apple" ] ] ()) = 1 in
-  let q_re = match T.find h ~where:[ Q.regex f_title "^App" ] () with [ t ] -> t.title = "Apple" | _ -> false in
-  let q_all = List.length (T.find h ~where:[ Q.contains_all f_tags [ "fruit"; "red" ] ] ()) = 1 in
-  let q_size = List.length (T.find h ~where:[ Q.size f_tags 1 ] ()) = 1 in
+  (* Filter: nin / regex / size / contains_all *)
+  let q_nin = List.length (T.find h ~where:[ Filter.nin f_title [ "Apple" ] ] ()) = 1 in
+  let q_re = match T.find h ~where:[ Filter.regex f_title "^App" ] () with [ t ] -> t.title = "Apple" | _ -> false in
+  let q_all = List.length (T.find h ~where:[ Filter.contains_all f_tags [ "fruit"; "red" ] ] ()) = 1 in
+  let q_size = List.length (T.find h ~where:[ Filter.size f_tags 1 ] ()) = 1 in
   (* Sort: typed keys *)
   let sorted = List.map (fun t -> t.title) (T.find h ~sort:Sort.(by [ asc f_title ]) ()) = [ "Apple"; "Banana" ] in
   (* M: pop / pull_all / set; typed selector *)
-  let _ = T.update h ~where:[ Q.eq f_title "Apple" ] M.(all [ set f_done true; pop_last f_tags ]) in
-  let popped = match T.find_one h ~where:[ Q.eq f_title "Apple" ] () with Some t -> t.tags = [ "fruit" ] && t.done_ | None -> false in
+  let _ = T.update h ~where:[ Filter.eq f_title "Apple" ] M.(all [ set f_done true; pop_last f_tags ]) in
+  let popped = match T.find_one h ~where:[ Filter.eq f_title "Apple" ] () with Some t -> t.tags = [ "fruit" ] && t.done_ | None -> false in
   (* upsert: matched path updates; a fresh selector inserts *)
-  let n1, ins1 = T.upsert h ~where:[ Q.eq f_title "Cherry" ] M.(all [ set f_done false; set_on_insert f_title "Cherry" ]) in
+  let n1, ins1 = T.upsert h ~where:[ Filter.eq f_title "Cherry" ] M.(all [ set f_done false; set_on_insert f_title "Cherry" ]) in
   let inserted = n1 = 1 && ins1 <> None && T.count h () = 3 in
   (* distinct: typed values of a field *)
   let titles = List.sort compare (T.distinct h f_title ()) in

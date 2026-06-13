@@ -41,42 +41,31 @@ let powered_by : Fennec.Paw.t =
       { r with Fennec.Http.headers = ("X-Powered-By", "fennec") :: r.Fennec.Http.headers })
 
 (* the realtime backend: a published "tasks" collection + an addTask method, served as DDP over a
-   websocket at /ddp by fennec.pulse.server over the in-memory reactive engine. The browser (Task_list)
-   subscribes and renders it live; addTask inserts and the new doc is pushed back through the open
-   subscription — server→client push, no refetch.
+   websocket at /ddp. The browser (Task_list) subscribes and renders it live; addTask inserts and the
+   new doc is pushed back through the open subscription — server→client push, no refetch.
 
-   The backend is the runtime-selectable Dynamic one: real MongoDB for a real global Mongo URL
-   (`fennec dev` auto-starts one when mongod is available; `fennec test --mongo` supplies one per
-   suite), or the in-memory engine for explicit MONGO_URL=:memory:. The driver is a
-   hard dependency — the dev/test server still runs as fast bytecode: dune builds libmongoc + the C
-   stub ONCE, and the dev/test harness puts that stub dir on CAML_LD_LIBRARY_PATH (so the bytecode
-   dlopens it), so per-edit only OCaml recompiles — no native, no relink. *)
-module D = Fennec_pulse_mongo.Dynamic
-module RData = Fennec_pulse.Reactive.Make (D)
-module RT = Fennec_pulse_server.Make (RData)
+   The whole data surface is the ambient [Fennec_pulse_app] facade ([Pulse] below): it wraps the
+   Reactive/server/Typed functors over the runtime-selectable Dynamic backend (real MongoDB for a
+   real global Mongo URL — `fennec dev` auto-starts one when mongod is available; `fennec test
+   --mongo` supplies one per suite — or the in-memory engine for MONGO_URL=:memory:), so the app
+   threads no functors and no backend instances. *)
+module Pulse = Fennec_pulse_app
 
-let realtime_ddp = RT.paw ~path:"/ddp" ()
+let realtime_ddp = Pulse.serve_ddp ~path:"/ddp" ()
 
-(* runs once in the server's Eio context (serve ~on_start): pick the backend, seed, publish, method.
-   [Dynamic.from_env] is the whole backend choice — it consumes the global Mongo state, so there is
-   no app config branch here. *)
-module T = Fennec_pulse.Typed.Make (RData)
-
+(* runs once in the server's Eio context (serve ~on_start): start the facade, seed, publish, method.
+   [Pulse.start] consumes the global Mongo state, so there is no app config branch here. Writes
+   validate against Task.collection (an invalid value cannot reach the database); [Pulse.publish] is
+   ONE call that wires both the live DDP publication AND the flicker-free SSR seed. *)
 let setup_realtime ~sw =
-  let backend = D.from_env ~sw ~db:"fennec_example" ~name:"tasks" () in
-  (* the TYPED collection: the shared declaration (Task.collection) bound to this instance — writes
-     validate (an invalid value cannot reach the database), reads decode with the skip policy *)
-  let tasks = T.attach Task.collection backend in
-  List.iter (fun title -> ignore (T.insert tasks { Task.id = ""; title; body = "" })) [ "Buy milk"; "Walk the dog" ];
-  RData.publish "tasks" (fun _pub -> RData.Cursor (T.cursor tasks ()));
-  (* SSR: hand the same docs to the SSR reactive so the first server-rendered paint already includes
-     the tasks; the browser hydrates them flicker-free, then the live subscription re-confirms. *)
-  Ddp_client.publish ~name:"tasks" (fun _ ->
-      [ ("tasks", RData.Collection.fetch (RData.Collection.find (T.collection tasks) ())) ]);
+  Pulse.start ~sw ~db:"fennec_example" ();
+  Pulse.seed Task.collection
+    [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
+  Pulse.publish Task.collection;
   (* the TYPED method over the TYPED collection: handler and stub share the declarations, so a
      renamed field/method is a compile error in every file; a malformed call is a 400 before this
      handler runs, and an invalid document raises before it writes *)
-  RData.handle Site_methods.add_task (fun _inv title -> T.insert tasks { Task.id = ""; title; body = "" })
+  Pulse.method_ Site_methods.add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title; body = "" })
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)

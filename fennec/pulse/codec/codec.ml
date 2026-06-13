@@ -467,7 +467,7 @@ let seal (b : ('r, 'r) builder) : 'r t = of_ty (TObj (obj_of_builder b))
 let doc_id = req "_id" id
 
 (* navigate into an embedded record for a SELECTOR/MODIFIER path: the resulting field has the dotted
-   wire name ("author.name") and the LEAF's shape/checks — so [Q.eq (dot Fields.author
+   wire name ("author.name") and the LEAF's shape/checks — so [Filter.eq (dot Fields.author
    Author.Fields.name) v] checks both names AND the value type, value-level (no ppx). The outer
    field's own codec is irrelevant here (we only borrow its wire name); the leaf decides the type.
    Required at the leaf (a dotted equality on an absent path simply matches nothing). *)
@@ -477,7 +477,7 @@ let dot (outer : _ field) (inner : 'a field) : 'a field =
     fld_required = inner.fld_required;
     fld_default = inner.fld_default }
 
-(* accessors for the collection vocabulary (Q/M/Index build on field handles) *)
+(* accessors for the collection vocabulary (Filter/M/Index build on field handles) *)
 let field_name f = f.fld_name
 let field_enc f v = enc_ty f.fld_ty v
 

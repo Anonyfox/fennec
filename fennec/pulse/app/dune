@@ -1,0 +1,10 @@
+; The server data facade — Pulse over the production Dynamic backend (mem-or-mongo by env), ambient
+; and batteries-included: start / serve_ddp / collection / insert / publish / method_. Collapses the
+; Reactive.Make + server.Make + Typed.Make + Dynamic ceremony into one module so a server file binds
+; data in a handful of lines. WRAPPED (module Fennec_pulse_app) so its facade never collides with the
+; client lib's top-level Pulse when both are linked into the server binary (SSR).
+(library
+ (name fennec_pulse_app)
+ (public_name fennec.pulse.app)
+ (libraries fennec.pulse fennec.pulse.server fennec.pulse.mongo fennec.pulse.collection
+   fennec.pulse.codec fennec.pulse.method fennec.pulse.live.client fennec-mongo.bson))

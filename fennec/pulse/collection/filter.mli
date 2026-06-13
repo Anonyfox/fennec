@@ -7,7 +7,7 @@
        (* the [%q] DSL (recommended) — reads as a condition: *)
        let _ = Task.find ~where:[%q status = "doing" && priority >= 2 && assignee.email = "x"] ()
        (* the explicit combinator form (escape hatch): *)
-       let _ = Q.[ eq Fields.status "doing"; gte Fields.priority 2 ] ]}
+       let _ = Filter.[ eq Fields.status "doing"; gte Fields.priority 2 ] ]}
 *)
 
 type t = (string * Bson.t) list

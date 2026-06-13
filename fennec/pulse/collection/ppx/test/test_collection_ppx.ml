@@ -132,17 +132,17 @@ let%test "dotted projection: siblings under one head merge into one nested objec
   match Proj.decode proj stored with Ok o -> o#author#name = "Ada" && o#author#email = "a@x.io" | Error _ -> false
 
 (* ── typed dotted-path SELECTORS (Codec.dot) — symmetric to dotted projections ── *)
-let%test "Q.eq over Codec.dot: nested selector compiles to the dotted wire key, value type checked" =
-  let sel = Q.eq (Codec.dot Post.Fields.author Author.Fields.name) "Ada" in
-  (* Q.eq Post.Fields.title 5 would be a TYPE error; dot's leaf (name:string) enforces the value *)
-  match Q.to_bson sel with
+let%test "Filter.eq over Codec.dot: nested selector compiles to the dotted wire key, value type checked" =
+  let sel = Filter.eq (Codec.dot Post.Fields.author Author.Fields.name) "Ada" in
+  (* Filter.eq Post.Fields.title 5 would be a TYPE error; dot's leaf (name:string) enforces the value *)
+  match Filter.to_bson sel with
   | B.Document [ ("author.name", B.String "Ada") ] -> true
   | _ -> false
 
 let%test "Codec.dot chains for deeper paths and keeps the leaf type" =
   let f = Codec.dot Post.Fields.author Author.Fields.email in
   Codec.field_name f = "author.email"
-  && (match Q.to_bson (Q.in_ f [ "a@x.io"; "b@x.io" ]) with
+  && (match Filter.to_bson (Filter.in_ f [ "a@x.io"; "b@x.io" ]) with
      | B.Document [ ("author.email", B.Document [ ("$in", B.Array _) ]) ] -> true
      | _ -> false)
 
@@ -171,12 +171,12 @@ let%test "validation attributes: the inline catalog enforces (one model form, no
    | Ok v -> v.title = "Hi" && v.email = "ada@x.io"
    | Error _ -> false)
 
-let%test "[%q] / [%sort] / [%set]: expressions expand to the typed Q/Sort/M (same wire as explicit)" =
+let%test "[%q] / [%sort] / [%set]: expressions expand to the typed Filter/Sort/M (same wire as explicit)" =
   let open Friendly in
   let q = [%q status = "doing" && priority >= 2] in
-  (* expands to a singleton clause list combining via Q.all *)
+  (* expands to a singleton clause list combining via Filter.all *)
   (match q with [ _ ] -> true | _ -> false)
-  && Q.to_bson (Q.all q) = Q.to_bson (Q.all Q.[ eq Fields.status "doing"; gte Fields.priority 2 ])
+  && Filter.to_bson (Filter.all q) = Filter.to_bson (Filter.all Filter.[ eq Fields.status "doing"; gte Fields.priority 2 ])
   && Sort.to_bson [%sort priority desc, title asc]
      = Sort.to_bson Sort.(by [ desc Fields.priority; asc Fields.title ])
   && M.to_bson [%set status = "done"] = M.to_bson M.(all [ set Fields.status "done" ])

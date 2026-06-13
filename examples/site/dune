@@ -120,14 +120,7 @@
   site_styles
   site_store
   fennec.pwa
-  fennec.pulse.server
-  fennec.pulse
-  fennec.pulse.method
-  fennec.pulse.mongo
-  fennec.ddp
-  fennec.pulse.live.client
-  fennec-mongo.bson
-  fennec-mongo.minimongo))
+  fennec.pulse.app))
 
 ; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test
 ; machinery or its yojson dep. A pure-OCaml guard reads the native server.exe and fails if

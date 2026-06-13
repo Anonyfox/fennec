@@ -28,12 +28,12 @@ val set_scheduler : ((unit -> unit) -> unit) -> unit
     decoded at the boundary with the skip policy (malformed docs skipped, warned once per id; the
     UI never crashes on foreign garbage). [~where] is a clause list read as AND. *)
 val find_c :
-  t -> 'a Def.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
+  t -> 'a Def.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
 
 (** The PROJECTED typed live read — the projection's inferred object type, decoded from the cache
     slice (malformed rows skipped, warned once). [name] is the collection (use [Def.name def]). *)
 val find_p :
-  t -> string -> 'o Proj.t -> ?where:Q.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+  t -> string -> 'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;

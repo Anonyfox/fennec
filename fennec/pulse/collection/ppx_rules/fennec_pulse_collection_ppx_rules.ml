@@ -323,8 +323,8 @@ let fields_expander =
 (* ---- [%q …] / [%sort …] / [%set …] — write queries as expressions, not API calls -------------
    Resolved against the model's [Fields] in scope (open Task, or Task.(…)). A bare ident is a field
    (Fields.x); record-access [a.b] is a dotted path (Codec.dot, navigating the embedded Fields).
-   Everything expands to the typed Q/Sort/M calls, so a wrong field/value is still a compile error —
-   only the noise is gone. Richer matchers/modifiers (regex/has/inc/push) use Q/M directly. *)
+   Everything expands to the typed Filter/Sort/M calls, so a wrong field/value is still a compile error —
+   only the noise is gone. Richer matchers/modifiers (regex/has/inc/push) use Filter/M directly. *)
 
 (* a field path expression (bare ident or a.b.c record-access) → the handle, dotted via Codec.dot *)
 let segs_of_field e =
@@ -350,21 +350,21 @@ let q_expander =
     (fun ~loc ~path:_ e ->
       let fld e = field_handle ~loc (segs_of_field e) in
       let cmp = function
-        | "=" -> Some [%expr Q.eq] | "<>" -> Some [%expr Q.ne] | "<" -> Some [%expr Q.lt]
-        | "<=" -> Some [%expr Q.lte] | ">" -> Some [%expr Q.gt] | ">=" -> Some [%expr Q.gte] | _ -> None
+        | "=" -> Some [%expr Filter.eq] | "<>" -> Some [%expr Filter.ne] | "<" -> Some [%expr Filter.lt]
+        | "<=" -> Some [%expr Filter.lte] | ">" -> Some [%expr Filter.gt] | ">=" -> Some [%expr Filter.gte] | _ -> None
       in
       let rec q_of e =
         match e.pexp_desc with
-        | Pexp_construct ({ txt = Lident "true"; _ }, None) -> [%expr Q.all []]
+        | Pexp_construct ({ txt = Lident "true"; _ }, None) -> [%expr Filter.all []]
         | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "&&"; _ }; _ }, [ (_, l); (_, r) ]) ->
-            [%expr Q.all [ [%e q_of l]; [%e q_of r] ]]
+            [%expr Filter.all [ [%e q_of l]; [%e q_of r] ]]
         | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "||"; _ }; _ }, [ (_, l); (_, r) ]) ->
-            [%expr Q.any [ [%e q_of l]; [%e q_of r] ]]
+            [%expr Filter.any [ [%e q_of l]; [%e q_of r] ]]
         | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ }, [ (_, l); (_, r) ]) when cmp op <> None ->
             [%expr [%e Option.get (cmp op)] [%e fld l] [%e r]]
         | _ ->
             Location.raise_errorf ~loc:e.pexp_loc
-              "%%q: use comparisons (= <> < <= > >=) and && / ||; for in/has/regex use Q directly"
+              "%%q: use comparisons (= <> < <= > >=) and && / ||; for in/has/regex use Filter directly"
       in
       [%expr [ [%e q_of e] ]])
 

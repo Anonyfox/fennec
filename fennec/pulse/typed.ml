@@ -40,6 +40,12 @@ module Make (R : Reactive.REACTIVE) = struct
           try R.Collection.drop_index coll ~name with _ -> ())
       have
 
+  (* wrap an EXISTING reactive collection as a typed handle — cheap, no IO, no new mux uid (so the
+     ambient server facade can cache one reactive collection and re-wrap per call) *)
+  let of_reactive (def : 'a Def.t) (coll : R.Collection.t) : 'a t = { def; coll }
+
+  let reconcile = reconcile_indexes
+
   (* bind the pure declaration to this instance (boot-time, next to publish) + reconcile its indexes *)
   let attach ?strict (def : 'a Def.t) backend : 'a t =
     let coll = R.Collection.create ~name:(Def.name def) backend in
@@ -64,8 +70,8 @@ module Make (R : Reactive.REACTIVE) = struct
         R.Collection.insert t.coll b
     | Error es -> raise (Invalid es)
 
-  (* [~where] is a LIST of clauses — Q.[ eq a 1; gt b 2 ] reads as AND (Q.all) *)
-  let sel where = match Q.all where with [] -> None | q -> Some (Q.to_bson q)
+  (* [~where] is a LIST of clauses — Filter.[ eq a 1; gt b 2 ] reads as AND (Filter.all) *)
+  let sel where = match Filter.all where with [] -> None | q -> Some (Filter.to_bson q)
   let srt = Option.map Sort.to_bson
 
   let cursor t ?(where = []) ?sort ?skip ?limit ?project () =
@@ -93,15 +99,15 @@ module Make (R : Reactive.REACTIVE) = struct
   let count t ?(where = []) () = R.Collection.count t.coll ?selector:(sel where) ()
 
   let update t ?(multi = true) ~where m =
-    R.Collection.update t.coll ~multi (Q.to_bson (Q.all where)) (M.to_bson m)
+    R.Collection.update t.coll ~multi (Filter.to_bson (Filter.all where)) (M.to_bson m)
 
   (* typed upsert: the modifier runs whether it matched or inserted ($setOnInsert covers
      insert-only fields). Returns the engine's affected count + any newly-minted id. *)
   let upsert t ?(multi = false) ~where m =
-    let r = R.Collection.upsert t.coll ~multi (Q.to_bson (Q.all where)) (M.to_bson m) in
+    let r = R.Collection.upsert t.coll ~multi (Filter.to_bson (Filter.all where)) (M.to_bson m) in
     (r.R.Collection.number_affected, r.R.Collection.inserted_id)
 
-  let remove t ~where = R.Collection.remove t.coll (Q.to_bson (Q.all where))
+  let remove t ~where = R.Collection.remove t.coll (Filter.to_bson (Filter.all where))
 
   (* distinct values of one field across the matching docs, decoded to the field's type (values
      that don't decode are skipped — the read policy) *)
