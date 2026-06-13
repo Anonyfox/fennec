@@ -57,7 +57,7 @@ let%test "projection: [%fields] yields the wire doc AND an object of exactly tho
   let card = [%fields title; done_] in
   (* the Mongo projection document — Meteor's { title: 1, done: 1 } *)
   (match Proj.project_doc card with
-  | B.Document [ ("title", B.Int 1); ("done", B.Int 1) ] -> true
+  | B.Document [ ("_id", B.Int 0); ("title", B.Int 1); ("done", B.Int 1) ] -> true (* _id auto-trimmed *)
   | _ -> false)
   &&
   (* decode a full stored doc into the PROJECTED object — only title/done survive, typed *)
@@ -65,6 +65,14 @@ let%test "projection: [%fields] yields the wire doc AND an object of exactly tho
   match Proj.decode card stored with
   | Ok o -> o#title = "Hello" && o#done_ = true (* o#remark would be a COMPILE error: no method *)
   | Error _ -> false
+
+let%test "projection: id is shipped only when explicitly projected (else _id:0 trims the wire)" =
+  (match Proj.project_doc [%fields id; title] with
+  | B.Document [ ("_id", B.Int 1); ("title", B.Int 1) ] -> true (* asked for id → no _id:0, _id:1 *)
+  | _ -> false)
+  &&
+  let o = match Proj.decode [%fields id; title] (B.doc [ ("_id", B.str "k"); ("title", B.str "Title") ]) with Ok o -> o | Error _ -> assert false in
+  o#id = "k" && o#title = "Title"
 
 let%test "projection: a missing projected field surfaces as a decode error (skip-policy fodder)" =
   let card = [%fields title; done_] in

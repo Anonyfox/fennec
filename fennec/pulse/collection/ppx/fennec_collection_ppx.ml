@@ -130,10 +130,19 @@ let fields_expander =
       let names = idents_of payload in
       if names = [] then Location.raise_errorf ~loc "%%fields: at least one field is required";
       let fld n = B.pexp_ident ~loc { txt = Ldot (Lident "Fields", n); loc } in
-      (* the wire projection doc: [(field_name Fields.a, 1); …] *)
+      (* the wire projection doc: [(field_name Fields.a, 1); …]. Mongo includes _id by default, so
+         unless a projected field's wire name is "_id" (i.e. the model's id), suppress it with
+         _id:0 — we ship EXACTLY what was asked for, not the id nobody requested. *)
+      let includes = List.map (fun n -> [%expr (Codec.field_name [%e fld n], 1)]) names in
+      let any_is_id =
+        List.fold_right
+          (fun n acc -> [%expr Codec.field_name [%e fld n] = "_id" || [%e acc]])
+          names [%expr false]
+      in
       let fields_list =
-        B.elist ~loc
-          (List.map (fun n -> [%expr (Codec.field_name [%e fld n], 1)]) names)
+        [%expr
+          let incs = [%e B.elist ~loc includes] in
+          if [%e any_is_id] then incs else ("_id", 0) :: incs]
       in
       (* the object: object method a = a method b = b end *)
       let obj =

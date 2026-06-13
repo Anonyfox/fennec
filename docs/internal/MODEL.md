@@ -285,6 +285,17 @@ to projected reads; full-document reads stay plain records. A shared/named proje
 view-record (a second small model over the same collection); `[%fields]` is the zero-definition
 inline path.
 
+**Coverage (precise):** `[%fields]` covers **top-level inclusion** — the overwhelming common case —
+and auto-trims the wire (`_id:0` injected unless you project `id`, so you ship exactly what you
+asked for, not the id nobody wanted). The full Mongo projection engine (dotted include/exclude,
+`$slice`, `$elemMatch`; `_id`-kept-unless-excluded) lives in `mongo/query/projection.ml` and is
+reachable via the **untyped escape**: `Ddp_client.find client "tasks" ~fields:(Bson.doc […]) ()`
+returns `Bson.t array` with the full engine — the honest pressure valve for exotic projections.
+Not typed by `[%fields]` (and why): **exclusion** can't yield a precise object type (the ppx can't
+enumerate the model's full field set, and object types can't be subtracted); **dotted paths** would
+need nested object synthesis. The positional `$` operator is unsupported engine-side too
+(documented). Transparent typed coverage of the remaining operators is a tracked follow-up.
+
 ## Taste decisions (each one a Meteor scar avoided)
 
 - **`Model` is the recommended path; `Collection` remains the dynamic substrate** and the escape
