@@ -1,14 +1,17 @@
 (** Inline unit tests — the third hunt layer (alongside Http and Browser).
 
-    {b Without the ppx}, register tests explicitly:
-    {[
-      let () = Fennec_hunt.Unit.test "addition" (fun () -> 1 + 1 = 2)
-      let () = Fennec_hunt.Unit.test_eq "decode" (percent_decode "a%20b") "a b"
-    ]}
-
-    {b With the ppx} ([fennec-hunt.ppx]):
+    {b With the ppx} ([fennec-hunt.ppx]) — the headline form:
     {[
       let%test "addition" = 1 + 1 = 2
+
+      let%test_unit "decode round-trips" =
+        Fennec_hunt.Unit.check_eq "decoded" ~expected:"a b" ~got:(percent_decode "a%20b")
+    ]}
+
+    {b Without the ppx}, register the same tests explicitly:
+    {[
+      let () = Fennec_hunt.Unit.test "addition" (fun () -> 1 + 1 = 2)
+      let () = exit (Fennec_hunt.Unit.run ())
     ]}
 
     Tests register as module-init side effects; {!run} executes them, reports via the shared

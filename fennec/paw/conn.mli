@@ -10,6 +10,18 @@
     (status/headers/cookies) does NOT answer — the pipeline keeps running; only an
     {e answerer} (a body, redirect, stream, halt, or upgrade) short-circuits the rest.
 
+    A handler is a paw [Conn.t -> Conn.t]: read the request, optionally build the response,
+    then answer. Builders return the conn so a later answerer short-circuits the pipeline:
+
+    {[
+      let show_user c =
+        match path_param c "id" with
+        | None -> text ~status:400 c "missing id"
+        | Some id ->
+          let c = set_header c "x-cache" "miss" in
+          json c (User.to_json (User.find id))
+    ]}
+
     Server-side only — conns never cross to the client. *)
 
 (** The mutable request/response carrier that flows through a paw pipeline. One conn per

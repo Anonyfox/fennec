@@ -2,7 +2,18 @@
     produces them via [emit]; a websocket shell just pipes the bytes. Extended (sub-tagged) mode:
     the server is stateless per session — each subscription's observe deltas are forwarded tagged
     with the sub id and the client merges (DATAFLOW.md §5b). Publications and methods are
-    caller-supplied closures, so this is pure and unit-testable with no socket. *)
+    caller-supplied closures, so this is pure and unit-testable with no socket.
+
+    {[
+      (* wire a session to a transport: [emit] sends, [dispatch] consumes inbound messages *)
+      let session =
+        Session.create ~session_id:"S1"
+          ~emit:(fun m -> ch.send (Message.encode m))
+          ~pubs ~methods ()
+      in
+      Session.dispatch session (Message.Connect { session = None; version = "1"; support = [] });
+      Session.close session
+    ]} *)
 
 (** Where a running publication streams its live deltas; [collection] is per-doc, so one publication
     can feed several collections. The session wires these to tagged [added]/[changed]/[removed]/

@@ -19,7 +19,18 @@
     compiled to JavaScript — behavior is exactly the old synchronous delivery.
 
     Insert is O(1) and store lookups are total, so a re-entrant observer that mutates the collection
-    during a notification can never raise. *)
+    during a notification can never raise.
+
+    {[
+      let c = create () in
+      let _id = insert c (Bson.doc [ ("name", Bson.str "ada"); ("score", Bson.int 1) ]) in
+      ignore (update c (Bson.doc [ ("name", Bson.str "ada") ])
+                (Bson.doc [ ("$inc", Bson.doc [ ("score", Bson.int 1) ]) ]));
+      let docs = fetch (find c ~selector:(Bson.doc [ ("name", Bson.str "ada") ]) ()) in
+      (* React to changes: initial set replays as [added], then live deltas. *)
+      let h = observe_changes (find c ()) ~added:(fun id _ -> track id) () in
+      ignore docs; h.stop ()
+    ]} *)
 
 (** The ordered event fan-out the change stream rides on — reusable wherever the same
     commit-ordered, deliver-outside-locks discipline is needed (the framework's observe multiplexer

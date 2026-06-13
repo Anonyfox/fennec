@@ -1,7 +1,11 @@
-(* Doc-coverage for [fennec test docs]: parse an interface (or implementation) and report exports
-   that lack a [(** ... *)] doc comment. OCaml has no missing-docs lint; this is fennec's. Because
-   odoc renders the curated [.mli], an export is documented-in-[.mli] (renders),
-   documented-only-in-[.ml] (won't render — "promote" it), or undocumented. *)
+(** Doc-coverage for [fennec test docs]: parse an interface (or implementation) and report exports
+    that lack a [(** ... *)] doc comment. OCaml has no missing-docs lint; this is fennec's. Because
+    odoc renders the curated [.mli], an export is documented-in-[.mli] (renders),
+    documented-only-in-[.ml] (won't render — "promote" it), or undocumented.
+
+    {[
+      let exit_code = Docscmd.run ~paths:[] ~strict:false ~private_:false ~promote:false
+    ]} *)
 
 (** A documentable export and its doc-comment text ([None] = no doc comment). *)
 type item = { kind : string; name : string; line : int; doc : string option }

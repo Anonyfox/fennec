@@ -4,7 +4,21 @@
     deployments: SP-initiated request state, AuthnRequest rendering, RelayState replay protection,
     HTTP-POST response parsing, enveloped XML signature validation, assertion validation, and
     canonical SAML/email identity evidence. It deliberately does not implement IdP metadata import,
-    certificate-chain policy, user creation, identity merging, or Accounts session issuance. *)
+    certificate-chain policy, user creation, identity merging, or Accounts session issuance.
+
+    {[
+      let t = Accounts_saml.make ~challenge in
+      let conn =
+        Result.get_ok
+          (Accounts_saml.connection ~id:"acme" ~issuer:"https://sp.example"
+             ~sso_url:"https://idp.example/sso" ~entity_id:"https://sp.example"
+             ~acs_url:"https://app/acs" ())
+      in
+      let trusted = Result.get_ok (Accounts_saml.trusted_keys_of_pem idp_pem) in
+      (* redirect via issue_request; on ACS callback consume the response atomically *)
+      Accounts_saml.consume_response t conn ~trusted_keys:trusted
+        ~relay_state ~saml_response
+    ]} *)
 
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity

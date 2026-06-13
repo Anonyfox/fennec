@@ -2,7 +2,17 @@
     {!token} returns a value that is MASKED fresh each render (BREACH-safe), carries an
     EXPIRY, and is HMAC-signed with the app secret; {!verify} returns a distinguishable
     {!outcome}; {!make} rejects unsafe requests whose token isn't [Ok]. Constant-time
-    throughout. Requires {!Session.make} earlier in the pipeline. *)
+    throughout. Requires {!Session.make} earlier in the pipeline.
+
+    {[
+      (* gate unsafe methods *)
+      Endpoint.pipe
+        [ Paw.Session.make ~secret ();
+          Paw.Csrf.make ~secret () ]
+
+      (* mint a token to embed in a form *)
+      let tok = Paw.Csrf.token ~secret conn
+    ]} *)
 
 (** Why a token did or didn't validate. [Expired]/[Wrong_session] occur in normal use (an
     aged-out form or session); [Invalid] indicates a bad signature or forged payload. *)

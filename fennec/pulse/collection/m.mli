@@ -1,5 +1,5 @@
 (** Typed modifiers over field handles — the $-operators with the strings taken out of app code.
-    Combine with {!all} (grouped by operator); {!raw} keeps the full surface reachable. 
+    Combine with {!all} (grouped by operator); {!raw} keeps the full surface reachable.
 
     {[ let _ = T.update tasks ~where:[%q id = x] [%set status = "done"]   (* the [%set] DSL *)
        let _ = M.(all [ set Fields.status "done"; inc Fields.n 1; push Fields.tags "t" ]) ]}

@@ -4,5 +4,12 @@
     1.0–1.3, so no protocol library is needed. *)
 
 (** [host_of_client_hello bytes] is the SNI hostname carried in the ClientHello record [bytes], or
-    [None] if there's no server-name extension or the bytes are truncated / not a ClientHello. *)
+    [None] if there's no server-name extension or the bytes are truncated / not a ClientHello.
+
+    Peek the first bytes of a fresh connection, then ensure a certificate before the handshake:
+    {[
+      match Sni.host_of_client_hello peeked with
+      | Some host -> on_demand host (* obtain / load the cert for this tenant *)
+      | None -> () (* no SNI: fall through to the default certificate *)
+    ]} *)
 val host_of_client_hello : string -> string option

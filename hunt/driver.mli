@@ -6,7 +6,20 @@
     duration). When a step's condition can't be met within the timeout the step is marked
     failed with its {!Backend.Diag.t} and the pipe short-circuits ({!exception:S.Step_failed});
     the runner turns the trace + diagnostic into a {!Failure.t}. So a failure explains itself
-    completely — which test, which step, what the page looked like, and how to re-run. *)
+    completely — which test, which step, what the page looked like, and how to re-run.
+
+    In practice you don't instantiate {!Make} yourself: open the ready-made {!Fennec_hunt.Live}
+    (it is [Make] over the CDP backend) and write a [let%browser] that pipes a [page]:
+    {[
+      open Fennec_hunt.Live
+
+      let%browser "counter increments" = fun page ->
+        page
+        |> goto "/"
+        |> click ".cbtn.inc"
+        |> expect_text ".count" "1"
+        |> ignore
+    ]} *)
 
 (** Instantiate the DSL + runner for a backend. The result is the page DSL and the test
     runner specialised to [B]. *)

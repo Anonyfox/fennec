@@ -7,7 +7,12 @@
     child + its line classifier ({!Server_proc}), held-port reclaim ({!Port}), and the shared
     CLI<->server wire ({!Fennec_core.Dev_proto}). This module is the glue that wires them to dune:
     it holds the server as a [Down | Up] state (so a live pid can't pair with a dead pipe or a
-    stale port), the dev control socket, the esbuild worker, and status logging. *)
+    stale port), the dev control socket, the esbuild worker, and status logging.
+
+    {[
+      (* typically fed from {!Discover.find}: *)
+      Supervisor.run ~targets:srv.targets ~exe:srv.exe ~assets:(srv.exe ^ ".assets")
+    ]} *)
 
 (** Watch [targets] with [dune build --watch], supervise the server executable [exe], and serve
     livereload from the [assets] subdirectory of the exe's build dir. Blocks until killed

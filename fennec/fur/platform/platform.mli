@@ -1,7 +1,20 @@
 (** Native-vs-browser surface, resolved at {b link time} via a dune virtual library — not via
     runtime hook refs. [Fur.native] provides inert SSR-safe stubs; [Fur.browser] provides the
     js_of_ocaml implementations. A client bundle cannot be linked without a real platform, and
-    browser code cannot reach the SSR build. *)
+    browser code cannot reach the SSR build.
+
+    Most code reaches this surface indirectly (through {!Fur.Data} and DOM event helpers).
+    The one direct use is per-request isolation in the SSR driver: wrap each render in
+    {!with_data_context} so concurrent requests never share a seed table, then read the
+    accumulated seed back via {!seed_table}:
+
+    {[
+      let html =
+        with_data_context (fun () ->
+          set_data_source fetch_resource;   (* key -> callback -> unit *)
+          let body = render_app () in       (* resources fill the seed during render *)
+          shell ~seed:(seed_table ()) body)
+    ]} *)
 
 (** {1 Ambient event (read inside DOM event handlers)} *)
 

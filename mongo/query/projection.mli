@@ -6,7 +6,15 @@
     matching MongoDB. Include vs exclude mode is decided by the first plain [0]/[1] field (other than
     [_id]); [_id] is kept unless explicitly set to [0]. [{"arr": {$slice: 3}}] / [{$slice: [s, n]}]
     limits an array; [{"arr": {$elemMatch: sel}}] keeps the first array element matching [sel]. The
-    positional projection operator [$] is not supported (it needs the query selector). *)
+    positional projection operator [$] is not supported (it needs the query selector).
+
+    {[
+      (* how Minimongo's [fetch] projects each result document *)
+      let proj = Projection.of_fields (Bson.Document [ ("name", Int 1); ("address.city", Int 1) ]) in
+      let visible = List.map (Projection.apply proj) docs in   (* keeps _id, name, address.city *)
+      (* observeChanges: don't report an unset of a field the projection hides *)
+      let reportable = Projection.cleared proj [ "name"; "secret" ]   (* = ["name"] *)
+    ]} *)
 
 (** A compiled projection (opaque). Build it with {!of_fields}. *)
 type t

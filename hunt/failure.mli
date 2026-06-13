@@ -5,7 +5,18 @@
     unit-tested) by constructing values directly. A report tells a human or an LLM, from a
     single failure, exactly which step of which test failed, what the page actually looked
     like at that instant, why it matters, and how to re-run just that test — without opening
-    the test file or doing another browser run. *)
+    the test file or doing another browser run.
+
+    The runner builds a {!t} from a test's trace and hands it to {!render} for a colourless,
+    byte-stable report; because it is pure data you can also construct one by hand (the renderer's
+    own tests do exactly this):
+    {[
+      let report =
+        { test = "checkout"; trace = []; kind = Errored "boom";
+          rerun = "fennec test browser --grep checkout"; screenshot = None }
+      in
+      print_string (Failure.render report)
+    ]} *)
 
 (** The status of one step in the executed pipeline. The failed (or, for an error/timeout,
     the in-flight) step is the last one in a {!t.trace}. *)

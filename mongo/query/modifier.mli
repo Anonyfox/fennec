@@ -13,7 +13,22 @@
     yields zero, [$inc] of a missing field yields the increment. [$min]/[$max] compare with the
     total {!Bson.compare}, so they work across types. [$pull] removes by operator predicate when its
     argument is an operator document (e.g. [{$gt:5}]) and by structural equality otherwise (so you
-    {e can} pull a whole sub-document by value). An unknown [$]-operator is ignored. *)
+    {e can} pull a whole sub-document by value). An unknown [$]-operator is ignored.
+
+    {[
+      (* how Minimongo's [update] mutates a matched document *)
+      let modifier =
+        Bson.Document
+          [ ("$set", Document [ ("status", String "active") ]);
+            ("$inc", Document [ ("seen", Int 1) ]);
+            ("$push", Document [ ("tags", String "new") ]) ]
+      in
+      let updated =
+        if Modifier.is_operator_doc modifier then Modifier.apply old_doc modifier
+        else old_doc (* a non-operator doc is a full replacement *)
+      in
+      let d = Modifier.set (Document []) "address.city" (String "Berlin")
+    ]} *)
 
 (** [apply ?insert doc modifier] applies [modifier] to [doc]. With [~insert:true], [$setOnInsert]
     is also applied (use it only when seeding a document on upsert). A non-operator [modifier]

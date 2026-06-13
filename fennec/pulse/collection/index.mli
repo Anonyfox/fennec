@@ -1,7 +1,7 @@
 (** Declarative indexes over field handles — declared once with the model, reconciled at boot
     ({!declare} + the runtime's [ensure_indexes]). A renamed field is a compile error here too.
     The NAME encodes the spec under an [fx_] prefix so reconcile is name-based and only
-    fennec-managed indexes are ever auto-dropped. 
+    fennec-managed indexes are ever auto-dropped.
 
     {[ let () = [%index unique email; team; desc created; unique (team, slug) ]   (* the [%index] DSL *)
        let () = Def.index collection Index.[ unique (asc Fields.email) ]          (* explicit form *) ]}

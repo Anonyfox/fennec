@@ -2,7 +2,22 @@
 
     SCIM is provisioning, not login. This module models directory connections, users, groups, PATCH
     operations, external-id identity evidence, and idempotent sync plans. It deliberately does not
-    expose HTTP endpoints, persist records, issue sessions, merge users, or revoke sessions. *)
+    expose HTTP endpoints, persist records, issue sessions, merge users, or revoke sessions.
+
+    {[
+      let conn =
+        Result.get_ok
+          (Accounts_scim.connection ~id:"acme-scim" ~org_id:"acme" ~bearer_token ())
+      in
+      (* after authenticating the bearer token, plan an idempotent provisioning change *)
+      let incoming =
+        Result.get_ok (Accounts_scim.user ~external_id:"okta-123" ~user_name:"ada" ())
+      in
+      match Accounts_scim.plan_user conn ~existing:None ~incoming with
+      | Ok (Accounts_scim.Create_user u) -> store.upsert_user ~connection_id:conn.id u
+      | Ok _ -> Ok ()
+      | Error e -> Error (Accounts_scim.string_of_error e)
+    ]} *)
 
 module Identity = Accounts_identity
 module Org = Accounts_org

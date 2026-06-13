@@ -4,7 +4,16 @@
     {!Fennec.Accounts.Methods}. This client module gives browser code the familiar pieces:
     {!user}, {!user_id}, {!logging_in}, {!login_with_password}, explicit resume-token login, logout,
     password lifecycle calls, and MFA step-up completion. All results decode the stable server
-    payloads into typed variants so components do not pattern-match raw BSON documents. *)
+    payloads into typed variants so components do not pattern-match raw BSON documents.
+
+    {[ module Accounts = Fennec_accounts_client
+
+       let accounts = Accounts.connect ~path:"/websocket" ~persist:"app" ()
+       let current_user = Accounts.user accounts          (* user option Fur.signal *)
+       let loading = Accounts.logging_in accounts          (* bool Fur.signal *)
+
+       let submit username password =
+         ignore (Accounts.login_with_password accounts (Accounts.By_username username) ~password) ]} *)
 
 (** Safe public email entry from the Accounts user document. *)
 type email = {

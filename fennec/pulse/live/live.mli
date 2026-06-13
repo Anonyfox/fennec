@@ -6,7 +6,13 @@
 
     Use Pulse live data for server-backed, cross-client, realtime collections such as task lists,
     chat messages, notifications, or collaborative records. Use plain {!Fur.signal} for local
-    browser UI state such as counters, toggles, and input drafts. *)
+    browser UI state such as counters, toggles, and input drafts.
+
+    The DDP client owns a {!t} and feeds its {!store}; components read the reactive side:
+    {[ let live = Live.create () in
+       (* the socket layer routes deltas into [Live.store live] (a Merge_store) *)
+       let tasks = Live.find_c live Task.collection ~sort:[%sort title asc] () in
+       (* [tasks : Task.t array Fur.signal] — recomputes as the collection changes *) ]} *)
 
 (** A reactive client cache: a merge store plus the per-collection Fur signals that drive
     {!find} and {!aggregate}. *)

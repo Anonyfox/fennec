@@ -1,5 +1,16 @@
 (** Collection-scoped operations — CRUD, aggregation, and the everyday admin/reset primitives, all
-    over libmongoc and off the Eio scheduler. Replies are the driver's raw result documents. *)
+    over libmongoc and off the Eio scheduler. Replies are the driver's raw result documents.
+
+    {[
+      let users = create client ~db:"app" ~name:"users" in
+      ignore (insert_one users (Bson.doc [ ("name", Bson.str "ada"); ("age", Bson.int 36) ]));
+      ignore (update_one users
+                ~filter:(Bson.doc [ ("name", Bson.str "ada") ])
+                ~update:(Bson.doc [ ("$inc", Bson.doc [ ("age", Bson.int 1) ]) ]));
+      match find_one users ~filter:(Bson.doc [ ("name", Bson.str "ada") ]) () with
+      | Some doc -> Bson.get_int doc "age"   (* Some 37 *)
+      | None -> None
+    ]} *)
 
 (** A collection handle: a client bundled with a db + collection name. *)
 type t = { client : Client.t; db : string; name : string }

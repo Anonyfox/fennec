@@ -1,7 +1,15 @@
 (** The validated Host→endpoint routing table. The only constructor is {!build}, which enforces
     every routing invariant — so a table that reaches the server is provably well-formed and {!route}
     is total. Polymorphic over the endpoint payload so it's pure and testable in isolation. {!build}
-    reports ALL errors at once so the developer fixes everything in one pass. *)
+    reports ALL errors at once so the developer fixes everything in one pass.
+
+    {[
+      match Host_router.build
+              [ ("web", [ "*" ], web_ep); ("admin", [ "admin.acme.com" ], admin_ep) ]
+      with
+      | Error errs -> failwith (Host_router.describe_errors errs)
+      | Ok t -> Host_router.route t ~host:"admin.acme.com" (* Some admin_ep *)
+    ]} *)
 
 (** One entry in the routing table: the endpoint's name, its parsed host patterns, and its payload. *)
 type 'ep entry = { name : string; patterns : Host_pattern.t list; ep : 'ep }

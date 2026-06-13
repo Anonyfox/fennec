@@ -1,7 +1,19 @@
 (** MFA and step-up authentication primitives.
 
     This module models assurance, fresh step-up requirements, TOTP, and backup codes. It deliberately
-    does not persist enrolled factors, decide account policy, issue sessions, or mutate users. *)
+    does not persist enrolled factors, decide account policy, issue sessions, or mutate users.
+
+    {[
+      let secret = Accounts_mfa.generate_totp_secret () in
+      match Accounts_mfa.totp ~issuer:"Acme" ~account:"ada@example.com" ~secret () with
+      | Error e -> prerr_endline (Accounts_mfa.string_of_error e)
+      | Ok cfg -> (
+          let uri = Accounts_mfa.provisioning_uri cfg in
+          (* render [uri] as a QR code, then verify the user's first code *)
+          match Accounts_mfa.verify_totp cfg ~code:"123456" with
+          | Ok _accepted_step -> ()
+          | Error _ -> ignore uri)
+    ]} *)
 
 module Challenge = Accounts_challenge
 

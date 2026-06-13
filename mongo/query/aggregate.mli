@@ -1,6 +1,17 @@
 (** The aggregation pipeline over a document list — every stage is a pure transform, so the whole
     engine runs in memory with no storage layer (server and browser alike). [$lookup] and
-    [$unionWith] resolve a foreign collection's documents through a caller-supplied hook. *)
+    [$unionWith] resolve a foreign collection's documents through a caller-supplied hook.
+
+    {[
+      (* how Minimongo's [aggregate] runs a pipeline over a collection (see {!Minimongo.aggregate}) *)
+      let pipeline =
+        [ Bson.Document [ ("$match", Document [ ("active", Bool true) ]) ];
+          Bson.Document [ ("$group", Document [ ("_id", String "$city");
+                                                ("total", Document [ ("$sum", String "$amount") ]) ]) ];
+          Bson.Document [ ("$sort", Document [ ("total", Int (-1)) ]) ] ]
+      in
+      let result = Aggregate.run ~lookup:(fun name -> foreign name) pipeline docs
+    ]} *)
 
 (** [run ?lookup pipeline docs] runs [pipeline] (a list of stage documents, e.g. [{$match: …}],
     [{$group: …}]) over [docs] and returns the result documents.

@@ -1,7 +1,12 @@
 (** The storage backend the reactive surface needs — CRUD over BSON documents (with query options)
     plus field-level live deltas. This is the seam between the reactive layer and the data engine:
     any module satisfying {!S} can host the full Meteor-style surface. The in-memory minimongo
-    backend ({!Mini}) is here; a native libmongoc backend is a later addition behind {!S}. *)
+    backend ({!Mini}) is here; a native libmongoc backend is a later addition behind {!S}.
+
+    A backend is normally chosen, not used directly — {!Reactive.Make} sits on top of it:
+
+    {[ module R = Fennec_pulse.Reactive.Make (Backend.Mini)
+       let q = Backend.query ~selector:(Bson.doc [ "done", Bson.Bool false ]) ~limit:20 () ]} *)
 
 (** A live-observation handle; call [stop] to detach. *)
 type handle = { stop : unit -> unit }

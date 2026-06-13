@@ -3,7 +3,19 @@
     This module is provider- and transport-neutral. It builds authorization URLs, stores transient
     state/PKCE material through {!Accounts_challenge}, parses callback query strings, and builds
     provider-subject identity keys. It does not perform HTTP token exchange, fetch provider profiles,
-    persist provider tokens, create users, or issue Accounts session tokens. *)
+    persist provider tokens, create users, or issue Accounts session tokens.
+
+    {[
+      let t = Accounts_oauth.make ~challenge in
+      let github =
+        Result.get_ok
+          (Accounts_oauth.Providers.github ~client_id ~redirect_uri:"https://app/cb" ())
+      in
+      (* redirect to [auth.url], then on callback consume the signed state *)
+      match Accounts_oauth.authorize t github with
+      | Ok auth -> Conn.redirect auth.url conn
+      | Error e -> Conn.text ~status:400 conn (Accounts_oauth.string_of_error e)
+    ]} *)
 
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity

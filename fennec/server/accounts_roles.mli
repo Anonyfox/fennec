@@ -4,7 +4,14 @@
     them, but it does not make ["admin"] or any other role magic. Persisted values remain plain
     strings for Mongo, SSO, SCIM, audit, and JSON boundaries; application code can use {!Role.t} and
     {!Permission.t} handles so typos are concentrated at declaration sites instead of repeated across
-    routes. *)
+    routes.
+
+    {[
+      let admin = Accounts_roles.Role.admin in
+      let billing_read = Accounts_roles.Permission.v_exn "billing.read" in
+      let policy = Accounts_roles.policy [ Accounts_roles.role admin [ billing_read ] ] in
+      Accounts_roles.role_allows policy ~role:admin ~permission:billing_read
+    ]} *)
 
 (** Constructor and policy errors. *)
 type error =

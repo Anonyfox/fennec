@@ -11,7 +11,26 @@
     [user_id], [set_user_id], [create_user], [login_with_password], [logout],
     [logout_other_clients], login hooks, and strategy-backed providers. The implementation is
     Fennec-native: typed paws for HTTP/SSR, a strategy interface for providers, and a store record
-    instead of a hard dependency on one persistence layer. *)
+    instead of a hard dependency on one persistence layer.
+
+    The substrate is always present, so a typical app only guards routes and reads the request user:
+
+    {[
+      let app =
+        Fennec.Endpoint.make ~name:"web" ()
+        |> Fennec.Endpoint.pipe_matched [ Fennec.Accounts.require_user () ]
+
+      let handler conn =
+        match Fennec.Accounts.user_id conn with
+        | Some uid -> Fennec.Conn.text conn ("hello " ^ uid)
+        | None -> Fennec.Conn.redirect "/login" conn
+    ]}
+
+    {1 Submodules}
+
+    The first-party batteries ({!Password}, {!Email}, {!OAuth}, {!Oidc}, {!Saml}, {!Passkey},
+    {!Mfa}, {!Org}, {!Scim}, {!Roles}, {!Audit}) compose through canonical user ids, identity links,
+    challenges, and the one {!Store.t} instead of one giant configuration record. *)
 
 module Conn = Fennec_paw.Conn
 module Paw = Fennec_paw.Paw

@@ -10,7 +10,15 @@
 
     Use sessions for signed cookie-backed request-to-request state such as "remember the
     logged-in user". Use {!Fennec_paw.Conn.set_cookie} / {!Fennec_paw.Conn.delete_cookie} for a
-    single unsessioned response cookie. *)
+    single unsessioned response cookie.
+
+    {[
+      Endpoint.pipe [ Paw.Session.make ~secret () ]
+
+      (* downstream: record + read the logged-in user *)
+      let conn = Paw.Session.set conn "user_id" "42"
+      let who = Paw.Session.get conn "user_id"
+    ]} *)
 
 (** Sign a payload: ["<b64 payload>.<b64 hmac>"] (also usable as a generic signed token). *)
 val sign : secret:string -> string -> string

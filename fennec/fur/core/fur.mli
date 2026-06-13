@@ -2,7 +2,25 @@
 
     Abstract types make invalid states unrepresentable; this [.mli] is also a recompile
     firewall — editing the [.ml] body never recompiles dependents. Internals (reaction,
-    run_effect, the effect tracker, flatten/escape, take_seed, Head counter, etc.) are hidden. *)
+    run_effect, the effect tracker, flatten/escape, take_seed, Head counter, etc.) are hidden.
+
+    A component is a setup thunk returning a render thunk. Setup runs once (create local
+    {!signal}s); the render thunk re-runs whenever a signal it {!get}s changes — the same
+    code drives SSR and post-hydration interactivity:
+
+    {[
+      let counter ?(label = "count") () =
+        let count = signal 0 in
+        fun () ->
+          h "span" [ class_ "counter" ]
+            [ text (label ^ ": ");
+              h "button" [ on "click" (fun () -> count -= 1) ] [ text "−" ];
+              h "span" [ class_ "count" ] [ node (get count) ];
+              h "button" [ on "click" (fun () -> count += 1) ] [ text "+" ] ]
+    ]}
+
+    In [.mlx] component files this is written with JSX-style tags that desugar to {!h} /
+    {!comp}; the runtime API above is what they compile to. *)
 
 (** {1 Reactivity} *)
 

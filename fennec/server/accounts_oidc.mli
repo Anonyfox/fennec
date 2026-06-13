@@ -4,7 +4,20 @@
     consumes single-use state, verifies RS256 ID tokens against trusted JWKS, validates ID-token
     claims, and derives canonical identity/email evidence. It does not fetch discovery documents,
     cache JWKS, exchange authorization codes, persist provider tokens, create users, or issue
-    Accounts session tokens. *)
+    Accounts session tokens.
+
+    {[
+      let t = Accounts_oidc.make ~challenge in
+      let google =
+        Result.get_ok (Accounts_oidc.Providers.google ~client_id ~redirect_uri:"https://app/cb" ())
+      in
+      (* on callback: consume state, then verify the app-fetched ID token + JWKS *)
+      match Accounts_oidc.consume_state t ~expected_connection:google.id state_token with
+      | Error e -> Error e
+      | Ok state ->
+          let jwks = Result.get_ok (Accounts_oidc.jwks_of_string jwks_json) in
+          Accounts_oidc.verify_id_token google state jwks id_token
+    ]} *)
 
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity

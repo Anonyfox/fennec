@@ -1,6 +1,13 @@
 (** A tiny, pure JSON value + parser + serializer — Stdlib only, so the whole DDP layer compiles
     identically to native and JavaScript. UTF-8 passes through verbatim on output; [\u] escapes
-    (including surrogate pairs) decode on input. Sized for protocol frames, not large documents. *)
+    (including surrogate pairs) decode on input. Sized for protocol frames, not large documents.
+
+    {[
+      (* parse at the network boundary with the non-raising form, then read a field *)
+      match Json.parse_opt body with
+      | Some j -> Option.bind (Json.member "msg" j) Json.to_string_opt
+      | None -> None
+    ]} *)
 
 (** A JSON value. *)
 type t =

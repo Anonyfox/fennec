@@ -4,7 +4,19 @@
     performance structure). Coordinates are [\[longitude, latitude\]] (GeoJSON order).
 
     Normally reached through the geo selector operators in {!Minimongo.find} (put [$geoWithin] etc.
-    in a selector); call these functions directly only for standalone geometry tests. *)
+    in a selector); call these functions directly only for standalone geometry tests.
+
+    {[
+      (* usual path: a geo operator inside a selector, run by {!Matcher.doc_matches} *)
+      let selector =
+        Bson.Document
+          [ ("loc", Document [ ("$geoWithin",
+              Document [ ("$centerSphere", Array [ Array [ Float 13.4; Float 52.5 ]; Float 0.01 ]) ]) ]) ]
+      in
+      let nearby = List.filter (Matcher.doc_matches selector) docs in
+      (* direct predicate, for a standalone geometry test *)
+      let inside = Geo.within field_value operand
+    ]} *)
 
 (** A coordinate pair, [(longitude, latitude)] (a.k.a. [(x, y)]). *)
 type point = float * float

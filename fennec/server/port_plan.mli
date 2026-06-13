@@ -1,6 +1,14 @@
 (** Deterministic dev port allocation from a single base. The gateway (prod-identical Host router)
     is at the base; endpoint i (declaration order) is at base+1+i. Validated at construction time
-    so all accessors are total. See [port_plan.ml]. *)
+    so all accessors are total. See [port_plan.ml].
+
+    {[
+      match Port_plan.of_base ~base:8020 ~count:2 with
+      | Error msg -> failwith msg
+      | Ok plan ->
+        Port_plan.gateway plan;                 (* 8020 — the Host router *)
+        Port_plan.endpoint_port plan ~index:0   (* 8021 — first endpoint *)
+    ]} *)
 
 (** An allocated port plan: the gateway port and a contiguous block of per-endpoint ports. *)
 type t

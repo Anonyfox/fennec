@@ -6,7 +6,18 @@
     page — whose embedded data seed restores its content through the normal hydration path. Multiple
     PWAs per origin work via per-app [scope]s (one subpath each); multitenant-by-host is separate
     origins. Updates are user-confirmed: the new worker waits, {!Pwa_client.update_available} flips,
-    [apply_update] swaps and reloads. *)
+    {!Pwa_client.apply_update} swaps and reloads.
+
+    {[ (* one declaration → manifest + SW (via {!paw}) + the <head> snippet (via {!head_html}) *)
+       let web_pwa = Pwa.v "Fennec Site" ~theme_color:"#0f172a"
+                       ~icons:[ Pwa.icon ~sizes:"512x512" "/icon-512.png" ]
+
+       let web =
+         Endpoint.make ~name:"web" ~hosts:[ "*" ] ()
+         |> Endpoint.pipe [ Pwa.paw web_pwa ~assets:Assets.lookup ~precache:[ "/_apps/web/main.js" ] ]
+         |> Endpoint.app
+              (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
+                 ~mounts:[ Web_app.Routes.mount ]) ]} *)
 
 (** One manifest icon. *)
 type icon

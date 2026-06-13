@@ -6,7 +6,17 @@
     mechanism does not invent its own uniqueness and merge rules.
 
     The module is deliberately persistence-neutral. Stores decide how to attach, detach, and merge
-    keys atomically, but all stores should persist {!stable_key} for globally scoped identities. *)
+    keys atomically, but all stores should persist {!stable_key} for globally scoped identities.
+
+    {[
+      let store = Accounts_identity.memory_store () in
+      match Accounts_identity.oauth ~provider:"github" ~subject:"12345" with
+      | Error e -> prerr_endline (Accounts_identity.string_of_error e)
+      | Ok key -> (
+          match store.attach ~created_at:(Unix.gettimeofday ()) ~user_id:"user-1" key with
+          | Accounts_identity.Attach _ | Accounts_identity.Already_linked _ -> ()
+          | Accounts_identity.Conflict _ -> prerr_endline "already linked to another user")
+    ]} *)
 
 (** Identity kind. *)
 type kind =

@@ -3,7 +3,14 @@
     collection there is one Minimongo store of the winning (merged) documents; per [(collection, id)]
     a precedence view tracks which subscriptions include the doc and, per field, whose value wins
     (earliest subscription wins; on clear/remove the next subscription's value takes over). Pure
-    (bson + minimongo) — runs native and in the browser. *)
+    (bson + minimongo) — runs native and in the browser.
+
+    {[ let box = Merge_store.create () in
+       (* the DDP router applies sub-tagged deltas — see {!Wire_route.apply_delta} *)
+       Merge_store.added box ~sub:"tasks" ~collection:"tasks" ~id:"t1"
+         ~fields:[ ("title", Bson.String "buy milk") ];
+       let docs = Merge_store.fetch box "tasks" () in   (* the merged winning documents *)
+       ignore docs ]} *)
 
 (** A merge store across all subscribed collections. *)
 type t

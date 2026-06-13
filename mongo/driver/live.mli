@@ -2,7 +2,19 @@
     per-query views that keep a result cache and emit field-level deltas — reusing the pure {!Query}
     semantics so it behaves identically to the in-memory minimongo observe. A polling guard caps the
     open-stream count under the pool size. Requires an ambient Eio switch ({!set_switch}) and a
-    replica set (see {!Server}). *)
+    replica set (see {!Server}).
+
+    {[
+      set_switch sw;                       (* once at startup, under the app's Eio switch *)
+      let q = query coll ~selector:(Bson.doc [ ("active", Bson.bool true) ]) in
+      let h =
+        observe_changes q
+          ~added:(fun id doc -> register id doc)
+          ~removed:(fun id -> forget id)
+          ()
+      in
+      (* … later … *) h.stop ()
+    ]} *)
 
 (** A live-observation handle; call [stop] to detach. *)
 type handle = { stop : unit -> unit }

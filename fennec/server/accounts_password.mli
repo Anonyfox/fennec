@@ -2,7 +2,16 @@
 
     The high-level account/session operations remain on {!Fennec.Accounts}: [create_user],
     [login_with_password], and [set_password]. This module owns the reusable password-specific
-    pieces those flows need: secure hashers and deterministic password policy checks. *)
+    pieces those flows need: secure hashers and deterministic password policy checks.
+
+    {[
+      let hasher = Accounts_password.password_hasher () in
+      let stored = hasher.hash ~password:"correct horse battery staple" in
+      let ok = hasher.verify ~password:"correct horse battery staple" ~hash:stored in
+      match Accounts_password.validate ~policy:Accounts_password.strict_policy "weak" with
+      | Ok () -> ignore ok
+      | Error errs -> prerr_endline (Accounts_password.describe_errors errs)
+    ]} *)
 
 (** A password hasher.
 

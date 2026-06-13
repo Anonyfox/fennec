@@ -1,7 +1,17 @@
 (** Change streams — the reactive primitive over a real MongoDB. A blocking watch cursor runs in an
     Eio systhread; {!next} returns [None] on a server-side timeout (no deadlock) and [Some event] on
     a real change. {!Live} builds the Meteor-style livequery fan-out on top. Requires a replica set
-    (even a single node) — see {!Server}. *)
+    (even a single node) — see {!Server}.
+
+    {[
+      let cs = watch coll ~full_document:true ~max_await_ms:200 () in
+      let rec loop () =
+        match next cs with                 (* None on a server-side timeout — just retry *)
+        | Some ev -> handle ev.op ev.full_document; loop ()
+        | None -> loop ()
+      in
+      Fun.protect ~finally:(fun () -> close cs) loop
+    ]} *)
 
 (** An open change stream (a libmongoc watch cursor). *)
 type t = Fennec_mongo_ffi.Mongo_ffi.change_stream

@@ -1,7 +1,12 @@
 (** CORS — Cross-Origin Resource Sharing. A paw that answers preflight ([OPTIONS] +
     [Access-Control-Request-Method]) with [204] + the negotiated headers, and stamps actual responses
     with [Access-Control-Allow-Origin] (and, when configured, credentials / exposed headers). A
-    request without an [Origin] header is not a CORS request and passes through untouched. *)
+    request without an [Origin] header is not a CORS request and passes through untouched.
+
+    {[
+      Endpoint.pipe
+        [ Paw.Cors.make ~origins:(Paw.Cors.These [ "https://app.example.com" ]) ~credentials:true () ]
+    ]} *)
 
 (** Which origins to allow: {!Any}, or an explicit allowlist (reflected back when matched; a
     non-matching origin gets no CORS headers, so the browser blocks it). *)

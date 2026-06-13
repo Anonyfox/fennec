@@ -1,6 +1,12 @@
 (** A reversed-label trie for host-pattern matching — O(1) exact, O(label-depth) suffix. Built
     once at startup from a pre-validated pattern list; lookup is pure. See [host_trie.ml] for the
-    algorithm. Used internally by {!Host_router}; the router's API does not expose the trie. *)
+    algorithm. Used internally by {!Host_router}; the router's API does not expose the trie.
+
+    {[
+      (* Host_router.build feeds the validated, Any-stripped patterns in: *)
+      let trie = Host_trie.build [ (Host_pattern.Exact "admin.acme.com", admin_ep) ] in
+      Host_trie.lookup trie ~host:"admin.acme.com" (* Some admin_ep *)
+    ]} *)
 
 (** An immutable reversed-label trie mapping host patterns to endpoint payloads. *)
 type 'ep t

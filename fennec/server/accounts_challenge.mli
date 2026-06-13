@@ -6,7 +6,16 @@
 
     A challenge token has the wire shape ["<id>.<secret>"]. The id is public lookup material. The
     secret is high-entropy bearer material and must be rendered only at the actual delivery boundary
-    (email link, redirect state, WebAuthn challenge, etc.). *)
+    (email link, redirect state, WebAuthn challenge, etc.).
+
+    {[
+      let t = Accounts_challenge.make ~secret ~store:(Accounts_challenge.memory_store ()) () in
+      match Accounts_challenge.create t ~purpose:Accounts_challenge.Password_reset () with
+      | Ok issued ->
+          Mailer.send (Accounts_challenge.token_to_string issued.token);
+          Accounts_challenge.consume t ~purpose:Accounts_challenge.Password_reset issued.token
+      | Error e -> Error e
+    ]} *)
 
 module Bson = Bson
 

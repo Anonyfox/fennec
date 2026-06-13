@@ -1,5 +1,13 @@
 (** A Host-header pattern, parsed into a total 3-way shape so matching never re-parses and
-    overlapping patterns order deterministically. See [host_pattern.ml]. *)
+    overlapping patterns order deterministically. See [host_pattern.ml].
+
+    Parse once, then match or classify:
+    {[
+      match Host_pattern.of_string "*.acme.com" with
+      | Ok (Host_pattern.Suffix _ as p) -> Host_pattern.matches p ~host:"api.acme.com" (* true *)
+      | Ok _ -> true
+      | Error msg -> failwith msg
+    ]} *)
 
 (** A parsed host pattern: an exact hostname, a wildcard suffix, or the catch-all. *)
 type t =

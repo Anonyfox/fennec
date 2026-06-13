@@ -9,7 +9,18 @@
     the identical contract, so the DSL is proven against the fake and behaves the same live.
 
     On timeout the backend returns a {!Diag.t}: a precise, structured snapshot of {e why}
-    the condition did not hold, captured in the page at the instant of failure. *)
+    the condition did not hold, captured in the page at the instant of failure.
+
+    A backend implements {!S}. Conditions are plain data the DSL builds and a backend honours;
+    on a miss it returns a diagnostic built with {!Diag.make} (every field but the reason
+    defaults to empty):
+    {[
+      let wait t cond ~timeout =
+        match satisfied t cond with
+        | true -> Ok ()
+        | false ->
+          Error (Backend.Diag.make ~selector:(Backend.Cond.selector cond) Backend.Diag.No_match)
+    ]} *)
 
 (** A condition the backend can wait for. The DSL constructs these; {!Failure} reads them
     back (alongside a {!Diag.t}) to render the expected values in a report. *)

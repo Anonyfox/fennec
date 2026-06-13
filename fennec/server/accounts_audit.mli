@@ -3,7 +3,18 @@
     This module defines the shared append-only security event vocabulary for Accounts. It is
     storage-neutral and transport-neutral: auth modules build events, stores append them, and UI or
     export code can query them later. Events must never contain passwords, raw tokens, provider
-    access tokens, bearer secrets, or challenge secrets. *)
+    access tokens, bearer secrets, or challenge secrets.
+
+    {[
+      let store = Accounts_audit.memory_store () in
+      let e =
+        Accounts_audit.event ~id:"evt-1" ~at:(Unix.gettimeofday ())
+          ~target_user_id:"user-1"
+          Accounts_audit.Login (Accounts_audit.User "actor-1") Accounts_audit.Success
+      in
+      ignore (Accounts_audit.append store e);
+      Accounts_audit.list ~target_user_id:"user-1" store
+    ]} *)
 
 (** Audit event kind. *)
 type kind =

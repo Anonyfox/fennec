@@ -1,5 +1,10 @@
 (** The deterministic subscription key (name + params) — shared so an SSR hydration payload lines up
-    with what the client looks up. Dependency-free string key; pure → native and browser. *)
+    with what the client looks up. Dependency-free string key; pure → native and browser.
+
+    {[ (* SSR and the client derive the SAME storage key for a subscription *)
+       let seed_key name params = "ddp:" ^ Subkey.key name params in
+       let collection = Subkey.collection_of_name name in
+       ignore (seed_key, collection) ]} *)
 
 (** [bkey b] — a stable string key for a BSON value (the building block of {!key}). *)
 val bkey : Bson.t -> string

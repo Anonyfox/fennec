@@ -5,7 +5,23 @@
     Two halves: the {b algebra} ({!seq}/{!pass}/{!run_conn}/{!run}) and the {b constructors}
     (the route verbs and {!fallthrough} — a route is just a paw guarded by method + path).
     The batteries (logger, auth, …) live in their own modules under the [Paw] namespace
-    ([Paw.Logger], [Paw.Session], …), each a [make] returning one of these paws. *)
+    ([Paw.Logger], [Paw.Session], …), each a [make] returning one of these paws.
+
+    Compose middleware and routes left-to-right with {!seq}; the first paw to answer wins and
+    the rest are skipped. {!run} drives a pipeline to a response (unanswered becomes a 404),
+    which is also the handle for pure tests:
+
+    {[
+      let app =
+        seq
+          [ get "/" (fun c -> Conn.html c "<h1>home</h1>");
+            get "/users/:id" (fun c ->
+              Conn.text c (Option.value (Conn.path_param c "id") ~default:"?"));
+            post "/api/ping" (fun c -> Conn.json c {|{"pong":true}|}) ]
+
+      let resp =
+        run app (Fennec_core.Http.make_request ~meth:Fennec_core.Http.GET ~path:"/users/42" ())
+    ]} *)
 
 (** A paw is just a function; write one as [fun c -> …]. *)
 type t = Conn.t -> Conn.t

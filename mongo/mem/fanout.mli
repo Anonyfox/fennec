@@ -4,7 +4,15 @@
     producer's commit (the queue order is the commit order) and are delivered by a single drainer at
     a time, outside all locks — so a callback may freely mutate the producer (re-entrancy by
     construction) and a delivery that suspends on IO blocks nothing but itself. Stdlib-only; compiles
-    to JavaScript, where the single-threaded runtime collapses it to synchronous delivery. *)
+    to JavaScript, where the single-threaded runtime collapses it to synchronous delivery.
+
+    {[
+      let fan = create () in
+      let _sub = subscribe fan ~ready:true (fun e -> handle e) in
+      (* A producer commits under its own lock, enqueueing atomically, then pumps outside it. *)
+      Mutex.protect lock (fun () -> commit (); enqueue fan event);
+      pump fan
+    ]} *)
 
 type 'e t
 (** A fan-out of ['e] events to a set of subscribers. *)

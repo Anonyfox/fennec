@@ -1,5 +1,12 @@
 (** A connection handle: a thread-safe libmongoc client pool plus the URI it was built from. Cheap to
-    share across fibers — every operation checks a client out of the pool for the call's duration. *)
+    share across fibers — every operation checks a client out of the pool for the call's duration.
+
+    {[
+      let client = connect () in                 (* opens a pool to {!default_uri} *)
+      assert (ping client ~db:"admin");
+      let coll = Collection.create client ~db:"app" ~name:"users" in
+      ignore (Collection.insert_one coll (Bson.doc [ ("name", Bson.str "ada") ]))
+    ]} *)
 
 (** A pooled connection. [pool] is the libmongoc client pool; [uri] is the connection string. *)
 type t = { pool : Fennec_mongo_ffi.Mongo_ffi.pool; uri : string }

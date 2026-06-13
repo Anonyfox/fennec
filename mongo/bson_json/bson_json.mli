@@ -4,7 +4,15 @@
     regardless of the JSON number representation, and Decimal128 is just [{$numberDecimal: "..."}] (a
     string libbson interprets — no decimal128 binary math here). {!of_string} reads both canonical
     and relaxed forms back; anything unmodelled degrades to a plain document rather than being
-    dropped. Pure ({!Bson} + the fennec-mongo JSON primitive) — native and browser. *)
+    dropped. Pure ({!Bson} + the fennec-mongo JSON primitive) — native and browser.
+
+    {[
+      (* Round-trip a BSON value through the wire format the C driver speaks. *)
+      let doc = Bson.doc [ ("n", Bson.int 42); ("when", Bson.Date 1700000000000L) ] in
+      let wire = to_string doc in       (* canonical: {"n":{"$numberInt":"42"},…} *)
+      let back = of_string wire in       (* reads canonical or relaxed *)
+      Bson.equal doc back                (* true *)
+    ]} *)
 
 (** [to_json b] is the canonical extended-JSON AST of [b]. *)
 val to_json : Bson.t -> Fennec_mongo_json.Json.t

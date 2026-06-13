@@ -1,6 +1,17 @@
 (** Pure HTTP semantics — content-encoding negotiation, conditional requests, and
     Range parsing (RFC 7230/7231/7232/7233). Stdlib only; the server layer wires
-    these to IO. *)
+    these to IO.
+
+    {[
+      module Sem = Http_semantics
+
+      let etag = Sem.make_etag (Digest.to_hex (Digest.string body)) in
+      if Sem.if_none_match_satisfied ~etag req_headers then `Not_modified (* 304 *)
+      else
+        match Sem.negotiate_encoding ~accept:(Sem.header req_headers "accept-encoding") () with
+        | Sem.Gzip -> `Send_gzip
+        | _ -> `Send_identity
+    ]} *)
 
 (** Case-insensitive header lookup over an assoc list. *)
 val header : (string * string) list -> string -> string option

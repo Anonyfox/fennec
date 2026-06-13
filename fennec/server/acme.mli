@@ -1,7 +1,15 @@
 (** Automatic HTTPS via ACME (Let's Encrypt): HTTP-01 for the host router's concrete domains, a
     {!Cert_store}-backed account key + certificate, and zero-downtime renewal / hot-reload. Pass
     {!auto} to {!Fennec.serve} as [~acme]. Wildcards (which need DNS-01) and a dynamic catch-all
-    (which needs on-demand TLS) are out of scope and reported, not failed. *)
+    (which needs on-demand TLS) are out of scope and reported, not failed.
+
+    {[
+      (* production HTTPS for the host router's concrete domains *)
+      Fennec.serve ~acme:(Acme.auto ~email:"ops@app.com" ()) [ (* … endpoints … *) ]
+
+      (* staging (no rate limits, untrusted certs) for a smoke test *)
+      Fennec.serve ~acme:(Acme.auto ~email:"ops@app.com" ~staging:true ()) endpoints
+    ]} *)
 
 (** ACME configuration. *)
 type config

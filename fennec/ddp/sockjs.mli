@@ -1,6 +1,13 @@
 (** SockJS framing for the websocket transport — the thin compat layer so a stock Meteor browser
     client (which dials [/sockjs] first) can speak to us. Raw [/websocket] is the primary path; this
-    only wraps/unwraps DDP JSON. Pure — native and JavaScript. *)
+    only wraps/unwraps DDP JSON. Pure — native and JavaScript.
+
+    {[
+      (* open the SockJS channel, then frame DDP out and unframe DDP in *)
+      ch.send Sockjs.open_frame;
+      ch.send (Sockjs.wrap [ Message.encode m ]);
+      List.iter (fun ddp -> handle ddp) (Sockjs.unwrap frame)
+    ]} *)
 
 (** The SockJS open frame, ["o"]. *)
 val open_frame : string

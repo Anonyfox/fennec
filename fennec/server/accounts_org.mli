@@ -2,7 +2,20 @@
 
     This module provides storage-neutral B2B identity primitives. It models organizations,
     memberships, verified domains, SSO routing, tenant login policy, and small RBAC hooks. It does
-    not persist records, create users, merge identities, or perform SCIM mutations. *)
+    not persist records, create users, merge identities, or perform SCIM mutations.
+
+    {[
+      let acme =
+        Result.get_ok
+          (Accounts_org.org ~id:"acme" ~name:"Acme"
+             ~domains:[ Result.get_ok (Accounts_org.domain ~verified:true "acme.example") ]
+             ())
+      in
+      (* route a sign-in email to its tenant, then check the requested strategy *)
+      match Accounts_org.route_domain [ acme ] "ada@acme.example" with
+      | Ok route -> Accounts_org.decide_strategy route.org (Accounts_org.Oidc "google")
+      | Error _ -> Accounts_org.Denied "unknown tenant"
+    ]} *)
 
 (** Constructor and policy errors. *)
 type error =

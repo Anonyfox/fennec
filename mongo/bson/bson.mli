@@ -1,7 +1,17 @@
 (** The canonical in-memory BSON value — shared by the query engine, Minimongo, and the native
     driver. Dependency-free (Stdlib only, no Yojson/Unix/Eio) so the same source compiles to native
     OCaml and, via js_of_ocaml, to JavaScript. An extended-JSON wire codec can be added as a
-    separate, native-only module; this module provides only a debug rendering ({!to_string}). *)
+    separate, native-only module; this module provides only a debug rendering ({!to_string}).
+
+    {[
+      (* Build a selector / document with the constructor aliases, then read it back. *)
+      let user = doc [ ("name", str "ada"); ("score", float 4.5); ("active", bool true) ] in
+      get_string user "name"  (* Some "ada" *)
+      |> ignore;
+      get_float user "score"  (* Some 4.5 *)
+      |> ignore;
+      equal (int 1) (float 1.0)  (* true — numeric value equality *)
+    ]} *)
 
 (** A BSON value. Covers every BSON type; a [Document] is an {e ordered} field list (order is
     preserved on the wire and through projections, and {!equal} on documents is order-sensitive). *)

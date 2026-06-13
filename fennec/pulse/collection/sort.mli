@@ -1,5 +1,5 @@
 (** Typed sort keys over field handles — [Sort.by [ asc Fields.title; desc Fields.created ]]; a
-    renamed field is a compile error. Order is the list order. 
+    renamed field is a compile error. Order is the list order.
 
     {[ let _ = Task.find ~sort:[%sort priority desc, title asc] ()   (* the [%sort] DSL *)
        let _ = Sort.(by [ desc Fields.priority; asc Fields.title ])  (* explicit form *) ]}

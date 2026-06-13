@@ -4,7 +4,13 @@
     fail, or exception — every browser, socket, and temp profile is gone.
 
     For full control (a custom backend, your own process lifecycle), use {!Live.run}
-    directly; this module is the common case wired up for you. *)
+    directly; this module is the common case wired up for you.
+
+    A browser-suite runner is one line — link the [*_test.ml] files (each registering tests via
+    [let%browser]) and call {!main_cli}, which parses argv and exits non-zero on any failure:
+    {[
+      let () = Fennec_hunt.Run.main_cli ()
+    ]} *)
 
 (** Run every registered test and return the tally. Boots [server_exe] first if given
     (waiting for it to accept HTTP), launches [browsers] headless Chrome processes

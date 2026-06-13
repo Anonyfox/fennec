@@ -1,6 +1,12 @@
 (** A database-scoped handle: connect a {!Client.t} once, name a database, and reach collections
     without repeating the db name. A local managed mongod and a remote cluster look identical here —
-    only the URI handed to {!Client.connect} differs. *)
+    only the URI handed to {!Client.connect} differs.
+
+    {[
+      let db = create (Client.connect ()) "app" in
+      let users = collection db "users" in
+      ignore (Collection.insert_one users (Bson.doc [ ("name", Bson.str "ada") ]))
+    ]} *)
 
 (** A database: a client plus a name. *)
 type t = { client : Client.t; name : string }

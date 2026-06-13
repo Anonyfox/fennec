@@ -3,7 +3,16 @@
     abstract collection type lets a single suite prove feature parity across backends.
 
     Reactivity is callback-driven (the backend's [observe_changes]); there is no Tracker here — a
-    client supplies its own reactive graph (e.g. Fur signals) on top of the live deltas. *)
+    client supplies its own reactive graph (e.g. Fur signals) on top of the live deltas.
+
+    Most apps reach this surface through the {!Fennec_pulse_app} facade rather than instantiating it
+    by hand; the raw functor looks like:
+
+    {[ module R = Fennec_pulse.Reactive.Make (Fennec_pulse.Backend.Mini)
+
+       let tasks = R.Collection.create ~name:"tasks" (Minimongo.create ())
+       let () = R.publish "tasks" (fun _pub -> R.Cursor (R.cursor tasks ()))
+       let () = R.methods [ "addTask", (fun _inv args -> ignore (R.Collection.insert tasks (List.hd args)); Bson.Null) ] ]} *)
 
 (** A document — a BSON value (in practice a [Document]). *)
 type doc = Bson.t

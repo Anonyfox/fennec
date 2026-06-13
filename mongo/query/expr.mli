@@ -4,7 +4,14 @@
     expressions, plus the [$group] accumulators.
 
     Normally reached through {!Aggregate.run} (pipeline stages call it for computed fields); call
-    [eval] directly only to evaluate an expression standalone. *)
+    [eval] directly only to evaluate an expression standalone.
+
+    {[
+      (* a computed field, as a [$project]/[$addFields] stage evaluates it *)
+      let full = Expr.eval (Bson.Document [ ("$concat", Array [ String "$first"; String " "; String "$last" ]) ]) doc in
+      (* a [$group] accumulator over one group's documents *)
+      let total = Expr.accumulate (Bson.Document [ ("$sum", String "$amount") ]) group_docs
+    ]} *)
 
 (** Aggregation truthiness: [false], [0], [Null] (and a missing value) are falsy; all else truthy. *)
 val truthy : Bson.t -> bool

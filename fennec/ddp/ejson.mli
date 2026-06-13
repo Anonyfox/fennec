@@ -4,7 +4,15 @@
     Numbers are IEEE-754 doubles on the wire: an integral value below {!Json.int_cutoff} round-trips
     as [Int], otherwise as [Float] — so the [Int]/[Float] distinction and [Int64] magnitudes beyond
     2^53 are {e not} preserved (the numeric value is, modulo double precision). All other types
-    round-trip exactly, including documents shaped like a marker (they are [{$escape}]-wrapped). *)
+    round-trip exactly, including documents shaped like a marker (they are [{$escape}]-wrapped).
+
+    {[
+      (* a BSON value to its EJSON wire string and back *)
+      let wire = Ejson.encode (Bson.Date 1718236800000L) in
+      (* {"$date":1718236800000} *)
+      let back = Ejson.decode wire in
+      assert (Bson.equal back (Bson.Date 1718236800000L))
+    ]} *)
 
 (** Encode a BSON value to its EJSON JSON projection. *)
 val of_bson : Bson.t -> Json.t

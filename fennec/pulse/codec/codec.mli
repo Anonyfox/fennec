@@ -10,7 +10,18 @@
     Refinements carry a machine-readable {!hint} (what a schema renderer can translate); an
     arbitrary {!check} is honestly app-side-only. Floats reject nan/inf by default. Options:
     absent OR null decode to [None]; [None] encodes by OMITTING the key (Mongo-idiomatic).
-    Pure, bson-only, js_of_ocaml-safe — shared verbatim by server and browser. *)
+    Pure, bson-only, js_of_ocaml-safe — shared verbatim by server and browser.
+
+    {[ type t = { id : string; title : string }
+       let codec =
+         Codec.(record (fun id title -> { id; title })
+                |> field doc_id (fun t -> t.id)
+                |> field (req "title" (non_empty (max_len 200 string))) (fun t -> t.title)
+                |> seal)
+       let bson = Codec.encode_checked codec { id = ""; title = "Buy milk" }   (* validates, then encodes *) ]}
+
+    In practice [@@deriving collection] generates this codec (plus the typed [Fields] and the
+    collection) straight from the record — write the type, not the builder. *)
 
 (** {1 Errors} *)
 

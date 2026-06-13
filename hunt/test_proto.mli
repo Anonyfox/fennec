@@ -1,3 +1,15 @@
+(** The [fennec test] {b environment contract}: the one source of truth for the env vars the
+    CLI sets per suite and a suite (via {!Http} / {!Run}) reads back —
+    no stringly-typed drift across the harness/suite seam.
+
+    A runner rarely touches this directly; it sits behind {!resolve_url}, which picks the target
+    URL (explicit argument wins, else the harness-assigned {!env_url}, else a clear error):
+    {[
+      match Fennec_hunt.Test_proto.resolve_url ~explicit:None with (* in another lib *)
+      | Ok url -> (* drive the suite against [url] *)
+      | Error msg -> failwith msg
+    ]} *)
+
 (* The `fennec test` ⟷ suite environment contract. The CLI sets these per suite; a suite
    reads them. One source of truth shared by the harness and the suites — no stringly drift. *)
 

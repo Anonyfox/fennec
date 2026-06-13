@@ -4,7 +4,14 @@
     sentinel [":memory:"] means "use the in-process Mongo-shaped backend". An absent or blank
     [MONGO_URL] is a first-class [Missing] state: the process may boot, but database operations
     should fail with a clear configuration error. Test/dev orchestration opts into memory or real
-    Mongo explicitly by setting this one variable before spawning an app. *)
+    Mongo explicitly by setting this one variable before spawning an app.
+
+    {[
+      match state () with
+      | Mongo { uri; db } -> open_real_backend ~uri ~db
+      | Memory -> open_in_memory_backend ()
+      | Missing -> failwith (unavailable_message ())
+    ]} *)
 
 (** Environment variable that carries the application's Mongo URL. *)
 val mongo_url_env : string

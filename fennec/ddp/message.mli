@@ -1,6 +1,14 @@
 (** The DDP message model and its JSON codec — one variant per [msg] type from the spec
     (DATAFLOW.md §2). Absent optional fields are omitted on encode and tolerated on decode; EJSON
-    fields/params go through {!Ejson}. Pure — native and JavaScript. *)
+    fields/params go through {!Ejson}. Pure — native and JavaScript.
+
+    {[
+      (* the websocket shell decodes an inbound frame and encodes outbound messages *)
+      (match Message.decode raw with
+       | m -> Session.dispatch session m
+       | exception _ -> ());
+      ch.send (Message.encode (Message.Connected { session = "S1" }))
+    ]} *)
 
 (** A DDP error payload (in [nosub] / [result]). [code] is a string in DDP v1, but real Meteor
     sends a number — {!of_json} coerces it. (On the wire the field is named ["error"].) *)

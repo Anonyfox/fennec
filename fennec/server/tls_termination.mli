@@ -1,6 +1,17 @@
 (** Server-side TLS termination — load a certificate + key into a config that {!Server.run} (and
     {!Fennec.serve}) can terminate HTTPS with, in-process (no reverse proxy). The TLS RNG is installed
-    on first use. *)
+    on first use.
+
+    A BYO certificate is loaded once into a {!t} the server terminates HTTPS with:
+    {[
+      let tls = Tls_termination.of_files ~cert:"fullchain.pem" ~key:"privkey.pem"
+    ]}
+    For SNI across several tenants, build one config from many chains:
+    {[
+      let tls =
+        Tls_termination.server_of_chains
+          [ Tls_termination.chain_of_pem ~cert ~key; (* … *) ]
+    ]} *)
 
 (** A loaded server TLS configuration (a {!Tls.Config.server}). *)
 type t = Tls.Config.server

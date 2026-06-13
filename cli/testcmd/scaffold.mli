@@ -1,5 +1,5 @@
-(* `fennec test new <cut> <name>` — scaffold a suite so even the first file in a new cut dir is
-   zero-friction. Templates are pure; only {!create} touches disk. *)
+(** [fennec test new <cut> <name>] — scaffold a suite so even the first file in a new cut dir is
+    zero-friction. Templates are pure; only {!create} touches disk. *)
 
 (** The cuts that can be scaffolded: ["http"], ["browser"], ["system"]. *)
 val cuts : string list

@@ -1,6 +1,6 @@
 (** The collection DECLARATION — pure and instance-free, shared by server and browser (what the
-    [@@fennec.collection] deriver generates): name + shape + indexes. The server attaches it to a
-    reactive instance at boot; the browser binds it to the live client. 
+    [@@deriving collection] deriver generates): name + shape + indexes. The server attaches it to a
+    reactive instance at boot; the browser binds it to the live client.
 
     {[ (* store/task.ml — the WHOLE model in one file *)
        type t = {

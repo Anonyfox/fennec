@@ -1,4 +1,8 @@
-(* The `fennec test` entry point — parse the cut + options, dispatch, return an exit code. *)
+(** The [fennec test] entry point — parse the cut + options, dispatch, return an exit code.
+
+    {[
+      let exit_code = Run.run { Run.default_options with suite = Run.Http }
+    ]} *)
 
 (** Which tests to run. ([Docs] is the doc-coverage cut — a check, warn by default.) *)
 type suite = Unit | Http | Browser | System | Docs | All

@@ -1,4 +1,9 @@
-(** Filename → MIME content-type, and which types are worth compressing. Pure. *)
+(** Filename → MIME content-type, and which types are worth compressing. Pure.
+
+    {[
+      let ct = Mime.of_path "/assets/app.css" in   (* "text/css; charset=utf-8" *)
+      if Mime.compressible ct then gzip body else body
+    ]} *)
 
 (** Content-type for a path, by file extension; unknown → ["application/octet-stream"].
     Text types carry a charset. *)

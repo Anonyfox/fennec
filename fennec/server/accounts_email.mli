@@ -2,7 +2,18 @@
 
     This module is persistence- and transport-neutral. It normalizes email addresses, builds email
     identity keys, and wraps {!Accounts_challenge} for email verification, magic-link login, and
-    one-time-code ceremonies. It does not send mail and it does not issue Accounts session tokens. *)
+    one-time-code ceremonies. It does not send mail and it does not issue Accounts session tokens.
+
+    {[
+      let t = Accounts_email.make ~secret ~challenge in
+      match Accounts_email.normalize " ADA@Example.COM " with
+      | Error e -> prerr_endline (Accounts_email.string_of_error e)
+      | Ok address -> (
+          match Accounts_email.issue_login_link t (Accounts_email.binding address) with
+          | Ok issued ->
+              Mailer.send address (Accounts_challenge.token_to_string issued.token)
+          | Error e -> prerr_endline (Accounts_email.string_of_error e))
+    ]} *)
 
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity

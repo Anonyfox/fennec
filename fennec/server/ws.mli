@@ -1,6 +1,19 @@
 (** RFC 6455 WebSocket codec over Eio buffered IO. Reads enforce the protocol
     invariants (client frames masked, frame/message size caps, control-frame
-    constraints, reserved bits); writes are server-side (unmasked). *)
+    constraints, reserved bits); writes are server-side (unmasked).
+
+    Complete the handshake with {!accept_key}, then loop on {!read_frame}:
+    {[
+      (* reply with Sec-WebSocket-Accept: Ws.accept_key client_key *)
+      let rec loop r =
+        match Ws.read_frame r with
+        | Ws.Frame { opcode = Ws.Text; payload; _ } -> handle payload; loop r
+        | Ws.Frame { opcode = Ws.Close; _ } | Ws.Eof -> ()
+        | Ws.Frame _ -> loop r (* ping / pong / binary *)
+        | Ws.Protocol_error _ -> ()
+      in
+      Ws.write_frame w { Ws.fin = true; rsv1 = false; opcode = Ws.Text; payload = "hi" }
+    ]} *)
 
 (** WebSocket frame opcode as defined in RFC 6455 §5.2. *)
 type opcode = Continuation | Text | Binary | Close | Ping | Pong | Other of int

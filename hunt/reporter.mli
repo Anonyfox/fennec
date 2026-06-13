@@ -10,7 +10,16 @@
 
     Concurrency: every write goes through one mutex and is assembled as a single atomic chunk
     (erase the status line, print the permanent content, redraw the status line), so two
-    tests can never interleave a half-line. Cursor control is emitted {b only} to a real TTY. *)
+    tests can never interleave a half-line. Cursor control is emitted {b only} to a real TTY.
+
+    A reporter is driven through one lifecycle — create it (auto-detecting the terminal), bracket
+    the run, and feed it each test as it starts and finishes (as {!Run.main} does internally):
+    {[
+      let rep = Reporter.create () in
+      Reporter.run_started rep ~total:3 ~jobs:1 ~grep:None ();
+      Reporter.test_finished rep { name = "home loads"; outcome = Passed; ms = 12.4; failure = None };
+      Reporter.run_finished rep summary
+    ]} *)
 
 (** The outcome of a single test. *)
 type outcome = Passed | Failed_assert | Errored | Timed_out

@@ -1,6 +1,14 @@
 (** A minimal outbound HTTPS client for the ACME flow (the hunt HTTP client is test-only — the
-    prod-lean guard forbids it in a server binary). One request per connection (Connection: close)
-    over the same tls-eio + x509 + ca-certs the server already links. *)
+    prod-lean guard forbids it in a server binary). One request per connection ([Connection: close])
+    over the same tls-eio + x509 + ca-certs the server already links.
+
+    {[
+      let resp =
+        Https_client.request ~net ~meth:"POST" ~headers:[ ("Content-Type", "application/jose+json") ]
+          ~body "https://acme-v02.api.letsencrypt.org/acme/new-order"
+      in
+      let nonce = Https_client.header_get resp.headers "Replay-Nonce"
+    ]} *)
 
 (** An HTTP response: status code, headers (as received, order-preserving), and body. *)
 type response = { status : int; headers : (string * string) list; body : string }

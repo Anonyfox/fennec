@@ -1,6 +1,17 @@
 (** Static file serving for a web root — disk (dev) or an embedded byte map
     (prod). Path-traversal-safe, with MIME, strong ETag + conditional 304, Range
-    (206/416), Cache-Control, and a symlink-escape (realpath) guard for disk mode. *)
+    (206/416), Cache-Control, and a symlink-escape (realpath) guard for disk mode.
+
+    Drop {!make} into an endpoint pipeline; it answers asset requests and declines
+    the rest (so pages / 404 follow). The app-facing wrapper is [Fennec.static]:
+    {[
+      let pipeline = [ Fennec.static ~name:"webroot" ~assets:Assets.lookup ]
+    ]}
+    which picks {!Dir} in dev and {!Embedded} in prod for you. Direct use:
+    {[
+      let paw = Static.make (Static.Dir "public") in
+      let prod = Static.make (Static.Embedded ("webroot", Assets.lookup))
+    ]} *)
 
 (** Re-exports {!Fennec_core.Http} for use in the static handler's type signatures. *)
 module H = Fennec_core.Http

@@ -4,7 +4,20 @@
 
     A launched instance gets its own data directory and TCP port, is waited on until it actually
     {e accepts connections} (not merely spawned), and is stopped gracefully (SIGTERM, then SIGKILL
-    after a grace period); ephemeral instances remove their data dir on stop. *)
+    after a grace period); ephemeral instances remove their data dir on stop.
+
+    {[
+      (* dev/test: own a real replica-set mongod (see cli/dev/mongo_rs.ml) *)
+      match Mongod.find () with
+      | None -> prerr_endline (Mongod.install_hint ())
+      | Some _ ->
+          let t = Mongod.start ?port ?dbpath ~replset:"rs0" () in
+          Printf.printf "mongod ready at %s\n" (Mongod.uri t);
+          Fun.protect ~finally:(fun () -> Mongod.stop t) (fun () -> run_against t)
+
+      (* a test wants a throwaway instance, cleaned up even on failure *)
+      let () = Mongod.with_ephemeral (fun t -> assert (Mongod.port t > 0))
+    ]} *)
 
 (** A running, supervised mongod instance. *)
 type t

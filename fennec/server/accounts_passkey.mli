@@ -3,7 +3,18 @@
     This module owns the Fennec-native WebAuthn server primitive: registration/assertion challenge
     state, client-data checks, authenticator-data parsing, COSE ES256 public-key extraction,
     signature verification, sign-counter policy, and typed credential facts for persistence. It does
-    not choose users, persist credentials, merge identities, or issue Accounts session tokens. *)
+    not choose users, persist credentials, merge identities, or issue Accounts session tokens.
+
+    {[
+      let t = Accounts_passkey.make ~challenge in
+      let rp = Result.get_ok (Accounts_passkey.relying_party ~id:"app.example" ~name:"Acme" ()) in
+      let u = Result.get_ok (Accounts_passkey.user ~id:"user-1" ~handle ~name:"ada" ()) in
+      match Accounts_passkey.begin_registration t rp u with
+      | Ok reg ->
+          (* send reg.challenge to the browser; later verify the response *)
+          Accounts_passkey.finish_registration t rp response ~token:reg.token ~user_id:"user-1"
+      | Error e -> Error e
+    ]} *)
 
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity

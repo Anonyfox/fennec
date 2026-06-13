@@ -1,7 +1,15 @@
 (** Deterministic single-node replica-set lifecycle — what makes change streams "just work" locally.
     Launches [mongod --replSet], waits until it answers, initiates the set if never initiated, then
     waits until the node is PRIMARY. Every step polls an explicit condition with a bounded timeout
-    (no fixed sleeps); the config uses [127.0.0.1:<port>], never a hostname. *)
+    (no fixed sleeps); the config uses [127.0.0.1:<port>], never a hostname.
+
+    {[
+      (* A hermetic throwaway replica set for a test — primary on a free port, wiped on exit. *)
+      Eio_main.run @@ fun env ->
+      with_ephemeral ~env (fun srv ->
+          let coll = Collection.create (client srv) ~db:"test" ~name:"items" in
+          ignore (Collection.insert_one coll (Bson.doc [ ("v", Bson.int 1) ])))
+    ]} *)
 
 (** A managed (or adopted) mongod. *)
 type t

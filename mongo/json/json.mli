@@ -1,6 +1,11 @@
 (** A tiny, pure JSON value + parser + serializer — Stdlib only, so it compiles identically to
     native and JavaScript. UTF-8 passes through verbatim on output; [\u] escapes (including surrogate
-    pairs) decode on input. {!Bson_json} (the extended-JSON bridge to the C driver) is built on it. *)
+    pairs) decode on input. {!Bson_json} (the extended-JSON bridge to the C driver) is built on it.
+
+    {[
+      let j = parse {|{"name": "ada", "age": 36}|} in
+      Option.bind (member "name" j) to_string_opt  (* Some "ada" *)
+    ]} *)
 
 (** A JSON value. *)
 type t =

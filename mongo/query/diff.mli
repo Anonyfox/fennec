@@ -1,5 +1,16 @@
 (** Pure document helpers + the diff/LCS machinery shared by the observe engines. No I/O — cross-
-    compiles to JavaScript unchanged. *)
+    compiles to JavaScript unchanged.
+
+    {[
+      (* how an observeChanges engine classifies one mutation and emits the right callback *)
+      match Diff.transition ~was ~now with
+      | Diff.Entered -> added id (Diff.fields_without_id new_doc)
+      | Diff.Left -> removed id
+      | Diff.Stayed ->
+          let changed_fields, cleared = Diff.diff_fields ~old_doc ~new_doc in
+          if changed_fields <> [] || cleared <> [] then changed id changed_fields cleared
+      | Diff.Outside -> ()
+    ]} *)
 
 (** The field list of a [Document] (or [[]] for any non-document). *)
 val kvs_of : Bson.t -> (string * Bson.t) list

@@ -6,7 +6,7 @@
 
     {[ (* shared file — server and client reference this ONE value (no drift) *)
        let add_task = Method.define "addTask" ~args:(Codec.a1 Codec.string) ~result:Codec.string
-       (* server: *) let () = RData.handle add_task (fun _inv title -> T.insert tasks { Task.id=""; title })
+       (* server: *) let () = Pulse.method_ add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title })
        (* client: *) let _ = Pulse.call add_task "buy milk" ]}
 *)
 

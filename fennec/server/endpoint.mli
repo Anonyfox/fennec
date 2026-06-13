@@ -10,7 +10,15 @@
     business middleware in the matched phase. Use the always phase for infrastructure that really
     must see every request, such as logging, request ids, static files, and method override.
 
-    For simple apps (no matched-phase paws) behaviour is identical to a flat pipeline. *)
+    For simple apps (no matched-phase paws) behaviour is identical to a flat pipeline.
+
+    {[
+      Endpoint.make ~name:"admin" ~hosts:[ "admin.example.com" ] ()
+      |> Endpoint.pipe [ Paw.Logger.make (); Paw.Security_headers.make () ]
+      |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true}|})
+      |> Endpoint.app ssr_handler
+      |> Endpoint.pipe_matched [ Paw.Basic_auth.make ~username ~password () ]
+    ]} *)
 
 (** Re-exports {!Fennec_paw.Paw} for convenience in endpoint definitions. *)
 module Paw = Fennec_paw.Paw

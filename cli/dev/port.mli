@@ -1,5 +1,10 @@
-(* Who is listening on a TCP port, and whether a holder is our own dev server. Used by the
-   supervisor to self-heal a held dev port: reclaim a leftover of OUR server, name a foreign one. *)
+(** Who is listening on a TCP port, and whether a holder is our own dev server. Used by the
+    {!Supervisor} to self-heal a held dev port: reclaim a leftover of OUR server, name a foreign
+    one.
+
+    The reclaim path SIGKILLs, so {!is_ours} — the predicate that gates the kill — deliberately
+    errs toward NOT-ours: the cost of a miss is a leftover we name instead of auto-killing, vs. the
+    cost of a false positive being SIGKILLing the wrong process. *)
 
 (** [(pid, full command)] of every process LISTENING on [port] right now (via lsof + ps); [] if
     lsof is absent. *)

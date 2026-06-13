@@ -10,7 +10,20 @@
     {!Bson.equal}, which does treat [Int]/[Int64]/[Float] as numerically equal); and a scalar
     predicate against an {e array} field matches if the array as a whole or any element matches (so
     [{tags:"a"}] matches a document whose [tags] is [["a","b"]]). [$type] additionally understands
-    the ["number"] umbrella, and [$exists] treats [false]/[0]/[null] as "must not exist". *)
+    the ["number"] umbrella, and [$exists] treats [false]/[0]/[null] as "must not exist".
+
+    {[
+      (* how Minimongo's [find] filters a collection (see {!Minimongo.matched}) *)
+      let selector =
+        Bson.Document
+          [ ("age", Document [ ("$gte", Int 18) ]);
+            ("tags", String "vip");                  (* matches a tags array too *)
+            ("$or", Array [ Document [ ("vip", Bool true) ];
+                            Document [ ("score", Document [ ("$gt", Int 90) ]) ] ]) ]
+      in
+      let hits = List.filter (Matcher.doc_matches selector) docs in
+      let city = Matcher.get_path doc "address.city"   (* dotted-path access *)
+    ]} *)
 
 (** [get_path d "a.b.c"] walks nested documents by dotted path; [None] if any segment is missing or
     an intermediate value is not a document. *)

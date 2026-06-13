@@ -1,7 +1,19 @@
 (** The dev-time CLI↔server protocol — environment variable names, stderr line prefixes, the
     port-conflict exit code, and typed (de)serializers — defined ONCE here so the CLI supervisor
     and the app server reference the same authoritative wire, never duplicated literals that can
-    silently drift. See [dev_proto.ml] for the full rationale. *)
+    silently drift. See [dev_proto.ml] for the full rationale.
+
+    {[
+      (* server side: report bound URLs, then classify on exit *)
+      Printf.eprintf "%s\n%!" (Dev_proto.urls_line [ ("app", "http://localhost:3000") ]);
+
+      (* CLI side: parse a line the server printed to stderr *)
+      match Dev_proto.parse_urls_line line with
+      | Some named -> ignore named                       (* render the dev banner *)
+      | None -> (match Dev_proto.parse_port_busy line with
+                 | Some port -> ignore port              (* reclaim the port holder *)
+                 | None -> ())
+    ]} *)
 
 (** {1 Environment the CLI sets for the server} *)
 

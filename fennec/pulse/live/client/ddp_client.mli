@@ -101,8 +101,8 @@ val call_m : t -> ('a, 'r) Method.t -> 'a -> ('r, string * string) result option
 val find_c :
   t -> 'a Def.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
 
-(** The PROJECTED typed live query: [find_p client Task.collection [%fields title; done_] ()] yields
-    [< title : string; done_ : bool > array] — Meteor's [{ fields: {…} }], type-checked. The
+(** The PROJECTED typed live query: [find_p client Task.collection [%fields title; body] ()] yields
+    [< title : string; body : string > array] — Meteor's [{ fields: {…} }], type-checked. The
     projected object exposes ONLY the chosen fields (a projected-away field is a compile error, not
     [undefined]); the server ships only those fields too. *)
 val find_p :
@@ -117,7 +117,7 @@ val default : unit -> t
     the live cache — live in the browser, SSR-seeded server-side):
     {[ open Task
        module Tasks = Ddp_client.Collection (Task)
-       let open_ = Tasks.find ~where:[%q status = "doing"] ~sort:[%sort priority desc] () ]} *)
+       let titled = Tasks.find ~where:[%q title <> ""] ~sort:[%sort title asc] () ]} *)
 module Collection (M : sig
   type doc
   val collection : doc Def.t

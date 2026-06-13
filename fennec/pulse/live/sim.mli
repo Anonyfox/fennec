@@ -3,7 +3,12 @@
     removes tombstone via {!Merge_store.sim_hide}, and the whole simulation rolls back to server
     truth with one [sub_stopped] when the method's [updated] arrives. Insert ids mint from the
     call's [seed] per collection, matching the server's seeded minting (STRING-id collections
-    converge; a MONGO ObjectId insert swaps once at reveal). Pure — simulations unit-test natively. *)
+    converge; a MONGO ObjectId insert swaps once at reveal). Pure — simulations unit-test natively.
+
+    {[ (* the DDP client runs a method's stub against the merge store as an optimistic sim *)
+       let w = Sim.writes (Live.store t.live) ~sim:simid ~seed in
+       let _id = Sim.insert_t w Task.collection { id = ""; title = "buy milk"; body = "" } in
+       ignore _id   (* server's [updated] later rolls the sim back to truth via [sub_stopped] *) ]} *)
 
 (** Typed optimistic insert for stubs: validates with the SAME checks the server enforces (instant
     offline form errors, zero duplicated logic); an invalid value raises — contained by the

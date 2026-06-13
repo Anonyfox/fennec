@@ -1,6 +1,6 @@
-(* Bounded-concurrency map — the one concurrency primitive the orchestrator needs, kept
-   separate so it is unit-testable (correctness, input-order, and the concurrency bound)
-   without spawning real servers. *)
+(** Bounded-concurrency map — the one concurrency primitive the orchestrator needs, kept
+    separate so it is unit-testable (correctness, input-order, and the concurrency bound)
+    without spawning real servers. *)
 
 (** [map ~jobs f xs] applies [f] to each element with at most [jobs] OS threads in flight, and
     returns the results in input order. [jobs <= 1] (or a list of 0/1 elements) runs inline on

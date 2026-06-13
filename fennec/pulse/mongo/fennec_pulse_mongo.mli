@@ -7,7 +7,16 @@
     calling fiber. {!observe_changes} uses real CHANGE STREAMS (via {!Fennec_mongo_driver.Live} — one
     stream per collection, fanned out to per-query views), not polling — so it needs a replica set
     (the managed mongod is launched as one by {!Fennec_mongo_driver.Server}; a production cluster
-    already is one). Native only. *)
+    already is one). Native only.
+
+    Apps rarely name this module: the {!Fennec_pulse_app} facade wraps the reactive stack over
+    {!Dynamic} and consumes the global Mongo URL for you. The raw seam, if you build it by hand:
+
+    {[ module R = Fennec_pulse.Reactive.Make (Fennec_pulse_mongo.Dynamic)
+
+       (* inside Fennec.serve ~on_start, where [sw] drives the change-stream daemons *)
+       let backend = Fennec_pulse_mongo.Dynamic.from_env ~sw ~db:"app" ~name:"tasks" ()
+       let tasks = R.Collection.create ~name:"tasks" backend ]} *)
 
 (** Whether the native driver was compiled in. [false] on a build where libmongoc was unavailable
     (the FFI degraded to stubs); then {!connect} and every op raise [Failure]. Most apps should NOT

@@ -4,7 +4,11 @@
     hints; arbitrary checks are app-side-only by design. Objects deliberately leave
     [additionalProperties] unset (legacy fields keep docs writable — evolution tolerance); an [opt]
     field is simply absent from [required]. Pure rendering — installation rides the backend boot
-    path next to index-ensure. *)
+    path next to index-ensure.
+
+    {[ let validator = Schema.validator Task.codec
+       (* { "$jsonSchema": { bsonType: "object", required: [...], properties: {...} } } *)
+       (* hand to mongod's create/collMod — minimongo enforces the same rule in-engine *) ]} *)
 
 (** The schema document for a reflected shape. *)
 val json_schema : Codec.view -> Bson.t

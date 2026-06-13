@@ -2,7 +2,16 @@
     the deployment: a writable volume (VM / docker volume / k8s PVC) → {!file}; an ephemeral or
     multi-replica deployment → an external shared store (implement {!t} over a k8s Secret / S3 /
     Redis / a DB) so a restart doesn't re-issue and replicas share one cert. The framework ships
-    {!file} (default) + {!memory} and exposes the seam. *)
+    {!file} (default) + {!memory} and exposes the seam.
+
+    {[
+      let store = Cert_store.file ~dir:"/var/lib/fennec/acme" in
+      store.put "account.pem" pem;
+      let granted =
+        store.with_lease "issue:managed" (fun () -> (* order the certificate *) ())
+      in
+      match store.get "managed.cert.pem" with Some cert -> () | None -> ()
+    ]} *)
 
 (** A cert store. Keys are opaque namespaced strings; values are PEM/JSON text. *)
 type t = {
