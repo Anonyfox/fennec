@@ -592,6 +592,7 @@ let publish ~name (_ : Bson.t list -> (string * Bson.t list) list) = ignore name
 
 let find t = Live.find t.live
 let find_c t = Live.find_c t.live
+let find_p t def = Live.find_p t.live (Def.name def)
 let aggregate t = Live.aggregate t.live
 
 (* offline affordances: the connection state and the buffered-write count, as Fur signals *)

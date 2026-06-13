@@ -101,6 +101,13 @@ val call_m : t -> ('a, 'r) Method.t -> 'a -> ('r, string * string) result option
 val find_c :
   t -> 'a Def.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
 
+(** The PROJECTED typed live query: [find_p client Task.collection [%fields title; done_] ()] yields
+    [< title : string; done_ : bool > array] — Meteor's [{ fields: {…} }], type-checked. The
+    projected object exposes ONLY the chosen fields (a projected-away field is a compile error, not
+    [undefined]); the server ships only those fields too. *)
+val find_p :
+  t -> 'a Def.t -> 'o Proj.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes as the server pushes changes. Read it with {!Fur.get} inside a component. *)
 val find :

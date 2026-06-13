@@ -31,8 +31,15 @@ module Make (R : Reactive.REACTIVE) : sig
   (** Validating insert: raises {!Invalid} rather than writing a bad document. Returns the [_id]. *)
   val insert : 'a t -> 'a -> string
 
-  (** The substrate's reactive cursor (sorted/windowed) — plugs into [publish] unchanged. *)
-  val cursor : 'a t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> R.Collection.cursor
+  (** The substrate's reactive cursor (sorted/windowed) — plugs into [publish] unchanged.
+      [?project] trims to a {!Proj.t}'s fields on the wire (the publication ships only those). *)
+  val cursor :
+    'a t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> ?project:_ Proj.t -> unit -> R.Collection.cursor
+
+  (** A PROJECTED read: only the projection's fields cross the boundary, decoded into its object
+      type (the full record is never built); malformed rows skipped. *)
+  val find_p :
+    'a t -> 'o Proj.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'o list
 
   (** Typed read; documents that fail decode are SKIPPED (the malformed-doc policy). *)
   val find : 'a t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'a list

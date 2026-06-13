@@ -52,4 +52,22 @@ let%test "golden: [@check] enforces (same battery as the server); view reflectio
   && Def.name collection = "gtasks"
   && B.equal (Def.validator collection) (Schema.validator twin)
 
+(* ── projections: [%fields …] — Meteor's { fields: {…} } made a type-safe object ── *)
+let%test "projection: [%fields] yields the wire doc AND an object of exactly those fields" =
+  let card = [%fields title; done_] in
+  (* the Mongo projection document — Meteor's { title: 1, done: 1 } *)
+  (match Proj.project_doc card with
+  | B.Document [ ("title", B.Int 1); ("done", B.Int 1) ] -> true
+  | _ -> false)
+  &&
+  (* decode a full stored doc into the PROJECTED object — only title/done survive, typed *)
+  let stored = B.doc [ ("_id", B.str "z"); ("title", B.str "Hello"); ("done", B.Bool true); ("remark", B.str "x"); ("tags", B.array []) ] in
+  match Proj.decode card stored with
+  | Ok o -> o#title = "Hello" && o#done_ = true (* o#remark would be a COMPILE error: no method *)
+  | Error _ -> false
+
+let%test "projection: a missing projected field surfaces as a decode error (skip-policy fodder)" =
+  let card = [%fields title; done_] in
+  match Proj.decode card (B.doc [ ("title", B.str "only") ]) with Error _ -> true | Ok _ -> false
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -41,8 +41,15 @@ module Make (R : Reactive.REACTIVE) = struct
   (* [~where] is a LIST of clauses — Q.[ eq a 1; gt b 2 ] reads as AND (Q.all) *)
 let sel where = match Q.all where with [] -> None | q -> Some (Q.to_bson q)
 
-  let cursor t ?(where = []) ?sort ?skip ?limit () =
-    R.Collection.find t.coll ?selector:(sel where) ?sort ?skip ?limit ()
+  let cursor t ?(where = []) ?sort ?skip ?limit ?project () =
+    let fields = Option.map Proj.project_doc project in
+    R.Collection.find t.coll ?selector:(sel where) ?sort ?skip ?limit ?fields ()
+
+  (* a PROJECTED read: only the projection's fields cross the boundary, decoded into its object
+     type; malformed rows skipped (the same policy as [find]) *)
+  let find_p t (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit () : 'o list =
+    R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ~project:p ())
+    |> List.filter_map (fun d -> match Proj.decode p d with Ok v -> Some v | Error _ -> None)
 
   let find t ?(where = []) ?sort ?skip ?limit () : 'a list =
     R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ())

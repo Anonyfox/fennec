@@ -477,6 +477,16 @@ let field_elem_enc (f : 'a list field) (v : 'a) : Bson.t =
 
 let field_validate f v = match check_ty f.fld_ty v with [] -> Ok () | es -> Error (List.map (at f.fld_name) es)
 
+(* decode ONE field out of a document (raw decode + the field's checks) — the projection primitive:
+   reading a projected slice without ever constructing the full record *)
+let field_get (f : 'a field) (doc : Bson.t) : ('a, error list) result =
+  match doc with
+  | Bson.Document kvs -> (
+      match dec_field f kvs with
+      | Error es -> Error es
+      | Ok v -> ( match check_ty f.fld_ty v with [] -> Ok v | es -> Error (List.map (at f.fld_name) es)))
+  | _ -> Error [ { path = [ f.fld_name ]; msg = "expected document" } ]
+
 (* ---- variants (tagged unions over a discriminator field) ----------------------------- *)
 
 type 'r vcase = 'r case

@@ -9,8 +9,10 @@
   fennec.fur.html
   site_store
   fennec.pulse.live.client
-  fennec-mongo.bson)
+  fennec-mongo.bson
+  fennec.pulse.codec
+  fennec.pulse.collection)
  (preprocess
-  (pps fennec.fur.ppx))
+  (pps fennec.fur.ppx fennec.pulse.collection.ppx))
  (flags
   (:standard -w -a -open Fur)))

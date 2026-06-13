@@ -66,7 +66,7 @@ let setup_realtime ~sw =
   (* the TYPED collection: the shared declaration (Task.collection) bound to this instance — writes
      validate (an invalid value cannot reach the database), reads decode with the skip policy *)
   let tasks = T.attach Task.collection backend in
-  List.iter (fun title -> ignore (T.insert tasks { Task.id = ""; title })) [ "Buy milk"; "Walk the dog" ];
+  List.iter (fun title -> ignore (T.insert tasks { Task.id = ""; title; body = "" })) [ "Buy milk"; "Walk the dog" ];
   RData.publish "tasks" (fun _params -> RData.Cursor (T.cursor tasks ()));
   (* SSR: hand the same docs to the SSR reactive so the first server-rendered paint already includes
      the tasks; the browser hydrates them flicker-free, then the live subscription re-confirms. *)
@@ -75,7 +75,7 @@ let setup_realtime ~sw =
   (* the TYPED method over the TYPED collection: handler and stub share the declarations, so a
      renamed field/method is a compile error in every file; a malformed call is a 400 before this
      handler runs, and an invalid document raises before it writes *)
-  RData.handle Site_methods.add_task (fun _inv title -> T.insert tasks { Task.id = ""; title })
+  RData.handle Site_methods.add_task (fun _inv title -> T.insert tasks { Task.id = ""; title; body = "" })
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)

@@ -108,3 +108,55 @@ let deriver =
                Location.raise_errorf
                  ~loc:(Expansion_context.Deriver.derived_item_loc ctxt)
                  "fennec.collection: the collection name is required — [@@deriving fennec_collection ~name:\"tasks\"]"))
+
+
+(* ---- the [%fields a; b; …] projection extension ---------------------------------------------
+   Expands, under the model's scope (so [Fields] resolves), to a Proj.t whose decoder builds an
+   object [< a : _; b : _ >] from [Fields.a]/[Fields.b] — existence + type pulled from the handles
+   (a non-model field is an unbound [Fields.x] error right here). Meteor's [{ a: 1, b: 1 }]. *)
+
+let rec idents_of (e : expression) : string list =
+  match e.pexp_desc with
+  | Pexp_ident { txt = Lident n; _ } -> [ n ]
+  | Pexp_sequence (a, b) -> idents_of a @ idents_of b
+  | Pexp_construct ({ txt = Lident "()"; _ }, None) -> []
+  | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%fields: expected a list of field names (e.g. [%%fields title; done_])"
+
+let fields_expander =
+  Extension.declare "fields" Extension.Context.expression
+    Ast_pattern.(single_expr_payload __)
+    (fun ~loc ~path:_ payload ->
+      let module B = Ast_builder.Default in
+      let names = idents_of payload in
+      if names = [] then Location.raise_errorf ~loc "%%fields: at least one field is required";
+      let fld n = B.pexp_ident ~loc { txt = Ldot (Lident "Fields", n); loc } in
+      (* the wire projection doc: [(field_name Fields.a, 1); …] *)
+      let fields_list =
+        B.elist ~loc
+          (List.map (fun n -> [%expr (Codec.field_name [%e fld n], 1)]) names)
+      in
+      (* the object: object method a = a method b = b end *)
+      let obj =
+        let meths =
+          List.map
+            (fun n ->
+              B.pcf_method ~loc
+                ({ txt = n; loc }, Public, Cfk_concrete (Fresh, B.evar ~loc n)))
+            names
+        in
+        B.pexp_object ~loc (B.class_structure ~self:(B.ppat_any ~loc) ~fields:meths)
+      in
+      (* nest: match Codec.field_get Fields.a __d with Error e -> Error e | Ok a -> … Ok obj *)
+      let decode_body =
+        List.fold_right
+          (fun n acc ->
+            [%expr
+              match Codec.field_get [%e fld n] __d with
+              | Error __e -> Error __e
+              | Ok [%p B.pvar ~loc n] -> [%e acc]])
+          names
+          [%expr Ok [%e obj]]
+      in
+      [%expr Proj.v ~fields:[%e fields_list] ~decode:(fun __d -> [%e decode_body])])
+
+let () = Driver.register_transformation "fennec_fields" ~extensions:[ fields_expander ]

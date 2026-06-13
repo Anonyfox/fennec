@@ -153,6 +153,10 @@ val field_elem_enc : 'a list field -> 'a -> Bson.t
 (** Run the field's own checks against a value (errors carry the field name). *)
 val field_validate : 'a field -> 'a -> (unit, error list) result
 
+(** Decode ONE field out of a document (raw decode + the field's checks) — the projection
+    primitive: read a projected slice without ever constructing the full record. *)
+val field_get : 'a field -> Bson.t -> ('a, error list) result
+
 type ('r, 'k) builder
 
 val record : 'k -> ('r, 'k) builder

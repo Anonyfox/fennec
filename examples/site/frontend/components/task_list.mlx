@@ -21,7 +21,9 @@ let make () =
      returns a [ready] signal — false until the server confirms the subscription, so we render a
      loading line until the live data is present. *)
   let ready = Ddp_client.use_subscribe client ~name:"tasks" () in
-  let tasks = Ddp_client.find_c client Task.collection () in
+  (* PROJECTED live read — ships/types ONLY title (Meteor's { fields: { title: 1 } }).
+     [t#title] works; [t#body] would be a COMPILE error — the field isn't on the projection. *)
+  let tasks = Ddp_client.find_p client Task.collection Task.([%fields title]) () in
   let add_task () =
     incr added;
     (* the TYPED call through the shared declaration — a wrong argument type is a compile error *)
@@ -32,7 +34,7 @@ let make () =
       <h2>"Live tasks"</h2>
       (if get ready then
          <ul className="task-items">
-           (frag (each (Array.to_list (get tasks)) (fun doc -> <li key=doc.Task.id>(node doc.Task.title)</li>)))
+           (frag (each (Array.to_list (get tasks)) (fun t -> <li>(node t#title)</li>)))
          </ul>
        else <p className="loading">"Loading tasks…"</p>)
       <button className="add-task" onClick=(add_task ())>"Add task"</button>

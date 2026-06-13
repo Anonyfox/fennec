@@ -86,6 +86,31 @@ let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur
   Fur.on_cleanup stop;
   result
 
+(* the PROJECTED typed live read: the projection's object type, decoded from the cache slice;
+   malformed rows skipped + warned once (same policy as find_c). [name] is the collection. *)
+let find_p t (name : string) (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit () : 'o array Fur.signal =
+  let selector = match Q.all where with [] -> None | q -> Some (Q.to_bson q) in
+  let v = version_signal t name in
+  let snap () =
+    Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
+    |> Array.to_list
+    |> List.filter_map (fun d ->
+           match Proj.decode p d with
+           | Ok x -> Some x
+           | Error es ->
+               let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in
+               if not (Hashtbl.mem _warned key) then begin
+                 Hashtbl.replace _warned key ();
+                 prerr_endline ("fennec/typed: skipping malformed projection " ^ key ^ " — " ^ Codec.errors_to_string es)
+               end;
+               None)
+    |> Array.of_list
+  in
+  let result = Fur.signal [||] in
+  let stop = Fur.watch (fun () -> ignore (Fur.get v); Fur.set result (snap ())) in
+  Fur.on_cleanup stop;
+  result
+
 (* the foreign collections a pipeline reads via $lookup.from / $unionWith — so [aggregate]'s signal
    recomputes when one of THEM changes too, not just the primary collection (else a join goes stale) *)
 let foreign_collections (pipeline : Bson.t list) : string list =

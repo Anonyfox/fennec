@@ -262,6 +262,29 @@ the handler; mongod itself rejects a foreign write with a bad zip or an unknown 
 `Listing.show v` pretty-prints the whole nested thing for free. Matching on `price` is exhaustive:
 add a `Subscription` case and the compiler lists every site that must handle it.
 
+## Projections — Meteor's `{ fields: {…} }`, made a type-safe object (BUILT)
+
+The gap projections normally open — "the result is the full type but half its fields are absent →
+`undefined` in JS" — is closed with the one OCaml product that is structural, inferred, and needs
+no declaration: the **object**. `[%fields title; done_]` (the ppx, under the model's scope) expands
+to a `Proj.t` carrying, from one source: the Mongo projection document `{title:1, done:1}` (the
+wire/cursor trims by it) AND a decoder that builds `object method title = … method done_ = … end`.
+
+```ocaml
+let cards = Ddp_client.find_p client Task.collection Task.([%fields title]) () in
+each (Fur.get cards) (fun t -> <li>(node t#title)</li>)   (* t#body → COMPILE ERROR, not undefined *)
+```
+
+The result type is the inferred `< title : string > array` — the full record is NEVER constructed
+on this path, so a projected-away field is *unmentionable*. A field not on the model is an unbound
+`Fields.x` (compile error) right at the projection. The wire doc and the object decoder come from
+the SAME `Fields` handles, so what ships, what's cached, and what's typed cannot drift. Server-side
+`T.cursor ~project` / `T.find_p` trim identically. The tradeoff, stated honestly: projected access
+is `t#title` (object method) not `t.title`, and object types print verbosely in errors — confined
+to projected reads; full-document reads stay plain records. A shared/named projection is just a
+view-record (a second small model over the same collection); `[%fields]` is the zero-definition
+inline path.
+
 ## Taste decisions (each one a Meteor scar avoided)
 
 - **`Model` is the recommended path; `Collection` remains the dynamic substrate** and the escape

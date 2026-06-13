@@ -30,6 +30,11 @@ val set_scheduler : ((unit -> unit) -> unit) -> unit
 val find_c :
   t -> 'a Def.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'a array Fur.signal
 
+(** The PROJECTED typed live read — the projection's inferred object type, decoded from the cache
+    slice (malformed rows skipped, warned once). [name] is the collection (use [Def.name def]). *)
+val find_p :
+  t -> string -> 'o Proj.t -> ?where:Q.t list -> ?sort:Bson.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;
     the underlying watch is torn down on the component's cleanup.
