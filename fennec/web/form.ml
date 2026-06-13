@@ -95,10 +95,17 @@ let parse_assoc (c : 'a Codec.t) (data : (string * string) list) : ('a, Codec.er
 type source = Body | Query
 
 (* [parse codec conn] parses the request body (a POSTed form) — or the query string with
-   [~from:Query] — into [codec]'s type. The everyday call inside a [create]/[update] handler. *)
-let parse ?(from = Body) (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
-  let data = match from with Body -> Conn.body_params conn | Query -> Conn.query_params conn in
-  parse_assoc c data
+   [~from:Query] — into [codec]'s type. The everyday call inside a [create]/[update] handler.
+
+   [~inject] supplies server-controlled fields (the id, owner, timestamps) that the form must NOT
+   carry — they OVERRIDE any value a client tries to submit for the same key (mass-assignment
+   safety: the form "omits" them, the server fills them). [~ignore] drops named keys from the user
+   input entirely (block fields a client may never set even when no server value is injected). *)
+let parse ?(from = Body) ?(inject = []) ?(ignore = []) (c : 'a Codec.t) (conn : Conn.t) :
+    ('a, Codec.error list) result =
+  let body = match from with Body -> Conn.body_params conn | Query -> Conn.query_params conn in
+  let body = List.filter (fun (k, _) -> (not (List.mem k ignore)) && not (List.mem_assoc k inject)) body in
+  parse_assoc c (inject @ body)
 
 (* the error messages attached to ONE field (by wire name) — drive inline form feedback *)
 let field_errors (f : _ Codec.field) (errs : Codec.error list) : string list =
@@ -387,3 +394,16 @@ let%test "values_of encodes a model into form-input strings" =
   let v = values_of signup_codec { email = "a@b"; age = 7; tags = [ "x"; "y" ]; subscribe = true } in
   List.assoc "email" v = "a@b" && List.assoc "age" v = "7" && List.assoc "subscribe" v = "on"
   && List.filter (fun (k, _) -> k = "tags") v = [ ("tags", "x"); ("tags", "y") ]
+
+let%test "parse ~inject overrides a client-submitted value (mass-assignment safety)" =
+  let body = "email=a@b.com&age=30&subscribe=on&owner=attacker" in
+  let conn =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/x"
+         ~headers:[ ("content-type", "application/x-www-form-urlencoded") ]
+         ~body:(body ^ "&age=999") ())
+  in
+  (* the client also tries to set age=999; the injected age wins *)
+  match parse signup_codec conn ~inject:[ ("age", "21") ] ~ignore:[ "owner" ] with
+  | Ok s -> s.age = 21
+  | Error _ -> false

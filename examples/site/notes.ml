@@ -108,7 +108,7 @@ let new_ c = View.document c (form_view ~conn:c ~action:"/notes" ~errors:[] ())
    per-field errors on failure (422) *)
 let create c =
   let id = next_id () in
-  match Form.parse_assoc codec (("_id", id) :: Conn.body_params c) with
+  match Form.parse codec c ~inject:[ ("_id", id) ] with
   | Ok n -> put n; Conn.redirect (set_flash c "Note created.") ("/notes/" ^ id)
   | Error errs -> View.document ~status:422 c (form_view ~conn:c ~action:"/notes" ~errors:errs ())
 
@@ -120,7 +120,7 @@ let edit c =
 let update c =
   match Action.path c "id" with
   | Some id when find id <> None -> (
-      match Form.parse_assoc codec (("_id", id) :: Conn.body_params c) with
+      match Form.parse codec c ~inject:[ ("_id", id) ] with
       | Ok n -> put n; Conn.redirect (set_flash c "Note updated.") ("/notes/" ^ id)
       | Error errs -> View.document ~status:422 c (form_view ~conn:c ~action:("/notes/" ^ id) ~override:"PUT" ~errors:errs ()))
   | _ -> not_found c

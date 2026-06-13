@@ -19,11 +19,21 @@ module Conn = Fennec_paw.Conn
     multipart — the default) or the [Query] string (a GET filter/search form). *)
 type source = Body | Query
 
-(** [parse ?from codec conn] coerces the submitted pairs into [codec]'s type and validates them.
-    Repeated keys feed a list field; an absent checkbox reads as [false]; an absent non-bool field
-    defers to the codec's own required/optional/default rule. A coercion failure (e.g. ["abc"] for an
-    int) is reported per-field and its redundant "missing" decode error is suppressed. *)
-val parse : ?from:source -> 'a Codec.t -> Conn.t -> ('a, Codec.error list) result
+(** [parse ?from ?inject ?ignore codec conn] coerces the submitted pairs into [codec]'s type and
+    validates them. Repeated keys feed a list field; an absent checkbox reads as [false]; an absent
+    non-bool field defers to the codec's own required/optional/default rule. A coercion failure (e.g.
+    ["abc"] for an int) is reported per-field and its redundant "missing" decode error is suppressed.
+
+    [~inject] supplies server-controlled fields (id, owner, timestamps) the form must not carry — they
+    OVERRIDE any client-submitted value for the same key (mass-assignment safety). [~ignore] drops
+    named keys from the user input entirely. *)
+val parse :
+  ?from:source ->
+  ?inject:(string * string) list ->
+  ?ignore:string list ->
+  'a Codec.t ->
+  Conn.t ->
+  ('a, Codec.error list) result
 
 (** {!parse} over an explicit assoc list — the testable core (no {!Conn}). *)
 val parse_assoc : 'a Codec.t -> (string * string) list -> ('a, Codec.error list) result
