@@ -1269,7 +1269,11 @@ let unseal_mfa_secret t sealed =
         Some (xor_with_stream ~key:(seal_key t) ~nonce cipher)
       else None
     | _ -> None)
-  | _ -> Some sealed
+  (* FAIL CLOSED on any non-sealed value. A TOTP secret is ALWAYS written through [seal_mfa_secret]
+     (keyed by [t.secret]), so a stored value that is not a valid v1 seal is either tampered or
+     foreign — trusting it as plaintext would let mere store-write access plant a known TOTP secret,
+     defeating the seal's whole purpose (forging a seal requires [t.secret]). *)
+  | _ -> None
 
 let enroll_totp t ?issuer ?account ?label uid =
   Result.bind (find_required_user t uid) (fun _ ->
@@ -4987,6 +4991,20 @@ let test_hasher =
     }
 
 let test_accounts () = make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:test_hasher ()
+
+let%test "mfa seal round-trips; a non-sealed or tampered secret fails closed (no plaintext trust)" =
+  let t = test_accounts () in
+  let sealed = seal_mfa_secret t "S3CRET-totp" in
+  let roundtrips = unseal_mfa_secret t sealed = Some "S3CRET-totp" in
+  (* a raw, never-sealed value is REJECTED rather than trusted as plaintext *)
+  let raw_rejected = unseal_mfa_secret t "S3CRET-totp" = None in
+  (* a tampered MAC is rejected *)
+  let tamper_rejected =
+    match String.split_on_char '.' sealed with
+    | [ v; n; c; _mac ] -> unseal_mfa_secret t (String.concat "." [ v; n; c; "AAAA" ]) = None
+    | _ -> false
+  in
+  roundtrips && raw_rejected && tamper_rejected
 
 let test_verified_email_key raw =
   match Identity.email ~verified:true raw with
