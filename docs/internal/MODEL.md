@@ -69,11 +69,22 @@ One model module, by convention, shared (compiles into server and browser bundle
 OCaml record plus one deriving attribute (the official surface):
 
 ```ocaml
-(* store/task.ml — this is the WHOLE model (common case: ZERO field annotations) *)
+(* store/task.ml — the WHOLE model (common case: ZERO field annotations) *)
 type t = { id : string; title : string; done_ : bool; tags : string list }
-[@@fennec.collection "tasks"]
+[@@deriving collection ~name:"tasks"]
 
-let () = Collection.index collection [ Index.asc Fields.done_; Index.unique [ Index.asc Fields.title ] ]
+(* the client view (Meteor's collection object) — bind once, then `open Task; Tasks.find …` *)
+module Tasks = Pulse.Collection (struct type doc = t  let collection = collection end)
+```
+
+**The day-to-day surface is Meteor's, in plain OCaml** (no React/wire clutter):
+```ocaml
+open Task                                  (* fields in scope + the Tasks view *)
+Pulse.connect ~path:"/ddp" ()              (* the one page connection — Meteor.connect *)
+let ready = Pulse.subscribe ~name:"tasks" ()                         (* Meteor.subscribe *)
+let live  = Tasks.find ~where:[%q done_ = false] ~sort:[%sort title asc] ()  (* Tasks.find(...) *)
+let cards = Tasks.project [%fields title] ()                          (* find(_, {fields}) *)
+ignore (Pulse.call add_task "buy milk")                              (* Meteor.call *)
 ```
 
 Convention over annotation — the deriver applies the rules a reader would guess:
@@ -315,7 +326,7 @@ paths into embedded records** — all typed, all auto-trimming the wire (`_id:0`
   the result is the faithful nested object `< author : < name : _; email : _ > >` (`o#author#name`).
   A wrong field at ANY depth is an unbound-handle compile error; `o#author#nope` / `o#body` are
   unmentionable. This needs the embedded field typed `Author.t` where `Author` also derives
-  `fennec_collection` (the deriver emits `Codec.req "author" Author.codec` + a `Fields` submodule
+  `collection` (the deriver emits `Codec.req "author" Author.codec` + a `Fields` submodule
   re-export for navigation).
 
 Still NOT typed by `[%fields]` (raw escape covers them): **exclusion** (can't yield a precise type)
