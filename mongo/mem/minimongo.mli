@@ -1,8 +1,8 @@
 (** In-memory MongoDB — a [Minimongo.t] is one collection: the [_id]-keyed store, mutations,
     cursors, and a reactive observe engine. A mutation emits a change event (the "simulated change
     stream"); the observe engines recompute off those events with the pure matcher/diff core. No Eio,
-    no polling, no systhreads. Cross-compiles to JavaScript — and it is the default backend for dev
-    and test.
+    no polling, no systhreads. Cross-compiles to JavaScript — and it is the explicit
+    [MONGO_URL=:memory:] backend used by default for app tests and browser/client caches.
 
     This module is the {b front door}: build selectors, update documents, and projections as plain
     {!Bson.t} values and pass them to [find]/[update]/[aggregate]. The [Query.*] modules
@@ -51,6 +51,17 @@ type t
 (** [create ?gen_id ()] — a fresh empty collection. [gen_id] mints the [_id] for inserts that omit
     one (default: {!Query.Id.random_id}). *)
 val create : ?gen_id:(unit -> string) -> unit -> t
+
+(** Raised by [insert]/[update] when a UNIQUE index would be violated (the index name) — the
+    in-memory engine enforces uniqueness for dev/test parity with mongod. *)
+exception Unique_violation of string
+
+(** Declare an index by name + key fields. [unique] is enforced in-engine; non-unique is tracked
+    (for reconcile) but doesn't accelerate scans yet. *)
+val ensure_index : t -> name:string -> fields:string list -> unique:bool -> unit
+
+val drop_index : t -> name:string -> unit
+val index_names : t -> string list
 
 (** A live subscription handle; call [stop] to detach. *)
 type handle = { stop : unit -> unit }

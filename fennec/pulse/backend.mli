@@ -72,6 +72,16 @@ module type S = sig
       backend whose deltas arrive over an external stream (a real mongod) may run [k] immediately
       (best-effort, documented at the impl). *)
   val fence : collection -> (unit -> unit) -> unit
+
+  (** Declare an index ([keys] = the Mongo key spec, [unique] enforced). Idempotent by [name].
+      Native → mongod createIndex; Mini → unique enforcement + name tracking (dev/test parity). *)
+  val ensure_index : collection -> name:string -> keys:Bson.t -> unique:bool -> unit
+
+  (** Drop an index by name (idempotent). *)
+  val drop_index : collection -> name:string -> unit
+
+  (** Existing index names — the reconcile diff reads this (and only drops fennec-named orphans). *)
+  val index_names : collection -> string list
 end
 
 (** The in-memory minimongo backend — the default for dev and test. *)

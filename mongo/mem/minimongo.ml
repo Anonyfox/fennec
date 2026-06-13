@@ -42,10 +42,37 @@ type t = {
   mutable rorder : string list; (* ids newest-first (reverse insertion order); O(1) insert *)
   fan : change Fanout.t; (* the change stream: enqueued under [lock], delivered outside *)
   gen_id : unit -> string; (* must be pure/non-blocking: runs under [lock] *)
+  mutable indexes : (string * (string list * bool)) list; (* name -> (key fields, unique) *)
 }
 
 let create ?(gen_id = fun () -> Query.Id.random_id ()) () =
-  { lock = Mutex.create (); store = Hashtbl.create 64; rorder = []; fan = Fanout.create (); gen_id }
+  { lock = Mutex.create (); store = Hashtbl.create 64; rorder = []; fan = Fanout.create (); gen_id;
+    indexes = [] }
+
+(* ---- indexes (in-memory): name tracking for reconcile + UNIQUE enforcement for dev/test parity --
+   Non-unique indexes are tracked (so reconcile's orphan-drop works in-memory too) but don't
+   accelerate scans yet (a noted perf seam); unique indexes are ENFORCED on insert/update. *)
+exception Unique_violation of string
+
+let ensure_index t ~name ~fields ~unique =
+  t.indexes <- (name, (fields, unique)) :: List.remove_assoc name t.indexes
+let drop_index t ~name = t.indexes <- List.remove_assoc name t.indexes
+let index_names t = List.map fst t.indexes
+
+(* the key tuple a unique index reads from a doc (top-level fields) *)
+let key_of fields d = List.map (fun f -> get d f) fields
+
+(* call under [t.lock], BEFORE committing [d] (which will live under [self_id]) *)
+let check_unique_unlocked t ~self_id (d : doc) =
+  List.iter
+    (fun (name, (fields, unique)) ->
+      if unique then begin
+        let k = key_of fields d in
+        Hashtbl.iter
+          (fun id other -> if id <> self_id && key_of fields other = k then raise (Unique_violation name))
+          t.store
+      end)
+    t.indexes
 
 let with_lock m f =
   Mutex.lock m;
@@ -87,6 +114,7 @@ let ensure_id t (d : doc) : string * doc =
 (* commit an insert — call under [t.lock] *)
 let insert_unlocked t (d : doc) : string =
   let id, d = ensure_id t d in
+  check_unique_unlocked t ~self_id:id d;
   if not (Hashtbl.mem t.store id) then t.rorder <- id :: t.rorder;
   Hashtbl.replace t.store id d;
   Fanout.enqueue t.fan { op = Insert; id; new_doc = Some d; old_doc = None };
@@ -141,6 +169,7 @@ let update t ?(multi = false) ?(upsert = false) (selector : doc) (modifier : doc
                       | None, Some idv -> Document (("_id", idv) :: Query.Diff.kvs_of nw)
                       | _ -> nw
                     in
+                    check_unique_unlocked t ~self_id:id nw;
                     Hashtbl.replace t.store id nw;
                     incr n;
                     Fanout.enqueue t.fan { op = Update; id; new_doc = Some nw; old_doc = Some old })

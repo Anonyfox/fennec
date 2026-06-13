@@ -11,3 +11,11 @@ val indexes : 'a t -> Index.t list
 
 (** The mongod validator document derived from the shape ({!Schema.validator}). *)
 val validator : 'a t -> Bson.t
+
+(** [index collection [ … ]] declares the collection's indexes, co-located with the model:
+    [Def.index collection Index.[ unique [ asc Fields.email ]; asc Fields.team ]]. Reconciled at
+    boot by the runtime. *)
+val index : 'a t -> Index.t list -> unit
+
+(** Every declared index (those passed to {!v} plus those via {!index}). *)
+val all_indexes : 'a t -> Index.t list

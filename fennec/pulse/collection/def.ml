@@ -10,3 +10,9 @@ let name d = d.name
 let codec d = d.codec
 let indexes d = d.indexes
 let validator d = Schema.validator d.codec
+
+(* declare this collection's indexes (co-located with the model); registered for boot reconcile *)
+let index d ixs = Index.register d.name ixs
+
+(* all indexes for this collection: those on the Def plus any registered via [index] *)
+let all_indexes d = d.indexes @ Index.for_collection d.name

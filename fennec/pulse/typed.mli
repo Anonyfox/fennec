@@ -17,8 +17,10 @@ module Make (R : Reactive.REACTIVE) : sig
   (** A typed handle: the pure declaration bound to this instance's collection. *)
   type 'a t
 
-  (** Bind a declaration to this instance (boot-time). *)
-  val attach : 'a Def.t -> R.backend_collection -> 'a t
+  (** Bind a declaration to this instance (boot-time) AND reconcile its declared indexes against the
+      backend: create the missing, drop fennec-named orphans (idempotent; graceful — a failed build
+      is logged unless [~strict], which fails boot). *)
+  val attach : ?strict:bool -> 'a Def.t -> R.backend_collection -> 'a t
 
   (** The dynamic collection underneath — the escape hatch (aggregations, raw queries). *)
   val collection : 'a t -> R.Collection.t

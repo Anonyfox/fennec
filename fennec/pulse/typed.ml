@@ -17,8 +17,34 @@ module Make (R : Reactive.REACTIVE) = struct
 
   type 'a t = { def : 'a Def.t; coll : R.Collection.t }
 
-  (* bind the pure declaration to this instance (boot-time, next to publish) *)
-  let attach (def : 'a Def.t) backend : 'a t = { def; coll = R.Collection.create ~name:(Def.name def) backend }
+  (* RECONCILE the declared indexes against what the backend actually has — the lifecycle keystone
+     (Meteor never closed this loop): create the missing, DROP the fennec-named orphans (an index we
+     created for a since-removed declaration), never touch _id_ or a hand-made index. Idempotent;
+     graceful — a failed build (e.g. unique over duplicate data) is logged, not fatal, unless
+     [~strict]. Names encode the spec, so a changed declaration auto-migrates (old dropped, new made). *)
+  let reconcile_indexes ?(strict = false) (coll : R.Collection.t) (declared : Index.t list) =
+    let want = List.map (fun ix -> (Index.name ix, ix)) declared in
+    let have = R.Collection.index_names coll in
+    (* create the missing *)
+    List.iter
+      (fun (name, ix) ->
+        if not (List.mem name have) then
+          try R.Collection.ensure_index coll ~name ~keys:(Index.keys_bson ix) ~unique:(Index.is_unique ix)
+          with e ->
+            let msg = Printf.sprintf "fennec/index: could not build %s — %s" name (Printexc.to_string e) in
+            if strict then failwith msg else prerr_endline msg)
+      want;
+    (* drop the fennec-named orphans (declared elsewhere, removed here) *)
+    List.iter
+      (fun name -> if Index.is_fennec_name name && not (List.mem_assoc name want) then
+          try R.Collection.drop_index coll ~name with _ -> ())
+      have
+
+  (* bind the pure declaration to this instance (boot-time, next to publish) + reconcile its indexes *)
+  let attach ?strict (def : 'a Def.t) backend : 'a t =
+    let coll = R.Collection.create ~name:(Def.name def) backend in
+    reconcile_indexes ?strict coll (Def.all_indexes def);
+    { def; coll }
 
   let collection t = t.coll (* the dynamic escape hatch *)
   let def t = t.def

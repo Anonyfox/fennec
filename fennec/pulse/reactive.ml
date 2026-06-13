@@ -81,6 +81,12 @@ module type REACTIVE = sig
     val forget : string -> unit
     val insert : t -> doc -> string
 
+    (** Index ops on the underlying backend (the typed layer reconciles declared indexes at boot). *)
+    val ensure_index : t -> name:string -> keys:Bson.t -> unique:bool -> unit
+
+    val drop_index : t -> name:string -> unit
+    val index_names : t -> string list
+
     val find :
       t ->
       ?selector:doc ->
@@ -328,6 +334,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
         | MONGO ->
             let id = Query.Id.object_id ?rng:(!_seeded_rng c.name) () in
             (id, Bson.Document (("_id", Bson.Object_id id) :: kvs))
+
+    (* index ops delegate to the backend — the typed layer's boot reconcile drives these *)
+    let ensure_index c ~name ~keys ~unique = B.ensure_index c.backend ~name ~keys ~unique
+    let drop_index c ~name = B.drop_index c.backend ~name
+    let index_names c = B.index_names c.backend
 
     let insert c (d : doc) : string =
       let _id, d = mint_id c d in

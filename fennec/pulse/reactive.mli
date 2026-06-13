@@ -129,6 +129,12 @@ module type REACTIVE = sig
     (** [insert c d] inserts [d] (minting an [_id] per [id_generation] if absent) and returns it. *)
     val insert : t -> doc -> string
 
+    (** Index ops on the underlying backend (the typed layer reconciles declared indexes at boot). *)
+    val ensure_index : t -> name:string -> keys:Bson.t -> unique:bool -> unit
+
+    val drop_index : t -> name:string -> unit
+    val index_names : t -> string list
+
     (** A cursor's transform disposition: [Inherit] the collection's transform (the default),
         [Disable] it for this cursor, or [Override f] with a per-cursor transform. (Replaces the old
         [(doc -> doc) option option] triple-state.) *)

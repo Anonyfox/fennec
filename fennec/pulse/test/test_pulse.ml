@@ -509,4 +509,46 @@ let%test "extended typed surface: Q matchers, M modifiers, Sort, upsert, distinc
   let titles = List.sort compare (T.distinct h f_title ()) in
   q_nin && q_re && q_all && q_size && sorted && popped && inserted && titles = [ "Apple"; "Banana"; "Cherry" ]
 
+(* ── indexes: declarative, reconciled at attach, unique enforced in-memory (Meteor-beating) ── *)
+type usr = { id : string; email : string; team : string }
+let uf_id = Codec.doc_id
+let uf_email = Codec.(req "email" string)
+let uf_team = Codec.(req "team" string)
+let usr_codec =
+  Codec.(seal (record (fun id email team -> { id; email; team })
+    |> field uf_id (fun u -> u.id) |> field uf_email (fun u -> u.email) |> field uf_team (fun u -> u.team)))
+
+let%test "index reconcile: declared indexes are created at attach; unique is enforced in-memory" =
+  let def = Def.v "usrs1" usr_codec ~indexes:Index.[ unique (asc uf_email); asc uf_team ] in
+  let h = T.attach def (Minimongo.create ()) in
+  let names = List.sort compare (R.Collection.index_names (T.collection h)) in
+  let created = names = List.sort compare [ Index.name Index.(unique (asc uf_email)); Index.name Index.(asc uf_team) ] in
+  let _ = T.insert h { id = ""; email = "a@x.io"; team = "red" } in
+  (* a second insert with the SAME email violates the unique index — enforced in-memory (parity) *)
+  let dup_rejected = match T.insert h { id = ""; email = "a@x.io"; team = "blue" } with
+    | exception Minimongo.Unique_violation _ -> true
+    | _ -> false in
+  let other_ok = (try ignore (T.insert h { id = ""; email = "b@x.io"; team = "red" }); true with _ -> false) in
+  created && dup_rejected && other_ok
+
+let%test "index reconcile: re-attach is idempotent; a removed declaration DROPS the fennec orphan" =
+  let backend = Minimongo.create () in
+  let d1 = Def.v "usrs2" usr_codec ~indexes:Index.[ unique (asc uf_email); asc uf_team ] in
+  let _ = T.attach d1 backend in
+  let n1 = List.length (Minimongo.index_names backend) in
+  (* re-attach the SAME declaration → idempotent (no new indexes) *)
+  let _ = T.attach d1 backend in
+  let n2 = List.length (Minimongo.index_names backend) in
+  (* a NARROWER declaration (team dropped) → the team index is a fennec orphan, auto-dropped *)
+  let d2 = Def.v "usrs2" usr_codec ~indexes:Index.[ unique (asc uf_email) ] in
+  let _ = T.attach d2 backend in
+  let after = Minimongo.index_names backend in
+  n1 = 2 && n2 = 2 && after = [ Index.name Index.(unique (asc uf_email)) ]
+
+let%test "index names: deterministic, spec-encoding, fennec-prefixed (reconcile matches by name)" =
+  Index.name Index.(unique (asc uf_email)) = "fx_u_email_1"
+  && Index.name Index.(asc uf_team) = "fx_m_team_1"
+  && Index.is_fennec_name "fx_m_team_1"
+  && not (Index.is_fennec_name "_id_")
+
 let () = exit (Fennec_hunt_unit.run ())

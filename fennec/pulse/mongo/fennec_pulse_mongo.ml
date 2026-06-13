@@ -82,6 +82,14 @@ let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
    Meteor fences via oplog positions — the resume-token equivalent is the marked seam here). *)
 let fence _c k = k ()
 
+(* index ops on the native driver — name-explicit so reconcile matches; list returns names *)
+let ensure_index c ~name ~keys ~unique =
+  let opts = if unique then [ ("unique", B.Bool true) ] else [] in
+  ignore (Coll.create_index c ~keys ~opts ~name ())
+let drop_index c ~name = Coll.drop_index c ~name
+let index_names c =
+  List.filter_map (fun d -> match B.get d "name" with Some (B.String s) -> Some s | _ -> None) (Coll.list_indexes c)
+
 (* real change streams: Live keeps ONE stream per collection, replays the initial set synchronously
    (ready-after-data), then routes per-query field-level deltas *)
 let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.handle =
@@ -137,4 +145,10 @@ module Dynamic = struct
     | Missing message -> unavailable message
 
   let fence c k = match c with Mem m -> Mini.fence m k | Native r -> fence r k | Missing message -> unavailable message
+  let ensure_index c ~name ~keys ~unique =
+    match c with Mem m -> Mini.ensure_index m ~name ~keys ~unique | Native r -> ensure_index r ~name ~keys ~unique | Missing message -> unavailable message
+  let drop_index c ~name =
+    match c with Mem m -> Mini.drop_index m ~name | Native r -> drop_index r ~name | Missing message -> unavailable message
+  let index_names c =
+    match c with Mem m -> Mini.index_names m | Native r -> index_names r | Missing message -> unavailable message
 end

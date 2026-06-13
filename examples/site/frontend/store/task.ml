@@ -12,6 +12,10 @@ type t = {
 
 (* the client view of the collection — bind once here, then `open Task` and use `Tasks.find …`
    anywhere with no client/handle threading (Meteor's `Tasks`). Reads only; writes are methods. *)
+(* declared indexes — co-located with the model, reconciled at boot by T.attach (created in the
+   backend, fennec-named so a future removal auto-drops the orphan) *)
+let () = Def.index collection Index.[ asc Fields.title ]
+
 module Tasks = Pulse.Collection (struct
   type doc = t
   let collection = collection

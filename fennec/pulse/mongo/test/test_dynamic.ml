@@ -5,6 +5,17 @@
 module D = Fennec_pulse_mongo.Dynamic
 module Backend = Fennec_pulse.Backend
 module B = Bson
+module Runtime = Fennec_mongo_driver.Runtime
+
+let with_env name value f =
+  let old = Sys.getenv_opt name in
+  (match value with
+  | Some value -> Unix.putenv name value
+  | None -> Unix.putenv name "");
+  Fun.protect f ~finally:(fun () ->
+      match old with
+      | Some value -> Unix.putenv name value
+      | None -> Unix.putenv name "")
 
 (* compile-only: the whole reactive stack runs over the dynamic backend *)
 module _ = Fennec_pulse.Reactive.Make (D)
@@ -21,5 +32,14 @@ let%test "Dynamic (in-memory selection): full CRUD through Backend.S" =
   let updated = match D.find c (Backend.query ()) with [ d ] -> B.get d "n" = Some (B.Int 2) | _ -> false in
   let removed = D.remove c (B.doc []) = 1 && D.count c (B.doc []) = 0 in
   inserted && counted && modified && updated && removed
+
+let%test "Dynamic missing Mongo fails operations clearly" =
+  with_env Runtime.mongo_url_env None (fun () ->
+      Eio_main.run (fun _env ->
+          Eio.Switch.run (fun sw ->
+              let c = D.from_env ~sw ~db:"fennec_test" ~name:"missing" () in
+              match D.count c (B.doc []) with
+              | _ -> false
+              | exception Failure msg -> Fennec_hunt_unit.str_contains msg "MONGO_URL is not set")))
 
 let () = exit (Fennec_hunt_unit.run ())
