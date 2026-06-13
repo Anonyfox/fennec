@@ -61,6 +61,7 @@ module Fur : sig
      [module type of Fur] would re-abstract them and break interop with Handler/Form) *)
   include module type of struct include Fur end
 
+  module Page : module type of Fennec_web.Page
   module Handler : module type of Fennec_web.Handler
   module Form : module type of Fennec_web.Form
   module Action : module type of Fennec_web.Action

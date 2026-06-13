@@ -25,3 +25,16 @@ let start (mounts : Fur.mount list) =
     (* a stable, app-agnostic "client booted + hydrated" signal, so e2e drivers can await
        hydration deterministically instead of guessing at app-specific DOM. *)
     Js.Unsafe.set Dom_html.window (Js.string "__fur_hydrated") Js._true
+
+(* Boot a standalone PAGE (Page.serve's client half): no router, no dispatch — load the SSR seed,
+   hydrate the single [view] into #app (it reads its payload from the seed → byte-identical to the
+   server render), then signal hydration. All in-page interactivity + live data work; navigation is
+   real links (full loads), so there is nothing to route. *)
+let start_page (view : unit -> Fur.vnode) =
+  Fur_client_data.install ();
+  let app = Js.Opt.get (Dom_html.document##getElementById (Js.string "app")) (fun () -> failwith "no #app") in
+  Fur_dom.hydrate_root app view;
+  Fur.Data.clear_seed ();
+  Fur_head.start ();
+  Fur.flush_mounts ();
+  Js.Unsafe.set Dom_html.window (Js.string "__fur_hydrated") Js._true

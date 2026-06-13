@@ -30,6 +30,7 @@ module Codec = Codec (* the shape language — for hand-written codecs + the res
 module Fur = struct
   include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
 
+  module Page = Fennec_web.Page (* a standalone page: conn block + isomorphic view + its own SPA bundle *)
   module Handler = Fennec_web.Handler (* render a component to a static HTML response + redirect/flash/csrf *)
   module Form = Fennec_web.Form (* typed form/query INPUT over the Codec model *)
   module Action = Fennec_web.Action (* typed path/query scalars + JSON-body decode *)
