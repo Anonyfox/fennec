@@ -16,6 +16,12 @@ val body : Conn.t -> string
     forms; a malformed body or a failed check returns per-field errors. *)
 val json : 'a Codec.t -> Conn.t -> ('a, Codec.error list) result
 
+(** [input ?inject ?ignore codec conn] parses the request into [codec]'s type from whichever format
+    the client sent: a JSON body ([Content-Type: application/json]) via {!json}, otherwise an HTML
+    form body via {!Form.parse} (so [~inject]/[~ignore] apply). One handler, both clients. *)
+val input :
+  ?inject:(string * string) list -> ?ignore:string list -> 'a Codec.t -> Conn.t -> ('a, Codec.error list) result
+
 (** A path parameter (e.g. [:id]). *)
 val path : Conn.t -> string -> string option
 

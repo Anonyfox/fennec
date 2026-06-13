@@ -15,6 +15,21 @@ let json (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
   | None -> Error [ { Codec.path = []; msg = "invalid JSON body" } ]
   | Some b -> Codec.decode c b
 
+(* substring test (no Str dependency) *)
+let contains hay needle =
+  let nh = String.length hay and nn = String.length needle in
+  let rec go i = if i + nn > nh then false else if String.sub hay i nn = needle then true else go (i + 1) in
+  nn = 0 || go 0
+
+(* Parse the request into [codec]'s type from WHICHEVER format the client sent: a JSON body
+   ([Content-Type: application/json]) decodes through {!json}; anything else is treated as an HTML
+   form body through {!Form.parse} (so [~inject]/[~ignore] apply). Lets ONE handler accept both a
+   browser form POST and an API JSON POST. *)
+let input ?inject ?ignore (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
+  match Conn.req_header conn "content-type" with
+  | Some ct when contains (String.lowercase_ascii ct) "application/json" -> json c conn
+  | _ -> Form.parse ?inject ?ignore c conn
+
 (* path / query scalars *)
 let path (conn : Conn.t) (name : string) : string option = Conn.path_param conn name
 let query (conn : Conn.t) (name : string) : string option = Conn.query conn name
@@ -49,3 +64,13 @@ let%test "query_int_default coerces or falls back" =
   let c = Conn.make (H.make_request ~meth:H.GET ~path:"/x" ~query_string:"page=3" ()) in
   query_int_default ~default:1 c "page" = 3
   && query_int_default ~default:1 (Conn.make (H.make_request ~meth:H.GET ~path:"/x" ())) "page" = 1
+
+let%test "input dispatches by content-type: JSON body vs form body" =
+  let json_conn =
+    conn_with_body ~headers:[ ("content-type", "application/json") ] {|{"name":"Ada","age":36}|}
+  in
+  let form_conn =
+    conn_with_body ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] "name=Bo&age=20"
+  in
+  (match input codec json_conn with Ok v -> v.name = "Ada" && v.age = 36 | Error _ -> false)
+  && match input codec form_conn with Ok v -> v.name = "Bo" && v.age = 20 | Error _ -> false
