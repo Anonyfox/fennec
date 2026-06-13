@@ -13,6 +13,8 @@
 .add-task:hover { opacity: .9 }
 |scss}]
 
+open Task   (* bring the model's fields into scope: queries below read bare, no Task.(...) *)
+
 let client = Ddp_client.connect ~path:"/ddp" () (* persistence auto-adopts the PWA meta *)
 let added = ref 0
 
@@ -23,8 +25,8 @@ let make () =
   let ready = Ddp_client.use_subscribe client ~name:"tasks" () in
   (* PROJECTED live read — ships/types ONLY title (Meteor's { fields: { title: 1 } }).
      [t#title] works; [t#body] would be a COMPILE error — the field isn't on the projection. *)
-  let tasks = Ddp_client.find_p client Task.collection Task.([%fields title])
-                ~where:Task.([%q title <> ""]) ~sort:Task.([%sort title asc]) () in
+  let tasks = Ddp_client.find_p client collection [%fields title]
+                ~where:[%q title <> ""] ~sort:[%sort title asc] () in
   let add_task () =
     incr added;
     (* the TYPED call through the shared declaration — a wrong argument type is a compile error *)

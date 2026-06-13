@@ -92,17 +92,22 @@ Validation is the inline attribute catalog (ONE model form — no hand-written b
 [@trim] [@lowercase] [@min n] [@max n] [@positive] [@check fun .. -> ..]`. `[@key "wire"]` overrides
 the wire key. Each wraps the field's codec; they stack and collect.
 
-**Queries read as expressions, not API calls** (the `[%q]`/`[%sort]`/`[%set]` DSLs, resolved against
-the model's `Fields` in scope — `open Task` or `Task.(…)`):
+**Queries read as expressions, not API calls.** Put `open Task` at the top of a file (the same
+`import`/`using` every language has — it brings the model's fields into scope), and queries are bare:
 ```ocaml
+open Task
+…
 ~where:[%q status = "doing" && priority >= 2 && assignee.email = "ada@x.io"]
 ~sort:[%sort priority desc, title asc]
 [%set status = "done"]
 ```
 They expand to byte-identical typed `Q`/`Sort`/`M` calls — a wrong field/value is still a compile
 error, only the `Q.`/`Fields.`/`eq`/`dot`/list noise is gone. `[%q]` covers `= <> < <= > >=` and
-`&& ||` (bare ident = field, `a.b` = dotted path); richer matchers (`in_`/`has`/`regex`) and
-modifiers (`inc`/`push`/…) use `Q`/`M` directly.
+`&& ||` (bare ident = field, `a.b` = a dotted path into an embedded record); richer matchers
+(`in_`/`has`/`regex`) and modifiers (`inc`/`push`/…) use `Q`/`M` directly. **Scope rule (the one
+thing to know):** the DSLs resolve field names against the model in scope; `open Task` is the idiom,
+and with two models in one file you qualify the secondary one with `Task.(…)` — exactly like
+resolving any name clash between two opened modules.
 
 One writing site, zero duplication, and the record stays 100% vanilla OCaml: dot access, pattern
 matching, merlin hover/completion all work natively (no synthetic types). The deriver — one small
