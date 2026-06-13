@@ -125,14 +125,27 @@ let insert t (d : doc) : string =
   Fanout.pump t.fan;
   id
 
+(* A pure point-lookup selector [{_id: <String|ObjectId>}] — the overwhelmingly common shape, which
+   resolves to a single O(1) hash lookup instead of an O(n) scan. Restricted to String/ObjectId (the
+   real _id types) so it is byte-for-byte equivalent to the matcher: a numeric/operator [_id]
+   selector ([{_id: {$in: …}}], [{_id: 5}]) returns [None] and falls through to the full scan, where
+   the matcher's numeric-equality semantics still apply. *)
+let id_point_selector (selector : doc) : string option =
+  match selector with
+  | Document [ ("_id", ((String _ | Object_id _) as v)) ] -> Some (Query.Diff.id_to_string v)
+  | _ -> None
+
 (* matching ids in insertion order — call under [t.lock] *)
 let matching_unlocked t selector =
-  List.filter
-    (fun id ->
-      match Hashtbl.find_opt t.store id with
-      | Some d -> Query.Matcher.doc_matches selector d
-      | None -> false)
-    (ids_unlocked t)
+  match id_point_selector selector with
+  | Some id -> if Hashtbl.mem t.store id then [ id ] else []
+  | None ->
+      List.filter
+        (fun id ->
+          match Hashtbl.find_opt t.store id with
+          | Some d -> Query.Matcher.doc_matches selector d
+          | None -> false)
+        (ids_unlocked t)
 
 (* update by selector; returns number affected. The match + modify + commit run atomically. *)
 let update t ?(multi = false) ?(upsert = false) (selector : doc) (modifier : doc) : int =
@@ -233,7 +246,11 @@ let find t ?(selector = Document []) ?(sort = Document []) ?(skip = 0) ?(limit =
 
 (* the pure window pipeline — call the *_unlocked forms under [cur.coll.lock] *)
 let all_docs_unlocked t = List.filter_map (Hashtbl.find_opt t.store) (ids_unlocked t)
-let matched_unlocked cur = List.filter (Query.Matcher.doc_matches cur.selector) (all_docs_unlocked cur.coll)
+
+let matched_unlocked cur =
+  match id_point_selector cur.selector with
+  | Some id -> ( match Hashtbl.find_opt cur.coll.store id with Some d -> [ d ] | None -> [])
+  | None -> List.filter (Query.Matcher.doc_matches cur.selector) (all_docs_unlocked cur.coll)
 
 let windowed_unlocked cur =
   let xs = Query.Sorter.sort cur.sort (matched_unlocked cur) in
@@ -251,10 +268,13 @@ let fetch cur = List.map (Query.Projection.apply (projection cur)) (windowed cur
 
 let count cur =
   with_lock cur.coll.lock (fun () ->
-      List.fold_left
-        (fun n d -> if Query.Matcher.doc_matches cur.selector d then n + 1 else n)
-        0
-        (all_docs_unlocked cur.coll))
+      match id_point_selector cur.selector with
+      | Some id -> if Hashtbl.mem cur.coll.store id then 1 else 0
+      | None ->
+          List.fold_left
+            (fun n d -> if Query.Matcher.doc_matches cur.selector d then n + 1 else n)
+            0
+            (all_docs_unlocked cur.coll))
 
 let is_empty cur =
   with_lock cur.coll.lock (fun () ->

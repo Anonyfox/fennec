@@ -284,6 +284,23 @@ let%test "update $set mutates the stored document" =
   (match C.find_one c ~selector:(d [ ("_id", Bson.str id) ]) () with
    | Some doc -> Bson.get doc "v" = Some (Bson.Int 2)
    | None -> false)
+let%test "_id point-lookup fast path agrees with the scan (hit, miss, and extra-field cases)" =
+  let c = C.create () in
+  let id = C.insert c (d [ ("v", i 1) ]) in
+  let _ = C.insert c (d [ ("v", i 2) ]) in
+  (* hit: a bare {_id} selector finds exactly the one doc *)
+  (match C.find_one c ~selector:(d [ ("_id", Bson.str id) ]) () with
+   | Some doc -> Bson.get doc "v" = Some (Bson.Int 1)
+   | None -> false)
+  && C.count (C.find c ~selector:(d [ ("_id", Bson.str id) ]) ()) = 1
+  (* miss: an unknown id finds nothing *)
+  && C.count (C.find c ~selector:(d [ ("_id", Bson.str "deadbeef") ]) ()) = 0
+  (* extra field ⇒ NOT a pure point selector ⇒ still scanned and filtered correctly *)
+  && C.count (C.find c ~selector:(d [ ("_id", Bson.str id); ("v", i 99) ]) ()) = 0
+  && C.count (C.find c ~selector:(d [ ("_id", Bson.str id); ("v", i 1) ]) ()) = 1
+  (* operator-valued _id ⇒ NOT a point selector ⇒ scanned via the matcher *)
+  && C.count (C.find c ~selector:(d [ ("_id", d [ ("$exists", Bson.Bool true) ]) ]) ()) = 2
+
 let%test "upsert seeds embedded-document equality fields" =
   let c = C.create () in
   let _ = C.update c ~upsert:true (d [ ("profile", d [ ("name", Bson.str "x") ]) ]) (d [ ("$set", d [ ("ok", i 1) ]) ]) in
