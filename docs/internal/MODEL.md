@@ -285,18 +285,30 @@ to projected reads; full-document reads stay plain records. A shared/named proje
 view-record (a second small model over the same collection); `[%fields]` is the zero-definition
 inline path.
 
-**Coverage (precise):** `[%fields]` covers **top-level inclusion** — the overwhelming common case —
-auto-trims the wire (`_id:0` injected unless you project `id`), and supports **`$slice`** on array
-fields with a natural function-call syntax that keeps the field's list type unchanged:
-`[%fields title; slice tags 3]` (first 3) / `[%fields slice tags 2 5]` (skip 2, keep 5) → the wire
-carries `{tags: {$slice: …}}`, `t#tags` is still `string list`, just trimmed. The full Mongo projection engine (dotted include/exclude,
+**Coverage (precise):** `[%fields]` covers **top-level inclusion**, **`$slice`**, and **dotted
+paths into embedded records** — all typed, all auto-trimming the wire (`_id:0` unless you project
+`id`):
+- `[%fields title; done_]` → `< title; done_ >`.
+- `[%fields slice tags 3]` / `[%fields slice tags 2 5]` → `$slice` on an array field, list type
+  unchanged (the array is trimmed server-side).
+- `[%fields author / name; author / email]` → **navigate, don't stringify**: the path goes through
+  the embedded model's re-exported `Fields`, the wire ships `"author.name"`/`"author.email"`, and
+  the result is the faithful nested object `< author : < name : _; email : _ > >` (`o#author#name`).
+  A wrong field at ANY depth is an unbound-handle compile error; `o#author#nope` / `o#body` are
+  unmentionable. This needs the embedded field typed `Author.t` where `Author` also derives
+  `fennec_collection` (the deriver emits `Codec.req "author" Author.codec` + a `Fields` submodule
+  re-export for navigation).
+
+Still NOT typed by `[%fields]` (raw escape covers them): **exclusion** (can't yield a precise type)
+and the positional `$` (unsupported engine-side). The full Mongo projection engine (dotted include/exclude,
 `$slice`, `$elemMatch`; `_id`-kept-unless-excluded) lives in `mongo/query/projection.ml` and is
 reachable via the **untyped escape**: `Ddp_client.find client "tasks" ~fields:(Bson.doc […]) ()`
 returns `Bson.t array` with the full engine — the honest pressure valve for exotic projections.
 Not typed by `[%fields]` (and why): **exclusion** can't yield a precise object type (the ppx can't
 enumerate the model's full field set, and object types can't be subtracted); **dotted paths** would
 need nested object synthesis. The positional `$` operator is unsupported engine-side too
-(documented). Transparent typed coverage of the remaining operators is a tracked follow-up.
+(documented). Transparent typed coverage of exclusion stays deferred (it can't produce a precise object type);
+everything else — inclusion, $slice, dotted-path nesting — is built.
 
 ## Taste decisions (each one a Meteor scar avoided)
 

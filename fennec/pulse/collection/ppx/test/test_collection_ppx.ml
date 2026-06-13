@@ -91,4 +91,44 @@ let%test "projection: a missing projected field surfaces as a decode error (skip
   let card = [%fields title; done_] in
   match Proj.decode card (B.doc [ ("title", B.str "only") ]) with Error _ -> true | Ok _ -> false
 
+(* ── embedded records + dotted-path projections (nested object) ── *)
+module Author = struct
+  type t = { name : string; email : string } [@@deriving fennec_collection ~name:"_authors"]
+end
+
+module Post = struct
+  type t = { id : string; title : string; author : Author.t }
+  [@@deriving fennec_collection ~name:"posts"]
+end
+
+let%test "embedded record: the deriver nests the codec; the doc round-trips through Author.codec" =
+  let p = { Post.id = "p1"; title = "Hi"; author = { Author.name = "Ada"; email = "a@x.io" } } in
+  match Codec.decode Post.codec (Post.codec.Codec.enc p) with
+  | Ok q -> q = p && (match Post.codec.Codec.enc p with
+                      | B.Document kvs -> (match List.assoc_opt "author" kvs with Some (B.Document _) -> true | _ -> false)
+                      | _ -> false)
+  | Error _ -> false
+
+let%test "dotted projection: author/name yields wire author.name AND a nested object" =
+  let proj = Post.([%fields title; author / name]) in
+  (match Proj.project_doc proj with
+  | B.Document [ ("_id", B.Int 0); ("title", B.Int 1); ("author.name", B.Int 1) ] -> true
+  | _ -> false)
+  &&
+  (* decode a full stored post → the projected nested object; o#author#name typed, o#author#email a COMPILE error *)
+  let stored = B.doc [ ("_id", B.str "p1"); ("title", B.str "Hi");
+                       ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "a@x.io") ]) ] in
+  match Proj.decode proj stored with
+  | Ok o -> o#title = "Hi" && o#author#name = "Ada"
+  | Error _ -> false
+
+let%test "dotted projection: siblings under one head merge into one nested object" =
+  let proj = Post.([%fields author / name; author / email]) in
+  (match Proj.project_doc proj with
+  | B.Document [ ("_id", B.Int 0); ("author.name", B.Int 1); ("author.email", B.Int 1) ] -> true
+  | _ -> false)
+  &&
+  let stored = B.doc [ ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "a@x.io") ]) ] in
+  match Proj.decode proj stored with Ok o -> o#author#name = "Ada" && o#author#email = "a@x.io" | Error _ -> false
+
 let () = exit (Fennec_hunt_unit.run ())
