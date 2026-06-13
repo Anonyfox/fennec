@@ -74,6 +74,19 @@ let%test "projection: id is shipped only when explicitly projected (else _id:0 t
   let o = match Proj.decode [%fields id; title] (B.doc [ ("_id", B.str "k"); ("title", B.str "Title") ]) with Ok o -> o | Error _ -> assert false in
   o#id = "k" && o#title = "Title"
 
+let%test "projection: $slice on an array field — wire carries {$slice}, the list type is unchanged" =
+  (match Proj.project_doc [%fields title; slice tags 3] with
+  | B.Document [ ("_id", B.Int 0); ("title", B.Int 1); ("tags", B.Document [ ("$slice", B.Int 3) ]) ] -> true
+  | _ -> false)
+  && (match Proj.project_doc [%fields slice tags 2 5] with
+     | B.Document [ ("_id", B.Int 0); ("tags", B.Document [ ("$slice", B.Array [ B.Int 2; B.Int 5 ]) ]) ] -> true
+     | _ -> false)
+  &&
+  (* the object still decodes tags as a string list (the slice trimmed the array, not the type) *)
+  let o = match Proj.decode [%fields slice tags 2] (B.doc [ ("tags", B.array [ B.str "a"; B.str "b" ]) ]) with
+    | Ok o -> o | Error _ -> assert false in
+  o#tags = [ "a"; "b" ]
+
 let%test "projection: a missing projected field surfaces as a decode error (skip-policy fodder)" =
   let card = [%fields title; done_] in
   match Proj.decode card (B.doc [ ("title", B.str "only") ]) with Error _ -> true | Ok _ -> false

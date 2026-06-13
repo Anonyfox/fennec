@@ -286,8 +286,10 @@ view-record (a second small model over the same collection); `[%fields]` is the 
 inline path.
 
 **Coverage (precise):** `[%fields]` covers **top-level inclusion** — the overwhelming common case —
-and auto-trims the wire (`_id:0` injected unless you project `id`, so you ship exactly what you
-asked for, not the id nobody wanted). The full Mongo projection engine (dotted include/exclude,
+auto-trims the wire (`_id:0` injected unless you project `id`), and supports **`$slice`** on array
+fields with a natural function-call syntax that keeps the field's list type unchanged:
+`[%fields title; slice tags 3]` (first 3) / `[%fields slice tags 2 5]` (skip 2, keep 5) → the wire
+carries `{tags: {$slice: …}}`, `t#tags` is still `string list`, just trimmed. The full Mongo projection engine (dotted include/exclude,
 `$slice`, `$elemMatch`; `_id`-kept-unless-excluded) lives in `mongo/query/projection.ml` and is
 reachable via the **untyped escape**: `Ddp_client.find client "tasks" ~fields:(Bson.doc […]) ()`
 returns `Bson.t array` with the full engine — the honest pressure valve for exotic projections.

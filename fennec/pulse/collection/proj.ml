@@ -8,8 +8,8 @@
 
 type 'o t = { project_doc : Bson.t; decode : Bson.t -> ('o, Codec.error list) result }
 
-let v ~(fields : (string * int) list) ~(decode : Bson.t -> ('o, Codec.error list) result) : 'o t =
-  { project_doc = Bson.Document (List.map (fun (n, i) -> (n, Bson.Int i)) fields); decode }
+let v ~(fields : (string * Bson.t) list) ~(decode : Bson.t -> ('o, Codec.error list) result) : 'o t =
+  { project_doc = Bson.Document fields; decode }
 
 let project_doc t = t.project_doc
 let decode t b = t.decode b

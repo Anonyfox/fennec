@@ -113,27 +113,41 @@ let deriver =
 (* ---- the [%fields a; b; …] projection extension ---------------------------------------------
    Expands, under the model's scope (so [Fields] resolves), to a Proj.t whose decoder builds an
    object [< a : _; b : _ >] from [Fields.a]/[Fields.b] — existence + type pulled from the handles
-   (a non-model field is an unbound [Fields.x] error right here). Meteor's [{ a: 1, b: 1 }]. *)
+   (a non-model field is an unbound [Fields.x] error right here). Meteor's [{ a: 1, b: 1 }]. An
+   array field can carry a $slice: [slice tags 3] keeps the first 3, [slice tags 2 5] skips 2 then
+   keeps 5 — the field's list TYPE is unchanged, only the wire/array is trimmed. *)
 
-let rec idents_of (e : expression) : string list =
+(* a projected field spec: the OCaml field name + the wire VALUE expression (1, or {$slice: …}) *)
+let rec specs_of (e : expression) : (string * expression) list =
+  let loc = e.pexp_loc in
   match e.pexp_desc with
-  | Pexp_ident { txt = Lident n; _ } -> [ n ]
-  | Pexp_sequence (a, b) -> idents_of a @ idents_of b
+  | Pexp_ident { txt = Lident n; _ } -> [ (n, [%expr Bson.Int 1]) ]
+  | Pexp_sequence (a, b) -> specs_of a @ specs_of b
   | Pexp_construct ({ txt = Lident "()"; _ }, None) -> []
-  | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%fields: expected a list of field names (e.g. [%%fields title; done_])"
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "slice"; _ }; _ }, args) -> (
+      match List.map snd args with
+      | [ { pexp_desc = Pexp_ident { txt = Lident n; _ }; _ }; count ] ->
+          [ (n, [%expr Bson.doc [ ("$slice", Bson.Int [%e count]) ]]) ]
+      | [ { pexp_desc = Pexp_ident { txt = Lident n; _ }; _ }; skip; count ] ->
+          [ (n, [%expr Bson.doc [ ("$slice", Bson.array [ Bson.Int [%e skip]; Bson.Int [%e count] ]) ]]) ]
+      | _ -> Location.raise_errorf ~loc "%%fields: slice expects `slice field n` or `slice field skip n`")
+  | _ ->
+      Location.raise_errorf ~loc
+        "%%fields: expected field names (e.g. [%%fields title; done_]) or `slice field n`"
 
 let fields_expander =
   Extension.declare "fields" Extension.Context.expression
     Ast_pattern.(single_expr_payload __)
     (fun ~loc ~path:_ payload ->
       let module B = Ast_builder.Default in
-      let names = idents_of payload in
-      if names = [] then Location.raise_errorf ~loc "%%fields: at least one field is required";
+      let specs = specs_of payload in
+      if specs = [] then Location.raise_errorf ~loc "%%fields: at least one field is required";
+      let names = List.map fst specs in
       let fld n = B.pexp_ident ~loc { txt = Ldot (Lident "Fields", n); loc } in
-      (* the wire projection doc: [(field_name Fields.a, 1); …]. Mongo includes _id by default, so
-         unless a projected field's wire name is "_id" (i.e. the model's id), suppress it with
+      (* the wire projection doc: [(field_name Fields.a, <value>); …]. Mongo includes _id by default,
+         so unless a projected field's wire name is "_id" (i.e. the model's id), suppress it with
          _id:0 — we ship EXACTLY what was asked for, not the id nobody requested. *)
-      let includes = List.map (fun n -> [%expr (Codec.field_name [%e fld n], 1)]) names in
+      let includes = List.map (fun (n, v) -> [%expr (Codec.field_name [%e fld n], [%e v])]) specs in
       let any_is_id =
         List.fold_right
           (fun n acc -> [%expr Codec.field_name [%e fld n] = "_id" || [%e acc]])
@@ -142,7 +156,7 @@ let fields_expander =
       let fields_list =
         [%expr
           let incs = [%e B.elist ~loc includes] in
-          if [%e any_is_id] then incs else ("_id", 0) :: incs]
+          if [%e any_is_id] then incs else ("_id", Bson.Int 0) :: incs]
       in
       (* the object: object method a = a method b = b end *)
       let obj =
