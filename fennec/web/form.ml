@@ -169,6 +169,11 @@ let checkbox ?(checked = false) ?(attrs = []) (f : _ Codec.field) : Fur.vnode =
   let base = [ Fur.attr "type" "checkbox"; Fur.attr "name" name; Fur.attr "id" name; Fur.attr "value" "on" ] in
   Fur.h "input" ((base @ if checked then [ Fur.attr "checked" "checked" ] else []) @ attrs_of attrs) []
 
+(* a file-upload input. Files are NOT codec data, so this binds a plain [name] (not a field handle);
+   the handler reads the upload with [Conn.file conn name]. Requires the form to be [~multipart]. *)
+let file_input ?(attrs = []) ~name () : Fur.vnode =
+  Fur.h "input" (Fur.attr "type" "file" :: Fur.attr "name" name :: Fur.attr "id" name :: attrs_of attrs) []
+
 (* a <select> bound to a field; [options] is [(value, label)]; [selected] marks the current one *)
 let select ?selected ?(attrs = []) ~options (f : _ Codec.field) : Fur.vnode =
   let name = Codec.field_name f in
@@ -206,13 +211,15 @@ let field ?(label = "") ?(kind = `Text) ?(value = "") ?(errors = []) ?(attrs = [
 (* The <form> wrapper. [method_] is the HTML method; [override] simulates PUT/PATCH/DELETE via the
    [_method] field (pair with the Method_override paw); [csrf] embeds the token in [_csrf_token]
    (pair with the Csrf paw — mint it with [Csrf.token] in the handler). *)
-let form ?(method_ = `POST) ~action ?csrf ?override ?(attrs = []) (children : Fur.vnode list) : Fur.vnode =
+let form ?(method_ = `POST) ~action ?csrf ?override ?(multipart = false) ?(attrs = []) (children : Fur.vnode list) :
+    Fur.vnode =
   let m = match method_ with `GET -> "get" | `POST -> "post" in
   let hiddens =
     (match override with Some verb -> [ hidden ~name:"_method" ~value:verb ] | None -> [])
     @ (match csrf with Some tok -> [ hidden ~name:"_csrf_token" ~value:tok ] | None -> [])
   in
-  Fur.h "form" (Fur.attr "action" action :: Fur.attr "method" m :: attrs_of attrs) (hiddens @ children)
+  let enc = if multipart then [ Fur.attr "enctype" "multipart/form-data" ] else [] in
+  Fur.h "form" ((Fur.attr "action" action :: Fur.attr "method" m :: enc) @ attrs_of attrs) (hiddens @ children)
 
 (* ───────────────────────── the bound form (to_form) ─────────────────────────
    A [ctx] carries the request (to repopulate values), the validation errors to show, and the form's
@@ -284,15 +291,17 @@ type ctx = {
   method_ : [ `GET | `POST ];
   override : string option;
   csrf : string option;
+  multipart : bool;
 }
 
 (* [start conn ~action …] opens a bound form. [~errors] are shown inline; [~values] prefill a fresh
    render (use {!values_of} on the entity for an edit form); [~secret] auto-mints a CSRF token (or
-   pass [~csrf] directly); [~override] simulates PUT/PATCH/DELETE. After a failed submit the request
-   body repopulates every field automatically (including values that failed to coerce). *)
-let start ?(method_ = `POST) ?(errors = []) ?(values = []) ?override ?csrf ?secret ~action conn : ctx =
+   pass [~csrf] directly); [~override] simulates PUT/PATCH/DELETE; [~multipart] sets the enctype for
+   file uploads. After a failed submit the request body repopulates every field automatically. *)
+let start ?(method_ = `POST) ?(errors = []) ?(values = []) ?override ?csrf ?secret ?(multipart = false) ~action conn :
+    ctx =
   let csrf = match csrf with Some t -> Some t | None -> Option.map (fun s -> Csrf.token ~secret:s conn) secret in
-  { conn; errors; values; submitted = Conn.body_params conn <> []; action; method_; override; csrf }
+  { conn; errors; values; submitted = Conn.body_params conn <> []; action; method_; override; csrf; multipart }
 
 let value_for (c : ctx) (name : string) : string =
   if c.submitted then Option.value ~default:"" (Conn.body_param c.conn name)
@@ -304,9 +313,9 @@ let bound (c : ctx) ?label ?kind (f : _ Codec.field) : Fur.vnode =
   field ?label ~kind ~value:(value_for c (Codec.field_name f)) ~errors:(field_errors f c.errors)
     ~attrs:(constraints f) f
 
-(* wrap a bound form's fields in the <form> (action/method/CSRF/override all from the ctx) *)
+(* wrap a bound form's fields in the <form> (action/method/CSRF/override/enctype all from the ctx) *)
 let render (c : ctx) (children : Fur.vnode list) : Fur.vnode =
-  form ~method_:c.method_ ~action:c.action ?csrf:c.csrf ?override:c.override children
+  form ~method_:c.method_ ~action:c.action ?csrf:c.csrf ?override:c.override ~multipart:c.multipart children
 
 (* ──────────────────────────── tests ──────────────────────────── *)
 
@@ -439,6 +448,10 @@ let%test "values_of encodes a model into form-input strings" =
   let v = values_of signup_codec { email = "a@b"; age = 7; tags = [ "x"; "y" ]; subscribe = true } in
   List.assoc "email" v = "a@b" && List.assoc "age" v = "7" && List.assoc "subscribe" v = "on"
   && List.filter (fun (k, _) -> k = "tags") v = [ ("tags", "x"); ("tags", "y") ]
+
+let%test "file_input + multipart form set the right type and enctype" =
+  let html = Fur.to_html (form ~action:"/up" ~multipart:true [ file_input ~name:"avatar" (); submit "Go" ]) in
+  contains html "enctype=\"multipart/form-data\"" && contains html "type=\"file\"" && contains html {|name="avatar"|}
 
 let%test "summary groups errors by field and separates form-level ones" =
   let s =

@@ -77,6 +77,10 @@ val input : ?type_:string -> ?value:string -> ?attrs:(string * string) list -> _
 val textarea : ?value:string -> ?attrs:(string * string) list -> _ Codec.field -> Fur.vnode
 val checkbox : ?checked:bool -> ?attrs:(string * string) list -> _ Codec.field -> Fur.vnode
 
+(** A file-upload input. Files are NOT codec data, so this binds a plain [name] (not a field handle);
+    read the upload in the handler with [Conn.file conn name]. Requires a [~multipart] form. *)
+val file_input : ?attrs:(string * string) list -> name:string -> unit -> Fur.vnode
+
 (** A [<select>] bound to a field; [options] is [(value, label)] pairs, [selected] marks the current. *)
 val select :
   ?selected:string -> ?attrs:(string * string) list -> options:(string * string) list -> _ Codec.field -> Fur.vnode
@@ -133,6 +137,7 @@ val start :
   ?override:string ->
   ?csrf:string ->
   ?secret:string ->
+  ?multipart:bool ->
   action:string ->
   Conn.t ->
   ctx
@@ -151,12 +156,14 @@ val render : ctx -> Fur.vnode list -> Fur.vnode
 
 (** The [<form>] wrapper. [method_] is the HTML method; [override] simulates PUT/PATCH/DELETE via the
     [_method] field (pair with {!Fennec_server.Method_override}); [csrf] embeds the token in
-    [_csrf_token] (pair with the CSRF paw — mint with [Csrf.token] in the handler). *)
+    [_csrf_token] (pair with the CSRF paw — mint with [Csrf.token] in the handler); [multipart] sets
+    [enctype="multipart/form-data"] for file uploads. *)
 val form :
   ?method_:[ `GET | `POST ] ->
   action:string ->
   ?csrf:string ->
   ?override:string ->
+  ?multipart:bool ->
   ?attrs:(string * string) list ->
   Fur.vnode list ->
   Fur.vnode
