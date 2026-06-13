@@ -43,36 +43,24 @@ type t = {
   fan : change Fanout.t; (* the change stream: enqueued under [lock], delivered outside *)
   gen_id : unit -> string; (* must be pure/non-blocking: runs under [lock] *)
   mutable indexes : (string * (string list * bool)) list; (* name -> (key fields, unique) *)
+  mutable uniq : (string * (string list * (Bson.t option list, string) Hashtbl.t)) list;
+      (* per UNIQUE index: its key fields + a live (key-tuple -> id) map, maintained on every commit
+         so the uniqueness check is O(#unique indexes) hash lookups instead of a full store scan
+         (which made bulk-loading N docs O(U·N²)). The key is the raw [Bson.t option list] tuple, so
+         the map's polymorphic equality is byte-identical to the prior [key_of x = key_of y] test. *)
 }
 
 let create ?(gen_id = fun () -> Query.Id.random_id ()) () =
   { lock = Mutex.create (); store = Hashtbl.create 64; rorder = []; fan = Fanout.create (); gen_id;
-    indexes = [] }
+    indexes = []; uniq = [] }
 
 (* ---- indexes (in-memory): name tracking for reconcile + UNIQUE enforcement for dev/test parity --
    Non-unique indexes are tracked (so reconcile's orphan-drop works in-memory too) but don't
    accelerate scans yet (a noted perf seam); unique indexes are ENFORCED on insert/update. *)
 exception Unique_violation of string
 
-let ensure_index t ~name ~fields ~unique =
-  t.indexes <- (name, (fields, unique)) :: List.remove_assoc name t.indexes
-let drop_index t ~name = t.indexes <- List.remove_assoc name t.indexes
-let index_names t = List.map fst t.indexes
-
 (* the key tuple a unique index reads from a doc (top-level fields) *)
 let key_of fields d = List.map (fun f -> get d f) fields
-
-(* call under [t.lock], BEFORE committing [d] (which will live under [self_id]) *)
-let check_unique_unlocked t ~self_id (d : doc) =
-  List.iter
-    (fun (name, (fields, unique)) ->
-      if unique then begin
-        let k = key_of fields d in
-        Hashtbl.iter
-          (fun id other -> if id <> self_id && key_of fields other = k then raise (Unique_violation name))
-          t.store
-      end)
-    t.indexes
 
 let with_lock m f =
   Mutex.lock m;
@@ -83,6 +71,48 @@ let with_lock m f =
   | exception e ->
       Mutex.unlock m;
       raise e
+
+let ensure_index t ~name ~fields ~unique =
+  with_lock t.lock (fun () ->
+      t.indexes <- (name, (fields, unique)) :: List.remove_assoc name t.indexes;
+      t.uniq <- List.remove_assoc name t.uniq;
+      if unique then begin
+        (* build the side-map from current data; last writer wins on any PRE-EXISTING duplicate,
+           matching the prior behavior of validating only on subsequent writes, never on ensure *)
+        let m = Hashtbl.create 64 in
+        Hashtbl.iter (fun id d -> Hashtbl.replace m (key_of fields d) id) t.store;
+        t.uniq <- (name, (fields, m)) :: t.uniq
+      end)
+
+let drop_index t ~name =
+  with_lock t.lock (fun () ->
+      t.indexes <- List.remove_assoc name t.indexes;
+      t.uniq <- List.remove_assoc name t.uniq)
+
+let index_names t = List.map fst t.indexes
+
+(* call under [t.lock], BEFORE committing [d] (which will live under [self_id]): O(1) per unique
+   index via the side-map instead of a full store scan *)
+let check_unique_unlocked t ~self_id (d : doc) =
+  List.iter
+    (fun (name, (fields, m)) ->
+      match Hashtbl.find_opt m (key_of fields d) with
+      | Some other when other <> self_id -> raise (Unique_violation name)
+      | _ -> ())
+    t.uniq
+
+(* keep the unique side-maps in sync with a committed change — call under [t.lock], AFTER the store
+   mutation. [old]/[nw] are the doc before/after (None on insert/remove respectively). *)
+let index_commit t ~id ~old ~nw =
+  List.iter
+    (fun (_name, (fields, m)) ->
+      (match old with
+      | Some o -> (
+          let ko = key_of fields o in
+          match Hashtbl.find_opt m ko with Some i when i = id -> Hashtbl.remove m ko | _ -> ())
+      | None -> ());
+      match nw with Some n -> Hashtbl.replace m (key_of fields n) id | None -> ())
+    t.uniq
 
 type handle = { stop : unit -> unit }
 
@@ -115,8 +145,10 @@ let ensure_id t (d : doc) : string * doc =
 let insert_unlocked t (d : doc) : string =
   let id, d = ensure_id t d in
   check_unique_unlocked t ~self_id:id d;
-  if not (Hashtbl.mem t.store id) then t.rorder <- id :: t.rorder;
+  let prev = Hashtbl.find_opt t.store id in
+  if prev = None then t.rorder <- id :: t.rorder;
   Hashtbl.replace t.store id d;
+  index_commit t ~id ~old:prev ~nw:(Some d);
   Fanout.enqueue t.fan { op = Insert; id; new_doc = Some d; old_doc = None };
   id
 
@@ -184,6 +216,7 @@ let update t ?(multi = false) ?(upsert = false) (selector : doc) (modifier : doc
                     in
                     check_unique_unlocked t ~self_id:id nw;
                     Hashtbl.replace t.store id nw;
+                    index_commit t ~id ~old:(Some old) ~nw:(Some nw);
                     incr n;
                     Fanout.enqueue t.fan { op = Update; id; new_doc = Some nw; old_doc = Some old })
               ms;
@@ -203,6 +236,7 @@ let remove t (selector : doc) : int =
             match Hashtbl.find_opt t.store id with
             | Some old ->
                 Hashtbl.remove t.store id;
+                index_commit t ~id ~old:(Some old) ~nw:None;
                 Fanout.enqueue t.fan { op = Remove; id; new_doc = None; old_doc = Some old }
             | None -> ())
           ms;
@@ -222,6 +256,7 @@ let remove_id t (id : string) : bool =
         | None -> false
         | Some old ->
             Hashtbl.remove t.store id;
+            index_commit t ~id ~old:(Some old) ~nw:None;
             t.rorder <- List.filter (fun x -> x <> id) t.rorder;
             Fanout.enqueue t.fan { op = Remove; id; new_doc = None; old_doc = Some old };
             true)

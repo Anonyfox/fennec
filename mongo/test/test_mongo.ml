@@ -301,6 +301,32 @@ let%test "_id point-lookup fast path agrees with the scan (hit, miss, and extra-
   (* operator-valued _id ⇒ NOT a point selector ⇒ scanned via the matcher *)
   && C.count (C.find c ~selector:(d [ ("_id", d [ ("$exists", Bson.Bool true) ]) ]) ()) = 2
 
+let%test "unique index: insert collision, remove frees the key, update retargets the key" =
+  let c = C.create () in
+  C.ensure_index c ~name:"u" ~fields:[ "email" ] ~unique:true;
+  let id_a = C.insert c (d [ ("email", Bson.str "a") ]) in
+  let collision = (try ignore (C.insert c (d [ ("email", Bson.str "a") ])); false with C.Unique_violation _ -> true) in
+  let _ = C.remove_id c id_a (* "a" is free again *) in
+  let reusable = (try ignore (C.insert c (d [ ("email", Bson.str "a") ])); true with C.Unique_violation _ -> false) in
+  let _ = C.insert c (d [ ("email", Bson.str "b") ]) in
+  let upd_collide =
+    try ignore (C.update c (d [ ("email", Bson.str "b") ]) (d [ ("$set", d [ ("email", Bson.str "a") ]) ])); false
+    with C.Unique_violation _ -> true
+  in
+  let upd_ok =
+    try ignore (C.update c (d [ ("email", Bson.str "b") ]) (d [ ("$set", d [ ("email", Bson.str "c") ]) ])); true
+    with C.Unique_violation _ -> false
+  in
+  let b_free = (try ignore (C.insert c (d [ ("email", Bson.str "b") ])); true with C.Unique_violation _ -> false) in
+  let c_taken = (try ignore (C.insert c (d [ ("email", Bson.str "c") ])); false with C.Unique_violation _ -> true) in
+  collision && reusable && upd_collide && upd_ok && b_free && c_taken
+
+let%test "ensure_index reserves keys already present in the store" =
+  let c = C.create () in
+  let _ = C.insert c (d [ ("email", Bson.str "z") ]) in
+  C.ensure_index c ~name:"u2" ~fields:[ "email" ] ~unique:true;
+  (try ignore (C.insert c (d [ ("email", Bson.str "z") ])); false with C.Unique_violation _ -> true)
+
 let%test "upsert seeds embedded-document equality fields" =
   let c = C.create () in
   let _ = C.update c ~upsert:true (d [ ("profile", d [ ("name", Bson.str "x") ]) ]) (d [ ("$set", d [ ("ok", i 1) ]) ]) in
