@@ -37,57 +37,63 @@ let coerce_msg (view : Codec.view) =
   | Codec.V_date -> "must be a date"
   | _ -> "invalid value"
 
-(* Parse a flat [(key, value)] assoc (as an HTML form or query string produces) into the codec's
-   type. Repeated keys feed a list field; an absent checkbox (bool) reads as [false]; an absent
-   non-bool field is left out so the codec's own required/optional/default rule decides. A coercion
-   failure (e.g. "abc" for an int) is reported per-field, and the matching decode "missing" error is
-   suppressed so the user sees one clear message, not two. *)
+(* the structural kind of a shape with check AND option wrappers peeled (for dispatch — option
+   semantics are still honored by [coerce] on the original shape in the scalar case) *)
+let rec kind (v : Codec.view) : Codec.view =
+  match v with Codec.V_check (_, i) | Codec.V_option i -> kind i | i -> i
+
+(* Parse a [(key, value)] assoc (as an HTML form or query string produces) into the codec's type.
+   Repeated keys feed a list field; dotted keys ([author.name]) feed a nested record; an absent
+   checkbox (bool) reads as [false]; an absent non-bool field is left out so the codec's own
+   required/optional/default rule decides. A coercion failure (e.g. "abc" for an int) is reported
+   per-field (full path), and the matching decode "missing" error is suppressed so the user sees one
+   clear message, not two. *)
 let parse_assoc (c : 'a Codec.t) (data : (string * string) list) : ('a, Codec.error list) result =
   match Codec.view c with
-  | Codec.V_obj fields ->
+  | Codec.V_obj top_fields ->
       let coerce_errs = ref [] and failed = ref [] in
-      let add_fail name msg =
-        failed := name :: !failed;
-        coerce_errs := { Codec.path = [ name ]; msg } :: !coerce_errs
+      let add_fail path msg =
+        failed := path :: !failed;
+        coerce_errs := { Codec.path; msg } :: !coerce_errs
       in
-      let values_of name = List.filter_map (fun (k, v) -> if k = name then Some v else None) data in
-      let bson_fields =
+      let values_of key = List.filter_map (fun (k, v) -> if k = key then Some v else None) data in
+      (* build the BSON document field-by-field, recursing into embedded records via dotted keys.
+         [path] is the error path (record-relative); [key] is the flat form-data key (dotted). *)
+      let rec build fields path key : (string * Bson.t) list =
         List.filter_map
           (fun (name, _required, shape) ->
-            let vals = values_of name in
-            match strip shape with
-            | Codec.V_bool -> Some (name, Bson.bool (match vals with v :: _ -> truthy v | [] -> false))
+            let k = if key = "" then name else key ^ "." ^ name in
+            let p = path @ [ name ] in
+            match kind shape with
+            | Codec.V_bool -> Some (name, Bson.bool (match values_of k with v :: _ -> truthy v | [] -> false))
             | Codec.V_list inner ->
                 let elems =
                   List.filter_map
-                    (fun v ->
-                      match coerce inner v with
-                      | Some b -> Some b
-                      | None ->
-                          add_fail name (coerce_msg inner);
-                          None)
-                    vals
+                    (fun v -> match coerce inner v with Some b -> Some b | None -> add_fail p (coerce_msg inner); None)
+                    (values_of k)
                 in
                 Some (name, Bson.array elems)
+            | Codec.V_obj subfields ->
+                let kvs = build subfields p k in
+                if kvs = [] then None (* nothing submitted for this nested record → let decode decide *)
+                else Some (name, Bson.Document kvs)
             | _ -> (
-                match vals with
-                | [] -> None (* absent: let the codec's required/optional/default rule decide *)
+                match values_of k with
+                | [] -> None (* absent: the codec's required/optional/default rule decides *)
                 | v :: _ -> (
                     match coerce shape v with
                     | Some b -> Some (name, b)
                     | None ->
-                        add_fail name (coerce_msg shape);
+                        add_fail p (coerce_msg shape);
                         None)))
           fields
       in
+      let bson_fields = build top_fields [] "" in
       (match Codec.decode c (Bson.Document bson_fields) with
       | Ok v -> if !coerce_errs = [] then Ok v else Error (List.rev !coerce_errs)
       | Error es ->
-          let es' =
-            List.filter
-              (fun (e : Codec.error) -> match e.path with x :: _ -> not (List.mem x !failed) | [] -> true)
-              es
-          in
+          (* drop decode errors for fields that already have a coercion error (one message, not two) *)
+          let es' = List.filter (fun (e : Codec.error) -> not (List.mem e.path !failed)) es in
           Error (List.rev !coerce_errs @ es'))
   | _ -> Error [ { Codec.path = []; msg = "form codec must be a record" } ]
 
@@ -349,6 +355,26 @@ let%test "parse_assoc: a missing required field is reported once, by name" =
   match parse_assoc signup_codec [ ("age", "30"); ("subscribe", "on") ] with
   | Ok _ -> false
   | Error errs -> field_errors f_email errs <> []
+
+(* a model with an embedded record — exercises dotted-key nested parsing *)
+type addr = { city : string; zip : string }
+type person = { who : string; home : addr }
+
+let addr_codec =
+  Codec.(seal (record (fun city zip -> { city; zip }) |> field (req "city" (non_empty string)) (fun a -> a.city) |> field (req "zip" string) (fun a -> a.zip)))
+
+let person_codec =
+  Codec.(seal (record (fun who home -> { who; home }) |> field (req "who" (non_empty string)) (fun p -> p.who) |> field (req "home" addr_codec) (fun p -> p.home)))
+
+let%test "parse_assoc: dotted keys populate an embedded record" =
+  match parse_assoc person_codec [ ("who", "Ada"); ("home.city", "London"); ("home.zip", "NW1") ] with
+  | Ok p -> p.who = "Ada" && p.home.city = "London" && p.home.zip = "NW1"
+  | Error _ -> false
+
+let%test "parse_assoc: a missing nested required field errors at its dotted path" =
+  match parse_assoc person_codec [ ("who", "Ada"); ("home.zip", "NW1") ] with
+  | Ok _ -> false
+  | Error errs -> List.exists (fun (e : Codec.error) -> e.path = [ "home"; "city" ]) errs
 
 let%test "rendered input binds the field's wire name (render and parse share the handle)" =
   let html = Fur.to_html (input ~value:"a@b.com" f_email) in
