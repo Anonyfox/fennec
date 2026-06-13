@@ -231,6 +231,11 @@ let%test "doc hash: field order does not matter; values do" =
   Doc_hash.fields [ ("a", B.int 1); ("b", B.str "x") ] = Doc_hash.fields [ ("b", B.str "x"); ("a", B.int 1) ]
   && Doc_hash.fields [ ("a", B.int 1) ] <> Doc_hash.fields [ ("a", B.int 2) ]
 
+(* PIN the wire fingerprint: it is shared across client/server, so the canonical bytes must never
+   drift silently. [{name:"Ada",age:36}] → canon "{age:36,name:\"Ada\"}" → md5/12hex. *)
+let%test "doc hash: fingerprint value is stable (wire contract)" =
+  Doc_hash.fields [ ("name", B.str "Ada"); ("age", B.int 36) ] = "bb5c33313341"
+
 let%test "wire: Sub round-trips the have payload; absent stays None" =
   (match Message.decode (Message.encode (Message.Sub { id = "s"; name = "n"; params = []; have = Some [ ("c", [ ("1", "abc") ]) ] })) with
    | Message.Sub { have = Some [ ("c", [ ("1", "abc") ]) ]; _ } -> true

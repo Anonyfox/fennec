@@ -7,13 +7,31 @@
    one observe by mistake. Arrays keep their order ($and / $or operands are positional); only Document
    keys are sorted. *)
 
-let rec canon (b : Bson.t) : string =
+(* write the canonical form into [buf] — one Buffer instead of a tree of [^]/[concat] allocations;
+   byte-identical to the old string form (empty doc → "{}", "{k:v}", "{k1:v1,k2:v2}", …) *)
+let rec canon_buf buf (b : Bson.t) =
   match b with
   | Bson.Document kvs ->
       let sorted = List.sort (fun (a, _) (b, _) -> String.compare a b) kvs in
-      "{" ^ String.concat "," (List.map (fun (k, v) -> k ^ ":" ^ canon v) sorted) ^ "}"
-  | Bson.Array xs -> "[" ^ String.concat "," (List.map canon xs) ^ "]"
-  | other -> Bson.to_string other
+      Buffer.add_char buf '{';
+      List.iteri
+        (fun i (k, v) ->
+          if i > 0 then Buffer.add_char buf ',';
+          Buffer.add_string buf k;
+          Buffer.add_char buf ':';
+          canon_buf buf v)
+        sorted;
+      Buffer.add_char buf '}'
+  | Bson.Array xs ->
+      Buffer.add_char buf '[';
+      List.iteri (fun i v -> if i > 0 then Buffer.add_char buf ','; canon_buf buf v) xs;
+      Buffer.add_char buf ']'
+  | other -> Buffer.add_string buf (Bson.to_string other)
+
+let canon (b : Bson.t) : string =
+  let buf = Buffer.create 64 in
+  canon_buf buf b;
+  Buffer.contents buf
 
 let of_query ~collection (q : Backend.query) : string =
   String.concat "\x00"
