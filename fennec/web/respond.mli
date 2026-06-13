@@ -25,7 +25,8 @@ val model : ?status:int -> Conn.t -> 'a Codec.t -> 'a -> Conn.t
 (** Answer with a LIST of model values. *)
 val models : ?status:int -> Conn.t -> 'a Codec.t -> 'a list -> Conn.t
 
-(** The JSON error envelope for validation failures: [{ errors: [{ field, message }, …] }]. *)
+(** The JSON error envelope — the canonical {!Form.summary} shape:
+    [{ form_errors: [..], field_errors: { field: [..] } }] (zod's [flatten] shape). *)
 val error_envelope : Codec.error list -> Bson.t
 
 (** Answer with the validation-error envelope ([422] by default). *)

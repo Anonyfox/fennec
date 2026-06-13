@@ -41,15 +41,13 @@ let model ?(status = 200) (conn : Conn.t) (c : 'a Codec.t) (v : 'a) : Conn.t = b
 let models ?(status = 200) (conn : Conn.t) (c : 'a Codec.t) (vs : 'a list) : Conn.t =
   bson ~status conn (Bson.array (List.map (fun v -> c.Codec.enc v) vs))
 
-(* the JSON error envelope for validation failures: [{ errors: [{ field, message }, …] }] *)
+(* the JSON error envelope — the canonical {!Form.summary} shape:
+   [{ form_errors: [..], field_errors: { field: [..] } }] *)
 let error_envelope (errs : Codec.error list) : Bson.t =
+  let s = Form.summary errs in
   Bson.doc
-    [ ( "errors",
-        Bson.array
-          (List.map
-             (fun (e : Codec.error) ->
-               Bson.doc [ ("field", Bson.str (String.concat "." e.path)); ("message", Bson.str e.msg) ])
-             errs) ) ]
+    [ ("form_errors", Bson.array (List.map Bson.str s.form_errors));
+      ("field_errors", Bson.doc (List.map (fun (f, ms) -> (f, Bson.array (List.map Bson.str ms))) s.field_errors)) ]
 
 (* answer with the validation-error envelope (422 by default) *)
 let errors ?(status = 422) (conn : Conn.t) (errs : Codec.error list) : Conn.t = bson ~status conn (error_envelope errs)
@@ -72,7 +70,8 @@ let contains hay needle =
   let rec go i = if i + nn > nh then false else if String.sub hay i nn = needle then true else go (i + 1) in
   nn = 0 || go 0
 
-let%test "error envelope serializes field + message pairs" =
-  let b = error_envelope [ { Codec.path = [ "email" ]; msg = "is required" } ] in
+let%test "error envelope uses the canonical form_errors/field_errors shape" =
+  let b = error_envelope [ { Codec.path = []; msg = "form is invalid" }; { Codec.path = [ "email" ]; msg = "is required" } ] in
   let s = Bson_json.to_string b in
-  contains s "email" && contains s "is required" && contains s "errors"
+  contains s "form_errors" && contains s "form is invalid" && contains s "field_errors" && contains s "email"
+  && contains s "is required"

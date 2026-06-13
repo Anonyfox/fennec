@@ -45,6 +45,13 @@ val field_errors : _ Codec.field -> Codec.error list -> string list
 (** The raw value the user just submitted for [name] — repopulate an input when re-rendering. *)
 val submitted : Conn.t -> string -> string
 
+(** The canonical validation-error summary (zod's [flatten] / Ecto's [traverse_errors] shape):
+    top-level (path-less) messages separated from per-field messages keyed by wire name (first-seen
+    order preserved). The one shape for JSON error bodies and form rendering alike. *)
+type error_summary = { form_errors : string list; field_errors : (string * string list) list }
+
+val summary : Codec.error list -> error_summary
+
 (** {1 Rendering}
 
     Inputs bind to the SAME field handles {!parse} reads, so a renamed model field is a compile error

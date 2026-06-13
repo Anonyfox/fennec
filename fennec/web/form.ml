@@ -115,6 +115,25 @@ let field_errors (f : _ Codec.field) (errs : Codec.error list) : string list =
 (* the value the user just submitted for [name] — repopulate an input when re-rendering after error *)
 let submitted (conn : Conn.t) (name : string) : string = Option.value ~default:"" (Conn.body_param conn name)
 
+(* The canonical validation-error summary (zod's flatten / Ecto's traverse_errors shape): top-level
+   (path-less) messages separated from per-field messages keyed by wire name, first-seen order
+   preserved. Drives both JSON error bodies and form rendering. *)
+type error_summary = { form_errors : string list; field_errors : (string * string list) list }
+
+let summary (errs : Codec.error list) : error_summary =
+  let form_errors = List.filter_map (fun (e : Codec.error) -> match e.path with [] -> Some e.msg | _ -> None) errs in
+  let pairs = List.filter_map (fun (e : Codec.error) -> match e.path with f :: _ -> Some (f, e.msg) | [] -> None) errs in
+  let rec group acc = function
+    | [] -> acc
+    | (f, m) :: rest ->
+        let acc =
+          if List.mem_assoc f acc then List.map (fun (k, v) -> if k = f then (k, v @ [ m ]) else (k, v)) acc
+          else acc @ [ (f, [ m ]) ]
+        in
+        group acc rest
+  in
+  { form_errors; field_errors = group [] pairs }
+
 (* ─────────────────────────── rendering ───────────────────────────
    Inputs are bound to the SAME field handles {!parse} reads, so a renamed model field is a compile
    error in BOTH directions — the form and its parser cannot drift. All emit {!Fur} vnodes (Fur
@@ -394,6 +413,17 @@ let%test "values_of encodes a model into form-input strings" =
   let v = values_of signup_codec { email = "a@b"; age = 7; tags = [ "x"; "y" ]; subscribe = true } in
   List.assoc "email" v = "a@b" && List.assoc "age" v = "7" && List.assoc "subscribe" v = "on"
   && List.filter (fun (k, _) -> k = "tags") v = [ ("tags", "x"); ("tags", "y") ]
+
+let%test "summary groups errors by field and separates form-level ones" =
+  let s =
+    summary
+      [ { Codec.path = []; msg = "form bad" };
+        { Codec.path = [ "email" ]; msg = "is required" };
+        { Codec.path = [ "email" ]; msg = "is invalid" };
+        { Codec.path = [ "age" ]; msg = "too small" } ]
+  in
+  s.form_errors = [ "form bad" ]
+  && s.field_errors = [ ("email", [ "is required"; "is invalid" ]); ("age", [ "too small" ]) ]
 
 let%test "parse ~inject overrides a client-submitted value (mass-assignment safety)" =
   let body = "email=a@b.com&age=30&subscribe=on&owner=attacker" in
