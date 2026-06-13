@@ -57,8 +57,11 @@ let central_angle (lng1, lat1) (lng2, lat2) =
   2. *. atan2 (sqrt a) (sqrt (1. -. a))
 
 (* parse cache for the (constant) query geometry — the matcher re-enters per document with the same
-   operand, so without this the same polygon would be re-parsed once per document scanned *)
+   operand, so without this the same polygon would be re-parsed once per document scanned.
+   BOUNDED: reset wholesale when full so a server seeing many distinct geometries can't grow it
+   without limit (a missed entry just re-parses; correctness-neutral). *)
 let parse_cache : (string, geom option) Hashtbl.t = Hashtbl.create 16
+let parse_cache_cap = 4096
 
 let parse_memo v =
   let k = Bson.to_string v in
@@ -66,6 +69,7 @@ let parse_memo v =
   | Some r -> r
   | None ->
       let r = parse v in
+      if Hashtbl.length parse_cache >= parse_cache_cap then Hashtbl.reset parse_cache;
       Hashtbl.replace parse_cache k r;
       r
 

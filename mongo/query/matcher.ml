@@ -86,8 +86,13 @@ let bit_mask = function
            0 positions)
   | _ -> None
 
-(* $regex via the pure [Re] library (PCRE-ish), compiled once per (options,pattern) and cached *)
+(* $regex via the pure [Re] library (PCRE-ish), compiled once per (options,pattern) and cached.
+   BOUNDED: a long-running server matching many distinct operands would otherwise grow this without
+   limit. When the cache fills we [reset] it wholesale (cheaper than per-entry LRU bookkeeping, and
+   correctness-neutral — a missed entry just recompiles); the working set of hot patterns refills
+   immediately. *)
 let re_cache : (string, Re.re) Hashtbl.t = Hashtbl.create 16
+let re_cache_cap = 4096
 
 let compile_re pattern opts =
   let key = opts ^ "\x00" ^ pattern in
@@ -106,6 +111,7 @@ let compile_re pattern opts =
             [] opts
         in
         let r = Re.compile (Re.Pcre.re ~flags pattern) in
+        if Hashtbl.length re_cache >= re_cache_cap then Hashtbl.reset re_cache;
         Hashtbl.replace re_cache key r;
         Some r
       with _ -> None)
