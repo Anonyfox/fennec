@@ -1,0 +1,27 @@
+(* A server-rendered FORM handler — the middle layer between an inline Paw handler and a full SPA app,
+   authored as ONE .mlx (JSX, no `h`/`text`/`attr` builders). `view : Form.ctx -> vnode` renders the
+   form; `submit : conn -> t -> Form.outcome` runs the POST. The fur ppx derives get/post/serve and
+   route_gen skips the bundle (server-only, no JS). Mounted in server.ml at any path with `Endpoint.form`.
+
+   Re-rendering HTML is first-class: `submit` returns `again` (re-show the form with an error — the input
+   is PRESERVED, awaiting correction) or `redirect` (post-redirect-get). Codec-invalid input (empty / too
+   long) re-renders automatically before `submit` runs, with the per-field error AND the typed value. *)
+type t = { name : string [@trim] [@non_empty] [@max_len 40] }
+[@@deriving model]
+
+let view (f : Form.ctx) =
+  <main className="page">
+    <h1>"Say hello"</h1>
+    (Form.flash f)
+    <form method_="post" action="">
+      (Form.csrf f)
+      <input type_="text" name="name" value=(Form.value f "name") placeholder="Your name" />
+      (Form.error f "name")
+      <button type_="submit">"Greet"</button>
+    </form>
+  </main>
+
+let submit _conn (t : t) =
+  (* a business rule alongside the codec refinements — re-render with an error, keeping the user's input *)
+  if String.lowercase_ascii t.name = "admin" then again [ ("name", "that name is reserved — pick another") ]
+  else redirect "/hello" ~flash:("Hello, " ^ t.name ^ "!")

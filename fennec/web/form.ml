@@ -111,6 +111,47 @@ let summary (errs : Codec.error list) : error_summary =
   in
   { form_errors; field_errors = group [] pairs }
 
+(* ─────────────── form-handler view-state + outcome (server-rendered handler vocabulary) ─────────────── *)
+
+(* The per-render context threaded into a form handler's [view]: the live conn (CSRF token + the raw
+   submitted values, to repopulate inputs), the flash from a prior redirect, and the validation errors
+   from a failed [read]. [view] only READS it — a plain value, so it is concurrency-safe (no globals,
+   unlike the still-racy Head). The ppx builds it in the generated get/post; userland never does. *)
+type ctx = { conn : Conn.t; flash : string option; errors : Codec.error list }
+
+let ctx ~conn ~flash ~errors = { conn; flash; errors }
+
+(* the flash banner (empty without a message — harmless to always place near the form top) *)
+let flash (c : ctx) : Fur.vnode =
+  match c.flash with Some m -> Fur.h "p" [ Fur.attr "class" "flash" ] [ Fur.text m ] | None -> Fur.frag []
+
+(* this form's CSRF hidden field (token from the conn; empty without the Csrf paw) *)
+let csrf (c : ctx) : Fur.vnode = Handler.csrf_field c.conn
+
+(* repopulate an input with what the user just submitted for [name] (empty on the first GET) *)
+let value (c : ctx) (name : string) : string = submitted c.conn name
+
+(* the inline validation error(s) for ONE field by wire name (empty when it validated) — same path-head
+   match as {!field_errors}/{!summary}, but keyed by the plain wire string the [view] writes. *)
+let error (c : ctx) (name : string) : Fur.vnode =
+  match
+    List.filter_map (fun (e : Codec.error) -> match e.path with x :: _ when x = name -> Some e.msg | _ -> None) c.errors
+  with
+  | [] -> Fur.frag []
+  | msgs -> Fur.h "ul" [ Fur.attr "class" "errors" ] (List.map (fun m -> Fur.h "li" [] [ Fur.text m ]) msgs)
+
+(* What a form handler's [submit] returns — the framework renders it. The author chooses per case, so
+   re-rendering HTML (error states, awaiting data corrections) is first-class, not a fixed branch:
+   re-show the form with errors (input preserved), post-redirect-get, or an arbitrary result page. *)
+type outcome =
+  | Again of Codec.error list  (** re-render [view] with these field errors, 422 — codec-invalid input auto-does this *)
+  | Redirect of string * string option  (** post-redirect-get: (url, optional flash) *)
+  | Page of Fur.vnode  (** render an arbitrary result page (200) *)
+
+let again (fields : (string * string) list) : outcome = Again (List.map (fun (f, m) -> Codec.err [ f ] m) fields)
+let redirect ?flash (url : string) : outcome = Redirect (url, flash)
+let page (v : Fur.vnode) : outcome = Page v
+
 (* ──────────────────────────── tests ──────────────────────────── *)
 
 module H = Fennec_core.Http
@@ -169,3 +210,32 @@ let%test "read: dotted keys populate an embedded record; a missing nested field 
   && match parse_assoc person_codec [ ("who", "Ada"); ("home.zip", "NW1") ] with
      | Error errs -> List.exists (fun (e : Codec.error) -> e.path = [ "home"; "city" ]) errs
      | Ok _ -> false
+
+(* ── form-handler view-state + outcome ── *)
+
+let has hay needle =
+  let nh = String.length hay and nn = String.length needle in
+  let rec go i = if i + nn > nh then false else if String.sub hay i nn = needle then true else go (i + 1) in
+  nn = 0 || go 0
+
+let%test "flash renders a banner when set, empty when not; error keys by field name" =
+  let c0 = Conn.make (H.make_request ~meth:H.GET ~path:"/" ()) in
+  let fa = ctx ~conn:c0 ~flash:(Some "saved!") ~errors:[] in
+  let fe = ctx ~conn:c0 ~flash:None ~errors:[ Codec.err [ "name" ] "must not be empty" ] in
+  has (Fur.to_html (flash fa)) "saved!"
+  && Fur.to_html (flash fe) = ""
+  && has (Fur.to_html (error fe "name")) "must not be empty"
+  && Fur.to_html (error fe "other") = ""
+
+let%test "again/redirect/page carry their payload at the right path" =
+  (match again [ ("name", "taken") ] with Again [ e ] -> e.Codec.path = [ "name" ] && e.Codec.msg = "taken" | _ -> false)
+  && (match redirect "/x" ~flash:"hi" with Redirect ("/x", Some "hi") -> true | _ -> false)
+  && (match page (Fur.h "p" [] [ Fur.text "ok" ]) with Page _ -> true | _ -> false)
+
+let%test "value repopulates an input from the submitted body (awaiting corrections)" =
+  let c =
+    Conn.make
+      (H.make_request ~meth:H.POST ~path:"/x" ~headers:[ ("content-type", "application/x-www-form-urlencoded") ]
+         ~body:"name=Ada" ())
+  in
+  value (ctx ~conn:c ~flash:None ~errors:[]) "name" = "Ada"

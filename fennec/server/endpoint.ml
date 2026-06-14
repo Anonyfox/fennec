@@ -39,6 +39,11 @@ let put path h t = use (Paw.put path h) t
 let delete path h t = use (Paw.delete path h) t
 let patch path h t = use (Paw.patch path h) t
 
+(* mount a server-rendered FORM handler at [path] in one call: its [serve] dispatches GET (render the
+   form) vs POST (validate -> redirect or re-render) internally, so a single registration covers both
+   verbs. Pair with Session + Csrf paws for flash + token. *)
+let form path h t = t |> get path h |> post path h
+
 let app ?(at = "/") (render : string -> string option) (t : t) : t =
   let prefix_ok path = at = "/" || path = at || (String.length path > String.length at && String.sub path 0 (String.length at) = at) in
   use (fun c -> if (Conn.meth c = H.GET || Conn.meth c = H.HEAD) && prefix_ok (Conn.path c) then (match render (Conn.path c) with Some html -> Conn.html c html | None -> c) else c) t

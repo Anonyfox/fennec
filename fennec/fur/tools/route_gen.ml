@@ -179,11 +179,27 @@ let handler_basenames dir =
 (* the CLIENT bundles: a dune.inc evaluated via (dynamic_include) — per handler, a rule that writes the
    boot .ml + a private jsoo (executable). [client_lib] is the stripped client-mirror lib (its module is
    the capitalized name). This is how N isolated bundles come from ZERO hand-written dune. *)
+(* An SPA handler defines a top-level `let load` (server load -> seed + SSR + its own jsoo bundle); a
+   FORM handler defines `let submit` and is server-only (no client). Only SPA handlers get a bundle.
+   Line-anchored so a `payload`/`download`/`reload` identifier in a view/submit body never matches. *)
+let has_top_let name src =
+  let pat = "let " ^ name in
+  let n = String.length src and pn = String.length pat in
+  let rec go i =
+    if i + pn > n then false
+    else if String.sub src i pn = pat && (i = 0 || src.[i - 1] = '\n') then true
+    else go (i + 1)
+  in
+  go 0
+
+let is_spa_handler dir n = has_top_let "load" (read (Filename.concat dir (n ^ ".mlx")))
+
 let emit_handler_bundles dir out_dir client_lib =
   let client_mod = String.capitalize_ascii client_lib in
   let b = Buffer.create 1024 in
-  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per frontend/handlers/*.mlx (boot rule + executable).\n";
+  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per SPA frontend/handlers/*.mlx (boot rule + executable). Form handlers (server-only, `let submit`) are skipped — no client bundle.\n";
   handler_basenames dir
+  |> List.filter (is_spa_handler dir)
   |> List.iter (fun n ->
          let m = String.capitalize_ascii (mangle n) in
          Buffer.add_string b

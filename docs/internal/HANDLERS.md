@@ -18,6 +18,11 @@ let load conn =                                  (* server-only; stripped from t
 let view (p : t) = <main><h1>(node ("Hello, " ^ p.who))</h1><Counter start=(p.count) /><Task_list /></main>
 ```
 
+**Two kinds, dispatched by shape.** A file with a `load` (above) is an **SPA handler** — hydrated, its
+own jsoo bundle, content-negotiated. A file with a `submit` instead is a **form handler** — server-
+rendered HTML, NO bundle, the redirect-vs-rerender form flow (below). The fur ppx routes on `load` vs
+`submit`; both author the view in `.mlx` JSX, both live in `frontend/handlers/`, both mount manually.
+
 ## The model: cross-stage persistence (unchanged, still the science)
 
 A handler is a TWO-STAGE computation: stage 1 = `load`; stage 2 = `view`/hydration. Only the
@@ -76,6 +81,40 @@ just three `--public`s (public + apps + handlers). Adding an app OR a handler is
 example `greet.mlx` content-negotiates one payload three ways — `/greet` (SPA), `?format=json`
 (JSON, no seed/bundle), `?format=html` (static HTML, no `#app`/seed/bundle) — verified by the http
 suite. So a handler is genuinely a full HTTP citizen, not just a page.
+
+## Form handlers (server-rendered, no bundle)
+
+A **form handler** is the same one-file idea for the classic POST/redirect/re-render form — the middle
+layer between an inline paw and a full SPA. It has NO client bundle (server-rendered HTML, zero JS):
+
+```ocaml
+(* frontend/handlers/hello.mlx *)
+type t = { name : string [@trim] [@non_empty] [@max_len 40] } [@@deriving model]
+let view (f : Form.ctx) =                         (* the form — flash, per-field errors, kept input *)
+  <main className="page">(Form.flash f)
+    <form method_="post" action="">(Form.csrf f)
+      <input type_="text" name="name" value=(Form.value f "name") />(Form.error f "name")
+      <button type_="submit">"Greet"</button>
+    </form></main>
+let submit _conn (t : t) =                         (* on VALID input -> a form outcome *)
+  if reserved t.name then again [ "name", "that name is reserved" ]   (* re-render, input preserved *)
+  else redirect "/hello" ~flash:("Hello, " ^ t.name)                  (* post-redirect-get *)
+```
+
+- **`view : Form.ctx -> vnode`** — the `ctx` (built by the ppx, a plain value — concurrency-safe, unlike
+  the still-racy `Head`) carries the conn, the flash, and the validation errors. Helpers: `Form.flash`,
+  `Form.csrf` (= `Handler.csrf_field`), `Form.value name` (repopulate from the submitted body — *awaiting
+  corrections*), `Form.error name` (the per-field codec message).
+- **`submit : conn -> t -> Form.outcome`** — runs on codec-VALID input and returns an outcome, so
+  **re-rendering HTML is first-class** (not a fixed branch): `again [field,msg]` (re-show the form with
+  errors, input preserved), `redirect url ~flash` (PRG), `page vnode` (an arbitrary result page).
+  Codec-invalid input (`[@non_empty]` …) auto-`again`s *before* `submit`, with the field errors + the
+  submitted values. (`fennec/web/form.ml` — `ctx`/`flash`/`csrf`/`value`/`error`/`outcome`.)
+- **ppx (`-handler`, by shape):** `submit`+no-`load` → generate `get` (render the form), `post`
+  (`Form.read` → `submit` or auto-rerender), `serve` (dispatch on `Conn.meth`). `-conn-client` strips it
+  to `type t` (no client). **route_gen skips the bundle** for any handler without a top-level `let load`.
+- **Mount** one line: `|> Endpoint.form "/hello" Site_handlers.Hello.serve` (registers GET+POST to the
+  one `serve`). Pair with `Paw.Session` + `Paw.Csrf` for flash + token.
 
 ## Considered + rejected: auto-`default` from `[@@deriving model]`
 

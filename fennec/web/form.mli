@@ -44,3 +44,42 @@ val submitted : Conn.t -> string -> string
 type error_summary = { form_errors : string list; field_errors : (string * string list) list }
 
 val summary : Codec.error list -> error_summary
+
+(** {2 Form-handler view-state + outcome}
+
+    A [frontend/handlers/<name>.mlx] FORM handler is [view : ctx -> vnode] + [submit : conn -> t -> outcome]
+    (the fur ppx generates GET/POST/serve). The [view] reads this {!ctx}; [submit] returns an {!outcome}. *)
+
+(** The per-render context a form handler's [view] receives: the conn (for {!csrf} + {!value}), the
+    flash from a prior {!redirect}, and the validation errors from a failed {!read}. The ppx builds it;
+    [view] only reads it (a plain value — concurrency-safe). *)
+type ctx
+
+val ctx : conn:Conn.t -> flash:string option -> errors:Codec.error list -> ctx
+
+(** The flash banner (empty without a message). *)
+val flash : ctx -> Fur.vnode
+
+(** This form's CSRF hidden field (= {!Handler.csrf_field}; empty without the Csrf paw). *)
+val csrf : ctx -> Fur.vnode
+
+(** Repopulate an input with the value the user just submitted for [name] (empty on the first GET). *)
+val value : ctx -> string -> string
+
+(** The inline validation error(s) for one field, by wire name (empty when it validated). *)
+val error : ctx -> string -> Fur.vnode
+
+(** What a form handler's [submit] returns — the framework renders it, so re-rendering HTML (error
+    states, awaiting corrections) is first-class: re-show the form with errors ([Again] — input
+    preserved; codec-invalid input auto-does this), [Redirect] (post-redirect-get), or an arbitrary
+    [Page]. Build with {!again}/{!redirect}/{!page}. *)
+type outcome = Again of Codec.error list | Redirect of string * string option | Page of Fur.vnode
+
+(** Re-render the form with these per-field errors (wire-name, message), 422. *)
+val again : (string * string) list -> outcome
+
+(** Post-redirect-get, optionally flashing a message onto the next page. *)
+val redirect : ?flash:string -> string -> outcome
+
+(** Render an arbitrary result page (200). *)
+val page : Fur.vnode -> outcome

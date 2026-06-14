@@ -93,11 +93,11 @@ let web =
   |> Endpoint.get "/api/stream"
        (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
   |> Endpoint.get "/api/download" (fun c -> Conn.send_file c ~path:download_path ())
-  (* the middle layer: a server-rendered HANDLER at /hello (typed form input + validation + CSRF +
-     flash, no client JS — see hello.ml). Session + CSRF paws back its flash + token. *)
+  (* the middle layer: a server-rendered FORM HANDLER at /hello (typed form input + validation + CSRF +
+     flash, no client JS — see frontend/handlers/hello.mlx). Session + CSRF paws back its flash + token;
+     [Endpoint.form] registers GET+POST to the one ppx-generated [serve] (it dispatches by method). *)
   |> Endpoint.pipe [ Paw.Session.make ~secret:hello_secret (); Paw.Csrf.make ~secret:hello_secret () ]
-  |> Endpoint.get "/hello" Hello.get
-  |> Endpoint.post "/hello" Hello.post
+  |> Endpoint.form "/hello" Site_handlers.Hello.serve
   (* standalone HANDLERS — mounted MANUALLY at any path, central-router style. The same handler
      (Site_handlers.Greet.serve, a hydrated SPA with its own bundle) is wired at two paths to show
      reuse: a query-string route and a path-param route. Adding a handler = drop a .mlx + one line here. *)

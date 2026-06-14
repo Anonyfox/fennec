@@ -233,6 +233,56 @@ let desugar_handler str =
   in
   body @ extra
 
+(* FORM handler (server-rendered, no bundle): payload `type t` + `view : Form.ctx -> vnode` +
+   `submit : conn -> t -> Form.outcome`. We generate get/post/serve. Re-rendering HTML is first-class:
+   the author returns `again`/`redirect`/`page`, and codec-invalid input auto re-renders the form with
+   the per-field errors AND the submitted values preserved (Form.ctx carries the conn). The client build
+   (-conn-client) strips it to `type t` (no Form/Handler/Conn client-side; route_gen never bundles it). *)
+let desugar_form_handler str =
+  let open Ast_builder.Default in
+  let loc = Location.none in
+  if !conn_client then
+    (* a form handler has no client half — keep only the payload type (codec-only, dead), drop the rest *)
+    List.filter (fun item -> match item.pstr_desc with Pstr_type _ -> true | _ -> false) str
+  else
+    let body =
+      List.concat_map
+        (fun item ->
+          match item.pstr_desc with
+          | Pstr_value (rf, [ vb ]) when pat_name vb.pvb_pat = Some "submit" ->
+            (* open the facade LOCALLY in `submit` so it reads `again …`/`redirect …`/`page …` bare and
+               can use Pulse/Conn for real work — never leaking into the client (load-less, stripped) *)
+            let e = [%expr let open Fennec in let open Fennec.Fur.Form in [%e vb.pvb_expr]] in
+            [ { item with pstr_desc = Pstr_value (rf, [ { vb with pvb_expr = e } ]) } ]
+          | _ -> [ item ])
+        str
+    in
+    let extra =
+      [ [%stri
+          let get conn =
+            let conn, flash = Fennec.Fur.Handler.flash conn in
+            Fennec.Fur.Handler.html conn (view (Fennec.Fur.Form.ctx ~conn ~flash ~errors:[]))];
+        [%stri
+          let post conn =
+            let rerender errs =
+              Fennec.Fur.Handler.html ~status:422 conn (view (Fennec.Fur.Form.ctx ~conn ~flash:None ~errors:errs))
+            in
+            match Fennec.Fur.Form.read codec conn with
+            | Error errs -> rerender errs
+            | Ok t -> (
+              match submit conn t with
+              | Fennec.Fur.Form.Again errs -> rerender errs
+              | Fennec.Fur.Form.Redirect (u, f) -> Fennec.Fur.Handler.redirect conn u ?flash:f
+              | Fennec.Fur.Form.Page v -> Fennec.Fur.Handler.html conn v)];
+        [%stri
+          let serve conn =
+            match Fennec.Conn.meth conn with Fennec.Http.POST -> post conn | _ -> get conn] ]
+    in
+    (* alias Form so the view's `Form.ctx`/`Form.flash`/`Form.error`/… resolve: the handler lib opens
+       CORE Fur (which has no Form — the client mirror needs core Fur, as Fennec.Fur.Form is native-only).
+       Dropped in the client build (the strip above keeps only `type t`). *)
+    [%stri module Form = Fennec.Fur.Form] :: (body @ extra)
+
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
       PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (css,_,_)); _ }, _); _ } ]), _) ->
@@ -243,12 +293,14 @@ let impl str =
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
   (* MLX desugaring first (turn JSX into plain OCaml), THEN append executable doc-block tests. Handler
-     files take a SEPARATE path: desugar_handler fuses load/view into serve+boot, and we SKIP
-     componentize/inject_params (a handler's `view` is a plain payload->vnode, not a component). *)
-  (* handler transform fires ONLY on actual handler files (those defining a `view`); sibling modules
-     in the same lib — e.g. the route_gen-generated routes.ml — take the normal (no-op here) path. *)
-  if !handler_mode && List.exists (item_defines "view") str then
+     files take a SEPARATE path and SKIP componentize/inject_params (a handler's `view` is a plain
+     function, not a component). We dispatch by SHAPE: a `load` is an SPA handler (fuse load/view ->
+     serve+boot); a `submit` is a server-rendered FORM handler (view/submit -> get/post/serve). Sibling
+     modules in the same lib (e.g. the route_gen-generated routes.ml) define neither -> the normal path. *)
+  if !handler_mode && List.exists (item_defines "load") str then
     Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks (desugar_handler str)))
+  else if !handler_mode && List.exists (item_defines "submit") str then
+    Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks (desugar_form_handler str)))
   else
     Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks str))))
 (* register the MLX transform (whole-structure) + the inline test rules (context-free) in

@@ -34,7 +34,16 @@ let%http "hello handler: server-rendered form, typed POST, CSRF + flash" = fun (
       post "/hello" ~form:[ ("name", "Ada"); ("_csrf_token", tok) ] ~follow:true
         ~expect:[ status 200; body_contains "Hello, Ada!" ]);
 
-  check "invalid POST re-renders the form with an error (422)" (fun () ->
+  check "codec-invalid POST re-renders the form with the per-field error (422)" (fun () ->
       get "/hello";
       let tok = csrf_token () in
-      post "/hello" ~form:[ ("name", ""); ("_csrf_token", tok) ] ~expect:[ status 422; body_contains "Please enter a name" ])
+      (* [@non_empty] fails -> the codec's own message surfaces through Form.error (no hand-written string) *)
+      post "/hello" ~form:[ ("name", ""); ("_csrf_token", tok) ] ~expect:[ status 422; body_contains "must not be empty" ]);
+
+  check "a business-rule error re-renders (422) with the message AND the submitted input preserved" (fun () ->
+      get "/hello";
+      let tok = csrf_token () in
+      (* submit returns `again [...]` — a first-class re-render; Form.value repopulates the input so the
+         user can correct it (awaiting data corrections), not retype from scratch *)
+      post "/hello" ~form:[ ("name", "admin"); ("_csrf_token", tok) ]
+        ~expect:[ status 422; body_contains "reserved"; body_contains {|value="admin"|} ])

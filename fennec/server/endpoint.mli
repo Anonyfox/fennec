@@ -57,6 +57,10 @@ val delete : string -> Paw.t -> t -> t
 (** Route shorthand: add a PATCH handler for [pattern] to the always-phase pipeline. *)
 val patch : string -> Paw.t -> t -> t
 
+(** Mount a server-rendered FORM handler's [serve] at [pattern] for BOTH GET and POST in one call
+    ([serve] dispatches on the method internally). Pair with Session + Csrf paws. *)
+val form : string -> Paw.t -> t -> t
+
 (** Mount an SSR app. *)
 val app : ?at:string -> (string -> string option) -> t -> t
 
