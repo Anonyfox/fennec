@@ -21,10 +21,10 @@ module Accounts = Fennec_server.Accounts
 module Mongo_runtime = Fennec_mongo_driver.Runtime
 
 (* The presentation layer — Fur. ONE namespace ([open Fennec.Fur]) for everything that turns data
-   into what a client sees: components & signals (live SPA), SSR + dead server-rendered views,
-   typed forms, and the RESTful [resource] convention. HTML is its job; JSON APIs are hand-built with
-   the [Form]/[Action]/[Respond] building blocks (different concern, not negotiated in). Includes the
-   isomorphic Fur core, so [page]/[h]/[text]/[signal]/[document] are all here too. *)
+   into what a client sees: components & signals (live SPA, isomorphic core), standalone [Page]s
+   (an isomorphic view + a server conn block + the page's own jsoo bundle), and server-rendered HTML
+   via [Handler]. Typed HTTP input is [Form]/[Action]; JSON APIs are hand-built with [Respond].
+   Includes the isomorphic Fur core, so [h]/[text]/[signal]/[document] are all here too. *)
 module Codec = Codec (* the shape language — for hand-written codecs + the resource/form signatures *)
 
 module Fur = struct

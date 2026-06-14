@@ -50,14 +50,27 @@ the cross-stage values, hydrate, and let the client live on its own. (LiveView's
 *change-tracking* is still a good idea done right — bank it as future inspiration for an *optional*
 socket-connected page mode, since we already have the DDP socket. Document it; don't build it now.)
 
+## Where it lives (realized)
+
+The page is a **Fur concept**, not a fabricated "web" module. The isomorphic essence is
+**`fennec.fur.page`** (`Page`: `resource`, `render`, `default_template`, `outcome`, `Server_only`) —
+jsoo-safe, so a page's view links into the server SSR *and* its own bundle. The one Conn-aware bit,
+`serve`, folds into the facade **`Fennec.Fur.Page`**. The client boot is `Fur_csr.start_page`. A page
+is authored as **one `.mlx`** (`pages/*.mlx`): `key`/`codec`/`bundle` + the `page` view + a server
+**`[%%conn fun conn -> outcome]`** block. The `fur.ppx` expands `[%%conn]` to `serve` for the server
+build and **strips it** for the client build (driver flag `-conn-client`) — Eliom's server/client
+section split, one flag, no hand-written second file. Demonstrated end-to-end by `examples/site`
+`pages/greet_page.mlx` (http + browser e2e: SSR seed → hydrate → interactive Counter + live Task_list,
+leak-proof).
+
 ## How fennec realizes CSP with three primitives it already has
 
 1. **Converter = `Codec`.** The same codec that powers Mongo + DDP + forms encodes the payload
    server-side and decodes it client-side. A value crosses ONLY through a codec → **leak-proof by
-   construction**: `Conn`, secrets-as-a-distinct-type, and Pulse server handles have no codec, so
-   they cannot be seeded. (Future nicety: a `Server_only.t` wrapper with no codec, so a *secret
-   string* is also unsendable by type, closing the residual "a string has a codec" gap — Eliom's
-   no-identity-converter, lean.)
+   construction**: `Conn`, full records, and Pulse server handles have no codec, so they cannot be
+   seeded. **Done:** `Server_only.t` — a wrapper with no codec, so even a *secret string* is unsendable
+   by type (putting one in a payload is a compile error), closing the "a string has a codec" gap —
+   Eliom's no-identity-converter.
 2. **Minimal transfer = the shaped payload (and, later, Fur read-tracking).** Today: the dev shapes
    the payload to exactly what the view renders (the Astro-island unit). Future: `Fur.Data`/signals
    already record which seeded values a render *reads*, so we can seed only the consumed set
@@ -66,6 +79,8 @@ socket-connected page mode, since we already have the DDP socket. Document it; d
 3. **Behavior + live data = Pulse handles.** Interactivity is the view's own Fur signals; live data
    is a Pulse subscription the client **reconstructs** (re-subscribes) rather than something seeded.
    So: seed the cheap static-derived values, reconstruct the live ones — never serialize a closure.
+   **Done:** the demo page seeds the static greeting/count and reconstructs live tasks via a Pulse
+   subscription after hydration.
 
 **One sentence:** the server→client handoff is cross-stage persistence — transfer only the
 codec-typed values the view consumes, make server-only types un-encodable so leaks are compile

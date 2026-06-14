@@ -1,7 +1,8 @@
-; fennec.web — the typed "middle layer" on Paw: forms, server-rendered views, typed request
-; actions, content negotiation, and RESTful resources. It owns NO new model — it projects the SAME
-; Codec shape (the one that powers collections + DDP methods) onto HTTP, so one declaration drives
-; the DB, the wire, the form, and the JSON API with no drift. Native (server-side) only.
+; fennec.web — typed server-side building blocks on Paw: server-rendered HTML responses (Handler),
+; typed form/query INPUT over the Codec model (Form), typed path/query + JSON-body decode (Action),
+; and JSON output building blocks (Respond). It owns NO new model — it projects the SAME Codec shape
+; (the one that powers collections + DDP methods) onto HTTP. Native (server-side) only. Standalone
+; PAGES (view + conn block + own bundle) are a Fur concept, not here — see fennec.fur.page.
 
 (library
  (name fennec_web)
