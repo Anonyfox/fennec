@@ -2,11 +2,12 @@
 
 **What a handler is (settled).** A *handler* is ONE file — `frontend/handlers/<name>.mlx` — that is a
 full HTTP handler: a server `load : conn -> outcome` fused with an isomorphic `view : payload -> vnode`,
-over a `payload` type (`type t [@@deriving model]`). On `render payload` the framework seeds exactly
-that codec-typed value, SSRs the view, and ships the handler's OWN jsoo bundle so it hydrates into a
-tiny SPA; `load` can also `redirect`/`error`/`not_found` (it is a full handler, not just a page). You
-**mount it yourself** in `server.ml` at any path — `Endpoint.get "/greet" Site_handlers.Greet.serve` —
-with path params, **reusable** across paths/endpoints. Central-router DX; no auto route table.
+over a `payload` type (`type t [@@deriving model]`). `load` is a **full HTTP action** — the SAME
+`view`/`payload` can be served as a hydrated SPA (`render p` — seed + SSR + own bundle), as static
+no-JS HTML (`static p` — same view, no bundle/seed/`#app`), content-negotiated to `json codec v`, or as
+`text`/`redirect`/`not_found`/`error`. You **mount it yourself** in `server.ml` at any path —
+`Endpoint.get "/greet" Site_handlers.Greet.serve` — with path params, **reusable** across
+paths/endpoints. Central-router DX; no auto route table.
 
 ```ocaml
 (* frontend/handlers/greet.mlx — the whole handler. No key/bundle/boot/dune. *)
@@ -67,9 +68,16 @@ just three `--public`s (public + apps + handlers). Adding an app OR a handler is
 **zero dune edits anywhere**; the only operational dirs are the generated `client/apps` and
 `client/handlers` gen+run pairs.
 
+## Full HTTP handler — the outcome set
+
+`load : conn -> 'p outcome`, with smart-verb constructors (in scope inside `load`):
+`render p` (hydrated SPA) · `static p` (same view, static no-JS HTML via `render_static`) ·
+`json codec v` (JSON body, same codec) · `text s` · `redirect url` · `not_found` · `error n`. The
+example `greet.mlx` content-negotiates one payload three ways — `/greet` (SPA), `?format=json`
+(JSON, no seed/bundle), `?format=static` (static HTML, no `#app`/seed/bundle) — verified by the http
+suite. So a handler is genuinely a full HTTP citizen, not just a page.
+
 ## Banked for later
 
 - Auto-`default` from `[@@deriving model]` (today the seed is always present, so `Handler.payload`
   reads it without a fallback; a derived default would let `resource`-style views drop the fallback).
-- A richer `outcome` (`Html`/`Json`) so a handler can also be a static-HTML or JSON endpoint without a
-  bundle — fully realizing "a handler is a full HTTP handler."

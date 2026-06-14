@@ -1,26 +1,35 @@
-(* A standalone HANDLER — one file, one bundle. The fur ppx (-handler) derives the seed key + bundle
-   URL from the filename and fuses [load] (server) with [view] (isomorphic): no key, no bundle, no
-   boot, no extension blocks, no per-file dune. You MOUNT it yourself in server.ml at any path (params, reuse).
-   [load] is a FULL HTTP handler — render an SPA, redirect, or error; only [render]'s payload crosses. *)
+(* A standalone HANDLER — one file, one bundle, a FULL HTTP handler. The fur ppx (-handler) derives the
+   seed key + bundle URL from the filename and fuses [load] (server) with [view] (isomorphic): no key,
+   no bundle, no boot, no per-file dune. You MOUNT it yourself in server.ml at any path (params, reuse).
+   The SAME view + payload is content-negotiated into three responses below — SPA, JSON, or static. *)
 type t = { who : string; count : int }
 [@@deriving model]
 
-(* SERVER: runs with the full Conn (+ Pulse + Accounts). Conn / render / redirect / Server_only are in
-   scope (the ppx opens the facade locally); the whole block is stripped from the jsoo bundle. *)
+(* SERVER: runs with the full Conn (+ Pulse + Accounts). Conn / render / static / json / redirect /
+   Server_only are in scope (the ppx opens the facade locally); the whole block is stripped from the
+   jsoo bundle. A handler does far more than serve HTML — it is a full HTTP action. *)
 let load conn =
   (* the handler is decoupled from its path: read [name] from a path param when mounted at e.g.
      "/hi/:name", else from the query string — so the SAME serve works at any path it's mounted on *)
   let name = match Conn.param conn "name" with Some n -> Some n | None -> Conn.query conn "name" in
-  match name with
-  | Some "" | None -> render { who = "world"; count = 5 }
-  | Some who ->
-    (* a secret held as Server_only — no codec, so it CANNOT be seeded (a leak is a compile error) *)
-    let api_key = Server_only.wrap "sk-live-d34db33f" in
-    ignore (Server_only.get api_key);
-    render { who; count = String.length who }
+  let p =
+    match name with
+    | Some "" | None -> { who = "world"; count = 5 }
+    | Some who ->
+      (* a secret held as Server_only — no codec, so it CANNOT be seeded (a leak is a compile error) *)
+      let api_key = Server_only.wrap "sk-live-d34db33f" in
+      ignore (Server_only.get api_key);
+      { who; count = String.length who }
+  in
+  (* ONE handler, the SAME payload, content-negotiated into three responses — that is a full handler *)
+  match Conn.query conn "format" with
+  | Some "json" -> json codec p (* API: the payload as JSON, encoded by the SAME codec *)
+  | Some "static" -> static p (* no-JS / SEO: the same view as static HTML, no bundle *)
+  | _ -> render p (* default: the hydrated SPA with its own bundle *)
 
 (* ISOMORPHIC: payload -> vnode. SSRs on the server, hydrates in the bundle, byte-identical. Seeds the
-   static (greeting/count -> the live Counter's start) and reconstructs the live (Task_list over DDP). *)
+   static (greeting/count -> the live Counter's start) and reconstructs the live (Task_list over DDP).
+   The same view backs all three responses above (hydrated, static, or skipped for JSON). *)
 let view (p : t) =
   <main className="greet" id="greet">
     <h1>(node ("Hello, " ^ p.who ^ "!"))</h1>

@@ -25,12 +25,23 @@
 
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 
-(* What [load] decides — render the handler (SPA), or any other HTTP response. Conn-free (the block
-   CLOSES OVER the Conn; the type does not name it), so it lives in the isomorphic runtime. *)
-type 'p outcome = Render of 'p | Redirect of string | Not_found | Error of int
+(* What [load] decides — a FULL HTTP response. Conn-free (the block CLOSES OVER the Conn; the type does
+   not name it), so it lives in the isomorphic runtime. The same [view]/[payload] can be served as a
+   hydrated SPA, as static no-JS HTML, or content-negotiated to JSON — a handler is a full handler. *)
+type 'p outcome =
+  | Render of 'p (* hydrated SPA: seed the payload + SSR the view + ship the bundle *)
+  | Static of 'p (* the SAME view as static HTML — no seed, no bundle, no JS (SEO / no-JS) *)
+  | Json of string (* a JSON body (already encoded) *)
+  | Text of string (* a plain-text body *)
+  | Redirect of string
+  | Not_found
+  | Error of int
 
-(* smart constructors so userland [load] reads as plain verbs: [render p] / [redirect "/"] / … *)
+(* smart constructors so userland [load] reads as plain verbs: [render p] / [json codec v] / … *)
 let render (p : 'p) : 'p outcome = Render p
+let static (p : 'p) : 'p outcome = Static p
+let json (codec : 'a Codec.t) (value : 'a) : 'p outcome = Json (Bson_json.to_string (codec.Codec.enc value))
+let text (s : string) : 'p outcome = Text s
 let redirect (url : string) : 'p outcome = Redirect url
 let not_found : 'p outcome = Not_found
 let error (status : int) : 'p outcome = Error status
@@ -84,6 +95,15 @@ let render_doc ~key ~(codec : 'p Codec.t) ~bundle ?(styles = "") ?template (valu
   let ctx = { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script (); body; styles; client_js = "" } in
   Fur.document ((Option.value template ~default:(default_template bundle)) ctx)
 
+(* STATIC render — SSR a vnode into a plain document: head + styles + body, but NO #app root, NO seed,
+   NO bundle <script>. The output is final HTML with no JS (the [Static] outcome / no-JS + SEO). *)
+let render_static ?(styles = "") (body : Fur.vnode) : string =
+  let body_html = Fur.to_html body (* runs the view first, so Fur.Head is populated before to_ssr *) in
+  let ctx = { Fur.Doc.head = Fur.Head.to_ssr (); data = ""; body = body_html; styles; client_js = "" } in
+  Fur.document
+    (Fur.h "html" [ Fur.attr "lang" "en" ]
+       [ Fur.h "head" [] [ Fur.Doc.head ctx; Fur.Doc.styles ctx ]; Fur.h "body" [] [ Fur.Doc.outlet ctx ] ])
+
 (* ──────────────────────────── tests ──────────────────────────── *)
 
 let contains hay needle =
@@ -103,8 +123,15 @@ let%test "render_doc seeds ONLY the codec payload + emits the bundle script + th
   contains out "Hi Ada" && contains out {|id="app"|} && contains out "__FUR_DATA__" && contains out "page:greet"
   && contains out "/_handlers/greet/main.js"
 
-let%test "smart constructors build the right outcomes" =
-  render { who = "x"; count = 0 } = Render { who = "x"; count = 0 } && redirect "/" = Redirect "/" && not_found = Not_found
+let%test "smart constructors build the right full-HTTP outcomes" =
+  render { who = "x"; count = 0 } = Render { who = "x"; count = 0 }
+  && static { who = "x"; count = 0 } = Static { who = "x"; count = 0 }
+  && redirect "/" = Redirect "/" && not_found = Not_found && text "hi" = Text "hi"
+  && (match json greeting_codec { who = "a"; count = 1 } with Json s -> contains s {|"who"|} && contains s "a" | _ -> false)
+
+let%test "render_static SSRs the view but emits NO seed and NO bundle" =
+  let out = render_static (greet_view { who = "Ada"; count = 3 }) in
+  contains out "Hi Ada" && (not (contains out "__FUR_DATA__")) && (not (contains out "main.js")) && (not (contains out {|id="app"|}))
 
 let%test "Server_only holds a value but exposes no Codec — it cannot be seeded" =
   Server_only.get (Server_only.wrap "sk-secret") = "sk-secret"

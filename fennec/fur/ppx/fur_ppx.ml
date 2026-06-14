@@ -223,6 +223,10 @@ let desugar_handler str =
           | Fennec_fur_handler.Handler.Render p ->
               Fennec.Conn.html conn
                 (Fennec_fur_handler.Handler.render_doc ~key:[%e key] ~codec ~bundle:[%e bundle] p view)
+          | Fennec_fur_handler.Handler.Static p ->
+              Fennec.Conn.html conn (Fennec_fur_handler.Handler.render_static (view p))
+          | Fennec_fur_handler.Handler.Json s -> Fennec.Conn.json conn s
+          | Fennec_fur_handler.Handler.Text s -> Fennec.Conn.text conn s
           | Fennec_fur_handler.Handler.Redirect u -> Fennec.Conn.redirect conn u
           | Fennec_fur_handler.Handler.Not_found -> Fennec.Conn.text ~status:404 conn "Not found"
           | Fennec_fur_handler.Handler.Error s -> Fennec.Conn.text ~status:s conn ("Error " ^ string_of_int s) ] ]

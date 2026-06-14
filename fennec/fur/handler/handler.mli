@@ -14,12 +14,23 @@
     implementation header. In short: only [codec.enc payload] crosses; {!Server_only} makes secrets
     un-encodable so a leak is a compile error; behaviour + live data cross as Pulse/Fur handles. *)
 
-(** What [load] decides — render the handler (SPA), or any other HTTP response. *)
-type 'p outcome = Render of 'p | Redirect of string | Not_found | Error of int
+(** What [load] decides — a FULL HTTP response. The same [view]/[payload] can be served as a hydrated
+    SPA ([render]), as static no-JS HTML ([static]), or content-negotiated to JSON ([json]). *)
+type 'p outcome =
+  | Render of 'p  (** hydrated SPA: seed + SSR view + bundle *)
+  | Static of 'p  (** the same view as static HTML — no seed, no bundle, no JS *)
+  | Json of string  (** a JSON body *)
+  | Text of string  (** a plain-text body *)
+  | Redirect of string
+  | Not_found
+  | Error of int
 
-(** Smart constructors, so [load] reads as plain verbs. *)
+(** Smart constructors, so [load] reads as plain verbs: [render p] / [static p] / [json codec v] / … *)
 
 val render : 'p -> 'p outcome
+val static : 'p -> 'p outcome
+val json : 'a Codec.t -> 'a -> 'p outcome
+val text : string -> 'p outcome
 val redirect : string -> 'p outcome
 val not_found : 'p outcome
 val error : int -> 'p outcome
@@ -54,3 +65,7 @@ val render_doc :
   'p ->
   ('p -> Fur.vnode) ->
   string
+
+(** STATIC render: SSR a vnode into a plain document (head + styles + body) with NO #app root, NO seed,
+    NO bundle — final HTML with no JS. Backs the [Static] outcome. *)
+val render_static : ?styles:string -> Fur.vnode -> string
