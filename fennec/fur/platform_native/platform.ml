@@ -15,10 +15,12 @@ let push_state _ = ()
 type _data_ctx = {
   seed : (string, string) Hashtbl.t;
   mutable source : string -> (string -> unit) -> unit;
+  mutable head : Obj.t option;  (* opaque per-request Head context — Fur.Head fills it lazily (the
+                                   signal type lives a layer up, so the slot is type-erased here) *)
 }
 
 let _data_key : _data_ctx Eio.Fiber.key = Eio.Fiber.create_key ()
-let _data_fallback = { seed = Hashtbl.create 16; source = (fun _ _ -> ()) }
+let _data_fallback = { seed = Hashtbl.create 16; source = (fun _ _ -> ()); head = None }
 
 let _data_current () =
   (* outside an Eio run (one-shot SSR / tests) Fiber.get's effect is unhandled — catch ONLY that and
@@ -27,9 +29,22 @@ let _data_current () =
   | Some c -> c
   | None -> _data_fallback
 
+(* Establish a fresh per-request render context (seed table + fetch source + Head registry). In an Eio
+   run it is a FIBER-LOCAL binding, so simultaneous renders across fibers AND domains never share state.
+   Outside an Eio run (one-shot SSR / unit tests) there is no fiber to bind — reset and reuse the global
+   fallback (single-threaded there, so safe), so repeated one-shot renders still start clean. *)
 let with_data_context f =
-  Eio.Fiber.with_binding _data_key { seed = Hashtbl.create 16; source = (fun _ _ -> ()) } f
+  let in_eio = try ignore (Eio.Fiber.get _data_key); true with Stdlib.Effect.Unhandled _ -> false in
+  if in_eio then Eio.Fiber.with_binding _data_key { seed = Hashtbl.create 16; source = (fun _ _ -> ()); head = None } f
+  else begin
+    Hashtbl.reset _data_fallback.seed;
+    _data_fallback.source <- (fun _ _ -> ());
+    _data_fallback.head <- None;
+    f ()
+  end
 
 let seed_table () = (_data_current ()).seed
 let data_source () = (_data_current ()).source
 let set_data_source s = (_data_current ()).source <- s
+let head_get () = (_data_current ()).head
+let head_set o = (_data_current ()).head <- Some o

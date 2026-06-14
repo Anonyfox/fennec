@@ -63,3 +63,10 @@ val data_source : unit -> string -> (string -> unit) -> unit
 
 (** Replace the current request's fetch source. *)
 val set_data_source : (string -> (string -> unit) -> unit) -> unit
+
+(** The current request's opaque HEAD context slot. {!Fur.Head} fills it lazily with its per-request
+    state (the signal type lives above this layer, so the slot is type-erased — [Obj.t]). Fiber-local
+    on the native server (so concurrent renders never share head tags); a single global on the browser. *)
+val head_get : unit -> Obj.t option
+
+val head_set : Obj.t -> unit

@@ -2,9 +2,10 @@
    strips the base), runs its data fetches concurrently between render passes (Eio),
    then assembles the app's chosen document. Generic over the generated [mount list].
 
-   IMPORTANT: per-request isolation — the module globals touched here (Router active/
-   current, Data.seed + source, Head.sources) must become Eio fiber-local before this
-   runs concurrently on the real server; [render]'s body is that unit of work. *)
+   Per-request isolation: Data (seed + source) and Head (the tag registry) are FIBER-LOCAL — both
+   [render] and the synchronous [handler] wrap in [Fur.Data.with_context], so concurrent renders across
+   fibers AND domains never share or leak them. (Router active/current is still a shared global — fixed
+   in a follow-up by activating a per-request clone of the app router.) *)
 let starts_with p s = String.length s >= String.length p && String.sub s 0 (String.length p) = p
 let dispatch (mounts : Fur.mount list) path =
   List.filter (fun (m : Fur.mount) -> m.base = "" || path = m.base || starts_with (m.base ^ "/") path) mounts
@@ -43,10 +44,11 @@ let render ?(head_extra = "") ~env ~(mounts : Fur.mount list) ~source ~request ~
     let ctx = { Fur.Doc.head = Fur.Head.to_ssr () ^ head_extra; data = Fur.Data.to_script (); body; styles; client_js } in
     Some (Fur.document (m.document ctx))
 
-(* Synchronous render — no Eio. This is the shape the framework's [Endpoint.app]
-   consumes directly (path -> html option). A pure render never yields, so the module
-   globals it touches (Router/Head/Data) cannot interleave between concurrent request
-   fibers — no per-request isolation needed.
+(* Synchronous render — no Eio I/O (the [?source] fetcher is in-process). This is the shape
+   [Endpoint.app] consumes directly (path -> html option). It STILL wraps in [Fur.Data.with_context]:
+   a pure render does not yield, but it DOES run in parallel across domains on the real server, so the
+   per-request globals it touches (Data seed + Head registry) must be fiber-local or two concurrent
+   renders would race on — and leak — them. (Router active/current is set fresh below each call.)
 
    [?source] turns on server-side data: an in-process (path -> string option) fetcher
    run between render passes (synchronously — fine because the source is in-process; an
@@ -61,9 +63,11 @@ let handler ?(styles = "") ?(head_extra = "") ?source ~(mounts : Fur.mount list)
   match dispatch mounts request with
   | None -> None
   | Some m ->
+    (* per-request isolation: each render gets its own fiber-local seed table + Head registry (so
+       parallel renders across domains never share or leak <title>/meta or seeds) *)
+    Fur.Data.with_context @@ fun () ->
     Fur.Router.activate m.router;
     Fur.Router.set_path m.router request;
-    Fur.Data.clear_seed ();
     let render_root = m.root () in
     (match source with
      | None -> ()

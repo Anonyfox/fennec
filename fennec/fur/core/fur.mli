@@ -194,8 +194,10 @@ module Head : sig
     val json_ld : string -> tag
   end
 
-  (** The reactive source list — [(priority, tags)] pairs, one per {!use} call. *)
-  val sources : (int * tag list) list signal
+  (** The reactive source registry for the CURRENT request (server) / document (browser) — [(priority,
+      tags)] pairs, one per {!use} call. It is per-request (fiber-local) on the concurrent server and the
+      single global on the browser, so concurrent SSR renders never share or leak head tags. *)
+  val sources : unit -> (int * tag list) list signal
 
   (** [use f] registers a dynamic (reactive) tag list from [f ()]. Re-evaluated when any
       signal read inside [f] changes. *)

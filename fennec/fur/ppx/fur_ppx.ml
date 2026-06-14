@@ -219,6 +219,7 @@ let desugar_handler str =
           Fur_csr.start_page (fun () -> view (Fennec_fur_handler.Handler.payload codec ~key:[%e key])) ] ]
     else
       [ [%stri let serve conn =
+          Fennec.Fur.Data.with_context @@ fun () ->   (* per-request seed + Head isolation for this render *)
           match load conn with
           | Fennec_fur_handler.Handler.Render p ->
               Fennec.Conn.html conn
@@ -276,6 +277,7 @@ let desugar_form_handler str =
               | Fennec.Fur.Form.Page v -> Fennec.Fur.Handler.html conn v)];
         [%stri
           let serve conn =
+            Fennec.Fur.Data.with_context @@ fun () ->   (* per-request seed + Head isolation (view + render) *)
             match Fennec.Conn.meth conn with Fennec.Http.POST -> post conn | _ -> get conn] ]
     in
     (* alias Form so the view's `Form.ctx`/`Form.flash`/`Form.error`/… resolve: the handler lib opens

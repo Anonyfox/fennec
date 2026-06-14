@@ -40,7 +40,7 @@ let start () =
     | Head.Json_ld j -> el##.textContent := Js.some (Js.string j)
   in
   ignore (Fur.watch (fun () ->
-      let desired = Head.resolve (get Head.sources) in  (* subscribes to the registry *)
+      let desired = Head.resolve (get (Head.sources ())) in  (* subscribes to the registry *)
       let keyed = List.map (fun t -> (Head.tag_key t, t)) desired in
       let wanted = List.map fst keyed in
       List.iter (fun (k, t) ->

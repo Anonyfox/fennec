@@ -202,14 +202,30 @@ module Head = struct
     let json_ld j = Json_ld j
   end
 
-  (* the registry: ordered (source-id, tags); a later source overrides an earlier *)
-  (* IMPORTANT: per-request state — must become fiber-local on the concurrent server *)
-  let sources : (int * tag list) list signal = signal []
-  let counter = ref 0
+  (* the registry: ordered (source-id, tags) (a later source overrides an earlier) + the slot-id
+     allocator. PER-REQUEST: fiber-local on the concurrent native server (via the Platform's render
+     context — the SAME one Data uses, so one binding isolates both), a single global on the browser
+     (one document). Lazily created on first use; the Obj cast is sound + contained here (only Head
+     ever stores/reads this slot, always as a [ctx]). This is what stops one request's <title> from
+     leaking into another's on the parallel server. *)
+  type ctx = { sources : (int * tag list) list signal; counter : int ref }
+
+  let ctx () : ctx =
+    match Platform.head_get () with
+    | Some o -> (Obj.obj o : ctx)
+    | None ->
+      let c = { sources = signal []; counter = ref 0 } in
+      Platform.head_set (Obj.repr c);
+      c
+
+  (* the reactive registry for THIS request (server) / document (browser) — the client head reconciler
+     subscribes to it. On the browser it is the one stable global signal; on the server, per-request. *)
+  let sources () : (int * tag list) list signal = (ctx ()).sources
 
   (* Register a reactive contribution. Call ONCE per instance, in setup (it allocates
      a stable slot id). The effect recomputes [f] whenever a signal it read changes. *)
   let use (f : unit -> tag list) : unit =
+    let { sources; counter } = ctx () in
     let id = !counter in
     incr counter;
     let eff =
@@ -264,7 +280,7 @@ module Head = struct
 
   (* server render: a string of resolved head tags, each marked with its key *)
   let to_ssr () =
-    resolve (peek sources)
+    resolve (peek (ctx ()).sources)
     |> List.map (fun t ->
         let k = tag_key t in
         match t with
@@ -1043,3 +1059,23 @@ let%test_unit "attr patched in place" =
   set t_ "b";
   Fennec_hunt_unit.check_eq "attr patched in place"
     ~expected:"b" ~got:(Option.value ~default:"" (List.assoc_opt "data-x" (List.hd r2.Fake.kids).Fake.attrs))
+
+(* per-request Head isolation: each render context (a [Platform.with_data_context] binding — fiber-local
+   on the concurrent server, the reset fallback outside Eio) gets its OWN Head registry, so one render's
+   <title>/meta can never leak into the next. Unit-level proof of the server fix; the http suite proves
+   it end-to-end (a no-title /hello after a titled /). *)
+let%test "Head registry is per-context — tags do not leak across renders" =
+  let sub h n =
+    let nh = String.length h and nn = String.length n in
+    let rec go i = i + nn <= nh && (String.sub h i nn = n || go (i + 1)) in
+    nn = 0 || go 0
+  in
+  let h1 = Platform.with_data_context (fun () -> Head.title "Page A"; Head.to_ssr ()) in
+  let h2 = Platform.with_data_context (fun () -> Head.title "Page B"; Head.to_ssr ()) in
+  let h3 = Platform.with_data_context (fun () -> Head.to_ssr ()) in
+  sub h1 "Page A"
+  && (not (sub h1 "Page B"))
+  && sub h2 "Page B"
+  && (not (sub h2 "Page A"))  (* B's render must not see A's title *)
+  && (not (sub h3 "Page A"))
+  && (not (sub h3 "Page B"))  (* a no-title render is empty — the exact /hello leak, guarded *)

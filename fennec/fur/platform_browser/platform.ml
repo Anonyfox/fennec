@@ -25,7 +25,10 @@ let push_state abs =
 (* per-request data context — one document, single-threaded, so a single global suffices *)
 let _seed : (string, string) Hashtbl.t = Hashtbl.create 16
 let _source : (string -> (string -> unit) -> unit) ref = ref (fun _ _ -> ())
+let _head : Obj.t option ref = ref None
 let with_data_context f = f ()
 let seed_table () = _seed
 let data_source () = !_source
 let set_data_source s = _source := s
+let head_get () = !_head
+let head_set o = _head := Some o

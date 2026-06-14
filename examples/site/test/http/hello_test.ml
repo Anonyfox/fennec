@@ -46,4 +46,12 @@ let%http "hello handler: server-rendered form, typed POST, CSRF + flash" = fun (
       (* submit returns `again [...]` — a first-class re-render; Form.value repopulates the input so the
          user can correct it (awaiting data corrections), not retype from scratch *)
       post "/hello" ~form:[ ("name", "admin"); ("_csrf_token", tok) ]
-        ~expect:[ status 422; body_contains "reserved"; body_contains {|value="admin"|} ])
+        ~expect:[ status 422; body_contains "reserved"; body_contains {|value="admin"|} ]);
+
+  check "no cross-request <head> leak: /hello does not inherit another page's <title>" (fun () ->
+      (* the web home (/) sets <title>Home — Fennec Site</title>; this form handler sets no title. With
+         per-request Head isolation, /hello's fresh render must NOT carry the home's title across requests
+         (the bug this guards: a shared global Head registry leaking one request's tags into the next). *)
+      get "/";
+      get "/hello" ~expect:[ status 200 ];
+      assert (find_sub (response_body ()) "Home — Fennec Site" = None))
