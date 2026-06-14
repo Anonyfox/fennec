@@ -31,3 +31,17 @@ let%browser "page: default payload when no query param" = fun page ->
   |> hydrated
   |> expect_text "#greet .count" "5" (* String.length "world" = 5, seeded into the live counter *)
   |> ignore
+
+let%browser "page: live data RECONSTRUCTS via Pulse after hydration (seed static, reconstruct live)" =
+ fun page ->
+  page
+  |> goto "/greet?name=Ada"
+  |> expect_text "#greet .seed" "server-computed start = 3" (* the SEEDED static payload, pre-JS *)
+  |> hydrated
+  (* the live half: no rows are seeded — the page opens its OWN DDP subscription after hydration and
+     fills in, then addTask pushes a new row back through the open subscription *)
+  |> expect_text ".tasks .task-items" "Buy milk"
+  |> expect_text ".tasks .task-items" "Walk the dog"
+  |> click ".tasks .add-task"
+  |> expect_text ".tasks .task-items" "Task 1"
+  |> ignore
