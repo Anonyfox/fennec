@@ -5,16 +5,26 @@
 module Store = Burrow_store.Store
 module B = Bson
 
-type t = { store : Store.t; cat : Catalog.t; observers : Observe.t }
+type t = { store : Store.t; cat : Catalog.t; observers : Observe.t; write_lock : Eio.Mutex.t }
 type collection = Catalog.collection
 
-let open_ ?(durability = Store.Full) ?(map_size_gb = 64) path =
+(* All writes (DML + DDL) serialize through [write_lock]: LMDB allows a single write txn at a time, and
+   a contended [mdb_txn_begin] would block the whole Eio domain (not just the calling fiber). An Eio
+   mutex suspends the fiber instead, so concurrent writers queue cleanly — the single-writer design.
+   Reads need no lock: they run on immutable MVCC snapshots. *)
+let open_ ?(durability = Store.Full) ?(map_size_gb = 128) path =
   let store = Store.open_ ~map_size_gb ~max_dbs:1024 ~durability path in
-  { store; cat = Catalog.open_ store; observers = Observe.create () }
+  { store; cat = Catalog.open_ store; observers = Observe.create (); write_lock = Eio.Mutex.create () }
 
+(* Plain lock/unlock (not [Mutex.use_rw], which poisons the mutex on any exception): an expected write
+   failure — Duplicate_key / Validation_failed — leaves the store consistent (Store.write already
+   aborted the txn), so we just release the lock and re-raise. Poisoning would break every later write. *)
+let with_write t f =
+  Eio.Mutex.lock t.write_lock;
+  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock t.write_lock) f
 let close t = Store.close t.store
 let store t = t.store
-let collection t name = Catalog.collection t.cat name
+let collection t name = with_write t (fun () -> Catalog.collection t.cat name)
 let collection_opt t name = Catalog.collection_opt t.cat name
 
 (* ---- ids ---------------------------------------------------------------------------------- *)
@@ -37,19 +47,22 @@ let ensure_id (doc : B.t) : B.t * B.t =
 
 let insert t (c : collection) doc =
   let id, doc = ensure_id doc in
-  Store.write t.store (fun txn -> Write.insert txn c doc);
-  Observe.notify t.observers ~coll:c.name;
+  with_write t (fun () ->
+      Store.write t.store (fun txn -> Write.insert txn c doc);
+      Observe.notify t.observers ~coll:c.name);
   id_to_string id
 
 let update t (c : collection) ~multi ~upsert selector modifier =
-  let n = Store.write t.store (fun txn -> Write.update txn c ~multi ~upsert selector modifier) in
-  Observe.notify t.observers ~coll:c.name;
-  n
+  with_write t (fun () ->
+      let n = Store.write t.store (fun txn -> Write.update txn c ~multi ~upsert selector modifier) in
+      Observe.notify t.observers ~coll:c.name;
+      n)
 
 let remove t (c : collection) selector =
-  let n = Store.write t.store (fun txn -> Write.remove txn c selector) in
-  Observe.notify t.observers ~coll:c.name;
-  n
+  with_write t (fun () ->
+      let n = Store.write t.store (fun txn -> Write.remove txn c selector) in
+      Observe.notify t.observers ~coll:c.name;
+      n)
 
 (* ---- reads -------------------------------------------------------------------------------- *)
 
@@ -125,15 +138,16 @@ let fence _t (_c : collection) k = k ()
 (* ---- index / validator DDL ---------------------------------------------------------------- *)
 
 let ensure_index t (c : collection) ~name ~keys ~unique =
-  match Catalog.ensure_index t.cat c ~name ~keys ~unique with
-  | None -> ()
-  | Some idx ->
-    (* backfill existing records into the new index (one write txn) *)
-    Store.write t.store (fun txn ->
-        Record.iter txn c.records (fun ~id_key ~doc ->
-            Index.add txn idx ~doc ~record_key:id_key;
-            true))
+  with_write t (fun () ->
+      match Catalog.ensure_index t.cat c ~name ~keys ~unique with
+      | None -> ()
+      | Some idx ->
+        (* backfill existing records into the new index (one write txn) *)
+        Store.write t.store (fun txn ->
+            Record.iter txn c.records (fun ~id_key ~doc ->
+                Index.add txn idx ~doc ~record_key:id_key;
+                true)))
 
-let drop_index t (c : collection) ~name = Catalog.drop_index t.cat c ~name
+let drop_index t (c : collection) ~name = with_write t (fun () -> Catalog.drop_index t.cat c ~name)
 let index_names (c : collection) = Catalog.index_names c
-let set_validator t (c : collection) v = Catalog.set_validator t.cat c v
+let set_validator t (c : collection) v = with_write t (fun () -> Catalog.set_validator t.cat c v)
