@@ -115,6 +115,20 @@ let () =
   done;
   check_all ();
 
+  (* ORDERED parity: sort must produce the same sequence (not just the same set) as minimongo. Sort by
+     [a] then [_id] (a total order — _id is unique), with skip/limit, exercising the paginated path. *)
+  let ord sort skip limit =
+    ( Eng.find eng c ~selector:empty ~sort ~skip ~limit ~fields:empty,
+      MM.fetch (MM.find mm ~selector:empty ~sort ~skip ~limit ()) )
+  in
+  let by_id = doc [ ("_id", i 1) ] and by_a_id = doc [ ("a", i 1); ("_id", i 1) ] in
+  let b1, m1 = ord by_id 0 0 in
+  assert (b1 = m1);
+  let b2, m2 = ord by_a_id 5 10 in
+  assert (b2 = m2);
+  let b3, m3 = ord (doc [ ("a", i (-1)); ("_id", i 1) ]) 3 7 in
+  assert (b3 = m3);
+
   (* distinct + count parity across a battery of selectors *)
   for _ = 1 to 50 do
     let sel = rand_selector () in
