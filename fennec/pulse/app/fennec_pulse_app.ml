@@ -27,6 +27,7 @@ let collection (def : 'a Def.t) : 'a T.t =
         let c = R.Collection.create ~name (D.from_env ~sw ~db ~name ()) in
         Hashtbl.replace _reactives name c;
         T.reconcile c (Def.all_indexes def);
+        T.install_validator c (Def.validator def);
         c
   in
   T.of_reactive def coll

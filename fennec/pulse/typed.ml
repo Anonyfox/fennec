@@ -46,10 +46,18 @@ module Make (R : Reactive.REACTIVE) = struct
 
   let reconcile = reconcile_indexes
 
+  (* install the model's structural [{$jsonSchema}] validator on the backend (boot-time, next to the
+     index reconcile); graceful — a backend that can't install it (or a transient error) is logged,
+     not fatal, so a boot never dies on validator install *)
+  let install_validator (coll : R.Collection.t) (v : Bson.t) =
+    try R.Collection.ensure_validator coll (Some v)
+    with e -> prerr_endline (Printf.sprintf "fennec/validator: could not install — %s" (Printexc.to_string e))
+
   (* bind the pure declaration to this instance (boot-time, next to publish) + reconcile its indexes *)
   let attach ?strict (def : 'a Def.t) backend : 'a t =
     let coll = R.Collection.create ~name:(Def.name def) backend in
     reconcile_indexes ?strict coll (Def.all_indexes def);
+    install_validator coll (Def.validator def);
     { def; coll }
 
   let collection t = t.coll (* the dynamic escape hatch *)

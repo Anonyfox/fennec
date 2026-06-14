@@ -144,6 +144,10 @@ module type REACTIVE = sig
     val drop_index : t -> name:string -> unit
     val index_names : t -> string list
 
+    (** Install (or clear) the [{$jsonSchema: …}] structural validator on the backend (the typed
+        layer installs the model's at boot, next to index reconcile). *)
+    val ensure_validator : t -> Bson.t option -> unit
+
     (** A cursor's transform disposition: [Inherit] the collection's transform (the default),
         [Disable] it for this cursor, or [Override f] with a per-cursor transform. (Replaces the old
         [(doc -> doc) option option] triple-state.) *)

@@ -89,4 +89,34 @@ let%test "insert/find/update/remove/count agree between Minimongo and a real mon
             let agg_ok = List.length am = List.length ai && List.for_all2 (fun x y -> B.equal (norm x) (norm y)) am ai in
             find_ok && count_ok && distinct_ok && update_ok && remove_ok && agg_ok)
 
+(* gap-closed: the model's $jsonSchema is INSTALLED on mongod (create/collMod), so the DATABASE
+   itself rejects shape-violating writes — the same rule Minimongo enforces in-engine. *)
+let%test "native: an installed $jsonSchema validator makes mongod reject shape-violating writes" =
+  if not (Mongo.available ()) then true (* native driver not built — skip *)
+  else
+    match M.find () with
+    | None -> true (* no mongod — skip *)
+    | Some _ ->
+        let t = M.start () in
+        Fun.protect
+          ~finally:(fun () -> M.stop t)
+          (fun () ->
+            Eio_main.run @@ fun _env ->
+            Eio.Switch.run @@ fun sw ->
+            let conn = Mongo.connect (M.uri t) in
+            let mc = Mongo.collection ~sw conn ~db:"valid" ~name:"v" in
+            let validator =
+              B.doc
+                [ ( "$jsonSchema",
+                    B.doc
+                      [ ("bsonType", B.str "object");
+                        ("properties", B.doc [ ("title", B.doc [ ("bsonType", B.str "string"); ("minLength", B.int 3) ]) ]);
+                        ("required", B.array [ B.str "title" ]) ] ) ]
+            in
+            Mongo.ensure_validator mc (Some validator);
+            let good = try ignore (Mongo.insert mc (B.doc [ ("title", B.str "hello") ])); true with _ -> false in
+            let bad_type = try ignore (Mongo.insert mc (B.doc [ ("title", B.int 7) ])); false with _ -> true in
+            let bad_short = try ignore (Mongo.insert mc (B.doc [ ("title", B.str "x") ])); false with _ -> true in
+            good && bad_type && bad_short)
+
 let () = exit (Fennec_hunt_unit.run ())

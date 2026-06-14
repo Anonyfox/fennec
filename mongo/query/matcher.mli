@@ -3,7 +3,8 @@
     [$lt] [$lte] [$all] [$size] [$elemMatch] [$not] [$type] [$mod] [$regex] [$bitsAllSet]
     [$bitsAllClear] [$bitsAnySet] [$bitsAnyClear]) and top-level [$and]/[$or]/[$nor], over dotted
     paths. [$regex] is backed by the pure [Re] library (PCRE-ish, with [$options] [i]/[m]/[s]);
-    [$where] (arbitrary JavaScript) and [$jsonSchema] are intentionally omitted.
+    [$where] (arbitrary JavaScript) is intentionally omitted; [$jsonSchema] validates the structural
+    subset {!Fennec_pulse.Schema} emits (see {!json_schema_matches}).
 
     Two rules follow MongoDB/minimongo: equality and range comparison are {e type-scoped} — a
     number query never matches a string (range ops compare same-type only; equality uses
@@ -37,3 +38,11 @@ val type_name : Bson.t -> string
     [$and]/[$or]/[$nor], dotted-path field conditions, operator documents, and implicit equality,
     with an implicit AND over all field conditions. An unknown operator never hides a document. *)
 val doc_matches : Bson.t -> Bson.t -> bool
+
+(** [json_schema_matches schema v] — does [v] satisfy [schema], the structural subset of JSON Schema
+    that {!Fennec_pulse.Schema} renders from a model's codec (bsonType / required / properties /
+    items / additionalProperties / enum / oneOf / length / pattern / numeric and item bounds /
+    uniqueItems)? Unknown keywords are permissive. This is the rule mongod enforces via an installed
+    [$jsonSchema] validator, so the in-memory engine and the database reject the same writes; it is
+    also reachable as the top-level [$jsonSchema] operator in {!doc_matches}. *)
+val json_schema_matches : Bson.t -> Bson.t -> bool

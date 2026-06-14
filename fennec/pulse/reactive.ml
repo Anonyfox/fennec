@@ -86,6 +86,7 @@ module type REACTIVE = sig
 
     val drop_index : t -> name:string -> unit
     val index_names : t -> string list
+    val ensure_validator : t -> Bson.t option -> unit
 
     val find :
       t ->
@@ -339,6 +340,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     let ensure_index c ~name ~keys ~unique = B.ensure_index c.backend ~name ~keys ~unique
     let drop_index c ~name = B.drop_index c.backend ~name
     let index_names c = B.index_names c.backend
+    let ensure_validator c v = B.ensure_validator c.backend v
 
     let insert c (d : doc) : string =
       let _id, d = mint_id c d in

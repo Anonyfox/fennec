@@ -133,6 +133,68 @@ let regex_field field_val pat opts =
   | Some fv -> test fv
   | None -> false
 
+(* ---- $jsonSchema ----------------------------------------------------------
+   Validate a value against the structural subset of JSON Schema that {!Fennec_pulse.Schema} renders
+   from a model's codec (bsonType / required / properties / items / additionalProperties / enum /
+   oneOf / min|maxLength / pattern / minimum / maximum / multipleOf / min|maxItems / uniqueItems).
+   This is the SAME rule mongod enforces via an installed [$jsonSchema] validator, so the in-memory
+   engine rejects exactly the foreign writes mongod would. An unknown keyword is permissive — like the
+   "unknown operator never hides a document" rule. *)
+
+(* code points, not bytes — mongod's $jsonSchema length keywords count characters *)
+let utf8_len s =
+  let n = ref 0 in
+  String.iter (fun c -> if Char.code c land 0xC0 <> 0x80 then incr n) s;
+  !n
+
+let rec json_schema_matches (schema : Bson.t) (v : Bson.t) : bool =
+  match schema with
+  | Document kws -> List.for_all (fun (kw, arg) -> schema_keyword kw arg v) kws
+  | _ -> true (* a non-object (or empty) schema accepts anything *)
+
+(* [arg] is the keyword's SCHEMA argument (e.g. the declared bsonType name(s)); [v] is the document
+   value under test. Dispatch on the keyword, then inspect [arg] and [v]. *)
+and schema_keyword (kw : string) (arg : Bson.t) (v : Bson.t) : bool =
+  match kw with
+  | "bsonType" -> (
+      match arg with
+      | String t -> type_matches t v
+      | Array ts -> List.exists (function String t -> type_matches t v | _ -> false) ts
+      | _ -> true)
+  | "enum" -> ( match arg with Array opts -> List.exists (fun o -> Bson.equal o v) opts | _ -> true)
+  | "minimum" -> ( match (Bson.as_float v, Bson.as_float arg) with Some x, Some m -> x >= m | _ -> true)
+  | "maximum" -> ( match (Bson.as_float v, Bson.as_float arg) with Some x, Some m -> x <= m | _ -> true)
+  | "multipleOf" -> (
+      match (Bson.as_float v, Bson.as_float arg) with Some x, Some m when m <> 0. -> Float.rem x m = 0. | _ -> true)
+  | "minLength" -> ( match (v, Bson.as_float arg) with String s, Some n -> float_of_int (utf8_len s) >= n | _ -> true)
+  | "maxLength" -> ( match (v, Bson.as_float arg) with String s, Some n -> float_of_int (utf8_len s) <= n | _ -> true)
+  | "pattern" -> ( match (arg, v) with String p, String s -> regex_matches p "" s | _ -> true)
+  | "minItems" -> ( match (v, Bson.as_float arg) with Array xs, Some n -> float_of_int (List.length xs) >= n | _ -> true)
+  | "maxItems" -> ( match (v, Bson.as_float arg) with Array xs, Some n -> float_of_int (List.length xs) <= n | _ -> true)
+  | "uniqueItems" -> (
+      match (arg, v) with
+      | Bool true, Array xs ->
+          let rec uniq = function [] -> true | x :: tl -> (not (List.exists (Bson.equal x) tl)) && uniq tl in
+          uniq xs
+      | _ -> true)
+  | "items" -> ( match v with Array xs -> List.for_all (json_schema_matches arg) xs | _ -> true)
+  | "additionalProperties" -> (
+      match v with Document kvs -> List.for_all (fun (_, fv) -> json_schema_matches arg fv) kvs | _ -> true)
+  | "properties" -> (
+      match (arg, v) with
+      | Document props, Document _ ->
+          List.for_all
+            (fun (pn, psch) -> match Bson.get v pn with Some fv -> json_schema_matches psch fv | None -> true)
+            props
+      | _ -> true)
+  | "required" -> (
+      match (arg, v) with
+      | Array reqs, Document _ -> List.for_all (function String rn -> Bson.get v rn <> None | _ -> true) reqs
+      | _ -> true)
+  | "oneOf" -> (
+      match arg with Array schemas -> List.length (List.filter (fun s -> json_schema_matches s v) schemas) = 1 | _ -> true)
+  | _ -> true (* unknown keyword: permissive *)
+
 (* one operator against one CONCRETE value (no array fan-out) *)
 let rec op1 op (v : Bson.t) (fv : Bson.t) : bool =
   match op with
@@ -240,6 +302,7 @@ and doc_matches (selector : Bson.t) (d : Bson.t) : bool =
               match cond with
               | Array xs -> not (List.exists (fun s -> doc_matches s d) xs)
               | _ -> true)
+          | "$jsonSchema" -> json_schema_matches cond d
           | _ when Bson.is_operator_key k -> true
           | _ -> matches_cond (get_path d k) cond)
         kvs

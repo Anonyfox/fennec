@@ -90,6 +90,16 @@ let drop_index c ~name = Coll.drop_index c ~name
 let index_names c =
   List.filter_map (fun d -> match B.get d "name" with Some (B.String s) -> Some s | _ -> None) (Coll.list_indexes c)
 
+(* install the model's $jsonSchema so mongod itself rejects foreign writes that violate the shape:
+   create-with-validator on a fresh collection, else collMod when it already exists. validationLevel
+   "moderate" keeps legacy/invalid docs updatable (the evolution-tolerance stance in Schema). *)
+let ensure_validator c = function
+  | None -> ()
+  | Some v ->
+      let opts = [ ("validator", v); ("validationLevel", B.str "moderate") ] in
+      ( try ignore (Client.command c.Coll.client ~db:c.Coll.db (B.doc (("create", B.str c.Coll.name) :: opts)))
+        with _ -> ignore (Client.command c.Coll.client ~db:c.Coll.db (B.doc (("collMod", B.str c.Coll.name) :: opts))) )
+
 (* real change streams: Live keeps ONE stream per collection, replays the initial set synchronously
    (ready-after-data), then routes per-query field-level deltas *)
 let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.handle =
@@ -151,4 +161,7 @@ module Dynamic = struct
     match c with Mem m -> Mini.drop_index m ~name | Native r -> drop_index r ~name | Missing message -> unavailable message
   let index_names c =
     match c with Mem m -> Mini.index_names m | Native r -> index_names r | Missing message -> unavailable message
+
+  let ensure_validator c v =
+    match c with Mem m -> Mini.ensure_validator m v | Native r -> ensure_validator r v | Missing message -> unavailable message
 end

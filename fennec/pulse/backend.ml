@@ -52,6 +52,10 @@ module type S = sig
 
   (** Existing index names — reconcile diffs against this (dropping only fennec-named orphans). *)
   val index_names : collection -> string list
+
+  (** Install (or clear, with [None]) the structural [{$jsonSchema: …}] validator (mongod
+      create/collMod natively; in-engine for Mini). Idempotent. *)
+  val ensure_validator : collection -> Bson.t option -> unit
 end
 
 (* The in-memory minimongo backend. *)
@@ -89,4 +93,5 @@ module Mini : S with type collection = Minimongo.t = struct
   let ensure_index c ~name ~keys ~unique = Minimongo.ensure_index c ~name ~fields:(fields_of_keys keys) ~unique
   let drop_index c ~name = Minimongo.drop_index c ~name
   let index_names = Minimongo.index_names
+  let ensure_validator c v = Minimongo.set_validator c v
 end

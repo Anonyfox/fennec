@@ -29,6 +29,11 @@ module Make (R : Reactive.REACTIVE) : sig
   (** Reconcile declared indexes against a reactive collection (the boot lifecycle step). *)
   val reconcile : ?strict:bool -> R.Collection.t -> Index.t list -> unit
 
+  (** [install_validator coll v] installs the model's structural [{$jsonSchema: …}] validator [v]
+      (from {!Def.validator}) on the backend collection — boot-time, next to index reconcile. Graceful
+      (logs and continues on failure). *)
+  val install_validator : R.Collection.t -> Bson.t -> unit
+
   (** The dynamic collection underneath — the escape hatch (aggregations, raw queries). *)
   val collection : 'a t -> R.Collection.t
 

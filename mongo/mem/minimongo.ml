@@ -48,11 +48,14 @@ type t = {
          so the uniqueness check is O(#unique indexes) hash lookups instead of a full store scan
          (which made bulk-loading N docs O(U·N²)). The key is the raw [Bson.t option list] tuple, so
          the map's polymorphic equality is byte-identical to the prior [key_of x = key_of y] test. *)
+  mutable validator : Bson.t option;
+      (* the collection's [{$jsonSchema: …}] document (from a model's codec) or [None]. When set,
+         writes are checked against it in-engine — dev/test parity with the validator mongod enforces. *)
 }
 
 let create ?(gen_id = fun () -> Query.Id.random_id ()) () =
   { lock = Mutex.create (); store = Hashtbl.create 64; rorder = []; fan = Fanout.create (); gen_id;
-    indexes = []; uniq = [] }
+    indexes = []; uniq = []; validator = None }
 
 (* ---- indexes (in-memory): name tracking for reconcile + UNIQUE enforcement for dev/test parity --
    Non-unique indexes are tracked (so reconcile's orphan-drop works in-memory too) but don't
@@ -114,6 +117,23 @@ let index_commit t ~id ~old ~nw =
       match nw with Some n -> Hashtbl.replace m (key_of fields n) id | None -> ())
     t.uniq
 
+(* ---- $jsonSchema validation (dev/test parity with mongod's installed validator) --------------
+   When a validator is set, [insert] checks every new document and [update] checks the post-image of
+   any document that was ALREADY valid ("moderate" — a legacy/invalid doc stays updatable), exactly
+   as mongod's validationLevel:"moderate". The validator IS a selector ([{$jsonSchema: …}]), so the
+   check is the same {!Query.Matcher.doc_matches} the engine already runs. *)
+exception Validation_error of string
+
+let set_validator t v = with_lock t.lock (fun () -> t.validator <- v)
+
+let valid_unlocked t (d : doc) =
+  match t.validator with None -> true | Some v -> Query.Matcher.doc_matches v d
+
+(* call under [t.lock], BEFORE committing [d] *)
+let check_valid_unlocked t (d : doc) =
+  if not (valid_unlocked t d) then
+    raise (Validation_error (match get d "_id" with Some i -> Query.Diff.id_to_string i | None -> "<doc>"))
+
 type handle = { stop : unit -> unit }
 
 (* raw simulated change stream: subscribe to insert/update/remove events from now on (tail of the
@@ -144,6 +164,7 @@ let ensure_id t (d : doc) : string * doc =
 (* commit an insert — call under [t.lock] *)
 let insert_unlocked t (d : doc) : string =
   let id, d = ensure_id t d in
+  check_valid_unlocked t d;
   check_unique_unlocked t ~self_id:id d;
   let prev = Hashtbl.find_opt t.store id in
   if prev = None then t.rorder <- id :: t.rorder;
@@ -214,6 +235,8 @@ let update t ?(multi = false) ?(upsert = false) (selector : doc) (modifier : doc
                       | None, Some idv -> Document (("_id", idv) :: Query.Diff.kvs_of nw)
                       | _ -> nw
                     in
+                    (* moderate: enforce the validator only when the pre-image was already valid *)
+                    if valid_unlocked t old && not (valid_unlocked t nw) then raise (Validation_error id);
                     check_unique_unlocked t ~self_id:id nw;
                     Hashtbl.replace t.store id nw;
                     index_commit t ~id ~old:(Some old) ~nw:(Some nw);

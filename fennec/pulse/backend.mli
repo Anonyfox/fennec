@@ -87,6 +87,11 @@ module type S = sig
 
   (** Existing index names — the reconcile diff reads this (and only drops fennec-named orphans). *)
   val index_names : collection -> string list
+
+  (** Install (or clear, with [None]) the structural [{$jsonSchema: …}] validator so writes that
+      violate the model's shape are rejected. Native → mongod create/collMod with the validator;
+      Mini → in-engine [$jsonSchema] enforcement (dev/test parity). Idempotent. *)
+  val ensure_validator : collection -> Bson.t option -> unit
 end
 
 (** The in-memory minimongo backend — the default for dev and test. *)

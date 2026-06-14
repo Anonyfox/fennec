@@ -67,12 +67,22 @@ val create : ?gen_id:(unit -> string) -> unit -> t
     in-memory engine enforces uniqueness for dev/test parity with mongod. *)
 exception Unique_violation of string
 
+(** Raised by [insert]/[update] when a document fails the collection's [$jsonSchema] validator (see
+    {!set_validator}); the payload is the offending document's [_id]. *)
+exception Validation_error of string
+
 (** Declare an index by name + key fields. [unique] is enforced in-engine; non-unique is tracked
     (for reconcile) but doesn't accelerate scans yet. *)
 val ensure_index : t -> name:string -> fields:string list -> unique:bool -> unit
 
 val drop_index : t -> name:string -> unit
 val index_names : t -> string list
+
+(** [set_validator t v] installs (or clears, with [None]) the collection's structural validator — a
+    [{$jsonSchema: …}] document (typically a model's {!Fennec_pulse.Schema.validator}). When set,
+    [insert] rejects non-conforming documents and [update] rejects post-images of already-valid
+    documents (mongod's [validationLevel:"moderate"]), raising {!Validation_error}. *)
+val set_validator : t -> Bson.t option -> unit
 
 (** A live subscription handle; call [stop] to detach. *)
 type handle = { stop : unit -> unit }

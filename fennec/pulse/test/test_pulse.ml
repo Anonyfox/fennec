@@ -464,17 +464,47 @@ let%test "typed: insert validates (Invalid collects); find round-trips; Filter/M
         | None -> false)
   && T.remove h ~where:Filter.[ eq f_done true ] = 2
 
-let%test "typed: the skip policy — foreign garbage is skipped by find, surfaced by find_results" =
-  let h = T.attach task_def (Minimongo.create ()) in
+let%test "typed: the skip policy — legacy garbage is skipped by find, surfaced by find_results" =
+  let backend = Minimongo.create () in
+  (* a legacy/foreign doc that PREDATES the validator — poked into the substrate before [attach]
+     installs the $jsonSchema. (Once installed, the validator rejects such a write outright; the
+     skip-policy is for docs that predate a tightened rule, exactly this.) *)
+  let _ = Minimongo.insert backend (B.doc [ ("title", B.int 42) ]) in
+  let h = T.attach task_def backend in
   let _ = T.insert h { id = ""; title = "Good one"; done_ = false; tags = [] } in
-  (* a foreign writer pokes garbage straight into the substrate (the escape hatch) *)
-  let _ = R.Collection.insert (T.collection h) (B.doc [ ("title", B.int 42) ]) in
   List.length (T.find h ()) = 1
   && (let bad =
         List.filter_map (function Error es -> Some es | Ok _ -> None) (T.find_results h ())
       in
       match bad with [ es ] -> List.exists (fun e -> e.Codec.path = [ "title" ]) es | _ -> false)
   && T.count h () = 2 (* count is the substrate's truth — the skip is a READ policy, not a lie *)
+
+let%test "typed: the model's $jsonSchema is INSTALLED at attach — bad writes are rejected (mongod parity)" =
+  let h = T.attach task_def (Minimongo.create ()) in
+  let _ = T.insert h { id = ""; title = "Valid one"; done_ = false; tags = [] } in
+  (* a write that bypasses the codec (the escape hatch) but violates the SHAPE — title is an int — is
+     rejected in-engine, exactly as mongod's installed $jsonSchema validator would reject it *)
+  let wrong_type =
+    match R.Collection.insert (T.collection h) (B.doc [ ("title", B.int 7); ("done", B.bool false) ]) with
+    | exception Minimongo.Validation_error _ -> true
+    | _ -> false
+  in
+  (* a refinement rode into the schema too: [min_len 3] became minLength, so "x" is rejected *)
+  let too_short =
+    match R.Collection.insert (T.collection h) (B.doc [ ("title", B.str "x"); ("done", B.bool false) ]) with
+    | exception Minimongo.Validation_error _ -> true
+    | _ -> false
+  in
+  wrong_type && too_short && T.count h () = 1 (* only the one valid insert landed *)
+
+let%test "typed: validator is MODERATE — a doc that was already invalid stays updatable" =
+  let backend = Minimongo.create () in
+  let bad_id = Minimongo.insert backend (B.doc [ ("title", B.int 99) ]) in (* legacy garbage, pre-validator *)
+  let h = T.attach task_def backend in
+  (* moderate validationLevel: an update to a doc that did not satisfy the schema is NOT re-validated *)
+  match T.update h ~where:Filter.[ eq f_id bad_id ] M.(all [ set f_done true ]) with
+  | n -> n = 1
+  | exception Minimongo.Validation_error _ -> false
 
 let%test "typed: cursor plugs into publish unchanged (the publication sees the typed window)" =
   let h = T.attach task_def (Minimongo.create ()) in
