@@ -14,8 +14,8 @@
 .count { font-weight: 700; min-width: 2ch; text-align: center }
 |scss}]
 
-let make ?(label = "count") () =
-  let count = signal 0 in
+let make ?(label = "count") ?(start = 0) () =
+  let count = signal start in
   fun () ->
     <span className="counter">
       <span className="clabel">(node (label ^ ":"))</span>

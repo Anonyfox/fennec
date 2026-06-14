@@ -8,5 +8,7 @@ let page () =
   <main className="greet" id="greet">
     <h1>(node ("Hello, " ^ g.Greet.who ^ "!"))</h1>
     <p className="seed">(node ("server-computed start = " ^ string_of_int g.Greet.count))</p>
-    <Counter label="clicks" />
+    (* the cross-stage value flows straight INTO interactive state: the live counter STARTS at the
+       server-computed count — proof the seed becomes behaviour, not just static text *)
+    <Counter label="clicks" start=(g.Greet.count) />
   </main>
