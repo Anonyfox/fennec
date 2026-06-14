@@ -21,3 +21,6 @@ val delete : [ `W ] Store.txn -> t -> id:Bson.t -> bool
 
 val iter : _ Store.txn -> t -> (id_key:string -> doc:Bson.t -> bool) -> unit
 (** Full scan in [_id] (key) order; [f] returns [true] to continue, [false] to stop. *)
+
+val count : _ Store.txn -> t -> int
+(** Number of records, counted at the storage layer without decoding any document. *)

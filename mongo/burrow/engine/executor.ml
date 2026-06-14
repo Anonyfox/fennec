@@ -59,4 +59,6 @@ let find txn c plan ~selector ~sort ~skip ~limit ~fields =
 let find_one txn c plan ~selector ~sort ~skip ~fields =
   match find txn c plan ~selector ~sort ~skip ~limit:1 ~fields with [] -> None | d :: _ -> Some d
 
-let count txn c plan ~selector = List.length (matched txn c plan ~selector)
+(* an unfiltered count is just the record count — no document decode, no candidate list *)
+let count txn (c : Catalog.collection) plan ~selector =
+  if selector = empty then Record.count txn c.records else List.length (matched txn c plan ~selector)
