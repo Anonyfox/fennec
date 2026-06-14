@@ -3,8 +3,16 @@ module B = Bson
 module Mod = Query.Modifier
 
 exception Duplicate_key of string
+exception Validation_failed of string
 
 let id_of doc = match B.get doc "_id" with Some id -> id | None -> invalid_arg "Burrow: document without _id"
+
+(* reject a write whose document violates the collection's installed $jsonSchema validator — the same
+   rule mongod enforces, so Burrow and the database refuse the same writes *)
+let check_validator (c : Catalog.collection) doc =
+  match c.validator with
+  | Some schema when not (Query.Matcher.json_schema_matches schema doc) -> raise (Validation_failed c.name)
+  | _ -> ()
 
 (* a unique index is violated if any of [doc]'s key tuples already maps to a *different* record *)
 let check_unique txn (c : Catalog.collection) ~record_key ~doc =
@@ -46,6 +54,7 @@ let reindex txn (c : Catalog.collection) ~record_key ~old_doc ~new_doc =
 let insert txn (c : Catalog.collection) (doc : B.t) =
   let id = id_of doc in
   let rk = Record.key_of_id id in
+  check_validator c doc;
   check_unique txn c ~record_key:rk ~doc;
   Record.put txn c.records ~id doc;
   index_all txn c ~record_key:rk ~doc
@@ -88,6 +97,7 @@ let update txn (c : Catalog.collection) ~multi ~upsert selector modifier : int =
         let id = id_of old_doc in
         let rk = Record.key_of_id id in
         let new_doc = force_id id (Mod.apply old_doc modifier) in
+        check_validator c new_doc;
         check_unique txn c ~record_key:rk ~doc:new_doc;
         Record.put txn c.records ~id new_doc;
         reindex txn c ~record_key:rk ~old_doc ~new_doc)

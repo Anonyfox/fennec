@@ -2,5 +2,5 @@
 ; secondary-index access paths incl. range/multikey/unique/backfill/persistence (test_index) — all
 ; through the real storage stack under an Eio scheduler.
 (tests
- (names test_engine test_writes test_index)
- (libraries burrow burrow_store eio_main unix fennec-mongo.bson))
+ (names test_engine test_writes test_index test_diff test_multikey)
+ (libraries burrow burrow_store eio_main unix fennec-mongo.bson fennec-mongo.minimongo))

@@ -15,12 +15,17 @@ type t = { store : Store.t; meta : Store.db; colls : (string, collection) Hashtb
 
 let store t = t.store
 
-(* meta-db key layout: a 1-char tag, NUL, then NUL-separated names. *)
+(* meta-db key layout: a 1-char tag, NUL, then NUL-separated names. These are KEYS (length-delimited
+   MDB_vals), so embedded NULs are fine. *)
 let ckey name = "c\000" ^ name
 let ikey coll iname = "i\000" ^ coll ^ "\000" ^ iname
 let vkey coll = "v\000" ^ coll
-let rec_db_name coll = "rec\000" ^ coll
-let idx_db_name coll iname = "idx\000" ^ coll ^ "\000" ^ iname
+
+(* Sub-DB NAMES, by contrast, are passed to mdb_dbi_open as C strings (NUL-terminated), so they MUST
+   be NUL-free or they'd truncate and collide (every "idx\000..." -> "idx"). Length-prefix the
+   collection so the (coll, iname) split is unambiguous regardless of separator characters. *)
+let rec_db_name coll = "rec:" ^ coll
+let idx_db_name coll iname = Printf.sprintf "idx:%d:%s:%s" (String.length coll) coll iname
 
 let parse_keys : B.t -> (string * int) list = function
   | B.Document kvs ->

@@ -9,6 +9,10 @@ exception Duplicate_key of string
 (** Raised (with the index name) when an insert/update would violate a unique index. The enclosing
     write transaction aborts, so no partial change is committed. *)
 
+exception Validation_failed of string
+(** Raised (with the collection name) when a write violates the collection's installed [$jsonSchema]
+    validator — the same writes mongod rejects. The enclosing write transaction aborts. *)
+
 val insert : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> unit
 (** Insert a document that already carries an [_id]; adds its index entries. *)
 

@@ -64,6 +64,30 @@ let count t (c : collection) ~selector =
       let plan = plan_for c ~selector ~sort:(B.Document []) in
       Executor.count txn c plan ~selector)
 
+(* distinct values of [key] (dotted path) across documents matching [selector]; array values are
+   unwrapped and the result deduped by the total Bson order *)
+let distinct t (c : collection) ~key ~selector =
+  let docs =
+    Store.read t.store (fun txn ->
+        let plan = plan_for c ~selector ~sort:(B.Document []) in
+        Executor.matched txn c plan ~selector)
+  in
+  List.sort_uniq B.compare
+    (List.concat_map
+       (fun d -> match Query.Matcher.get_path d key with None -> [] | Some (B.Array els) -> els | Some v -> [ v ])
+       docs)
+
+(* one-shot aggregation pipeline over the collection's documents (reuses the pure pipeline engine);
+   [lookup] resolves a foreign collection for $lookup / $unionWith *)
+let aggregate t (c : collection) ?(lookup = fun _ -> []) pipeline =
+  let docs =
+    Store.read t.store (fun txn ->
+        let acc = ref [] in
+        Record.iter txn c.records (fun ~id_key:_ ~doc -> acc := doc :: !acc; true);
+        List.rev !acc)
+  in
+  Query.Aggregate.run ~lookup pipeline docs
+
 (* ---- index / validator DDL ---------------------------------------------------------------- *)
 
 let ensure_index t (c : collection) ~name ~keys ~unique =
