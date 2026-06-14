@@ -4,7 +4,7 @@
 ; native driver wasn't built or no mongod is installed.
 
 (tests
- (names test_diff test_observe test_dynamic test_embedded)
+ (names test_diff test_observe test_dynamic test_embedded test_burrow_vs_mongod)
  (libraries
   fennec.pulse.mongo
   fennec.pulse
@@ -13,6 +13,8 @@
   fennec-mongo.bson
   fennec-mongo.query
   fennec-mongo.minimongo
+  fennec-mongo.burrow
+  fennec-mongo.burrow.store
   eio
   eio.unix
   eio_main
