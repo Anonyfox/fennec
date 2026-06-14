@@ -1,8 +1,15 @@
-; Build tools: file-tree route codegen + scoped-style extractor.
+; Build tools: file-tree route codegen + scoped-style extractor + jsoo-bundle stager.
 
 (executable
  (name route_gen)
  (modules route_gen)
+ (libraries unix)
+ (flags
+  (:standard -w -a)))
+
+(executable
+ (name stage)
+ (modules stage)
  (libraries unix)
  (flags
   (:standard -w -a)))

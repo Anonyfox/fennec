@@ -1,14 +1,18 @@
-; CONSUMER: evaluate the generated per-app bundle stanzas in-pass (one isolated .bc.js + .css per
-; app, incremental via jsoo separate compilation). One fixed staging rule lays them out as the served
-; tree _apps/<app>/{main.js,main.css}, which the webroot --public's.
+; CONSUMER: evaluate the generated per-app bundle stanzas in-pass (one isolated .bc.js + .css per app,
+; incremental via jsoo separate compilation). A native staging rule then lays each app out as the served
+; tree _apps/<app>/{main.js,main.css}, which the webroot --public's. The stager (fennec.fur.tools.stage)
+; is ONE native exec — it replaced a per-file bash fork-loop that cost ~24ms almost entirely on
+; basename/mkdir/cp forks. (Per-bundle incremental staging isn't possible: dune forbids (subdir) and
+; subdir targets inside a (dynamic_include), so the served tree is one (dir) target.) Adding an app = drop
+; a folder; no edit here.
 (dynamic_include ../gen/dune.inc)
 
 (rule
  (deps
   (glob_files_rec *.bc.js)
-  (glob_files_rec *.css))
+  (glob_files_rec *.css)
+  %{project_root}/fennec/fur/tools/stage.exe)
  (targets
   (dir served))
  (action
-  (bash
-   "mkdir -p served/_apps; for f in *.bc.js; do [ -e \"$f\" ] || continue; n=$(basename \"$f\" .bc.js); mkdir -p \"served/_apps/$n\"; cp \"$f\" \"served/_apps/$n/main.js\"; done; for f in *.css; do [ -e \"$f\" ] || continue; n=$(basename \"$f\" .css); mkdir -p \"served/_apps/$n\"; cp \"$f\" \"served/_apps/$n/main.css\"; done")))
+  (run %{project_root}/fennec/fur/tools/stage.exe _apps)))
