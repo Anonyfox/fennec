@@ -37,8 +37,13 @@ let ensure_id (doc : B.t) : B.t * B.t =
 
 let insert t (c : collection) doc =
   let id, doc = ensure_id doc in
-  Store.write t.store (fun txn -> Record.put txn c.records ~id doc);
+  Store.write t.store (fun txn -> Write.insert txn c doc);
   id_to_string id
+
+let update t (c : collection) ~multi ~upsert selector modifier =
+  Store.write t.store (fun txn -> Write.update txn c ~multi ~upsert selector modifier)
+
+let remove t (c : collection) selector = Store.write t.store (fun txn -> Write.remove txn c selector)
 
 (* ---- reads -------------------------------------------------------------------------------- *)
 
@@ -62,8 +67,14 @@ let count t (c : collection) ~selector =
 (* ---- index / validator DDL ---------------------------------------------------------------- *)
 
 let ensure_index t (c : collection) ~name ~keys ~unique =
-  (* registers + persists; backfill + unique enforcement arrive with the indexing phase *)
-  ignore (Catalog.ensure_index t.cat c ~name ~keys ~unique)
+  match Catalog.ensure_index t.cat c ~name ~keys ~unique with
+  | None -> ()
+  | Some idx ->
+    (* backfill existing records into the new index (one write txn) *)
+    Store.write t.store (fun txn ->
+        Record.iter txn c.records (fun ~id_key ~doc ->
+            Index.add txn idx ~doc ~record_key:id_key;
+            true))
 
 let drop_index t (c : collection) ~name = Catalog.drop_index t.cat c ~name
 let index_names (c : collection) = Catalog.index_names c

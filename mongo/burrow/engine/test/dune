@@ -1,6 +1,6 @@
-; End-to-end engine test: insert (explicit + generated _id), point lookups, field/operator/array
-; queries, sort, projection, skip/limit, count, and persistence across reopen — all through the real
-; storage stack under an Eio scheduler.
-(test
- (name test_engine)
+; Engine test suites: the read pipeline (test_engine), the mutation path (test_writes), and the
+; secondary-index access paths incl. range/multikey/unique/backfill/persistence (test_index) — all
+; through the real storage stack under an Eio scheduler.
+(tests
+ (names test_engine test_writes test_index)
  (libraries burrow burrow_store eio_main unix fennec-mongo.bson))

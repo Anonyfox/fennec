@@ -4,16 +4,40 @@ module M = Query.Matcher
 
 let empty = B.Document []
 
-(* candidate documents from the access path (pre-residual-match) *)
+let full_scan txn (c : Catalog.collection) : B.t list =
+  let acc = ref [] in
+  Record.iter txn c.records (fun ~id_key:_ ~doc -> acc := doc :: !acc; true);
+  List.rev !acc
+
+(* candidate documents from the access path (a superset of the matches; the residual matcher filters) *)
 let candidates txn (c : Catalog.collection) (plan : Plan.t) : B.t list =
   match plan with
   | Plan.Id_point id -> ( match Record.get txn c.records ~id with Some d -> [ d ] | None -> [])
-  | Plan.Collection_scan ->
-    let acc = ref [] in
-    Record.iter txn c.records (fun ~id_key:_ ~doc ->
-        acc := doc :: !acc;
-        true);
-    List.rev !acc
+  | Plan.Collection_scan -> full_scan txn c
+  | Plan.Index_scan { index; lo; excl_lo; hi; excl_hi } -> (
+    match List.find_opt (fun i -> i.Catalog.iname = index) c.indexes with
+    | None -> full_scan txn c (* index vanished concurrently: correctness over speed *)
+    | Some idx ->
+      (* stop once the entry's field value passes the upper bound; emit unless below an exclusive lower *)
+      let stop entry =
+        match hi with
+        | None -> false
+        | Some e -> if excl_hi then not (entry < e) else not (entry < e || String.starts_with ~prefix:e entry)
+      in
+      let emit entry =
+        match lo with Some e when excl_lo -> not (String.starts_with ~prefix:e entry) | _ -> true
+      in
+      let seen = Hashtbl.create 64 and acc = ref [] in
+      Store.iter txn idx.Catalog.db ?from:lo (fun ~key ~data ->
+          if stop key then false
+          else begin
+            if emit key && not (Hashtbl.mem seen data) then begin
+              Hashtbl.add seen data ();
+              acc := data :: !acc
+            end;
+            true
+          end);
+      List.filter_map (fun rk -> Record.get_by_key txn c.records rk) (List.rev !acc))
 
 let matched txn c plan ~selector =
   let cs = candidates txn c plan in
