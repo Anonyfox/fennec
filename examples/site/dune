@@ -14,50 +14,17 @@
 ; needed (esbuild can't bundle the jsoo runtime's node-guarded requires, and there are
 ; no npm deps to resolve). It is --included into the web root below, at its served path.
 
-; ---- per-app CSS — compile the app's entry stylesheet (@use pulls colocated parts) ----
-
-(rule
- (target web.css)
- (deps
-  (glob_files_rec frontend/*.scss))
- (action
-  (run
-   %{bin:fennec}
-   build
-   --out-name
-   web.css
-   -o
-   .
-   frontend/apps/web/main.scss)))
-
-(rule
- (target admin.css)
- (deps
-  (glob_files_rec frontend/*.scss))
- (action
-  (run
-   %{bin:fennec}
-   build
-   --out-name
-   admin.css
-   -o
-   .
-   frontend/apps/admin/main.scss)))
-
-; ---- assemble the SERVED web root: each bundle at its /_apps/<name>/ served path,
-; which the SSR template references verbatim, + the shared public/ tree ----
+; ---- assemble the SERVED web root: just merge the staged trees. Apps and handlers each generate
+; their own isolated bundles (+ app css) into served/_apps|_handlers/<name>/main.{js,css} via
+; route_gen + dynamic_include (client/apps, client/handlers); here we only --public them next to the
+; shared public/ tree. Adding an app OR a handler needs NO change in this file. ----
 
 (rule
  (targets
   (dir webroot))
  (deps
-  client/web.bc.js
-  client/admin.bc.js
-  web.css
-  admin.css
   (source_tree public)
-  ; the staged handler-bundle tree (_handlers/<name>/main.js), built generically from
-  ; frontend/handlers/*.mlx — adding a handler needs NO change here
+  (glob_files_rec client/apps/run/served/*)
   (glob_files_rec client/handlers/run/served/*))
  (action
   (run
@@ -65,16 +32,10 @@
    build
    -o
    webroot
-   --include
-   client/web.bc.js:_apps/web/main.js
-   --include
-   web.css:_apps/web/main.css
-   --include
-   client/admin.bc.js:_apps/admin/main.js
-   --include
-   admin.css:_apps/admin/main.css
    --public
    public
+   --public
+   client/apps/run/served
    --public
    client/handlers/run/served)))
 

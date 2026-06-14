@@ -147,15 +147,27 @@ let emit_routes apps_dir out_dir =
     (Printf.sprintf "(* GENERATED — combined mount list. *)\nlet apps : Fur.mount list = [ %s ]\n"
        (String.concat "; " (List.map (fun n -> route_mod n ^ ".mount") names)))
 
-(* boots mode: emit one client entry per app (<app>.ml) into out_dir, booting ONLY its
-   own app — by referencing its per-app library's Routes.mount. Generated, so there are
-   no hand-written entry files; each bundle links only its own app's lib. *)
-let emit_boots apps_dir out_dir =
-  app_dirs apps_dir |> List.iter (fun n ->
-    write (Filename.concat out_dir (mangle n ^ ".ml"))
-      (Printf.sprintf
-         "(* GENERATED client entry for app %S — do not edit. Boots only this app. *)\nlet () = Fur_csr.start [ %s.Routes.mount ]\n"
-         n (lib_mod n)))
+(* app-bundles mode: emit a dune.inc (consumed via dynamic_include) with, per frontend/apps/<app>/,
+   its WHOLE bundle wiring — the boot rule (entry referencing only that app's lib, so bundles stay
+   isolated), the private jsoo (executable), AND the CSS rule (compiles main.scss). No hand-written
+   client/dune stanza per app; adding an app = drop a folder. [rel_frontend] is the project-relative
+   path to the frontend/ dir, for the %{project_root}-anchored scss inputs the CSS rule needs. *)
+let emit_app_bundles apps_dir out_dir rel_frontend =
+  let b = Buffer.create 2048 in
+  Buffer.add_string b "; GENERATED — do not edit. One isolated jsoo bundle (+ css) per frontend/apps/<app>/.\n";
+  app_dirs apps_dir
+  |> List.iter (fun n ->
+         let lib = mangle n ^ "_app" in
+         Buffer.add_string b
+           (Printf.sprintf
+              "(rule\n (target %s.ml)\n (action (with-stdout-to %s.ml (echo \"let () = Fur_csr.start [ %s.Routes.mount ]\"))))\n(executable\n (name %s)\n (modules %s)\n (modes js)\n (libraries %s fennec.fur.client fennec.pulse.live.client.browser)\n (preprocess (pps js_of_ocaml-ppx))\n (flags (:standard -w -a)))\n"
+              n n (lib_mod n) n n lib);
+         if Sys.file_exists (Filename.concat (Filename.concat apps_dir n) "main.scss") then
+           Buffer.add_string b
+             (Printf.sprintf
+                "(rule\n (target %s.css)\n (deps (glob_files_rec %%{project_root}/%s/*.scss))\n (action (run %%{bin:fennec} build --out-name %s.css -o . %%{project_root}/%s/apps/%s/main.scss)))\n"
+                n rel_frontend n rel_frontend n));
+  write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
 (* ---- HANDLERS (frontend/handlers/*.mlx) — one flat .mlx = one handler = one bundle ---- *)
 let handler_basenames dir =
@@ -183,10 +195,10 @@ let emit_handler_bundles dir out_dir client_lib =
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--glue" :: app_dir :: out_dir :: _ -> emit_glue app_dir out_dir
-  | _ :: "--boots" :: apps_dir :: out_dir :: _ -> emit_boots apps_dir out_dir
+  | _ :: "--app-bundles" :: apps_dir :: out_dir :: rel_frontend :: _ -> emit_app_bundles apps_dir out_dir rel_frontend
   | _ :: "--handler-bundles" :: dir :: out_dir :: client_lib :: _ -> emit_handler_bundles dir out_dir client_lib
   | _ :: apps_dir :: out_dir :: _ -> emit_routes apps_dir out_dir
   | _ ->
     prerr_endline
-      "usage: route_gen --glue <dir> <out> | --boots <dir> <out> | --handler-bundles <dir> <out> <client_lib> | <dir> <out>";
+      "usage: route_gen --glue <dir> <out> | --app-bundles <apps_dir> <out> <rel_frontend> | --handler-bundles <dir> <out> <client_lib> | <dir> <out>";
     exit 2
