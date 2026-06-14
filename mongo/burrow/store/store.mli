@@ -44,6 +44,9 @@ val put : [ `W ] txn -> db -> string -> string -> unit
 val del : [ `W ] txn -> db -> string -> bool
 (** [del] returns whether a value was present. *)
 
+val clear : [ `W ] txn -> db -> unit
+(** Empty a sub-database (drop all entries; the handle stays valid) — index drop/recreate. *)
+
 val iter : _ txn -> db -> ?from:string -> (key:string -> data:string -> bool) -> unit
 (** Iterate key/value pairs in key (byte) order, optionally starting at the first key >= [from].
     [f ~key ~data] returns [true] to continue, [false] to stop. *)

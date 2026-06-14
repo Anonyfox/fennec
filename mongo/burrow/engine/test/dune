@@ -1,0 +1,6 @@
+; End-to-end engine test: insert (explicit + generated _id), point lookups, field/operator/array
+; queries, sort, projection, skip/limit, count, and persistence across reopen — all through the real
+; storage stack under an Eio scheduler.
+(test
+ (name test_engine)
+ (libraries burrow burrow_store eio_main unix fennec-mongo.bson))

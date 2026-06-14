@@ -72,6 +72,7 @@ let write t ?(blocking = true) f =
 let get txn db key = L.get txn db key
 let put txn db key data = L.put txn db key data
 let del txn db key = L.del txn db key
+let clear txn db = L.drop txn db false
 
 (* Forward scan from an optional lower bound. Opening/closing the cursor brackets the loop; [f]
    decides when to stop (e.g. once the key leaves the index range). *)

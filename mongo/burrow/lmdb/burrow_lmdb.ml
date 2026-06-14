@@ -24,6 +24,7 @@ external txn_commit_blocking : txn -> unit = "ml_txn_commit_blocking"
 
 (* open/create a named sub-DB; the handle is private to [txn] until it commits, then env-wide *)
 external dbi_open : txn -> string -> bool -> dbi = "ml_dbi_open_named" (* name, create? *)
+external drop : txn -> dbi -> bool -> unit = "ml_drop" (* empty (false) or delete (true) a sub-DB *)
 
 external put : txn -> dbi -> string -> string -> unit = "ml_put"
 external get : txn -> dbi -> string -> string option = "ml_get"

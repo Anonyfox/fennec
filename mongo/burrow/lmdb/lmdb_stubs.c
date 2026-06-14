@@ -86,6 +86,14 @@ CAMLprim value ml_dbi_open_named(value txn, value name, value create) {
   CAMLreturn(Val_int((int)dbi));
 }
 
+/* Empty a sub-DB ([del]=false: keep the handle) or delete it entirely ([del]=true). Used to clear an
+   index's entries on drop/recreate so stale entries can't survive. */
+CAMLprim value ml_drop(value txn, value dbi, value del) {
+  CAMLparam3(txn, dbi, del);
+  ck(mdb_drop(Txn_val(txn), (MDB_dbi)Int_val(dbi), Bool_val(del) ? 1 : 0));
+  CAMLreturn(Val_unit);
+}
+
 /* --- point operations ----------------------------------------------------------------------- */
 
 CAMLprim value ml_put(value txn, value dbi, value key, value data) {
