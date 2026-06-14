@@ -1,10 +1,13 @@
 (** EJSON wire codec — {!Bson.t} ⇄ {!Json.t}, the JSON projection used on the DDP wire. Implements
     the four EJSON escape objects ([{$date}], [{$binary}], [{$type,$value}], [{$escape}]).
 
-    Numbers are IEEE-754 doubles on the wire: an integral value below {!Json.int_cutoff} round-trips
-    as [Int], otherwise as [Float] — so the [Int]/[Float] distinction and [Int64] magnitudes beyond
-    2^53 are {e not} preserved (the numeric value is, modulo double precision). All other types
-    round-trip exactly, including documents shaped like a marker (they are [{$escape}]-wrapped).
+    Plain numbers are IEEE-754 doubles on the wire: an integral value below {!Json.int_cutoff}
+    round-trips as [Int], otherwise as [Float] — so the [Int]/[Float] distinction is {e not}
+    preserved (the value is, and {!Bson.equal} is cross-type numeric, so this never surfaces as a
+    spurious delta). [Int64] {e is} preserved exactly — type and full 64-bit magnitude — via a
+    [{$type:"Int64",$value:"<decimal>"}] marker (a string, since a JS double would lose both). All
+    other types round-trip exactly, including documents shaped like a marker (they are
+    [{$escape}]-wrapped).
 
     {[
       (* a BSON value to its EJSON wire string and back *)

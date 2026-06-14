@@ -16,6 +16,13 @@ let%test "EJSON round-trips a mixed document" =
 let%test "EJSON escapes a marker-shaped document and round-trips it" =
   let d = B.doc [ ("$date", B.int 5) ] in
   B.equal (Ejson.decode (Ejson.encode d)) d
+let%test "EJSON preserves Int64 type and magnitude beyond 2^53" =
+  (* 2^53 + 1 is not representable as an IEEE-754 double — the old bare-Number encoding lost it *)
+  let big = 9_007_199_254_740_993L in
+  let d = B.doc [ ("small", B.Int64 7L); ("big", B.Int64 big) ] in
+  match Ejson.decode (Ejson.encode d) with
+  | B.Document [ ("small", B.Int64 7L); ("big", B.Int64 b) ] -> Int64.equal b big
+  | _ -> false
 
 (* ── message codec ── *)
 let%test "Message round-trips a sub-tagged added" =

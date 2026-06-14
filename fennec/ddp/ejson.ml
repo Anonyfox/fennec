@@ -28,7 +28,10 @@ let rec of_bson (b : Bson.t) : Json.t =
   | Bson.Null -> Json.Null
   | Bson.Bool x -> Json.Bool x
   | Bson.Int n -> Json.Number (float_of_int n)
-  | Bson.Int64 n -> Json.Number (Int64.to_float n)
+  | Bson.Int64 n ->
+      (* Int64: preserve type + full 64-bit magnitude via a string $value (a bare JS double loses
+         both beyond 2^53). The $type/$value shape is already escape-safe via [looks_like_marker]. *)
+      Json.Obj [ ("$type", Json.String "Int64"); ("$value", Json.String (Int64.to_string n)) ]
   | Bson.Float f -> Json.Number f
   | Bson.String s -> Json.String s
   | Bson.Array xs -> Json.List (List.map of_bson xs)
@@ -85,6 +88,7 @@ and of_typed ty v =
   match (ty, v) with
   | "oid", Json.String hex -> Bson.Object_id hex
   | "Decimal", Json.String s -> Bson.Decimal128 s
+  | "Int64", Json.String s -> ( match Int64.of_string_opt s with Some n -> Bson.Int64 n | None -> Bson.Null )
   | "Code", Json.String s -> Bson.Code s
   | "Regex", Json.List [ Json.String p; Json.String o ] ->
       Bson.Regex { pattern = p; options = o }
