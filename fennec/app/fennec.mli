@@ -61,7 +61,49 @@ module Fur : sig
      [module type of Fur] would re-abstract them and break interop with Handler/Form) *)
   include module type of struct include Fur end
 
-  module Page : module type of Fennec_web.Page
+  (** A standalone PAGE — a Fur concept (presentation: view + SSR + the cross-stage seed). The
+      isomorphic essence is {!Fennec_fur_page.Page} (so it links into the page's own jsoo bundle); the
+      facade adds the one Conn-aware bit, [serve]. Client boot: {!Fur_csr.start_page}. See the cross-
+      stage-persistence model in fennec.fur.page's page.mli. *)
+  module Page : sig
+    (** What a page's conn block decides — render the page, or any other HTTP response. *)
+    type 'p outcome = Render of 'p | Redirect of string | Not_found | Error of int
+
+    (** Server-only values: NO {!Codec}, so a secret held in the conn block cannot be seeded — putting
+        one in a payload is a COMPILE error (Eliom's no-identity-converter, by type). *)
+    module Server_only : sig
+      type 'a t
+
+      val wrap : 'a -> 'a t
+      val get : 'a t -> 'a
+    end
+
+    (** The cross-stage read — decode the seeded payload with the same [codec]. CREATE IT INSIDE the
+        view (per render); server + client resolve it identically. *)
+    val resource : 'a Codec.t -> key:string -> fallback:'a -> 'a Fur.Data.t
+
+    (** The default page document shell (head + styles + #app hydration root + seed + page bundle). *)
+    val default_template : string -> Fur.Doc.ctx -> Fur.vnode
+
+    (** PURE render: seed ONLY [codec.enc value], SSR the view, wrap in the shell -> the HTML string. *)
+    val render :
+      key:string -> codec:'p Codec.t -> bundle:string ->
+      ?styles:string -> ?template:(Fur.Doc.ctx -> Fur.vnode) -> 'p -> (unit -> Fur.vnode) -> string
+
+    (** A page: isomorphic [view] + server [data] handler (conn block) + the [codec] that transports
+        the payload + the URL of the page's own jsoo [bundle]. *)
+    type 'p t = {
+      key : string;
+      codec : 'p Codec.t;
+      view : unit -> Fur.vnode;
+      data : Conn.t -> 'p outcome;
+      bundle : string;
+    }
+
+    (** Run the conn block and answer: render the seeded view, or the chosen HTTP response. *)
+    val serve : 'p t -> ?styles:string -> ?template:(Fur.Doc.ctx -> Fur.vnode) -> Conn.t -> Conn.t
+  end
+
   module Handler : module type of Fennec_web.Handler
   module Form : module type of Fennec_web.Form
   module Action : module type of Fennec_web.Action

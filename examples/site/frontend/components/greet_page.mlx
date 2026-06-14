@@ -4,7 +4,7 @@
    [view]) so the Fur ppx leaves it a plain unit -> vnode composer rather than a stateful component —
    the seeded text is static, the Counter carries its own reactivity. *)
 let page () =
-  let g = Data.value (Page_data.resource Greet.codec ~key:"page:greet" ~fallback:Greet.empty) in
+  let g = Data.value (Page.resource Greet.codec ~key:"page:greet" ~fallback:Greet.empty) in
   <main className="greet" id="greet">
     <h1>(node ("Hello, " ^ g.Greet.who ^ "!"))</h1>
     <p className="seed">(node ("server-computed start = " ^ string_of_int g.Greet.count))</p>

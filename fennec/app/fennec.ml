@@ -30,7 +30,28 @@ module Codec = Codec (* the shape language — for hand-written codecs + the res
 module Fur = struct
   include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
 
-  module Page = Fennec_web.Page (* a standalone page: conn block + isomorphic view + its own SPA bundle *)
+  (* A standalone PAGE — a Fur concept. The isomorphic essence (cross-stage [resource], pure [render],
+     [outcome], [Server_only], [default_template]) lives in fennec.fur.page so it links into the page's
+     OWN jsoo bundle; here we add the one Conn-aware bit — the [t] record (conn block included) and
+     [serve], the HTTP adapter that runs the conn block, then seeds + SSRs on [Render]. Client boot:
+     {!Fur_csr.start_page}. *)
+  module Page = struct
+    include Page (* fennec.fur.page: resource, render, outcome (Render/Redirect/Not_found/Error), Server_only, default_template *)
+
+    (* a page = isomorphic [view] + server [data] handler (the conn block) + the [codec] that transports
+       the payload + the URL of the page's own jsoo [bundle] (its standalone-SPA JS, for hydration) *)
+    type 'p t = { key : string; codec : 'p Codec.t; view : unit -> Fur.vnode; data : Conn.t -> 'p outcome; bundle : string }
+
+    (* run the page's conn block and answer: on [Render] seed ONLY [codec.enc value] + SSR the view +
+       emit the page bundle; otherwise the chosen HTTP response. [~template]/[~styles] override the shell. *)
+    let serve (p : 'p t) ?(styles = "") ?template (conn : Conn.t) : Conn.t =
+      match p.data conn with
+      | Render value -> Conn.html conn (render ~key:p.key ~codec:p.codec ~bundle:p.bundle ~styles ?template value p.view)
+      | Redirect url -> Conn.redirect conn url
+      | Not_found -> Conn.text ~status:404 conn "Not found"
+      | Error s -> Conn.text ~status:s conn ("Error " ^ string_of_int s)
+  end
+
   module Handler = Fennec_web.Handler (* render a component to a static HTML response + redirect/flash/csrf *)
   module Form = Fennec_web.Form (* typed form/query INPUT over the Codec model *)
   module Action = Fennec_web.Action (* typed path/query scalars + JSON-body decode *)

@@ -42,7 +42,7 @@
 
 ; a standalone PAGE bundle (hand-written boot, NOT route_gen): boots ONLY the /greet page's view via
 ; Fur_csr.start_page. Links the page view (site_components) + the browser platform + the isomorphic
-; page-read helper (fennec.web.client). Served at /_pages/greet/main.js.
+; page-read helper (fennec.fur.page). Served at /_pages/greet/main.js.
 (executable
  (name greet)
  (modules greet)
@@ -50,7 +50,7 @@
  (libraries
   site_components
   fennec.fur.client
-  fennec.web.client
+  fennec.fur.page
   fennec.pulse.live.client.browser)
  (preprocess
   (pps js_of_ocaml-ppx))
