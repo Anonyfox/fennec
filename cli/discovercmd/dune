@@ -37,7 +37,6 @@
   (source_tree %{project_root}/fennec)
   (source_tree %{project_root}/hunt)
   (source_tree %{project_root}/mongo)
-  (source_tree %{project_root}/examples/site)
   (source_tree %{project_root}/cli/dev)
   (source_tree %{project_root}/cli/docscmd)
   (source_tree %{project_root}/cli/testcmd)
