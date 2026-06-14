@@ -11,7 +11,8 @@
   fennec.pulse.live.client
   fennec-mongo.bson
   fennec.pulse.codec
-  fennec.pulse.collection)
+  fennec.pulse.collection
+  fennec.web.client)
  (preprocess
   (pps fennec.fur.ppx))
  (flags

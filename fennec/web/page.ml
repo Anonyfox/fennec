@@ -18,14 +18,10 @@ type 'p outcome = Render of 'p | Redirect of string | Not_found | Error of int
    the URL of the page's own jsoo bundle (its standalone-SPA JS, for hydration + interactivity) *)
 type 'p t = { key : string; codec : 'p Codec.t; view : unit -> Fur.vnode; data : Conn.t -> 'p outcome; bundle : string }
 
-(* The payload as an isomorphic resource the [view] reads (declare it at module scope, like an app's
-   data resource, then [Fur.Data.value] it in the view). Server (seeded by {!serve}) and client
-   (seeded from [window.__FUR_DATA__]) resolve it identically, so they hydrate byte-for-byte. Use the
-   SAME [key]+[codec] the page's record carries. *)
-let resource (codec : 'a Codec.t) ~key ~fallback : 'a Fur.Data.t =
-  Fur.Data.resource ~key ~fallback
-    ~decode:(fun s -> match Bson_json.of_string_opt s with Some b -> ( match Codec.decode codec b with Ok v -> v | Error _ -> fallback) | None -> fallback)
-    ()
+(* The payload as an isomorphic resource the [view] reads — defined in the ISOMORPHIC {!Page_data} so
+   the same helper links into both the server SSR and the page's jsoo bundle. Declare it INSIDE the
+   view (per render), like an app's data resource, then [Fur.Data.value] it. *)
+let resource = Page_data.resource
 
 (* the default page document shell: head + scoped styles + the SSR'd body, then the seed + the page's
    own bundle <script> (so the page becomes alive client-side). No app shell, no router. *)
@@ -34,7 +30,8 @@ let default_template (bundle : string) (ctx : Fur.Doc.ctx) : Fur.vnode =
     [ Fur.attr "lang" "en" ]
     [ Fur.h "head" [] [ Fur.Doc.head ctx; Fur.Doc.styles ctx ];
       Fur.h "body" []
-        [ Fur.Doc.outlet ctx; Fur.Doc.data ctx; Fur.h "script" [ Fur.attr "src" bundle; Fur.attr "defer" "true" ] [] ] ]
+        [ Fur.h "div" [ Fur.attr "id" "app" ] [ Fur.Doc.outlet ctx ] (* the hydration root start_page adopts *);
+          Fur.Doc.data ctx; Fur.h "script" [ Fur.attr "src" bundle; Fur.attr "defer" "true" ] [] ] ]
 
 (* run the page's conn block and answer: render the seeded view, or the chosen HTTP response. The
    conn block (which may yield on Pulse/Eio) runs FIRST; the seed manipulation + render is a single

@@ -1,0 +1,9 @@
+; The CLIENT/isomorphic half of a Page (Page.serve is the server half): read the server-seeded
+; payload back as a typed value, decoded with the same Codec the server encoded with. Pure
+; (Fur.Data + Codec + Bson_json), so it links into a page's jsoo bundle AND the server SSR.
+
+(library
+ (name fennec_web_client)
+ (public_name fennec.web.client)
+ (wrapped false)
+ (libraries fennec.fur fennec.pulse.codec fennec-mongo.bson_json))

@@ -53,6 +53,7 @@
  (deps
   client/web.bc.js
   client/admin.bc.js
+  client/greet.bc.js
   web.css
   admin.css
   (source_tree public))
@@ -70,6 +71,8 @@
    client/admin.bc.js:_apps/admin/main.js
    --include
    admin.css:_apps/admin/main.css
+   --include
+   client/greet.bc.js:_pages/greet/main.js
    --public
    public)))
 
@@ -111,7 +114,7 @@
  ; dev builds the bytecode server (server.bc); release builds native server.exe.
  (name server)
  (modes byte exe)
- (modules server hello assets)
+ (modules server hello greet_route assets)
  (preprocess
   (pps fennec.fur.ppx))
  (libraries
@@ -121,6 +124,7 @@
   fennec.pulse.codec
   web_app
   admin_app
+  site_components
   site_styles
   site_store
   fennec.pwa

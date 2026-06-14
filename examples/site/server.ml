@@ -98,6 +98,10 @@ let web =
   |> Endpoint.pipe [ Paw.Session.make ~secret:hello_secret (); Paw.Csrf.make ~secret:hello_secret () ]
   |> Endpoint.get "/hello" Hello.get
   |> Endpoint.post "/hello" Hello.post
+  (* a standalone PAGE at /greet: the conn block computes a cross-stage payload, Page.serve seeds it +
+     SSRs the isomorphic view, and the page's OWN jsoo bundle (/_pages/greet/main.js) hydrates it into
+     a tiny SPA — interactivity (the <Counter/>) with no client router. See greet_route.ml. *)
+  |> Endpoint.get "/greet" Greet_route.serve
   |> Endpoint.app
        (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
           ~source:api_source ~mounts:[ Web_app.Routes.mount ])

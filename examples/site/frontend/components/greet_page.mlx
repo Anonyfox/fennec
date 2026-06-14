@@ -1,0 +1,12 @@
+(* The /greet page VIEW — isomorphic. Decodes the server-seeded payload (the cross-stage value) with
+   the SAME codec the server encoded with, so it SSRs and then hydrates byte-for-byte; the shared
+   <Counter/> proves the page is alive (interactive) after its own bundle boots. Named [page] (not
+   [view]) so the Fur ppx leaves it a plain unit -> vnode composer rather than a stateful component —
+   the seeded text is static, the Counter carries its own reactivity. *)
+let page () =
+  let g = Data.value (Page_data.resource Greet.codec ~key:"page:greet" ~fallback:Greet.empty) in
+  <main className="greet" id="greet">
+    <h1>(node ("Hello, " ^ g.Greet.who ^ "!"))</h1>
+    <p className="seed">(node ("server-computed start = " ^ string_of_int g.Greet.count))</p>
+    <Counter label="clicks" />
+  </main>
