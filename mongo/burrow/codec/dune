@@ -4,4 +4,5 @@
 ; (key ++ _id) and compound keys concatenate correctly.
 (library
  (name burrow_codec)
+ (public_name fennec-mongo.burrow.codec)
  (libraries fennec-mongo.bson))

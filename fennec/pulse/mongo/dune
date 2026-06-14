@@ -13,4 +13,6 @@
   fennec-mongo.ffi
   fennec-mongo.bson
   fennec-mongo.query
-  eio))
+  fennec-mongo.burrow
+  eio
+  unix))

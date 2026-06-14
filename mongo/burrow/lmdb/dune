@@ -4,6 +4,7 @@
 ; call releases the runtime lock so the safe layer can run it off the Eio scheduler.
 (library
  (name burrow_lmdb)
+ (public_name fennec-mongo.burrow.lmdb)
  (foreign_stubs
   (language c)
   (names mdb midl lmdb_stubs)

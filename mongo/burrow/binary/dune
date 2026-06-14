@@ -3,4 +3,5 @@
 ; [find_field] walks to one field while skipping the rest by size (the read-path win the spike showed).
 (library
  (name burrow_binary)
+ (public_name fennec-mongo.burrow.binary)
  (libraries fennec-mongo.bson))

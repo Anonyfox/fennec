@@ -111,13 +111,59 @@ let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.han
   in
   { Backend.stop = h.Live.stop }
 
-(* A runtime-selectable backend: in-memory OR this native driver, behind ONE Backend.S, so an app
-   picks at boot (real mongo if configured, else :memory:) with no type change downstream. The
-   per-op dispatch references the outer (native) ops — non-recursive [let], so no shadowing. *)
+(* ---- Embedded (Burrow) backend ------------------------------------------ *)
+
+(* Burrow — the native, in-process, on-disk MongoDB-compatible engine (fennec-mongo.burrow). One
+   engine per on-disk database directory, shared across that database's collections; selected by a
+   [:embedded:] MONGO_URL. Durable by default (group-committed F_FULLFSYNC). *)
+module Burrow_engine = Burrow.Engine
+
+let embedded_engines : (string, Burrow_engine.t) Hashtbl.t = Hashtbl.create 8
+
+let rec mkdir_p dir =
+  if not (Sys.file_exists dir) then begin
+    mkdir_p (Filename.dirname dir);
+    (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+  end
+
+let embedded_engine dir =
+  match Hashtbl.find_opt embedded_engines dir with
+  | Some e -> e
+  | None ->
+    mkdir_p dir;
+    let e = Burrow_engine.open_ dir in
+    Hashtbl.replace embedded_engines dir e;
+    e
+
+type embedded = { eng : Burrow_engine.t; ecoll : Burrow_engine.collection }
+
+let embedded_collection ~dir ~name =
+  let eng = embedded_engine dir in
+  { eng; ecoll = Burrow_engine.collection eng name }
+
+let bw_find e (q : Backend.query) =
+  Burrow_engine.find e.eng e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort ~skip:q.Backend.skip
+    ~limit:q.Backend.limit ~fields:q.Backend.fields
+
+let bw_find_one e (q : Backend.query) =
+  Burrow_engine.find_one e.eng e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort
+    ~skip:q.Backend.skip ~fields:q.Backend.fields
+
+let bw_observe e (q : Backend.query) ~added ~changed ~removed =
+  { Backend.stop =
+      Burrow_engine.observe_changes e.eng e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort
+        ~skip:q.Backend.skip ~limit:q.Backend.limit ~fields:q.Backend.fields ~added ~changed ~removed }
+
+(* ---- runtime-selectable backend ----------------------------------------- *)
+
+(* A runtime-selectable backend: in-memory, this native driver, OR the embedded Burrow engine, behind
+   ONE Backend.S, so an app picks at boot (real mongo / :embedded: / :memory:) with no type change
+   downstream. The per-op dispatch references the outer (native / burrow) ops — non-recursive [let],
+   so no shadowing. *)
 module Dynamic = struct
   module Mini = Backend.Mini
 
-  type collection = Mem of Minimongo.t | Native of Coll.t | Missing of string
+  type collection = Mem of Minimongo.t | Native of Coll.t | Embedded of embedded | Missing of string
 
   let mem m = Mem m
   let real ?poll ~sw conn ~db ~name = Native (collection ?poll ~sw conn ~db ~name)
@@ -131,37 +177,105 @@ module Dynamic = struct
      drives Live's change-stream daemons. *)
   let mongo_url_env = Runtime.mongo_url_env
 
-  let from_env ?poll ~sw ~db ~name () =
-    match Runtime.state () with
-    | Runtime.Missing -> missing (Runtime.unavailable_message ())
-    | Runtime.Memory -> mem (Minimongo.create ())
-    | Runtime.Mongo { uri; db = _ } -> real ?poll ~sw (connect uri) ~db ~name
+  (* [:embedded:] selects Burrow; an optional path after it is the base directory (default
+     ./.fennec/burrow), under which each database is its own subdirectory. *)
+  let embedded_prefix = ":embedded:"
 
-  let insert c d = match c with Mem m -> Mini.insert m d | Native r -> insert r d | Missing message -> unavailable message
+  let is_embedded u =
+    let p = embedded_prefix in
+    String.length u >= String.length p && String.sub u 0 (String.length p) = p
+
+  let embedded_dir url db =
+    let rest = String.sub url (String.length embedded_prefix) (String.length url - String.length embedded_prefix) in
+    let base = if rest = "" then Filename.concat (Sys.getcwd ()) ".fennec/burrow" else rest in
+    Filename.concat base db
+
+  let from_env ?poll ~sw ~db ~name () =
+    match Runtime.url () with
+    | Some u when is_embedded u -> Embedded (embedded_collection ~dir:(embedded_dir u db) ~name)
+    | _ -> (
+      match Runtime.state () with
+      | Runtime.Missing -> missing (Runtime.unavailable_message ())
+      | Runtime.Memory -> mem (Minimongo.create ())
+      | Runtime.Mongo { uri; db = _ } -> real ?poll ~sw (connect uri) ~db ~name)
+
+  let insert c d =
+    match c with
+    | Mem m -> Mini.insert m d
+    | Native r -> insert r d
+    | Embedded e -> Burrow_engine.insert e.eng e.ecoll d
+    | Missing message -> unavailable message
   let update c ~multi ~upsert s m =
-    match c with Mem mm -> Mini.update mm ~multi ~upsert s m | Native r -> update r ~multi ~upsert s m | Missing message -> unavailable message
-  let remove c s = match c with Mem m -> Mini.remove m s | Native r -> remove r s | Missing message -> unavailable message
-  let find c q = match c with Mem m -> Mini.find m q | Native r -> find r q | Missing message -> unavailable message
-  let find_one c q = match c with Mem m -> Mini.find_one m q | Native r -> find_one r q | Missing message -> unavailable message
-  let count c s = match c with Mem m -> Mini.count m s | Native r -> count r s | Missing message -> unavailable message
+    match c with
+    | Mem mm -> Mini.update mm ~multi ~upsert s m
+    | Native r -> update r ~multi ~upsert s m
+    | Embedded e -> Burrow_engine.update e.eng e.ecoll ~multi ~upsert s m
+    | Missing message -> unavailable message
+  let remove c s =
+    match c with
+    | Mem m -> Mini.remove m s
+    | Native r -> remove r s
+    | Embedded e -> Burrow_engine.remove e.eng e.ecoll s
+    | Missing message -> unavailable message
+  let find c q =
+    match c with Mem m -> Mini.find m q | Native r -> find r q | Embedded e -> bw_find e q | Missing message -> unavailable message
+  let find_one c q =
+    match c with Mem m -> Mini.find_one m q | Native r -> find_one r q | Embedded e -> bw_find_one e q | Missing message -> unavailable message
+  let count c s =
+    match c with
+    | Mem m -> Mini.count m s
+    | Native r -> count r s
+    | Embedded e -> Burrow_engine.count e.eng e.ecoll ~selector:s
+    | Missing message -> unavailable message
   let aggregate c ?(lookup = fun _ -> []) p =
-    match c with Mem m -> Mini.aggregate m ~lookup p | Native r -> aggregate r ~lookup p | Missing message -> unavailable message
-  let distinct c k s = match c with Mem m -> Mini.distinct m k s | Native r -> distinct r k s | Missing message -> unavailable message
+    match c with
+    | Mem m -> Mini.aggregate m ~lookup p
+    | Native r -> aggregate r ~lookup p
+    | Embedded e -> Burrow_engine.aggregate e.eng e.ecoll ~lookup p
+    | Missing message -> unavailable message
+  let distinct c k s =
+    match c with
+    | Mem m -> Mini.distinct m k s
+    | Native r -> distinct r k s
+    | Embedded e -> Burrow_engine.distinct e.eng e.ecoll ~key:k ~selector:s
+    | Missing message -> unavailable message
 
   let observe_changes c q ~added ~changed ~removed =
     match c with
     | Mem m -> Mini.observe_changes m q ~added ~changed ~removed
     | Native r -> observe_changes r q ~added ~changed ~removed
+    | Embedded e -> bw_observe e q ~added ~changed ~removed
     | Missing message -> unavailable message
 
-  let fence c k = match c with Mem m -> Mini.fence m k | Native r -> fence r k | Missing message -> unavailable message
+  let fence c k =
+    match c with
+    | Mem m -> Mini.fence m k
+    | Native r -> fence r k
+    | Embedded e -> Burrow_engine.fence e.eng e.ecoll k
+    | Missing message -> unavailable message
   let ensure_index c ~name ~keys ~unique =
-    match c with Mem m -> Mini.ensure_index m ~name ~keys ~unique | Native r -> ensure_index r ~name ~keys ~unique | Missing message -> unavailable message
+    match c with
+    | Mem m -> Mini.ensure_index m ~name ~keys ~unique
+    | Native r -> ensure_index r ~name ~keys ~unique
+    | Embedded e -> Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique
+    | Missing message -> unavailable message
   let drop_index c ~name =
-    match c with Mem m -> Mini.drop_index m ~name | Native r -> drop_index r ~name | Missing message -> unavailable message
+    match c with
+    | Mem m -> Mini.drop_index m ~name
+    | Native r -> drop_index r ~name
+    | Embedded e -> Burrow_engine.drop_index e.eng e.ecoll ~name
+    | Missing message -> unavailable message
   let index_names c =
-    match c with Mem m -> Mini.index_names m | Native r -> index_names r | Missing message -> unavailable message
+    match c with
+    | Mem m -> Mini.index_names m
+    | Native r -> index_names r
+    | Embedded e -> Burrow_engine.index_names e.ecoll
+    | Missing message -> unavailable message
 
   let ensure_validator c v =
-    match c with Mem m -> Mini.ensure_validator m v | Native r -> ensure_validator r v | Missing message -> unavailable message
+    match c with
+    | Mem m -> Mini.ensure_validator m v
+    | Native r -> ensure_validator r v
+    | Embedded e -> Burrow_engine.set_validator e.eng e.ecoll v
+    | Missing message -> unavailable message
 end

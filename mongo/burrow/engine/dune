@@ -5,4 +5,5 @@
 ; group-committing writer fiber + reader snapshots.
 (library
  (name burrow)
+ (public_name fennec-mongo.burrow)
  (libraries burrow_store burrow_codec burrow_binary fennec-mongo.bson fennec-mongo.query eio eio.unix))

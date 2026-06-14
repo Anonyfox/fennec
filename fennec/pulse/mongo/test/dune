@@ -4,7 +4,7 @@
 ; native driver wasn't built or no mongod is installed.
 
 (tests
- (names test_diff test_observe test_dynamic)
+ (names test_diff test_observe test_dynamic test_embedded)
  (libraries
   fennec.pulse.mongo
   fennec.pulse
@@ -16,6 +16,7 @@
   eio
   eio.unix
   eio_main
+  unix
   fennec-hunt.unit)
  (preprocess
   (pps fennec-hunt.ppx)))
