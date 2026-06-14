@@ -1,0 +1,15 @@
+; CLIENT half of the standalone pages: the SAME .mlx sources (copied from ../pages), compiled with
+; the fur ppx in -conn-client mode so [%%conn] is STRIPPED — the jsoo bundle gets ONLY the isomorphic
+; view (no Conn, no facade). client/<page>.ml boots Site_pages_client.<Page>.page via start_page.
+; This is the Eliom server/client section split, one driver flag, no hand-written second file.
+(copy_files#
+ (files ../pages/*.mlx))
+
+(library
+ (name site_pages_client)
+ (modules :standard)
+ (libraries fennec.fur fennec.fur.page site_store site_components)
+ (preprocess
+  (pps fennec.fur.ppx -conn-client))
+ (flags
+  (:standard -w -a -open Fur)))

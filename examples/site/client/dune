@@ -48,7 +48,7 @@
  (modules greet)
  (modes js)
  (libraries
-  site_components
+  site_pages_client
   fennec.fur.client
   fennec.fur.page
   fennec.pulse.live.client.browser)

@@ -23,4 +23,7 @@ let%http "page /greet: cross-stage payload SSRs; only the codec payload crosses"
             body_contains "/_pages/greet/main.js" (* the page's OWN bundle for hydration, no app router *) ];
       (* leak-proof: ?leak=TOPSECRET was fully in the conn block's scope, but it is not in the payload,
          so it is nowhere in the response. Only what you encode crosses — the Conn cannot be seeded. *)
-      assert (find_sub (response_body ()) "TOPSECRET" = None))
+      assert (find_sub (response_body ()) "TOPSECRET" = None);
+      (* #3: the conn block holds a secret as Server_only.t (sk-live-…). It has no Codec, so it CANNOT
+         be put in the payload — and indeed it is nowhere in the response. A leak is a compile error. *)
+      assert (find_sub (response_body ()) "sk-live" = None))

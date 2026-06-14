@@ -174,6 +174,33 @@ let inject_params str =
         pstr_value ~loc Nonrecursive [ vb ]) params in
       bindings @ str
 
+(* ---- [%%conn] page block ----
+   A standalone PAGE is ONE .mlx: the isomorphic essence (`let key`/`codec`/`bundle` + the `page`
+   view that reads the seed) compiles to BOTH the server SSR and the page's own jsoo bundle, while
+   the SERVER conn block lives in a [%%conn fun conn -> outcome] extension. The conn block is the only
+   place that names server-only things (Conn, Pulse, Accounts, the facade `serve`), so:
+     - server build (default): expand it to `let serve = Page.serve { …; data = <block> }`, with the
+       facade opened locally so Conn/Page.Render resolve — all server refs stay inside this generated,
+       server-only binding;
+     - client build (`-conn-client`): DROP it entirely, so the jsoo compilation never sees Conn.
+   This is Eliom's server/client section split, done with one driver flag — no second source file. *)
+let conn_client = ref false
+let () = Driver.add_arg "-conn-client" (Stdlib.Arg.Set conn_client)
+    ~doc:"strip [%%conn] page blocks (the client/jsoo build of a page)"
+let desugar_conn str =
+  List.concat_map (fun item -> match item.pstr_desc with
+    | Pstr_extension (({ txt = "conn"; _ }, PStr [ { pstr_desc = Pstr_eval (block, _); _ } ]), _) ->
+      if !conn_client then []  (* client build: the server conn block never crosses to jsoo *)
+      else
+        let loc = item.pstr_loc in
+        (* `serve` (LHS) is bound fresh; the RHS `serve` is the facade's Page.serve via the local open.
+           Field puns key/codec/bundle pick up the file's top-level lets; view = its `page`. *)
+        [ [%stri let serve =
+                   let open Fennec in
+                   let open Fur.Page in
+                   serve { key; codec; bundle; view = page; data = [%e block] }] ]
+    | _ -> [ item ]) str
+
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
       PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (css,_,_)); _ }, _); _ } ]), _) ->
@@ -183,8 +210,10 @@ let impl str =
   module_scope := None; scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
-  (* MLX desugaring first (turn JSX into plain OCaml), THEN append executable doc-block tests *)
-  Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks str))))
+  (* MLX desugaring first (turn JSX into plain OCaml), THEN append executable doc-block tests.
+     [desugar_conn] runs first: it expands/strips [%%conn] into a plain `let serve` (server) or
+     nothing (client) before JSX/componentize touch the view. *)
+  Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks (desugar_conn str)))))
 (* register the MLX transform (whole-structure) + the inline test rules (context-free) in
    ONE driver, so a library using (pps fennec.fur.ppx) pays ONE ppx process for both *)
 (* ONE driver for the whole component pipeline: MLX/JSX sugar (impl) + inline tests (hunt rules) +
