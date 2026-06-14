@@ -363,11 +363,16 @@ module Router : sig
   (** Render the currently active page at this router's outlet slot. *)
   val outlet : t -> vnode
 
-  (** Activate this router as the application-level current router. *)
+  (** Activate this router as the application-level current router (per-request: stored in the render
+      context, so concurrent server renders don't share it). *)
   val activate : t -> unit
 
   (** The currently active router (set via {!activate}). *)
   val current : unit -> t
+
+  (** A per-request copy of [t] for a SERVER render — same routes, but its own path signal + params, so
+      concurrent requests to one app never share the current path. The SSR driver activates the clone. *)
+  val clone_for_render : t -> t
 
   (** Look up a named segment from the currently matched route. *)
   val param : string -> string option

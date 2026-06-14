@@ -211,11 +211,11 @@ module Head = struct
   type ctx = { sources : (int * tag list) list signal; counter : int ref }
 
   let ctx () : ctx =
-    match Platform.head_get () with
+    match Platform.slot_get "head" with
     | Some o -> (Obj.obj o : ctx)
     | None ->
       let c = { sources = signal []; counter = ref 0 } in
-      Platform.head_set (Obj.repr c);
+      Platform.slot_set "head" (Obj.repr c);
       c
 
   (* the reactive registry for THIS request (server) / document (browser) — the client head reconciler
@@ -433,11 +433,21 @@ module Router = struct
   let make ?(base = "") ?not_found () =
     { base; routes = []; not_found; current = signal "/"; cur_params = [] }
 
-  (* the ACTIVE app for this render — lets pages/components reach the router (for p,
-     param, href) without importing it, so there's no instance/registration cycle *)
-  let active : t option ref = ref None
-  let activate t = active := Some t
-  let current () = match !active with Some t -> t | None -> failwith "Router: no active app (call activate)"
+  (* the ACTIVE app for THIS render — lets pages/components reach the router (for p, param, href) without
+     importing it, so there's no instance/registration cycle. PER-REQUEST: stored in the fiber-local
+     render context (the browser keeps the single global, one document), so concurrent server renders
+     never fight over it. The server activates a per-request CLONE (see [clone_for_render]) so the path
+     signal is per-request too. The Obj cast is sound + contained here (only Router stores/reads "router"). *)
+  let activate (t : t) = Platform.slot_set "router" (Obj.repr t)
+
+  let current () : t =
+    match Platform.slot_get "router" with
+    | Some o -> (Obj.obj o : t)
+    | None -> failwith "Router: no active app (call activate)"
+
+  (* a per-request copy of the app router for a SERVER render: same routes, but its OWN path signal +
+     params, so two concurrent requests to the same app never share (and corrupt) the current path. *)
+  let clone_for_render (t : t) : t = { t with current = signal "/"; cur_params = [] }
   let page ?name pattern p t =
     t.routes <- t.routes @ [ { pattern; name = (match name with Some n -> n | None -> pattern); page = p } ];
     t
@@ -1079,3 +1089,20 @@ let%test "Head registry is per-context — tags do not leak across renders" =
   && (not (sub h2 "Page A"))  (* B's render must not see A's title *)
   && (not (sub h3 "Page A"))
   && (not (sub h3 "Page B"))  (* a no-title render is empty — the exact /hello leak, guarded *)
+
+(* per-request Router isolation: the SSR driver activates a per-request CLONE of the app router (its own
+   path signal), so two concurrent requests to one app never share the current path (a wrong-route
+   hazard). A later render must start fresh, not inherit the prior render's path. *)
+let%test "Router active app + path are per-context — a fresh render does not inherit the prior route" =
+  let r = Router.make ~base:"" () in
+  let _ =
+    Platform.with_data_context (fun () ->
+        Router.activate (Router.clone_for_render r);
+        Router.set_path (Router.current ()) "/was-here")
+  in
+  let fresh =
+    Platform.with_data_context (fun () ->
+        Router.activate (Router.clone_for_render r);
+        Router.current_path (Router.current ()))
+  in
+  fresh = "/"

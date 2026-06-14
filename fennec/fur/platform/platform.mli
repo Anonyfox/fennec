@@ -64,9 +64,11 @@ val data_source : unit -> string -> (string -> unit) -> unit
 (** Replace the current request's fetch source. *)
 val set_data_source : (string -> (string -> unit) -> unit) -> unit
 
-(** The current request's opaque HEAD context slot. {!Fur.Head} fills it lazily with its per-request
-    state (the signal type lives above this layer, so the slot is type-erased — [Obj.t]). Fiber-local
-    on the native server (so concurrent renders never share head tags); a single global on the browser. *)
-val head_get : unit -> Obj.t option
+(** The current request's [locals] map — a generic, type-erased ([Obj.t]) store for the Fur.core
+    per-request singletons (the {!Fur.Head} tag registry under ["head"], the active {!Fur.Router} under
+    ["router"]) whose types live above this layer. Fiber-local on the native server (so concurrent
+    renders never share them); a single global on the browser (one document). Each owner lazily fills
+    its key and casts back. *)
+val slot_get : string -> Obj.t option
 
-val head_set : Obj.t -> unit
+val slot_set : string -> Obj.t -> unit

@@ -2,10 +2,10 @@
    strips the base), runs its data fetches concurrently between render passes (Eio),
    then assembles the app's chosen document. Generic over the generated [mount list].
 
-   Per-request isolation: Data (seed + source) and Head (the tag registry) are FIBER-LOCAL — both
-   [render] and the synchronous [handler] wrap in [Fur.Data.with_context], so concurrent renders across
-   fibers AND domains never share or leak them. (Router active/current is still a shared global — fixed
-   in a follow-up by activating a per-request clone of the app router.) *)
+   Per-request isolation: the Data context (seed + source), the Head tag registry, AND the active Router
+   are ALL per-request — both [render] and the synchronous [handler] wrap in [Fur.Data.with_context] and
+   activate a per-request CLONE of the app router (its own path signal), so concurrent renders across
+   fibers AND domains never share or leak title/meta, data seeds, or the active route. *)
 let starts_with p s = String.length s >= String.length p && String.sub s 0 (String.length p) = p
 let dispatch (mounts : Fur.mount list) path =
   List.filter (fun (m : Fur.mount) -> m.base = "" || path = m.base || starts_with (m.base ^ "/") path) mounts
@@ -19,8 +19,9 @@ let render ?(head_extra = "") ~env ~(mounts : Fur.mount list) ~source ~request ~
     (* per-request isolation: each concurrent render gets its own fiber-local seed table + source *)
     Fur.Data.with_context @@ fun () ->
     let clock = Eio.Stdenv.clock env in
-    Fur.Router.activate m.router;
-    Fur.Router.set_path m.router request;
+    let router = Fur.Router.clone_for_render m.router in  (* per-request: its OWN path signal + params *)
+    Fur.Router.activate router;
+    Fur.Router.set_path router request;
     let render_root = m.root () in
     let pending : (string, unit) Hashtbl.t = Hashtbl.create 8 in
     let attempted : (string, unit) Hashtbl.t = Hashtbl.create 8 in
@@ -63,11 +64,13 @@ let handler ?(styles = "") ?(head_extra = "") ?source ~(mounts : Fur.mount list)
   match dispatch mounts request with
   | None -> None
   | Some m ->
-    (* per-request isolation: each render gets its own fiber-local seed table + Head registry (so
-       parallel renders across domains never share or leak <title>/meta or seeds) *)
+    (* per-request isolation: each render gets its own fiber-local seed table + Head registry + a clone
+       of the app router (its own path signal), so parallel renders across domains never share or leak
+       any of them — title/meta, data seeds, OR the active route *)
     Fur.Data.with_context @@ fun () ->
-    Fur.Router.activate m.router;
-    Fur.Router.set_path m.router request;
+    let router = Fur.Router.clone_for_render m.router in
+    Fur.Router.activate router;
+    Fur.Router.set_path router request;
     let render_root = m.root () in
     (match source with
      | None -> ()
