@@ -368,7 +368,17 @@ let dev_cmd =
     in
     Arg.(value & opt (some string) None & info [ "agent-dir" ] ~docv:"DIR" ~doc)
   in
-  let go target exe assets dry clean port mongo agent attach agent_dir =
+  let debug_arg =
+    let doc =
+      "Build the dev loop with debug info ($(b,-g), the standard $(b,dev) profile) so exceptions carry \
+       line-numbered backtraces. Off by default: the fast loop omits $(b,-g), which is the bulk of the \
+       per-edit relink time."
+    in
+    Arg.(value & flag & info [ "debug" ] ~doc)
+  in
+  let go target exe assets dry clean port mongo agent attach agent_dir debug =
+    (* fast by default (fastdev profile, no -g — see Dune_watch.start); --debug restores -g backtraces *)
+    Unix.putenv "FENNEC_DEV_PROFILE" (if debug then "dev" else "fastdev");
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -470,7 +480,7 @@ let dev_cmd =
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
   in
   Cmd.v (Cmd.info "dev" ~doc ~man)
-    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ attach_arg $ agent_dir_arg)
+    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ attach_arg $ agent_dir_arg $ debug_arg)
 
 let agent_cmd =
   let dir_arg =

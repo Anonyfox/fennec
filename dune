@@ -10,4 +10,18 @@
 (env
  (release
   (env-vars
-   (FENNEC_DROP_TESTS true))))
+   (FENNEC_DROP_TESTS true)))
+ ; `fennec dev` builds under this custom profile = dev minus `-g`. The bytecode link of the SSR server
+ ; otherwise re-serializes the debug section of the WHOLE image (opam + fennec + frontend) on every
+ ; edit — ~180ms, the dominant cost of an incremental rebuild. Dropping `-g` makes the link ~7x faster.
+ ; `fennec dev --debug` uses the standard `dev` profile to restore line-numbered backtraces.
+ ;
+ ; CRITICAL: dune only auto-enables js_of_ocaml SEPARATE compilation in the built-in `dev` profile; a
+ ; custom profile silently falls back to WHOLE-PROGRAM jsoo, which re-translates the entire client image
+ ; (runtime + every lib + app) on every edit (~0.64s here vs ~0.28s incremental — and the client bundle
+ ; is the long pole of `@dev`). So we must force `separate` back on, or the -g win is more than erased.
+ (fastdev
+  (ocamlc_flags
+   (:standard \ -g))
+  (js_of_ocaml
+   (compilation_mode separate))))
