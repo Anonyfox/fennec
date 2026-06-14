@@ -58,14 +58,18 @@ compilation** (the dev-profile default) compiles each module to JS once and link
 N bundles share artifacts and stay incremental — touch one handler, only its bundle relinks.
 
 Net userland footprint to add a handler: **drop a `.mlx` in `frontend/handlers/` + one
-`Endpoint.get` line.** No per-handler dune, no boots, no webroot edits, no external CLI step — the only
-generated/operational dirs are the `client/` route_gen folder.
+`Endpoint.get` line.** No per-handler dune, no boots, no webroot edits, no external CLI step.
+
+**Apps use the same mechanism.** `route_gen --app-bundles` emits, per `frontend/apps/<app>/`, its boot
+rule + private jsoo `(executable)` + CSS rule into `client/apps/gen/dune.inc`; `client/apps/run`
+consumes it and stages `served/_apps/<app>/{main.js,main.css}`. `client/dune` is gone. The webroot is
+just three `--public`s (public + apps + handlers). Adding an app OR a handler is drop-a-folder with
+**zero dune edits anywhere**; the only operational dirs are the generated `client/apps` and
+`client/handlers` gen+run pairs.
 
 ## Banked for later
 
 - Auto-`default` from `[@@deriving model]` (today the seed is always present, so `Handler.payload`
   reads it without a fallback; a derived default would let `resource`-style views drop the fallback).
-- Migrating the *app* bundles to the same generated-stanza mechanism (kill the last hand-written
-  `(executable)`s in `client/dune`).
 - A richer `outcome` (`Html`/`Json`) so a handler can also be a static-HTML or JSON endpoint without a
   bundle — fully realizing "a handler is a full HTTP handler."
