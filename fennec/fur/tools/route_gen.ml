@@ -157,9 +157,36 @@ let emit_boots apps_dir out_dir =
          "(* GENERATED client entry for app %S — do not edit. Boots only this app. *)\nlet () = Fur_csr.start [ %s.Routes.mount ]\n"
          n (lib_mod n)))
 
+(* ---- HANDLERS (frontend/handlers/*.mlx) — one flat .mlx = one handler = one bundle ---- *)
+let handler_basenames dir =
+  if Sys.file_exists dir && Sys.is_directory dir then
+    Sys.readdir dir |> Array.to_list |> List.sort String.compare
+    |> List.filter_map (fun f -> if Filename.check_suffix f ".mlx" then Some (Filename.chop_suffix f ".mlx") else None)
+  else []
+
+(* the CLIENT bundles: a dune.inc evaluated via (dynamic_include) — per handler, a rule that writes the
+   boot .ml + a private jsoo (executable). [client_lib] is the stripped client-mirror lib (its module is
+   the capitalized name). This is how N isolated bundles come from ZERO hand-written dune. *)
+let emit_handler_bundles dir out_dir client_lib =
+  let client_mod = String.capitalize_ascii client_lib in
+  let b = Buffer.create 1024 in
+  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per frontend/handlers/*.mlx (boot rule + executable).\n";
+  handler_basenames dir
+  |> List.iter (fun n ->
+         let m = String.capitalize_ascii (mangle n) in
+         Buffer.add_string b
+           (Printf.sprintf
+              "(rule\n (target %s.ml)\n (action (with-stdout-to %s.ml (echo \"let () = %s.%s.boot ()\"))))\n(executable\n (name %s)\n (modules %s)\n (modes js)\n (libraries %s fennec.fur.client fennec.pulse.live.client.browser)\n (preprocess (pps js_of_ocaml-ppx))\n (flags (:standard -w -a)))\n"
+              n n client_mod m n n client_lib));
+  write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--glue" :: app_dir :: out_dir :: _ -> emit_glue app_dir out_dir
   | _ :: "--boots" :: apps_dir :: out_dir :: _ -> emit_boots apps_dir out_dir
+  | _ :: "--handler-bundles" :: dir :: out_dir :: client_lib :: _ -> emit_handler_bundles dir out_dir client_lib
   | _ :: apps_dir :: out_dir :: _ -> emit_routes apps_dir out_dir
-  | _ -> prerr_endline "usage: route_gen --glue <app_dir> <out_dir> | --boots <apps_dir> <out_dir> | <apps_dir> <out_dir>"; exit 2
+  | _ ->
+    prerr_endline
+      "usage: route_gen --glue <dir> <out> | --boots <dir> <out> | --handler-bundles <dir> <out> <client_lib> | <dir> <out>";
+    exit 2

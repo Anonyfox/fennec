@@ -174,32 +174,60 @@ let inject_params str =
         pstr_value ~loc Nonrecursive [ vb ]) params in
       bindings @ str
 
-(* ---- [%%conn] page block ----
-   A standalone PAGE is ONE .mlx: the isomorphic essence (`let key`/`codec`/`bundle` + the `page`
-   view that reads the seed) compiles to BOTH the server SSR and the page's own jsoo bundle, while
-   the SERVER conn block lives in a [%%conn fun conn -> outcome] extension. The conn block is the only
-   place that names server-only things (Conn, Pulse, Accounts, the facade `serve`), so:
-     - server build (default): expand it to `let serve = Page.serve { …; data = <block> }`, with the
-       facade opened locally so Conn/Page.Render resolve — all server refs stay inside this generated,
-       server-only binding;
-     - client build (`-conn-client`): DROP it entirely, so the jsoo compilation never sees Conn.
-   This is Eliom's server/client section split, done with one driver flag — no second source file. *)
+(* ---- handler files (frontend/handlers/<name>.mlx) ----
+   A HANDLER is ONE .mlx: an isomorphic `view : payload -> vnode` + a server `load : conn -> outcome`,
+   over a `payload` type (which derives its `codec`). The fur ppx (-handler) derives key/bundle from
+   the FILENAME and fuses them, so the file holds zero plumbing:
+     - server (-handler):              wrap `load` with the facade opened (so Conn/render/redirect
+                                       resolve) and append `serve` (run load -> seed+SSR via render_doc,
+                                       or redirect/error/not_found);
+     - client (-handler -conn-client): STRIP `load`, append `boot` (start_page over the seeded view),
+                                       so the jsoo bundle never sees Conn.
+   The ONLY Conn-aware code is the generated server `serve`. This is Eliom's server/client section
+   split via one driver flag — no second source file, no userland ceremony. *)
+let handler_mode = ref false
+let () = Driver.add_arg "-handler" (Stdlib.Arg.Set handler_mode)
+    ~doc:"compile a frontend/handlers/*.mlx file (payload/load/view -> serve+boot)"
 let conn_client = ref false
 let () = Driver.add_arg "-conn-client" (Stdlib.Arg.Set conn_client)
-    ~doc:"strip [%%conn] page blocks (the client/jsoo build of a page)"
-let desugar_conn str =
-  List.concat_map (fun item -> match item.pstr_desc with
-    | Pstr_extension (({ txt = "conn"; _ }, PStr [ { pstr_desc = Pstr_eval (block, _); _ } ]), _) ->
-      if !conn_client then []  (* client build: the server conn block never crosses to jsoo *)
+    ~doc:"strip the server `load` (the client/jsoo build of a handler)"
+
+let handler_name str =
+  let f = input_fname str in
+  let base = (try Filename.basename f with _ -> f) in
+  (try Filename.chop_extension base with _ -> base)
+
+let desugar_handler str =
+  let open Ast_builder.Default in
+  let loc = Location.none in
+  let name = handler_name str in
+  let key = estring ~loc ("handler:" ^ name) in
+  let bundle = estring ~loc ("/_handlers/" ^ name ^ "/main.js") in
+  (* keep+wrap `load` (server), or strip it (client). The facade open stays LOCAL to load, so it never
+     leaks into the client compilation — and on the client load is gone entirely. *)
+  let body = List.concat_map (fun item -> match item.pstr_desc with
+    | Pstr_value (rf, [ vb ]) when pat_name vb.pvb_pat = Some "load" ->
+      if !conn_client then []
       else
-        let loc = item.pstr_loc in
-        (* `serve` (LHS) is bound fresh; the RHS `serve` is the facade's Page.serve via the local open.
-           Field puns key/codec/bundle pick up the file's top-level lets; view = its `page`. *)
-        [ [%stri let serve =
-                   let open Fennec in
-                   let open Fur.Page in
-                   serve { key; codec; bundle; view = page; data = [%e block] }] ]
+        let e = [%expr let open Fennec in let open Fennec_fur_handler.Handler in [%e vb.pvb_expr]] in
+        [ { item with pstr_desc = Pstr_value (rf, [ { vb with pvb_expr = e } ]) } ]
     | _ -> [ item ]) str
+  in
+  let extra =
+    if !conn_client then
+      [ [%stri let boot () =
+          Fur_csr.start_page (fun () -> view (Fennec_fur_handler.Handler.payload codec ~key:[%e key])) ] ]
+    else
+      [ [%stri let serve conn =
+          match load conn with
+          | Fennec_fur_handler.Handler.Render p ->
+              Fennec.Conn.html conn
+                (Fennec_fur_handler.Handler.render_doc ~key:[%e key] ~codec ~bundle:[%e bundle] p view)
+          | Fennec_fur_handler.Handler.Redirect u -> Fennec.Conn.redirect conn u
+          | Fennec_fur_handler.Handler.Not_found -> Fennec.Conn.text ~status:404 conn "Not found"
+          | Fennec_fur_handler.Handler.Error s -> Fennec.Conn.text ~status:s conn ("Error " ^ string_of_int s) ] ]
+  in
+  body @ extra
 
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
@@ -210,10 +238,15 @@ let impl str =
   module_scope := None; scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
-  (* MLX desugaring first (turn JSX into plain OCaml), THEN append executable doc-block tests.
-     [desugar_conn] runs first: it expands/strips [%%conn] into a plain `let serve` (server) or
-     nothing (client) before JSX/componentize touch the view. *)
-  Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks (desugar_conn str)))))
+  (* MLX desugaring first (turn JSX into plain OCaml), THEN append executable doc-block tests. Handler
+     files take a SEPARATE path: desugar_handler fuses load/view into serve+boot, and we SKIP
+     componentize/inject_params (a handler's `view` is a plain payload->vnode, not a component). *)
+  (* handler transform fires ONLY on actual handler files (those defining a `view`); sibling modules
+     in the same lib — e.g. the route_gen-generated routes.ml — take the normal (no-op here) path. *)
+  if !handler_mode && List.exists (item_defines "view") str then
+    Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks (desugar_handler str)))
+  else
+    Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks str))))
 (* register the MLX transform (whole-structure) + the inline test rules (context-free) in
    ONE driver, so a library using (pps fennec.fur.ppx) pays ONE ppx process for both *)
 (* ONE driver for the whole component pipeline: MLX/JSX sugar (impl) + inline tests (hunt rules) +

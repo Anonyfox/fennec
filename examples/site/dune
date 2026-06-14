@@ -53,10 +53,12 @@
  (deps
   client/web.bc.js
   client/admin.bc.js
-  client/greet.bc.js
   web.css
   admin.css
-  (source_tree public))
+  (source_tree public)
+  ; the staged handler-bundle tree (_handlers/<name>/main.js), built generically from
+  ; frontend/handlers/*.mlx — adding a handler needs NO change here
+  (glob_files_rec client/handlers/run/served/*))
  (action
   (run
    %{bin:fennec}
@@ -71,10 +73,10 @@
    client/admin.bc.js:_apps/admin/main.js
    --include
    admin.css:_apps/admin/main.css
-   --include
-   client/greet.bc.js:_pages/greet/main.js
    --public
-   public)))
+   public
+   --public
+   client/handlers/run/served)))
 
 ; ---- prod embed module (release bakes the web root in; dev = empty stub) ----
 
@@ -123,7 +125,7 @@
   fennec.fur.server
   fennec.pulse.codec
   web_app
-  site_pages
+  site_handlers
   admin_app
   site_components
   site_styles

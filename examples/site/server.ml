@@ -98,11 +98,11 @@ let web =
   |> Endpoint.pipe [ Paw.Session.make ~secret:hello_secret (); Paw.Csrf.make ~secret:hello_secret () ]
   |> Endpoint.get "/hello" Hello.get
   |> Endpoint.post "/hello" Hello.post
-  (* a standalone PAGE at /greet — ONE .mlx (pages/greet_page.mlx): its [%%conn] block runs server-side
-     to compute the cross-stage payload, seeds + SSRs the isomorphic view, and the page's OWN jsoo
-     bundle (/_pages/greet/main.js) hydrates it into a tiny SPA — interactive Counter + live Task_list,
-     no client router. [serve] is generated from [%%conn] by the fur ppx. *)
-  |> Endpoint.get "/greet" Site_pages.Greet_page.serve
+  (* standalone HANDLERS — mounted MANUALLY at any path, central-router style. The same handler
+     (Site_handlers.Greet.serve, a hydrated SPA with its own bundle) is wired at two paths to show
+     reuse: a query-string route and a path-param route. Adding a handler = drop a .mlx + one line here. *)
+  |> Endpoint.get "/greet" Site_handlers.Greet.serve
+  |> Endpoint.get "/hi/:name" Site_handlers.Greet.serve
   |> Endpoint.app
        (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
           ~source:api_source ~mounts:[ Web_app.Routes.mount ])

@@ -1,0 +1,15 @@
+; CONSUMER: evaluate the generated per-handler bundle stanzas in-pass. One .mlx = one .bc.js here,
+; fully incremental (jsoo separate compilation shares artifacts). No hand-written stanza per handler.
+(dynamic_include ../gen/dune.inc)
+
+; stage the generated bundles into the SERVED tree (_handlers/<name>/main.js) — one fixed rule, globs
+; the local .bc.js (no cross-dir cycle). The webroot --public's this tree, so handlers need no per-file
+; webroot wiring. The served URL matches the ppx-derived bundle URL (/_handlers/<name>/main.js).
+(rule
+ (deps
+  (glob_files_rec *.bc.js))
+ (targets
+  (dir served))
+ (action
+  (bash
+   "mkdir -p served/_handlers; for f in *.bc.js; do n=$(basename \"$f\" .bc.js); mkdir -p \"served/_handlers/$n\"; cp \"$f\" \"served/_handlers/$n/main.js\"; done")))

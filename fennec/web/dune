@@ -2,7 +2,7 @@
 ; typed form/query INPUT over the Codec model (Form), typed path/query + JSON-body decode (Action),
 ; and JSON output building blocks (Respond). It owns NO new model — it projects the SAME Codec shape
 ; (the one that powers collections + DDP methods) onto HTTP. Native (server-side) only. Standalone
-; PAGES (view + conn block + own bundle) are a Fur concept, not here — see fennec.fur.page.
+; Standalone HANDLERS (view + load + own bundle) are a Fur concept, not here — see fennec.fur.handler.
 
 (library
  (name fennec_web)

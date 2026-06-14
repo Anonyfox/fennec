@@ -40,19 +40,5 @@
  (flags
   (:standard -w -a)))
 
-; a standalone PAGE bundle (hand-written boot, NOT route_gen): boots ONLY the /greet page's view via
-; Fur_csr.start_page. Links the page view (site_components) + the browser platform + the isomorphic
-; page-read helper (fennec.fur.page). Served at /_pages/greet/main.js.
-(executable
- (name greet)
- (modules greet)
- (modes js)
- (libraries
-  site_pages_client
-  fennec.fur.client
-  fennec.fur.page
-  fennec.pulse.live.client.browser)
- (preprocess
-  (pps js_of_ocaml-ppx))
- (flags
-  (:standard -w -a)))
+; standalone HANDLERS get their bundles from ../client/handlers (gen + run, fully route_gen-generated
+; via dynamic_include) — see frontend/handlers. Nothing for them here.

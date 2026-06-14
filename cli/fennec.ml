@@ -111,7 +111,7 @@ let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner
 let run inputs outdir minify format global_name external_ sourcemap banner banner_file out_name
     public embed includes =
   match inputs with
-  | [] when public = None && embed = None && includes = [] ->
+  | [] when public = [] && embed = None && includes = [] ->
     prerr_endline "fennec build: no input files given (try `fennec build --help`)";
     1
   | _ :: _ :: _ when out_name <> None ->
@@ -148,12 +148,12 @@ let run inputs outdir minify format global_name external_ sourcemap banner banne
          includes;
        (* 2b. stage public/ INTO the web root (after bundles, so clashes with a
           bundle output are caught and are hard errors) *)
-       (match public with
-       | Some dir -> (
-         match Webroot.stage_public ~outdir ~public_dir:dir with
-         | Ok () -> Printf.printf "  staged %-21s -> %s/\n" dir outdir
-         | Error msg -> failwith msg)
-       | None -> ());
+       List.iter
+         (fun dir ->
+           match Webroot.stage_public ~outdir ~public_dir:dir with
+           | Ok () -> Printf.printf "  staged %-21s -> %s/\n" dir outdir
+           | Error msg -> failwith msg)
+         public;
        (* 3. optionally emit the prod embed module from the assembled web root *)
        (match embed with
        | Some file -> (
@@ -232,9 +232,10 @@ let public_arg =
   let doc =
     "Stage a static directory (e.g. $(b,public)) into the output directory, paths preserved, \
      AFTER the bundle inputs. A file that collides with a build output at the same path is a \
-     hard error. The output directory becomes the web root (bundles + static, served together)."
+     hard error. The output directory becomes the web root (bundles + static, served together). \
+     Repeatable — e.g. one tree for $(b,public) and one for the staged handler bundles."
   in
-  Arg.(value & opt (some string) None & info [ "public" ] ~docv:"DIR" ~doc)
+  Arg.(value & opt_all string [] & info [ "public" ] ~docv:"DIR" ~doc)
 
 let embed_arg =
   let doc =
