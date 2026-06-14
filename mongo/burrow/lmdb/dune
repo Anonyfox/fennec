@@ -1,0 +1,11 @@
+; Burrow's storage substrate: vendored LMDB 1.0 (mdb.c + midl.c compiled straight in — no external
+; dependency, the production shape proven by the spike) plus our own thin FFI (burrow_lmdb.ml +
+; lmdb_stubs.c). Native only. This is the ONLY unsafe code in the engine: every potentially-blocking
+; call releases the runtime lock so the safe layer can run it off the Eio scheduler.
+(library
+ (name burrow_lmdb)
+ (foreign_stubs
+  (language c)
+  (names mdb midl lmdb_stubs)
+  (flags
+   (-O2 -w))))

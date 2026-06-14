@@ -1,0 +1,7 @@
+; Burrow — the memcomparable key codec. Pure OCaml (depends only on the in-memory Bson value type, no
+; LMDB/C), so it lives cleanly on the pure side and is property-testable with no disk. The byte order
+; of an encoded key equals Bson.compare's value order; encodings are prefix-free so index entries
+; (key ++ _id) and compound keys concatenate correctly.
+(library
+ (name burrow_codec)
+ (libraries fennec-mongo.bson))

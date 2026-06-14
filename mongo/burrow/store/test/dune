@@ -1,0 +1,5 @@
+; Runtime smoke test for the storage facade + the new FFI surface (named sub-DBs, del, cursors,
+; ordered iteration, seek, early-stop) end-to-end under an Eio scheduler with off-scheduler commit.
+(test
+ (name test_store)
+ (libraries burrow_store eio_main unix))

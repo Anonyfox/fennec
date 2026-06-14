@@ -1,0 +1,7 @@
+; Burrow's typed-safe storage facade over the raw LMDB FFI. Phantom transaction modes ([`R]/[`W])
+; make illegal access a compile error; named sub-DBs are cached typed handles. This and burrow_lmdb
+; are the only places that touch unsafe code / IO; everything above is pure values + typed handles.
+; eio.unix: the durable (~8 ms F_FULLFSYNC) commit runs off the scheduler via run_in_systhread.
+(library
+ (name burrow_store)
+ (libraries burrow_lmdb eio eio.unix))

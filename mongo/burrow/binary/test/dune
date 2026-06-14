@@ -1,0 +1,7 @@
+; Round-trip + zero-copy-reader evidence for the record codec: decode (encode d) = d over random
+; documents spanning all 19 BSON types (nested), and find_field agreeing with a full decode.
+(test
+ (name test_burrow_binary)
+ (libraries burrow_binary fennec-mongo.bson fennec-hunt.unit)
+ (preprocess
+  (pps fennec-hunt.ppx)))
