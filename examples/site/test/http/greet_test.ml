@@ -26,8 +26,8 @@ let%http "handler /greet: full HTTP handler — SPA / JSON / static; leak-proof;
       assert (find_sub (response_body ()) "__FUR_DATA__" = None);
       assert (find_sub (response_body ()) "main.js" = None));
 
-  check "?format=static -> the SAME view as static HTML, NO JS (no bundle, no seed, no #app)" (fun () ->
-      get "/greet?name=Ada&format=static" ~expect:[ status 200; is_html; body_contains "Hello, Ada!" ];
+  check "?format=html -> the SAME view as plain static HTML, NO JS (no bundle, no seed, no #app)" (fun () ->
+      get "/greet?name=Ada&format=html" ~expect:[ status 200; is_html; body_contains "Hello, Ada!" ];
       assert (find_sub (response_body ()) "__FUR_DATA__" = None);
       assert (find_sub (response_body ()) "main.js" = None);
       assert (find_sub (response_body ()) {|id="app"|} = None));

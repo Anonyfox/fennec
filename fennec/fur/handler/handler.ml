@@ -29,17 +29,18 @@ module Bson_json = Fennec_mongo_bson_json.Bson_json
    not name it), so it lives in the isomorphic runtime. The same [view]/[payload] can be served as a
    hydrated SPA, as static no-JS HTML, or content-negotiated to JSON — a handler is a full handler. *)
 type 'p outcome =
-  | Render of 'p (* hydrated SPA: seed the payload + SSR the view + ship the bundle *)
-  | Static of 'p (* the SAME view as static HTML — no seed, no bundle, no JS (SEO / no-JS) *)
-  | Json of string (* a JSON body (already encoded) *)
+  | Render of 'p (* the rich default: hydrated SPA — seed the payload + SSR the view + ship the bundle *)
+  | Html of 'p (* the SAME view as plain static HTML — no seed, no bundle, no JS (a simpler representation) *)
+  | Json of string (* the payload as a plain JSON body (already encoded) *)
   | Text of string (* a plain-text body *)
   | Redirect of string
   | Not_found
   | Error of int
 
-(* smart constructors so userland [load] reads as plain verbs: [render p] / [json codec v] / … *)
+(* smart constructors so userland [load] reads as plain verbs: [render p] (SPA) / [html p] (plain HTML)
+   / [json codec v] (data) / … — one [view]/[payload], negotiated into the representation the caller asked for *)
 let render (p : 'p) : 'p outcome = Render p
-let static (p : 'p) : 'p outcome = Static p
+let html (p : 'p) : 'p outcome = Html p
 let json (codec : 'a Codec.t) (value : 'a) : 'p outcome = Json (Bson_json.to_string (codec.Codec.enc value))
 let text (s : string) : 'p outcome = Text s
 let redirect (url : string) : 'p outcome = Redirect url
@@ -65,16 +66,6 @@ let payload (codec : 'a Codec.t) ~key : 'a =
       match Bson_json.of_string_opt s with
       | Some b -> ( match Codec.decode codec b with Ok v -> v | Error _ -> failwith ("handler: bad seed for " ^ key))
       | None -> failwith ("handler: bad seed json for " ^ key))
-
-(* The seeded payload as a reactive resource, for views that want the signal form. Same decode as
-   {!payload} but with a fallback (loading-state safe). Most handler views just take a plain payload. *)
-let resource (codec : 'a Codec.t) ~key ~fallback : 'a Fur.Data.t =
-  Fur.Data.resource ~key ~fallback
-    ~decode:(fun s ->
-      match Bson_json.of_string_opt s with
-      | Some b -> ( match Codec.decode codec b with Ok v -> v | Error _ -> fallback)
-      | None -> fallback)
-    ()
 
 (* The default handler document shell: head + scoped styles + the #app hydration root (the SSR'd
    body), then the seed + the handler's OWN bundle <script>. No app shell, no router. *)
@@ -125,7 +116,7 @@ let%test "render_doc seeds ONLY the codec payload + emits the bundle script + th
 
 let%test "smart constructors build the right full-HTTP outcomes" =
   render { who = "x"; count = 0 } = Render { who = "x"; count = 0 }
-  && static { who = "x"; count = 0 } = Static { who = "x"; count = 0 }
+  && html { who = "x"; count = 0 } = Html { who = "x"; count = 0 }
   && redirect "/" = Redirect "/" && not_found = Not_found && text "hi" = Text "hi"
   && (match json greeting_codec { who = "a"; count = 1 } with Json s -> contains s {|"who"|} && contains s "a" | _ -> false)
 

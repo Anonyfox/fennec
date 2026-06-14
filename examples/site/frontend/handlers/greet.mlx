@@ -24,7 +24,7 @@ let load conn =
   (* ONE handler, the SAME payload, content-negotiated into three responses — that is a full handler *)
   match Conn.query conn "format" with
   | Some "json" -> json codec p (* API: the payload as JSON, encoded by the SAME codec *)
-  | Some "static" -> static p (* no-JS / SEO: the same view as static HTML, no bundle *)
+  | Some "html" -> html p (* no-JS / SEO: the same view as plain static HTML, no bundle *)
   | _ -> render p (* default: the hydrated SPA with its own bundle *)
 
 (* ISOMORPHIC: payload -> vnode. SSRs on the server, hydrates in the bundle, byte-identical. Seeds the

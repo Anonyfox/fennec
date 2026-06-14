@@ -3,9 +3,9 @@
 **What a handler is (settled).** A *handler* is ONE file — `frontend/handlers/<name>.mlx` — that is a
 full HTTP handler: a server `load : conn -> outcome` fused with an isomorphic `view : payload -> vnode`,
 over a `payload` type (`type t [@@deriving model]`). `load` is a **full HTTP action** — the SAME
-`view`/`payload` can be served as a hydrated SPA (`render p` — seed + SSR + own bundle), as static
-no-JS HTML (`static p` — same view, no bundle/seed/`#app`), content-negotiated to `json codec v`, or as
-`text`/`redirect`/`not_found`/`error`. You **mount it yourself** in `server.ml` at any path —
+`view`/`payload` can be served as a hydrated SPA (`render p` — seed + SSR + own bundle), as plain
+static no-JS HTML (`html p` — same view, no bundle/seed/`#app`), content-negotiated to `json codec v`,
+or as `text`/`redirect`/`not_found`/`error`. You **mount it yourself** in `server.ml` at any path —
 `Endpoint.get "/greet" Site_handlers.Greet.serve` — with path params, **reusable** across
 paths/endpoints. Central-router DX; no auto route table.
 
@@ -71,13 +71,29 @@ just three `--public`s (public + apps + handlers). Adding an app OR a handler is
 ## Full HTTP handler — the outcome set
 
 `load : conn -> 'p outcome`, with smart-verb constructors (in scope inside `load`):
-`render p` (hydrated SPA) · `static p` (same view, static no-JS HTML via `render_static`) ·
+`render p` (hydrated SPA) · `html p` (same view, plain static HTML via `render_static`) ·
 `json codec v` (JSON body, same codec) · `text s` · `redirect url` · `not_found` · `error n`. The
 example `greet.mlx` content-negotiates one payload three ways — `/greet` (SPA), `?format=json`
-(JSON, no seed/bundle), `?format=static` (static HTML, no `#app`/seed/bundle) — verified by the http
+(JSON, no seed/bundle), `?format=html` (static HTML, no `#app`/seed/bundle) — verified by the http
 suite. So a handler is genuinely a full HTTP citizen, not just a page.
 
-## Banked for later
+## Considered + rejected: auto-`default` from `[@@deriving model]`
 
-- Auto-`default` from `[@@deriving model]` (today the seed is always present, so `Handler.payload`
-  reads it without a fallback; a derived default would let `resource`-style views drop the fallback).
+The earlier "bank it" item — derive a zero-value `default` so a seed read could fall back — was
+examined and **dropped**, for reasons worth recording:
+
+- **It was solving a non-problem.** A handler `view` is `payload -> vnode`; the boot reads the seed as
+  a *plain value* (`Handler.payload`), and the seed is ALWAYS present on a rendered handler (the server
+  seeds before shipping the bundle). There was a vestigial signal-form `resource ~fallback` (from the
+  old page model) that nothing used — it has been **removed**. With no fallback site, no default is
+  needed. `Handler.payload` *raising* on a missing seed is correct: it's a "can't happen / corrupt page"
+  signal, and a silent default would mask the bug.
+- **A derived default is semantically wrong as often as right.** The zero value of a record
+  (`{ who=""; count=0 }`) frequently **violates the model's own validation** (`who` is `[@non_empty]`),
+  so "default value" and "valid value" are different concepts the deriver can't reconcile. And
+  sum/abstract types have no canonical zero at all.
+- **Where an empty value IS wanted — forms, new minimongo docs — it's a caller concern**, supplied
+  explicitly (and validated), not silently synthesized by the model deriver.
+
+Net: handlers stay fallback-free and the model deriver stays honest (a model is its *codec* +
+`Fields`, nothing pretends to be a valid blank). Nothing structural remains banked.

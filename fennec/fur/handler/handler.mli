@@ -17,18 +17,19 @@
 (** What [load] decides — a FULL HTTP response. The same [view]/[payload] can be served as a hydrated
     SPA ([render]), as static no-JS HTML ([static]), or content-negotiated to JSON ([json]). *)
 type 'p outcome =
-  | Render of 'p  (** hydrated SPA: seed + SSR view + bundle *)
-  | Static of 'p  (** the same view as static HTML — no seed, no bundle, no JS *)
-  | Json of string  (** a JSON body *)
+  | Render of 'p  (** the rich default: hydrated SPA — seed + SSR view + bundle *)
+  | Html of 'p  (** the same view as plain static HTML — no seed, no bundle, no JS *)
+  | Json of string  (** the payload as a plain JSON body *)
   | Text of string  (** a plain-text body *)
   | Redirect of string
   | Not_found
   | Error of int
 
-(** Smart constructors, so [load] reads as plain verbs: [render p] / [static p] / [json codec v] / … *)
+(** Smart constructors, so [load] reads as plain verbs: [render p] (SPA) / [html p] (plain HTML) /
+    [json codec v] (data) / … — one [view]/[payload] negotiated into the representation asked for. *)
 
 val render : 'p -> 'p outcome
-val static : 'p -> 'p outcome
+val html : 'p -> 'p outcome
 val json : 'a Codec.t -> 'a -> 'p outcome
 val text : string -> 'p outcome
 val redirect : string -> 'p outcome
@@ -47,10 +48,6 @@ end
 (** Client read of the cross-stage payload (decode the seed with the same [codec]). No fallback: on a
     rendered handler the seed is always present, so a missing/garbled seed raises (corrupt page). *)
 val payload : 'a Codec.t -> key:string -> 'a
-
-(** The seeded payload as a reactive resource (signal form, with a fallback) — for views that want it;
-    most handler views just take a plain payload. *)
-val resource : 'a Codec.t -> key:string -> fallback:'a -> 'a Fur.Data.t
 
 (** The default handler document shell (head + styles + #app hydration root + seed + bundle script). *)
 val default_template : string -> Fur.Doc.ctx -> Fur.vnode

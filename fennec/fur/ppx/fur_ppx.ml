@@ -223,7 +223,7 @@ let desugar_handler str =
           | Fennec_fur_handler.Handler.Render p ->
               Fennec.Conn.html conn
                 (Fennec_fur_handler.Handler.render_doc ~key:[%e key] ~codec ~bundle:[%e bundle] p view)
-          | Fennec_fur_handler.Handler.Static p ->
+          | Fennec_fur_handler.Handler.Html p ->
               Fennec.Conn.html conn (Fennec_fur_handler.Handler.render_static (view p))
           | Fennec_fur_handler.Handler.Json s -> Fennec.Conn.json conn s
           | Fennec_fur_handler.Handler.Text s -> Fennec.Conn.text conn s
