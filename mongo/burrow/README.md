@@ -25,10 +25,10 @@ is pure values and typed handles.
 |---|---|---|
 | `Catalog` | collection / index / validator metadata (persisted in a meta sub-DB), rebuilt on open | ✅ |
 | `Record` | the clustered `_id` record store — record bytes keyed by encoded `_id` | ✅ |
-| `Index` | secondary index access method (key++`_id` entries); maintenance + multikey/compound | ✅ |
-| `Plan` | the plan IR — point (`_id`) / index-range list / index-union / collection-scan | ✅ |
-| `Planner` | `(selector, sort) → Plan` — `_id` point, equality/range/compound/`$in`/`$or` index selection, selectivity scoring, sort-via-index | ✅ (index-intersection / covering: future) |
-| `Executor` | interpret a `Plan` → docs; residual `Matcher`; sort/skip/limit; projection; streaming early-termination for sorted+limit | ✅ |
+| `Index` | secondary index access method (key++`_id` entries); maintenance + multikey/compound; ascending & descending | ✅ |
+| `Plan` | the plan IR — point (`_id`) / index-range list / index-union / index-intersect / collection-scan, with a `reverse` flag | ✅ |
+| `Planner` | `(selector, sort) → Plan` — `_id` point, equality/range/compound/`$in`/`$or`/intersection index selection, selectivity scoring, forward+reverse sort-via-index | ✅ |
+| `Executor` | interpret a `Plan` → docs; residual `Matcher`; sort/skip/limit; projection; streaming early-termination for sorted+limit; index-only count | ✅ |
 | `Write` | insert / update / remove / upsert (`Modifier`) + index maintenance + unique + validator (one txn) | ✅ |
 | `Observe` | live observeChanges: post-write recompute + diff → added/changed/removed | ✅ (in-process) |
 | `Engine` | open/close lifecycle, single-writer lock, the public API | ✅ |
@@ -63,13 +63,18 @@ so the public pulse backend can depend on them.)
 - **Oplog / resumable change streams** — in-process `observe_changes` works; resume-token-based change
   streams across reconnects/restarts are deferred.
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
-- **Planner** — equality/range/compound/`$in`/`$or` index selection, selectivity scoring, and
-  sort-via-index (with streaming early-termination for sorted+limit) are done; index-INTERSECTION (AND
-  of two indexes) and covering-index reads (serving a projection without fetching the record) are future.
-- **Index** — descending-field *range* (asc range + any-direction equality work); special index types
-  (text/geo) fall back to collection scan (still correct via the residual matcher).
-- A filtered `count` still fetches matching records; only the unfiltered count is served at the storage
-  layer. (See the benchmark in `engine/bench`.)
+- **Planner** — equality / range / compound / `$in` / `$or` (index-union) / intersection selection,
+  selectivity scoring, forward+reverse sort-via-index (streaming early-termination for sorted+limit),
+  and index-only count are all done. Special index types (text / geo) fall back to a collection scan
+  (still correct via the residual matcher).
+- **Covering-index reads** (serving a projection straight from the index without fetching the record)
+  are a deliberate NON-goal: index keys are memcomparable-encoded (lossy for numbers — the sortable
+  double can't be turned back into the exact Int/Int64/Float), so the original values aren't
+  reconstructable. Serving them would mean storing redundant uncompressed values in every index entry —
+  a write/space cost paid on every write for a modest read win (the clustered record store is a single
+  cheap point-get away), so it isn't worth it for this design.
+- A multi-field / operator-residual `count` still fetches matching records; a single-field count fully
+  captured by a non-multikey index is served from index entries (no fetch). (See `engine/bench`.)
 - **Map growth** — fixed 128 GB virtual map (sparse; grows on disk as used); online `MDB_MAP_FULL`
   grow-and-retry is deferred (blocked by LMDB's no-active-txns constraint).
 - **`Decimal128`** stored as its canonical string (round-trips losslessly; not the 16-byte wire form);
