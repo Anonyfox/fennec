@@ -14,8 +14,9 @@ let i = B.int
 
 let () =
   Eio_main.run @@ fun _env ->
+  Eio.Switch.run @@ fun sw ->
   let dir = tmp () in
-  let eng = Eng.open_ ~durability:Burrow_store.Store.No_sync dir in
+  let eng = Eng.open_ ~sw ~durability:Burrow_store.Store.No_sync dir in
   let users = Eng.collection eng "users" in
 
   ignore
@@ -61,7 +62,7 @@ let () =
   Eng.close eng;
 
   (* reopen: catalog + records persist *)
-  let eng2 = Eng.open_ ~durability:Burrow_store.Store.No_sync dir in
+  let eng2 = Eng.open_ ~sw ~durability:Burrow_store.Store.No_sync dir in
   let users2 = Eng.collection eng2 "users" in
   assert (Eng.count eng2 users2 ~selector:empty = 4);
   (match Eng.find_one eng2 users2 ~selector:(doc [ ("_id", s "u1") ]) ~sort:empty ~skip:0 ~fields:empty with

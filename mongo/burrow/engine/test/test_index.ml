@@ -18,8 +18,9 @@ let ids docs = List.sort compare (List.filter_map (fun d -> B.get_string d "_id"
 
 let () =
   Eio_main.run @@ fun _env ->
+  Eio.Switch.run @@ fun sw ->
   let dir = tmp "index" in
-  let eng = Eng.open_ ~durability:S.No_sync dir in
+  let eng = Eng.open_ ~sw ~durability:S.No_sync dir in
   let c = Eng.collection eng "t" in
   let insert d = ignore (Eng.insert eng c d) in
   let q sel = Eng.find eng c ~selector:sel ~sort:empty ~skip:0 ~limit:0 ~fields:empty in
@@ -71,7 +72,7 @@ let () =
 
   (* reopen: indexes persist + reload, still correct, still enforcing uniqueness *)
   Eng.close eng;
-  let eng2 = Eng.open_ ~durability:S.No_sync dir in
+  let eng2 = Eng.open_ ~sw ~durability:S.No_sync dir in
   let c2 = Eng.collection eng2 "t" in
   let q2 sel = Eng.find eng2 c2 ~selector:sel ~sort:empty ~skip:0 ~limit:0 ~fields:empty in
   assert (ids (q2 (doc [ ("age", i 99) ])) = [ "b" ]);

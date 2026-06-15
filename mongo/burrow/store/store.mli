@@ -39,6 +39,17 @@ val write : t -> ?blocking:bool -> ([ `W ] txn -> 'a) -> 'a
 (** A write transaction: committed when [f] returns, aborted if it raises. [~blocking:true] (the
     default for the engine's group-committing writer) runs the commit off the scheduler. *)
 
+(** Group-commit primitives. Open one parent write txn with {!begin_write}, run each write in a
+    {!child} (commit or {!abort} it independently — per-write failure isolation), then
+    {!commit_durable} the parent ONCE: one [F_FULLFSYNC] amortized across the whole batch (off the
+    scheduler under [Full]; inline under [No_sync]). Used by the engine's single writer fiber. *)
+val begin_write : t -> [ `W ] txn
+
+val child : [ `W ] txn -> [ `W ] txn
+val commit_child : [ `W ] txn -> unit
+val abort : [ `W ] txn -> unit
+val commit_durable : t -> [ `W ] txn -> unit
+
 val get : _ txn -> db -> string -> string option
 val put : [ `W ] txn -> db -> string -> string -> unit
 val del : [ `W ] txn -> db -> string -> bool

@@ -73,6 +73,17 @@ let write t ?(blocking = true) f =
     L.txn_abort txn;
     raise e
 
+(* group-commit primitives: open ONE parent write txn, run each write in a child txn (commit or abort
+   it independently — failure isolation), then commit the parent ONCE (one fsync for the whole batch). *)
+let begin_write t : [ `W ] txn = L.txn_begin t.env false
+let child (txn : [ `W ] txn) : [ `W ] txn = L.txn_begin_child txn
+let commit_child (txn : [ `W ] txn) = L.txn_commit txn (* merge the child's changes into the parent *)
+let abort (txn : [ `W ] txn) = L.txn_abort txn
+
+let commit_durable t (txn : [ `W ] txn) =
+  if t.durability = No_sync then L.txn_commit txn
+  else Eio_unix.run_in_systhread (fun () -> L.txn_commit_blocking txn)
+
 let get txn db key = L.get txn db key
 let put txn db key data = L.put txn db key data
 let del txn db key = L.del txn db key

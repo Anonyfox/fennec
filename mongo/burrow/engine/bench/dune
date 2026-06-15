@@ -1,4 +1,4 @@
-; Micro-benchmark for the engine access paths (not a test — run with `dune exec`).
-(executable
- (name bench_engine)
- (libraries burrow burrow_store eio_main unix fennec-mongo.bson))
+; Micro-benchmarks for the engine (not tests — run with `dune exec`).
+(executables
+ (names bench_engine bench_durable)
+ (libraries burrow burrow_store eio eio_main unix fennec-mongo.bson))

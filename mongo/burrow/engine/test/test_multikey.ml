@@ -18,7 +18,8 @@ let ids docs = List.sort compare (List.filter_map (fun d -> B.get_string d "_id"
 
 let () =
   Eio_main.run @@ fun _env ->
-  let eng = Eng.open_ ~durability:S.No_sync (tmp "mk") in
+  Eio.Switch.run @@ fun sw ->
+  let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp "mk") in
   let c = Eng.collection eng "t" in
   Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false;
   Eng.ensure_index eng c ~name:"b_1" ~keys:(doc [ ("b", i 1) ]) ~unique:false;

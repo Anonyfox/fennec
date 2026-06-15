@@ -8,8 +8,10 @@ module Store = Burrow_store.Store
 type t
 type collection = Catalog.collection
 
-val open_ : ?durability:Store.durability -> ?map_size_gb:int -> string -> t
-(** Open (creating if absent) the engine over an on-disk directory; the catalog is rebuilt from it. *)
+val open_ : sw:Eio.Switch.t -> ?durability:Store.durability -> ?map_size_gb:int -> string -> t
+(** Open (creating if absent) the engine over an on-disk directory; the catalog is rebuilt from it. The
+    group-committing writer fiber is forked into [sw], so it must outlive the engine; {!close} stops it
+    cleanly (flushing queued writes) before the switch ends. *)
 
 val close : t -> unit
 val store : t -> Store.t

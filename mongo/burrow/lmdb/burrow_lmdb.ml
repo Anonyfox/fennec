@@ -16,6 +16,7 @@ external env_close : env -> unit = "ml_env_close"
 external env_sync : env -> bool -> unit = "ml_env_sync" (* force? — releases the lock around fsync *)
 
 external txn_begin : env -> bool -> txn = "ml_txn_begin" (* rdonly? *)
+external txn_begin_child : txn -> txn = "ml_txn_begin_child" (* nested write txn under a parent *)
 external txn_commit : txn -> unit = "ml_txn_commit"
 external txn_abort : txn -> unit = "ml_txn_abort"
 

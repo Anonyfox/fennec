@@ -61,6 +61,18 @@ CAMLprim value ml_txn_begin(value env, value rdonly) {
 CAMLprim value ml_txn_commit(value txn) { CAMLparam1(txn); ck(mdb_txn_commit(Txn_val(txn))); CAMLreturn(Val_unit); }
 CAMLprim value ml_txn_abort(value txn)  { CAMLparam1(txn); mdb_txn_abort(Txn_val(txn));  CAMLreturn(Val_unit); }
 
+/* Begin a nested (child) write transaction under [parent]. Committing the child merges its changes
+   into the parent; aborting discards just the child's — so each write in a group commit is isolated
+   (one failure doesn't sink the batch), and a single parent commit fsyncs the whole batch at once.
+   Only one child may be open per parent at a time (the group-committing writer runs them serially). */
+CAMLprim value ml_txn_begin_child(value parent) {
+  CAMLparam1(parent);
+  MDB_txn *p = Txn_val(parent);
+  MDB_txn *child;
+  ck(mdb_txn_begin(mdb_txn_env(p), p, 0, &child));
+  CAMLreturn(caml_copy_nativeint((intnat)child));
+}
+
 /* Commit with the runtime lock RELEASED around the (~8 ms F_FULLFSYNC) commit. The txn pointer is
    read out BEFORE the blocking section; no OCaml value is touched inside it. Drive via
    Eio_unix.run_in_systhread so the writer fiber suspends and the domain keeps running. */

@@ -15,9 +15,10 @@ let mb n = n * 1024 * 1024
 
 let () =
   Eio_main.run @@ fun _env ->
+  Eio.Switch.run @@ fun sw ->
   let dir = tmp "blob" in
   (* default open = Full durability (group-committed F_FULLFSYNC) *)
-  let eng = Eng.open_ dir in
+  let eng = Eng.open_ ~sw dir in
   let c = Eng.collection eng "files" in
   let big = String.make (mb 4) 'x' in
   ignore (Eng.insert eng c (doc [ ("name", B.str "big.bin"); ("data", B.Binary { subtype = "00"; base64 = big }) ]));
@@ -31,7 +32,7 @@ let () =
   Eng.close eng;
 
   (* reopen: the durable write persisted the 4 MB blob intact *)
-  let eng2 = Eng.open_ dir in
+  let eng2 = Eng.open_ ~sw dir in
   let c2 = Eng.collection eng2 "files" in
   let got = read_blob eng2 c2 in
   assert (String.length got = mb 4 && got = big);

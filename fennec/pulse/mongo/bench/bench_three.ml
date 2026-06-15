@@ -63,7 +63,7 @@ let () =
       Eio_main.run @@ fun _env ->
       Eio.Switch.run @@ fun sw ->
       (* --- three backends, same data + indexes --- *)
-      let eng = Eng.open_ ~durability:S.No_sync (tmpdir ()) in
+      let eng = Eng.open_ ~sw ~durability:S.No_sync (tmpdir ()) in
       let bc = Eng.collection eng "bench" in
       let conn = Mongo.connect (M.uri t) in
       let mc = Mongo.collection ~sw conn ~db:"bench" ~name:"bench" in

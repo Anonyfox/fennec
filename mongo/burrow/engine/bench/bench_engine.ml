@@ -24,7 +24,8 @@ let time name (f : unit -> string) =
 
 let () =
   Eio_main.run @@ fun _env ->
-  let eng = Eng.open_ ~durability:S.No_sync (tmp ()) in
+  Eio.Switch.run @@ fun sw ->
+  let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp ()) in
   let c = Eng.collection eng "t" in
   Eng.ensure_index eng c ~name:"n_1" ~keys:(doc [ ("n", i 1) ]) ~unique:false;
   Eng.ensure_index eng c ~name:"g_1" ~keys:(doc [ ("g", i 1) ]) ~unique:false;

@@ -26,7 +26,8 @@ let bstrs = [| "x"; "y"; "z" |]
 
 let () =
   Eio_main.run @@ fun _env ->
-  let eng = Eng.open_ ~durability:S.No_sync (tmp "diff") in
+  Eio.Switch.run @@ fun sw ->
+  let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp "diff") in
   let c = Eng.collection eng "t" in
   let mm = MM.create () in
   Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false;

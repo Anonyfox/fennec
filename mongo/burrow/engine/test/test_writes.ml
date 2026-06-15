@@ -15,7 +15,8 @@ let empty = B.Document []
 
 let () =
   Eio_main.run @@ fun _env ->
-  let eng = Eng.open_ ~durability:S.No_sync (tmp "writes") in
+  Eio.Switch.run @@ fun sw ->
+  let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp "writes") in
   let c = Eng.collection eng "t" in
   let insert d = ignore (Eng.insert eng c d) in
   let one sel = Eng.find_one eng c ~selector:sel ~sort:empty ~skip:0 ~fields:empty in

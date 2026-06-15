@@ -16,7 +16,8 @@ let empty = B.Document []
 
 let () =
   Eio_main.run @@ fun _env ->
-  let eng = Eng.open_ ~durability:S.No_sync (tmp "observe") in
+  Eio.Switch.run @@ fun sw ->
+  let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp "observe") in
   let c = Eng.collection eng "t" in
   let events = ref [] in
   let log e = events := e :: !events in

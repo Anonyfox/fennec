@@ -45,7 +45,7 @@ let%test "Burrow agrees with a real mongod across find/count/distinct/update/rem
           Eio.Switch.run @@ fun sw ->
           let conn = Mongo.connect (M.uri t) in
           let mc = Mongo.collection ~sw conn ~db:"bdiff" ~name:"c" in
-          let eng = Eng.open_ ~durability:S.No_sync (tmpdir ()) in
+          let eng = Eng.open_ ~sw ~durability:S.No_sync (tmpdir ()) in
           let bc = Eng.collection eng "c" in
           (* index the Burrow side so the index access paths + sort-via-index are what gets compared *)
           Eng.ensure_index eng bc ~name:"age_1" ~keys:(B.doc [ ("age", B.int 1) ]) ~unique:false;

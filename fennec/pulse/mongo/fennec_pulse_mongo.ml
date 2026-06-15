@@ -126,19 +126,20 @@ let rec mkdir_p dir =
     (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
   end
 
-let embedded_engine dir =
+let embedded_engine ~sw dir =
   match Hashtbl.find_opt embedded_engines dir with
   | Some e -> e
   | None ->
     mkdir_p dir;
-    let e = Burrow_engine.open_ dir in
+    (* the writer fiber runs under [sw] — the server's long-lived switch, captured at first open *)
+    let e = Burrow_engine.open_ ~sw dir in
     Hashtbl.replace embedded_engines dir e;
     e
 
 type embedded = { eng : Burrow_engine.t; ecoll : Burrow_engine.collection }
 
-let embedded_collection ~dir ~name =
-  let eng = embedded_engine dir in
+let embedded_collection ~sw ~dir ~name =
+  let eng = embedded_engine ~sw dir in
   { eng; ecoll = Burrow_engine.collection eng name }
 
 let bw_find e (q : Backend.query) =
@@ -192,7 +193,7 @@ module Dynamic = struct
 
   let from_env ?poll ~sw ~db ~name () =
     match Runtime.url () with
-    | Some u when is_embedded u -> Embedded (embedded_collection ~dir:(embedded_dir u db) ~name)
+    | Some u when is_embedded u -> Embedded (embedded_collection ~sw ~dir:(embedded_dir u db) ~name)
     | _ -> (
       match Runtime.state () with
       | Runtime.Missing -> missing (Runtime.unavailable_message ())
