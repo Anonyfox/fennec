@@ -91,6 +91,10 @@ verified durable. So the embedded-as-prod tier scales vertically under write loa
 
 ## Known limitations (future work)
 
+- **GridFS** — done, as `fennec-mongo.gridfs`: a pure functor (standard `fs.files`/`fs.chunks`, 255 KiB
+  chunks, wire-compatible with mongod) over the same minimal store seam, so it runs over minimongo /
+  Burrow / mongod and cross-compiles to JS. Client pattern: file metadata syncs reactively to the
+  browser; bytes are served from the server's store over HTTP (not pumped through browser minimongo).
 - **Oplog / resumable change streams** — in-process `observe_changes` works; resume-token-based change
   streams across reconnects/restarts are deferred.
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
