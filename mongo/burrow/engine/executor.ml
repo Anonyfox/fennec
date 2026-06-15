@@ -67,16 +67,22 @@ let project fields = if fields = empty then Fun.id else Query.Projection.apply (
 let find_sorted_limited txn (c : Catalog.collection) idx (r : Plan.range) ~selector ~skip ~limit ~fields =
   let need = skip + limit in
   let proj = project fields in
+  (* with no residual selector every entry matches, so the skip region is a pure index walk — fetch
+     (decode) only the page. With a selector we must fetch each to test it. *)
+  let no_filter = selector = empty in
   let seen = ref 0 and kept = ref [] in
+  let keep_page data = if !seen > skip then match Record.get_by_key txn c.records data with Some d -> kept := proj d :: !kept | None -> () in
   Store.iter txn idx.Catalog.db ?from:r.Plan.lo (fun ~key ~data ->
       if range_stop r key then false
       else begin
         (if range_emit r key then
-           match Record.get_by_key txn c.records data with
-           | Some d when selector = empty || M.doc_matches selector d ->
-             incr seen;
-             if !seen > skip then kept := proj d :: !kept
-           | _ -> ());
+           if no_filter then (incr seen; keep_page data)
+           else
+             match Record.get_by_key txn c.records data with
+             | Some d when M.doc_matches selector d ->
+               incr seen;
+               if !seen > skip then kept := proj d :: !kept
+             | _ -> ());
         !seen < need
       end);
   List.rev !kept
