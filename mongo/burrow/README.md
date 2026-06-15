@@ -58,8 +58,37 @@ so the public pulse backend can depend on them.)
 - Correctness is proven by **differential testing** (the same ops through Burrow and minimongo must
   agree, with index probes after every step) + property tests for the codecs + a concurrency test.
 
+## Performance (three-way stress test — `fennec/pulse/mongo/bench`)
+
+Identical data + indexes + operations through Burrow (`:embedded:`), a real **mongod** (libmongoc),
+and **minimongo** (in-memory). 20k docs, release build, `µs/op` (lower is better):
+
+| scenario | Burrow | mongod | minimongo | Burrow vs mongod |
+|---|---:|---:|---:|---:|
+| point by `_id` | 1.5 | 46 | 0.1 | **30×** |
+| equality on uid (~10 hits) | 5.6 | 83 | 1360 | **15×** |
+| equality on status (~4000 hits) | 3464 | 11882 | 1646 | **3×** |
+| range on score (~1000 hits) | 785 | 2952 | 2164 | **4×** |
+| sort `created` desc, limit 20 | 6.9 | 96 | 5883 | **14×** |
+| feed: `status=k` sort `created` desc, limit 20 | 8.4 | 104 | 2472 | **12×** |
+| count `status=k` | 123 | 541 | 1529 | **4×** |
+| update one by `_id` (`$inc`) | 16 | 59 | 0.5 | **4×** |
+| bulk insert (one-by-one) | 44.5k/s | 20.3k/s | 1.46M/s | **2.2×** |
+
+Burrow beats real mongod on **every** scenario (no wire/serialization — it's in-process). It also beats
+minimongo wherever a real index beats an in-memory scan (selective equality 240×, sorted-limit 860×,
+the feed 280×, count 12×). minimongo wins on broad scans / point / update because it's a pure in-memory
+store with no record decode or durability — a different tier; Burrow trades that for persistence and
+still outruns the database it replaces. (Durability here is `No_sync`, comparable to mongod's default
+`w:1` async-journal; see `Store.durability` for `Full` F_FULLFSYNC + the group-commit note below.)
+
 ## Known limitations (future work)
 
+- **Durable-write throughput / group commit** — `No_sync` (the bench's mode, comparable to mongod's
+  default) commits inline, no per-op fsync. `Full` does an ~8 ms F_FULLFSYNC per commit and writes are
+  not yet group-committed, so each durable write is its own fsync (~125 writes/s under `Full`). A
+  group-committing writer fiber — batch pending writes into one txn + one fsync — is the planned fix
+  (the spike evidenced ~114k durable writes/s that way). Reads and `No_sync` writes are unaffected.
 - **Oplog / resumable change streams** — in-process `observe_changes` works; resume-token-based change
   streams across reconnects/restarts are deferred.
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
