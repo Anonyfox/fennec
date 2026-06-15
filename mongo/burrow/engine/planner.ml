@@ -82,6 +82,22 @@ let serves_sort (idx : Catalog.index) sort =
   let ss = sort_spec sort in
   ss <> [] && go ss idx.Catalog.keys
 
+(* an estimate of how tight a scan is — higher = fewer candidates. Purely a cost heuristic; any usable
+   index is correct (the residual matcher filters), so this only affects speed. *)
+let is_eq_point = function
+  | [ ({ Plan.lo = Some a; hi = Some b; _ } : Plan.range) ] -> a = b
+  | _ -> false
+
+let range_score (r : Plan.range) =
+  let plen = match (r.Plan.lo, r.Plan.hi) with Some s, _ | _, Some s -> String.length s | None, None -> 0 in
+  match (r.Plan.lo, r.Plan.hi) with Some a, Some b when a = b -> 1000 + plen (* equality / prefix *) | _ -> 100 + plen
+
+let score (idx : Catalog.index) ranges =
+  match ranges with
+  | [ r ] -> if idx.Catalog.unique && is_eq_point ranges then range_score r + 100_000 else range_score r
+  | r :: _ -> range_score r / (1 + List.length ranges) (* $in: less selective the more values *)
+  | [] -> 0
+
 let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
   match B.get selector "_id" with
   | Some v when is_pointable v -> Plan.Id_point v
@@ -89,16 +105,26 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
     let usable = List.filter_map (fun idx -> match build_index idx selector with Some r -> Some (idx, r) | None -> None) indexes in
     let single = function [ _ ] -> true | _ -> false in
     let scan (idx : Catalog.index) ranges sorted = Plan.Index_scan { index = idx.Catalog.iname; ranges; sorted } in
-    match
-      (* a filter index whose order also satisfies the sort: scan it, no in-memory sort needed *)
-      List.find_opt (fun (idx, r) -> single r && serves_sort idx sort) usable
-    with
-    | Some (idx, r) -> scan idx r true
-    | None -> (
-      match usable with
-      | (idx, r) :: _ -> scan idx r false (* filter by index, then sort in memory *)
-      | [] -> (
-        (* no filter index — use one purely to produce the sort order, if one fits *)
+    let want_sort = sort_spec sort <> [] in
+    match usable with
+    | [] ->
+      (* no filter index — use one purely to produce the sort order, if one fits *)
+      if want_sort then (
         match List.find_opt (fun idx -> serves_sort idx sort) indexes with
         | Some idx -> scan idx [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] true
-        | None -> Plan.Collection_scan))
+        | None -> Plan.Collection_scan)
+      else Plan.Collection_scan
+    | _ ->
+      (* the most selective usable index *)
+      let scored = List.map (fun (idx, r) -> (idx, r, score idx r)) usable in
+      let bidx, branges, _ =
+        List.fold_left (fun (bi, br, bs) (idx, r, sc) -> if sc > bs then (idx, r, sc) else (bi, br, bs)) (List.hd scored) (List.tl scored)
+      in
+      if single branges && serves_sort bidx sort then scan bidx branges true (* tight filter AND ordered *)
+      else if want_sort && not (is_eq_point branges) then
+        (* tightest filter is an open range and we must sort: prefer an index that yields the order, to
+           skip sorting a potentially large result *)
+        match List.find_opt (fun (idx, r) -> single r && serves_sort idx sort) usable with
+        | Some (idx, r) -> scan idx r true
+        | None -> scan bidx branges false
+      else scan bidx branges false
