@@ -24,5 +24,7 @@ val is_multikey_doc : Catalog.index -> Bson.t -> bool
 
 val add : [ `W ] Store.txn -> Catalog.index -> doc:Bson.t -> record_key:string -> unit
 val remove : [ `W ] Store.txn -> Catalog.index -> doc:Bson.t -> record_key:string -> unit
-(** The executor scans an index directly via {!Store.iter} over [(Catalog.index).db]; bound predicates
-    live in the executor since they depend on the chosen plan. *)
+
+val update : [ `W ] Store.txn -> Catalog.index -> old_doc:Bson.t -> new_doc:Bson.t -> record_key:string -> unit
+(** Reindex on update, skipping the sub-DB entirely when this index's keys are unchanged. (The executor
+    scans an index directly via {!Store.iter} over its [db]; bound predicates live in the executor.) *)

@@ -64,10 +64,14 @@ let write t ?(blocking = true) f =
   let txn = L.txn_begin t.env false in
   match f txn with
   | x ->
-    (if blocking then Eio_unix.run_in_systhread (fun () -> L.txn_commit_blocking txn)
+    (* No_sync commits do no fsync, so a systhread hand-off is pure overhead — commit inline. Full /
+       No_meta_sync do an ~8 ms F_FULLFSYNC, so run that off the scheduler when [blocking]. *)
+    (if blocking && t.durability <> No_sync then Eio_unix.run_in_systhread (fun () -> L.txn_commit_blocking txn)
      else L.txn_commit txn);
     x
-  | exception e -> L.txn_abort txn; raise e
+  | exception e ->
+    L.txn_abort txn;
+    raise e
 
 let get txn db key = L.get txn db key
 let put txn db key data = L.put txn db key data

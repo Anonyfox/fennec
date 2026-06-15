@@ -40,3 +40,13 @@ let add txn (idx : Catalog.index) ~doc ~record_key =
 
 let remove txn (idx : Catalog.index) ~doc ~record_key =
   List.iter (fun k -> ignore (Store.del txn idx.Catalog.db (k ^ record_key))) (keys_for_doc idx doc)
+
+(* Diff-aware reindex on update: recompute this index's keys for the old and new document and touch the
+   sub-DB ONLY if they differ — so an update that doesn't change a field leaves that field's index
+   untouched (the common case: most indexes are unaffected by any given update). *)
+let update txn (idx : Catalog.index) ~old_doc ~new_doc ~record_key =
+  let ok = keys_for_doc idx old_doc and nk = keys_for_doc idx new_doc in
+  if ok <> nk then begin
+    List.iter (fun k -> ignore (Store.del txn idx.Catalog.db (k ^ record_key))) ok;
+    List.iter (fun k -> Store.put txn idx.Catalog.db (k ^ record_key) record_key) nk
+  end

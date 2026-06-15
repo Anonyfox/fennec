@@ -58,8 +58,7 @@ let reindex txn (c : Catalog.collection) ~record_key ~old_doc ~new_doc =
   List.iter
     (fun idx ->
       note_multikey txn c idx new_doc;
-      Index.remove txn idx ~doc:old_doc ~record_key;
-      Index.add txn idx ~doc:new_doc ~record_key)
+      Index.update txn idx ~old_doc ~new_doc ~record_key)
     c.indexes
 
 (* populate a freshly-created index from every existing record (and set its multikey flag) *)

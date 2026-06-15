@@ -81,12 +81,17 @@ let sort_spec = function
    ([Some 1]) matches the sort to the index dirs + a trailing [_id:1]; REVERSE ([Some (-1)]) matches the
    FLIPPED dirs + a trailing [_id:-1] (a back-to-front scan — e.g. an ascending index serving a
    descending sort). Non-multikey only. *)
-let serves_sort_dir (idx : Catalog.index) sort : int option =
+let serves_sort_dir ?(pinned = 0) (idx : Catalog.index) sort : int option =
   if idx.Catalog.multikey then None
   else
     let ss = sort_spec sort in
     if ss = [] then None
     else
+      (* [pinned] leading index fields are fixed by an equality filter (a compound prefix scan), so they
+         contribute no ordering — match the sort against the keys that REMAIN after them. This is what
+         makes {status:k} sort {created:-1} a streaming scan of a {status:1,created:-1} index. *)
+      let rec drop n l = match (n, l) with 0, _ | _, [] -> l | _, _ :: t -> drop (n - 1) t in
+      let remaining = drop pinned idx.Catalog.keys in
       let matches flip trail =
         let rec go ss keys =
           match (ss, keys) with
@@ -95,7 +100,7 @@ let serves_sort_dir (idx : Catalog.index) sort : int option =
           | (sf, sd) :: st, (kf, kd) :: kt -> sf = kf && sd = flip * kd && go st kt
           | _ -> false
         in
-        go ss idx.Catalog.keys
+        go ss remaining
       in
       if matches 1 1 then Some 1 else if matches (-1) (-1) then Some (-1) else None
 
@@ -161,8 +166,13 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
     let scan (idx : Catalog.index) ranges sorted reverse = Plan.Index_scan { index = idx.Catalog.iname; ranges; sorted; reverse } in
     let want_sort = sort_spec sort <> [] in
     let full = [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] in
-    (* a filter index serves the sort only by a FORWARD scan — reverse needs a full range, not bounds *)
-    let serves_fwd idx = serves_sort_dir idx sort = Some 1 in
+    (* a filter index serves the sort only by a FORWARD scan (reverse needs a full range, not bounds).
+       An equality-prefix scan pins its leading fields, so the sort is matched against the keys after
+       them — the {status:k} sort {created:-1} compound case. *)
+    let serves_fwd (idx : Catalog.index) ranges =
+      let pinned = if is_eq_point ranges then eq_reach idx selector else 0 in
+      serves_sort_dir ~pinned idx sort = Some 1
+    in
     match usable with
     | [] -> (
       (* no single filter index: an all-indexed top-level $or becomes a union; else use an index purely
@@ -176,22 +186,19 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
           | None -> Plan.Collection_scan)
         else Plan.Collection_scan)
     | _ ->
-      (* the most selective usable index *)
-      let scored = List.map (fun (idx, r) -> (idx, r, score idx r)) usable in
-      let bidx, branges, _ =
-        List.fold_left (fun (bi, br, bs) (idx, r, sc) -> if sc > bs then (idx, r, sc) else (bi, br, bs)) (List.hd scored) (List.tl scored)
+      let best_of lst =
+        let scored = List.map (fun (idx, r) -> (idx, r, score idx r)) lst in
+        let idx, r, _ = List.fold_left (fun (bi, br, bs) (i, rr, s) -> if s > bs then (i, rr, s) else (bi, br, bs)) (List.hd scored) (List.tl scored) in
+        (idx, r)
       in
-      if single branges && serves_fwd bidx then scan bidx branges true false (* tight filter AND ordered *)
-      else
+      (* (1) the most selective usable index that ALSO yields the sort order (forward) — filter + order
+         in one scan, no in-memory sort. Covers the {status:k} sort {created:-1} compound feed query. *)
+      match List.filter (fun (idx, r) -> single r && serves_fwd idx r) usable with
+      | _ :: _ as fs -> let idx, r = best_of fs in scan idx r true false
+      | [] ->
+        (* (2) intersect equalities on separate fields when it covers MORE fields than any single index;
+           else (3) the most selective single filter, sorting in memory if needed *)
         let eqs = distinct_eq_indexes usable in
         let max_reach = List.fold_left (fun m (idx, _) -> max m (eq_reach idx selector)) 0 usable in
-        (* intersect equality conditions on separate fields only when it covers MORE fields than the
-           best single index (so it never loses to a covering compound index) *)
         if List.length eqs >= 2 && List.length eqs > max_reach then Plan.Index_intersect eqs
-        else if want_sort && not (is_eq_point branges) then
-          (* tightest filter is an open range and we must sort: prefer an index that yields the order, to
-             skip sorting a potentially large result *)
-          match List.find_opt (fun (idx, r) -> single r && serves_fwd idx) usable with
-          | Some (idx, r) -> scan idx r true false
-          | None -> scan bidx branges false false
-        else scan bidx branges false false
+        else let bidx, branges = best_of usable in scan bidx branges false false
