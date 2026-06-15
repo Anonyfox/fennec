@@ -1,0 +1,7 @@
+; GridFS — standard MongoDB file storage (fs.files + fs.chunks) as a functor over a minimal store.
+; Pure (bson + query + inline base64), so it cross-compiles to JS and runs over minimongo / Burrow /
+; mongod alike. Inline tests live in ./test.
+(library
+ (name gridfs)
+ (public_name fennec-mongo.gridfs)
+ (libraries fennec-mongo.bson fennec-mongo.query))
