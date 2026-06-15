@@ -42,19 +42,34 @@ let process_batch t (jobs : job list) =
   let outcome =
     try
       let parent = Store.begin_write t.store in
-      let run (Job { body; reply; coll = _ }) =
-        let ch = Store.child parent in
-        let r = match body ch with v -> (match Store.commit_child ch with () -> Ok v | exception e -> Error e) | exception e -> (Store.abort ch; Error e) in
-        fun pe -> reply (match (r, pe) with Ok v, None -> Ok v | Ok _, Some e -> Error e | Error e, _ -> Error e)
-      in
-      let deferred = List.map run jobs in
-      let parent_err = match Store.commit_durable t.store parent with () -> None | exception e -> Some e in
-      `Done (parent_err, deferred)
+      match jobs with
+      | [ Job { body; reply; coll } ] ->
+        (* fast path: a single write has no siblings to isolate from, so run it directly in the parent
+           (no child txn). On failure abort the whole (single-job) txn. *)
+        (match body parent with
+         | v -> (
+           match Store.commit_durable t.store parent with
+           | () -> `One ((fun () -> reply (Ok v)), Some coll)
+           | exception e -> `One ((fun () -> reply (Error e)), None))
+         | exception e -> Store.abort parent; `One ((fun () -> reply (Error e)), None))
+      | _ ->
+        (* batch: each job in its own child txn for failure isolation; parent committed once *)
+        let run (Job { body; reply; coll = _ }) =
+          let ch = Store.child parent in
+          let r = match body ch with v -> (match Store.commit_child ch with () -> Ok v | exception e -> Error e) | exception e -> (Store.abort ch; Error e) in
+          fun pe -> reply (match (r, pe) with Ok v, None -> Ok v | Ok _, Some e -> Error e | Error e, _ -> Error e)
+        in
+        let deferred = List.map run jobs in
+        let parent_err = match Store.commit_durable t.store parent with () -> None | exception e -> Some e in
+        `Many (parent_err, deferred)
     with fatal -> `Fatal fatal
   in
   Eio.Mutex.unlock t.write_lock;
   match outcome with
-  | `Done (parent_err, deferred) ->
+  | `One (thunk, coll_opt) ->
+    (match coll_opt with Some coll -> Observe.notify t.observers ~coll | None -> ());
+    thunk ()
+  | `Many (parent_err, deferred) ->
     (if parent_err = None then
        List.sort_uniq String.compare (List.map (fun (Job { coll; _ }) -> coll) jobs)
        |> List.iter (fun coll -> Observe.notify t.observers ~coll));
