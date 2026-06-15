@@ -89,6 +89,25 @@ fsync per write (~125/s), but the group-committing writer fiber amortizes one fs
 concurrent wave — **20k+ durable writes/s at 200 concurrent writers (≈160× the sequential rate)**, all
 verified durable. So the embedded-as-prod tier scales vertically under write load by default.
 
+## Connecting with mongosh (the wire endpoint)
+
+The embedded engine can be **exposed over the MongoDB wire protocol** so any real client — mongosh,
+Compass, an official driver — connects exactly as it would to a hosted mongod and runs ad-hoc queries
+against the app's live data. It is built as a clean separate layer, [`fennec-mongo.wire`](../wire/README.md)
+(pure: spec BSON codec + OP_MSG/OP_QUERY framing + SCRAM-SHA-256) with the Eio TCP server + the one-liner
+in `fennec.pulse.mongo`:
+
+```ocaml
+Fennec_pulse_mongo.expose ~sw ~net:(Eio.Stdenv.net env)
+  ~users:[ Fennec_pulse_mongo.wire_user ~user:"admin" ~password:secret ] ()
+(* then: mongosh "mongodb://admin:secret@127.0.0.1:27017" *)
+```
+
+Secure by default (loopback bind, SCRAM-SHA-256 required when any user is set, no `$where`/JS, capped
+message size, optional read-only + TLS). It shares this engine's per-directory cache, so writes from
+mongosh funnel through the same group-committing writer (no concurrent-writer hazard). Validated against
+the **real libmongoc driver** and **real mongosh** (full CRUD + SCRAM). See the wire README for details.
+
 ## Known limitations (future work)
 
 - **GridFS** — done, as `fennec-mongo.gridfs`: a pure functor (standard `fs.files`/`fs.chunks`, 255 KiB
