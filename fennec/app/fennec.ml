@@ -142,7 +142,6 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
   Eio_main.run @@ fun env ->
   let lr = Livereload.create () in
-  Mongo_runtime.warn_if_missing ();
   (* Livereload is a dev convenience; it reloads the page on a frontend edit. For an e2e or
      any controlled run it is pure nondeterminism (spontaneous navigations), so it can be
      turned off while still serving the dev (on-disk) web root: set FENNEC_DEV_LIVERELOAD=0. *)

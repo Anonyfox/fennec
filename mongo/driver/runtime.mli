@@ -59,7 +59,4 @@ val backend : unit -> backend
 (** Classify [MONGO_URL] into the backend choice, without inventing a fallback. *)
 
 val unavailable_message : unit -> string
-(** Clear operation error for database-backed features when [backend () = Missing]. *)
-
-val warn_if_missing : unit -> unit
-(** Print the missing-[MONGO_URL] startup warning at most once per process. *)
+(** The hard error a database-backed feature raises when [backend () = Missing]. No soft degradation. *)

@@ -17,7 +17,6 @@ let default_db = "fennec"
 let burrow_scheme = "burrow://"
 let default_wire_port = 27017
 let default_bind = "127.0.0.1"
-let missing_warning_printed = Atomic.make false
 
 (* the optional mongosh wire endpoint a burrow:// authority asks for *)
 type expose = {
@@ -127,15 +126,10 @@ let backend () =
     parse_burrow (String.sub u (String.length burrow_scheme) (String.length u - String.length burrow_scheme))
   | Some uri -> Mongo { uri; db = mongo_db_of_uri uri ~default:(db ()) }
 
+(* The hard error a database-backed feature raises when MONGO_URL is not configured. There is no soft
+   degradation: with no usable backend the data layer simply does not work, and says so clearly. (In
+   dev there is always a backend — `fennec dev` defaults MONGO_URL to the embedded engine.) *)
 let unavailable_message () =
-  "MONGO_URL is not set. Database-backed Fennec features are unavailable in this process. Set MONGO_URL \
-   for production (a mongodb:// URI, or burrow://[user:pass@host:port]/abs/path for the in-process \
-   engine), run through `fennec dev` (which defaults to the embedded engine — no mongod needed), or set \
-   MONGO_URL=:memory: explicitly for tests."
-
-let warn_if_missing () =
-  match backend () with
-  | Missing ->
-    if Atomic.compare_and_set missing_warning_printed false true then
-      Printf.eprintf "fennec: WARNING: %s\n%!" (unavailable_message ())
-  | Memory | Burrow _ | Mongo _ -> ()
+  "MONGO_URL is not set, so there is no database. Set MONGO_URL — a mongodb:// URI, or \
+   burrow://[user:pass@host:port]/abs/path for the in-process engine, or :memory: for tests. (`fennec \
+   dev` sets it to the embedded engine automatically.)"
