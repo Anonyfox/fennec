@@ -52,9 +52,11 @@ so the public pulse backend can depend on them.)
 
 - Deps point **down only**; the two storage libs own all unsafe + all IO.
 - Planner and codecs are **pure** — unit/property-testable with no disk.
-- **Single writer**: all writes serialize through an Eio mutex (a contended LMDB write-txn begin would
-  block the whole domain); commit runs off-scheduler via `run_in_systhread`. Readers run on **immutable
-  MVCC snapshots** (`MDB_NOTLS`) with no lock — no data races by construction.
+- **Single group-committing writer**: a dedicated writer fiber drains all queued writes into one
+  transaction (each in an LMDB child txn for per-write failure isolation) and commits **once** — so one
+  `F_FULLFSYNC` is amortized across the whole wave (sequential 125 → concurrent 20k+ durable writes/s).
+  The fsync runs off-scheduler (`run_in_systhread`); a batch of one skips the child. Readers run on
+  **immutable MVCC snapshots** (`MDB_NOTLS`) with no lock — no data races by construction.
 - Correctness is proven by **differential testing** (the same ops through Burrow and minimongo must
   agree, with index probes after every step) + property tests for the codecs + a concurrency test.
 
@@ -79,16 +81,16 @@ Burrow beats real mongod on **every** scenario (no wire/serialization — it's i
 minimongo wherever a real index beats an in-memory scan (selective equality 240×, sorted-limit 860×,
 the feed 280×, count 12×). minimongo wins on broad scans / point / update because it's a pure in-memory
 store with no record decode or durability — a different tier; Burrow trades that for persistence and
-still outruns the database it replaces. (Durability here is `No_sync`, comparable to mongod's default
-`w:1` async-journal; see `Store.durability` for `Full` F_FULLFSYNC + the group-commit note below.)
+still outruns the database it replaces. (Query durability is irrelevant; the writes above use `No_sync`,
+comparable to mongod's default `w:1` async-journal.)
+
+**Durable writes (`Full` = `F_FULLFSYNC`, `engine/bench/bench_durable`):** a sequential writer pays one
+fsync per write (~125/s), but the group-committing writer fiber amortizes one fsync across each
+concurrent wave — **20k+ durable writes/s at 200 concurrent writers (≈160× the sequential rate)**, all
+verified durable. So the embedded-as-prod tier scales vertically under write load by default.
 
 ## Known limitations (future work)
 
-- **Durable-write throughput / group commit** — `No_sync` (the bench's mode, comparable to mongod's
-  default) commits inline, no per-op fsync. `Full` does an ~8 ms F_FULLFSYNC per commit and writes are
-  not yet group-committed, so each durable write is its own fsync (~125 writes/s under `Full`). A
-  group-committing writer fiber — batch pending writes into one txn + one fsync — is the planned fix
-  (the spike evidenced ~114k durable writes/s that way). Reads and `No_sync` writes are unaffected.
 - **Oplog / resumable change streams** — in-process `observe_changes` works; resume-token-based change
   streams across reconnects/restarts are deferred.
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
