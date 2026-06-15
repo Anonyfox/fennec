@@ -1,0 +1,17 @@
+; Three-way performance stress test (not a test — run with `dune exec`): Burrow vs real mongod vs
+; minimongo over identical data/indexes/operations. Needs a mongod installed (skips otherwise).
+(executable
+ (name bench_three)
+ (libraries
+  fennec.pulse.mongo
+  fennec.pulse
+  fennec-mongo.mongod
+  fennec-mongo.driver
+  fennec-mongo.bson
+  fennec-mongo.minimongo
+  fennec-mongo.burrow
+  fennec-mongo.burrow.store
+  eio
+  eio.unix
+  eio_main
+  unix))
