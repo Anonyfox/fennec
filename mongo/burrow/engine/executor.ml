@@ -113,6 +113,32 @@ and find_general txn c plan ~selector ~sort ~skip ~limit ~fields =
 let find_one txn c plan ~selector ~sort ~skip ~fields =
   match find txn c plan ~selector ~sort ~skip ~limit:1 ~fields with [] -> None | d :: _ -> Some d
 
-(* an unfiltered count is just the record count — no document decode, no candidate list *)
+(* a single-field constraint that an index bound captures EXACTLY (no residual): a scalar equality, or
+   an operator doc using only the operators build_index encodes — so counting index entries equals
+   counting matching documents *)
+let captured_op = function "$eq" | "$gt" | "$gte" | "$lt" | "$lte" | "$in" -> true | _ -> false
+
+let fully_captured = function
+  | B.Document kvs when List.exists (fun (k, _) -> String.length k > 0 && k.[0] = '$') kvs -> List.for_all (fun (k, _) -> captured_op k) kvs
+  | B.Document _ | B.Array _ -> false (* subdocument / array literal: not an index point *)
+  | _ -> true (* scalar equality *)
+
+(* count index entries in the ranges WITHOUT fetching documents. Sound only on a non-multikey index
+   (one entry per document) whose bound captures the whole selector; entries across $in ranges are
+   disjoint (a field has one value), so no dedup is needed. *)
+let count_entries txn (idx : Catalog.index) ranges =
+  let n = ref 0 in
+  List.iter
+    (fun r -> Store.iter txn idx.Catalog.db ?from:r.Plan.lo (fun ~key ~data:_ -> if range_stop r key then false else (if range_emit r key then incr n; true)))
+    ranges;
+  !n
+
 let count txn (c : Catalog.collection) plan ~selector =
-  if selector = empty then Record.count txn c.records else List.length (matched txn c plan ~selector)
+  match (selector, plan) with
+  | B.Document [], _ -> Record.count txn c.records (* unfiltered: storage-layer count, no decode *)
+  | B.Document [ (f, v) ], Plan.Index_scan { index; ranges; _ } when (String.length f = 0 || f.[0] <> '$') && fully_captured v -> (
+    match find_index c index with
+    | Some idx when (not idx.Catalog.multikey) && (match idx.Catalog.keys with (k, _) :: _ -> k = f | [] -> false) ->
+      count_entries txn idx ranges (* index-only count: no document fetch/decode *)
+    | _ -> List.length (matched txn c plan ~selector))
+  | _ -> List.length (matched txn c plan ~selector)
