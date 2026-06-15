@@ -37,7 +37,7 @@ let%test "Dynamic missing Mongo fails operations clearly" =
   with_env Runtime.mongo_url_env None (fun () ->
       Eio_main.run (fun _env ->
           Eio.Switch.run (fun sw ->
-              let c = D.from_env ~sw ~db:"fennec_test" ~name:"missing" () in
+              let c = D.from_env ~sw ~name:"missing" () in
               match D.count c (B.doc []) with
               | _ -> false
               | exception Failure msg -> Fennec_hunt_unit.str_contains msg "MONGO_URL is not set")))

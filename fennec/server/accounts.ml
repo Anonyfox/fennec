@@ -4958,9 +4958,18 @@ let native_secret () =
   | None -> "fennec-ephemeral-accounts-" ^ b64e (secure_random 24)
 
 let native_store () =
-  match Mongo_runtime.state () with
+  match Mongo_runtime.backend () with
   | Missing -> Store.unavailable ()
   | Memory -> Store.minimongo ()
+  | Burrow _ ->
+    (* The accounts store on the embedded engine isn't wired yet: it must reuse the app's single engine
+       instance (two opens of one LMDB dir would break the single-writer invariant), which needs a
+       shared engine registry. Until then, accounts needs :memory: (dev/test) or a mongodb:// server. *)
+    Store.unavailable
+      ~message:
+        "Accounts is not yet available on the embedded (burrow://) backend. Use MONGO_URL=:memory: for \
+         dev/test, or a mongodb:// server for production accounts."
+      ()
   | Mongo { uri; db = db_name } ->
     let client = Fennec_mongo_driver.Client.connect ~uri () in
     let db = Fennec_mongo_driver.Database.create client db_name in

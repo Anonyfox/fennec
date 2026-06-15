@@ -14,7 +14,7 @@
        let ddp = Pulse.serve_ddp ~path:"/ddp" ()           (* the websocket paw, at module init *)
 
        let setup ~sw ~net =                                 (* inside Fennec.serve ~on_start *)
-         Pulse.start ~sw ~net ~db:"app" ();
+         Pulse.start ~sw ~net ();                            (* db + backend + endpoint all from MONGO_URL *)
          Pulse.seed Task.collection [ { Task.id = ""; title = "Buy milk"; body = "" } ];
          Pulse.publish Task.collection;                     (* ONE call: live cursor + SSR seed *)
          Pulse.method_ Site_methods.add_task (fun _inv title ->
@@ -35,11 +35,12 @@ module T : module type of Fennec_pulse.Typed.Make (R)
 
 (** {1 Lifecycle} *)
 
-(** [start ~sw ~net ~db ()] records the ambient config (the Eio switch + database name) consumed by
-    every subsequent collection. Call it once, first, inside [Fennec.serve ~on_start] (which now passes
-    [~net] alongside [~sw]). In dev with the embedded backend it also auto-opens the loopback MongoDB
-    wire endpoint (see {!Fennec_pulse_mongo.expose_in_dev}) so [mongosh] connects with no setup. *)
-val start : sw:Eio.Switch.t -> net:_ Eio.Net.t -> db:string -> unit -> unit
+(** [start ~sw ~net ()] records the ambient Eio switch consumed by every subsequent collection. Call it
+    once, first, inside [Fennec.serve ~on_start] (which passes [~net] alongside [~sw]). The database name
+    comes from [MONGO_URL] (the engine, db, and any mongosh endpoint are all decided there — no app
+    config). If the URL is a [burrow://] one with an authority, it also opens the MongoDB wire endpoint
+    (see {!Fennec_pulse_mongo.expose_from_env}) so [mongosh] connects. *)
+val start : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> unit
 
 (** The DDP websocket paw for the endpoint pipeline — the one server→client realtime channel.
     Safe to call at module-init time (it does not need {!start}). *)

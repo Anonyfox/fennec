@@ -78,13 +78,16 @@ let dev_embedded_dir ~root ~base_port =
 
 let ensure_dev ~root ~base_port () =
   match Runtime.url () with
-  | Some _ -> None (* an explicit MONGO_URL (real mongo / :memory: / :embedded:) always wins *)
+  | Some _ -> None (* an explicit MONGO_URL (real mongo / :memory: / burrow://) always wins *)
   | None ->
-    (* Default to the in-process embedded engine (Burrow): always available, nothing to install or
-       carry around, and reactive observe works via the engine's in-process change path. mongosh-style
-       access is the app's wire endpoint (auto-exposed in dev). A real mongod is still opt-in by setting
-       MONGO_URL=mongodb://… , and `fennec test --mongo` still launches one per suite. *)
-    let dir = dev_embedded_dir ~root ~base_port in
-    Unix.putenv Runtime.mongo_url_env (Printf.sprintf ":embedded:%s" dir);
-    Printf.eprintf "fennec dev: embedded MongoDB (Burrow) at %s\n%!" dir;
+    (* Default to the in-process embedded engine (Burrow): always available, nothing to install or carry
+       around; reactive observe works via the engine's in-process change path. We generate a burrow://
+       URL WITH a loopback authority on the official port, so the framework auto-opens an unauthenticated
+       mongosh endpoint — `mongosh mongodb://localhost:27017` just works, with no dev special-case in the
+       resolver. The path is absolute (db = "fennec"); a real mongod is still opt-in via an explicit
+       MONGO_URL, and `fennec test --mongo` still launches one per suite. *)
+    let path = Filename.concat (dev_embedded_dir ~root ~base_port) Runtime.default_db in
+    let url = Printf.sprintf "burrow://localhost:%d%s" Runtime.default_wire_port path in
+    Unix.putenv Runtime.mongo_url_env url;
+    Printf.eprintf "fennec dev: embedded MongoDB (Burrow) at %s — mongosh on 127.0.0.1:%d\n%!" path Runtime.default_wire_port;
     None

@@ -89,21 +89,19 @@ let%test "wrong password is rejected by the SCRAM handshake (no anonymous access
     | exception _ -> true
   end
 
-(* the dev auto-expose path: in dev (FENNEC_ENV) with an embedded MONGO_URL, expose_in_dev opens an
-   UNAUTHENTICATED loopback endpoint on FENNEC_MONGO_PORT, fronting the engine MONGO_URL points at.
-   Runs last — it sets process-global env vars the earlier subtests don't read. *)
-let%test "expose_in_dev opens an unauthenticated dev endpoint on FENNEC_MONGO_PORT (embedded backend)" =
+(* the URL-driven auto path: a burrow:// URL with a loopback authority (no creds) makes expose_from_env
+   open an UNAUTHENTICATED endpoint on that port, fronting the engine the path points at; the db is the
+   path's trailing segment. Runs last — it sets the process-global MONGO_URL the earlier subtests skip. *)
+let%test "expose_from_env opens an unauthenticated endpoint from a burrow:// authority" =
   if not (Mongo.available ()) then true
   else begin
     let port = 50000 + (Unix.getpid () mod 5000) in
     let dir = tmpdir () in
-    Unix.putenv "FENNEC_ENV" "development";
-    Unix.putenv "MONGO_URL" (":embedded:" ^ dir);
-    Unix.putenv "FENNEC_MONGO_PORT" (string_of_int port);
+    Unix.putenv "MONGO_URL" (Printf.sprintf "burrow://localhost:%d%s" port (Filename.concat dir "devdb"));
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    Mongo.expose_in_dev ~sw ~net:(Eio.Stdenv.net env) ();
-    (* connect with NO credentials — the dev endpoint is open on loopback *)
+    Mongo.expose_from_env ~sw ~net:(Eio.Stdenv.net env) ();
+    (* connect with NO credentials — the endpoint is open on loopback *)
     let conn = Mongo.connect (Printf.sprintf "mongodb://127.0.0.1:%d/?serverSelectionTimeoutMS=5000" port) in
     let c = Mongo.collection ~sw conn ~db:"devdb" ~name:"k" in
     ignore (Mongo.insert c (B.doc [ ("_id", B.str "x"); ("n", B.int 7) ]));

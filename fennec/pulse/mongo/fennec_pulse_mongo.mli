@@ -15,7 +15,7 @@
     {[ module R = Fennec_pulse.Reactive.Make (Fennec_pulse_mongo.Dynamic)
 
        (* inside Fennec.serve ~on_start, where [sw] drives the change-stream daemons *)
-       let backend = Fennec_pulse_mongo.Dynamic.from_env ~sw ~db:"app" ~name:"tasks" ()
+       let backend = Fennec_pulse_mongo.Dynamic.from_env ~sw ~name:"tasks" ()
        let tasks = R.Collection.create ~name:"tasks" backend ]} *)
 
 (** Whether the native driver was compiled in. [false] on a build where libmongoc was unavailable
@@ -50,7 +50,7 @@ include Fennec_pulse.Backend.S with type collection := collection
     ad-hoc queries against the app's live embedded data. It is the wire protocol over TCP (optionally
     TLS), not HTTP — which is precisely why unmodified mongosh works.
 
-    The endpoint shares the same per-directory engine cache as the [:embedded:] backend, so it sees the
+    The endpoint shares the same per-directory engine cache as the burrow:// backend, so it sees the
     app's data and its writes go through the same group-committing writer (no concurrent-writer hazard).
     It is secure by default: loopback bind, SCRAM-SHA-256 required whenever any user is configured, no
     [$where]/JS (so no server-side code injection), a capped message size, and optional read-only / TLS.
@@ -80,25 +80,22 @@ val expose :
   ?max_connections:int ->
   unit ->
   unit
-(** [expose ~sw ~net () ] starts the wire endpoint as a background daemon fiber under [sw] (returns once
-    bound, and is torn down when [sw] ends). Binding is best-effort: a port clash or listen error is
-    logged and skipped — it never takes down the app's web server. Defaults:
-    - [addr] = loopback on [FENNEC_MONGO_PORT] (else 27017, the official MongoDB port) — so the port is
-      env-configurable in dev and prod without code changes;
-    - [base_dir] = the [:embedded:<dir>] base parsed from [MONGO_URL] (else ["./.fennec/burrow"]), so the
-      endpoint fronts exactly the engine the app uses;
-    - [users] = none; [require_auth] = [true] iff any user is given (set [~require_auth:false] only for a
-      trusted localhost socket); [read_only] = [false]; [max_message_bytes] = 48 MB;
-      [max_connections] = 1000.
-    Raises [Invalid_argument] if [require_auth] holds with no users. *)
+(** The escape hatch for opening a wire endpoint with explicit parameters (the normal path is
+    {!expose_from_env}, driven entirely by [MONGO_URL]). Starts a background daemon fiber under [sw]
+    (returns once bound, torn down when [sw] ends). Binding is best-effort: a clash or listen error is
+    logged and skipped — never takes down the app's web server. Defaults: [addr] = loopback:27017;
+    [base_dir] = ["./.fennec/burrow"]; [users] = none; [require_auth] = [true] iff any user is given (set
+    [~require_auth:false] only for a trusted localhost socket); [read_only] = [false];
+    [max_message_bytes] = 48 MB; [max_connections] = 1000. Use [~tls] for an encrypted endpoint. Raises
+    [Invalid_argument] if [require_auth] holds with no users. *)
 
-val expose_in_dev : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> unit
-(** What the dev runtime calls automatically (via {!Fennec_pulse_app.start}): in dev
-    ([FENNEC_ENV] <> ["production"]) and when the backend is the embedded engine, opens an
-    {e unauthenticated} loopback wire endpoint (port [FENNEC_MONGO_PORT], else 27017) so
-    [mongosh mongodb://localhost:27017] just works with no setup. A no-op outside dev, on a non-embedded
-    backend, or when [FENNEC_MONGO_PORT] is ["off"]/["0"]/["none"] (the switch e2e/CI uses to suppress
-    the endpoint). For production, call {!expose} explicitly with [~users] (and [~tls]). *)
+val expose_from_env : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> unit
+(** The normal path, called automatically by {!Fennec_pulse_app.start}: the [MONGO_URL] alone decides.
+    If it is a [burrow://] URL with an authority, opens the mongosh wire endpoint there — bind
+    [host:port], SCRAM when the URL carries [user:pass] (else unauthenticated, only sane on loopback),
+    read-only on [?readonly]. Any other backend, or a [burrow://] URL with no authority, is a no-op. So
+    dev's zero-config endpoint comes from [fennec dev] generating a loopback authority — there is no dev
+    special case. ([?tls=true] is parsed but not yet wired for this auto path — use {!expose} [~tls].) *)
 
 (** A runtime-selectable backend — in-memory or this native driver behind one
     {!Fennec_pulse.Backend.S}, so an app chooses at boot from the global framework Mongo state
@@ -120,11 +117,12 @@ module Dynamic : sig
       and [fennec test --mongo] supplies a per-suite real Mongo URL. Value: ["MONGO_URL"]. *)
   val mongo_url_env : string
 
-  (** [from_env ?poll ~sw ~db ~name ()] — the one call an app needs to consume the global Mongo URL:
-      a fresh in-memory {!mem} collection for explicit [":memory:"], a {!real} collection for a
-      real URI, or a collection whose operations fail clearly when no [MONGO_URL] is configured.
-      Build it in [Fennec.serve ~on_start] (the captured [sw] drives Live's change-stream daemons). *)
-  val from_env : ?poll:float -> sw:Eio.Switch.t -> db:string -> name:string -> unit -> collection
+  (** [from_env ?poll ~sw ~name ()] — the one call an app needs to consume [MONGO_URL]: a fresh
+      in-memory {!mem} collection for [:memory:], an embedded Burrow collection for [burrow://…], a
+      {!real} collection for a [mongodb://] URI, or one whose operations fail clearly when [MONGO_URL] is
+      unset. The database name comes from the URL (so there is no [~db] knob in app code). Build it in
+      [Fennec.serve ~on_start] (the captured [sw] drives Live's change-stream daemons). *)
+  val from_env : ?poll:float -> sw:Eio.Switch.t -> name:string -> unit -> collection
 
   include Fennec_pulse.Backend.S with type collection := collection
 end

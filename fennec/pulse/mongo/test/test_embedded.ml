@@ -1,6 +1,6 @@
-(* The embedded Burrow backend through the runtime-selectable Dynamic seam: a [:embedded:] MONGO_URL
-   selects it, and the full Backend.S surface (insert / find / find_one / count / index+range query /
-   update / observeChanges / remove) works end-to-end with no mongod. *)
+(* The embedded Burrow backend through the runtime-selectable Dynamic seam: a [burrow://] MONGO_URL
+   selects it (the path's trailing segment is the db), and the full Backend.S surface (insert / find /
+   find_one / count / index+range query / update / observeChanges / remove) works end-to-end, no mongod. *)
 module D = Fennec_pulse_mongo.Dynamic
 module Backend = Fennec_pulse.Backend
 module B = Bson
@@ -9,10 +9,11 @@ let tmpdir = Filename.concat (Filename.get_temp_dir_name ()) ("burrow_emb_" ^ st
 let qy ?selector ?sort ?skip ?limit ?fields () = Backend.query ?selector ?sort ?skip ?limit ?fields ()
 
 let () =
-  Unix.putenv "MONGO_URL" (":embedded:" ^ tmpdir);
+  (* storage-only burrow:// (no authority); the path's trailing segment "testdb" is the database *)
+  Unix.putenv "MONGO_URL" ("burrow://" ^ Filename.concat tmpdir "testdb");
   Eio_main.run @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
-  let c = D.from_env ~sw ~db:"testdb" ~name:"things" () in
+  let c = D.from_env ~sw ~name:"things" () in
 
   let id1 = D.insert c (B.doc [ ("name", B.str "ada"); ("age", B.int 36) ]) in
   assert (String.length id1 > 0);

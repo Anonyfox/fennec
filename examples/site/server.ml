@@ -58,7 +58,7 @@ let realtime_ddp = Pulse.serve_ddp ~path:"/ddp" ()
    validate against Task.collection (an invalid value cannot reach the database); [Pulse.publish] is
    ONE call that wires both the live DDP publication AND the flicker-free SSR seed. *)
 let setup_realtime ~sw ~net =
-  Pulse.start ~sw ~net ~db:"fennec_example" ();
+  Pulse.start ~sw ~net ();
   Pulse.seed Task.collection
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
   Pulse.publish Task.collection;

@@ -1,47 +1,65 @@
-(** Process-wide Mongo runtime conventions shared by Fennec subsystems.
+(** The one database knob: [MONGO_URL], parsed once into a structured backend choice. Three schemes,
+    mirroring the SQLite -> server progression:
+    - [:memory:] — the in-process Mongo-shaped store (minimongo); ephemeral (unit tests).
+    - [burrow://\[user:pass@\]\[host\[:port\]\]/<abs-path>\[?tls&readonly\]] — the embedded on-disk engine.
+      It is the mirror image of [mongodb://]: the authority is the coordinates the {e hosted} embedded
+      server listens on (absent => storage only, no wire endpoint), and the path's trailing segment is
+      the database name {e and} its on-disk directory ([mongosh use other] => a sibling dir under the
+      same base). Paths are absolute.
+    - [mongodb://…] / [mongodb+srv://…] — a real MongoDB server (native driver).
 
-    Fennec has one data-location knob: [MONGO_URL]. A real MongoDB URI means "use Mongo"; the
-    sentinel [":memory:"] means "use the in-process Mongo-shaped backend". An absent or blank
-    [MONGO_URL] is a first-class [Missing] state: the process may boot, but database operations
-    should fail with a clear configuration error. Test/dev orchestration opts into memory or real
-    Mongo explicitly by setting this one variable before spawning an app.
+    An absent/blank [MONGO_URL] is a first-class [Missing] state. Pure string parsing — no IO, no driver.
 
-    {[
-      match state () with
-      | Mongo { uri; db } -> open_real_backend ~uri ~db
-      | Memory -> open_in_memory_backend ()
-      | Missing -> failwith (unavailable_message ())
-    ]} *)
+    {[ match backend () with
+       | Memory -> in_memory ()
+       | Burrow { base; db; expose } -> open_embedded ~dir:(Filename.concat base db) ?expose ()
+       | Mongo { uri; db } -> connect ~uri ~db
+       | Missing -> failwith (unavailable_message ()) ]} *)
 
-(** Environment variable that carries the application's Mongo URL. *)
 val mongo_url_env : string
+(** The environment variable that carries the application's database URL: ["MONGO_URL"]. *)
 
-(** Sentinel URL for the in-process Mongo-shaped backend. *)
 val memory_url : string
+(** The [:memory:] sentinel for the in-process backend. *)
 
-(** Default Mongo database used by framework-owned collections. *)
 val default_db : string
+(** The default database name (["fennec"]) when neither the URL nor [FENNEC_DB] provides one. *)
 
-(** Resolved process state for framework-owned Mongo consumers. *)
-type state =
+val default_wire_port : int
+(** The default mongosh wire-endpoint port (27017, the official MongoDB port). *)
+
+(** The optional mongosh wire endpoint requested by a [burrow://] authority. *)
+type expose = {
+  host : string;  (** bind address (default 127.0.0.1) *)
+  port : int;  (** wire port (default 27017) *)
+  user : string option;  (** SCRAM username — creds present => auth required *)
+  pass : string option;
+  tls : bool;  (** [?tls=true] — reuse the app's TLS certificate *)
+  read_only : bool;  (** [?readonly=true] *)
+}
+
+(** The resolved backend choice. For [Burrow], the engine directory is [Filename.concat base db]. *)
+type backend =
   | Missing
   | Memory
+  | Burrow of { base : string; db : string; expose : expose option }
   | Mongo of { uri : string; db : string }
 
-(** [url ()] returns the trimmed [MONGO_URL], or [None] when it is absent/blank. *)
 val url : unit -> string option
+(** The trimmed [MONGO_URL], or [None] when absent/blank. *)
 
-(** [db ()] returns [FENNEC_DB] when set/nonblank, otherwise ["fennec"]. *)
 val db : unit -> string
+(** [FENNEC_DB] when set/nonblank, else {!default_db}. The fallback db for [:memory:] and for a
+    [mongodb://] URI with no database component. *)
 
-(** [is_memory_url url] is [true] only for the [":memory:"] sentinel. *)
 val is_memory_url : string -> bool
+(** [true] only for the [:memory:] sentinel. *)
 
-(** [state ()] classifies the current environment without inventing a fallback. *)
-val state : unit -> state
+val backend : unit -> backend
+(** Classify [MONGO_URL] into the backend choice, without inventing a fallback. *)
 
-(** Clear operation error for database-backed features when [state () = Missing]. *)
 val unavailable_message : unit -> string
+(** Clear operation error for database-backed features when [backend () = Missing]. *)
 
-(** Print the missing-Mongo startup warning at most once per process. *)
 val warn_if_missing : unit -> unit
+(** Print the missing-[MONGO_URL] startup warning at most once per process. *)

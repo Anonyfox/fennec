@@ -7,7 +7,7 @@ a cycle is a compile error). All unsafe code and all IO live in the two bottom l
 is pure values and typed handles.
 
 **Status: implemented and wired in.** Burrow is a runtime-selectable `Backend.S` backend (select with a
-`:embedded:` `MONGO_URL`), validated by a differential test against minimongo and a concurrency test.
+`burrow://` `MONGO_URL`), validated by a differential test against minimongo and a concurrency test.
 
 ## Libraries (bottom-up)
 
@@ -38,15 +38,17 @@ Query semantics (selector operators, update modifiers, projection, sort, aggrega
 from `fennec-mongo.query` — Burrow's job is durable storage, indexing, and access-path selection, so it
 inherits minimongo's operator coverage exactly (the differential test proves it).
 
-## The `:embedded:` Backend.S adapter — built
+## The `burrow://` Backend.S adapter — built
 
 `Fennec_pulse.Backend.S` is in the `fennec` package; `fennec` depends on `fennec-mongo`, so Burrow
 (in `fennec-mongo`) cannot depend *up* on it. The engine therefore exposes a Backend-shaped API, and the
 adapter that wraps it lives in **`fennec/pulse/mongo/`** (`fennec_pulse_mongo.ml`), beside the Mini and
-Native adapters: an `Embedded` op set + a `Dynamic.Embedded` case + `:embedded:` `MONGO_URL` parsing in
-`Dynamic.from_env`. One engine per on-disk database directory (cached), shared across that db's
-collections; durable by default. (The five burrow libs are public — `fennec-mongo.burrow{,.store,…}` —
-so the public pulse backend can depend on them.)
+Native adapters: an `Embedded` op set + a `Dynamic.Embedded` case. The single `MONGO_URL` parser
+(`Fennec_mongo_driver.Runtime.backend`) turns a `burrow://[auth]/<abs-path>` URL into the engine
+directory (= base/db, the path's trailing segment is the db) + an optional wire-endpoint spec. One engine
+per on-disk database directory (cached), shared across that db's collections; durable by default. (The
+five burrow libs are public — `fennec-mongo.burrow{,.store,…}` — so the public pulse backend can depend
+on them.)
 
 ## Invariants
 
@@ -62,7 +64,7 @@ so the public pulse backend can depend on them.)
 
 ## Performance (three-way stress test — `fennec/pulse/mongo/bench`)
 
-Identical data + indexes + operations through Burrow (`:embedded:`), a real **mongod** (libmongoc),
+Identical data + indexes + operations through Burrow (`burrow://`), a real **mongod** (libmongoc),
 and **minimongo** (in-memory). 20k docs, release build, `µs/op` (lower is better):
 
 | scenario | Burrow | mongod | minimongo | Burrow vs mongod |
@@ -109,11 +111,13 @@ mongosh funnel through the same group-committing writer (no concurrent-writer ha
 the **real libmongoc driver**, **real mongosh**, and **over TLS** (full CRUD + SCRAM). See the wire
 README for details.
 
-In **dev**, this is automatic: `fennec dev` defaults the backend to this engine (no mongod) and
-auto-opens an unauthenticated loopback endpoint on `FENNEC_MONGO_PORT` (default 27017), so `mongosh`
-connects with zero setup. The **e2e/system harness** therefore runs against the embedded engine for free
-(per-`base_port` data dirs keep parallel instances isolated; it sets `FENNEC_MONGO_PORT=off` so the
-endpoint never fights for a port). Production opts in explicitly via `Fennec_pulse_mongo.expose`.
+In **dev**, this is automatic: `fennec dev` defaults `MONGO_URL` to a `burrow://localhost:27017/…` URL
+(no mongod), and the loopback authority makes the framework auto-open an unauthenticated mongosh endpoint
+— `mongosh "mongodb://localhost:27017"` just works. The **e2e/system harness** runs against the embedded
+engine for free, isolated per scenario: it pins `MONGO_URL` to a storage-only `burrow:///<sandbox>/…` URL
+(no authority ⇒ no endpoint to fight for a port). Production sets `MONGO_URL` explicitly — including the
+authority + credentials when it wants a remote mongosh endpoint. The full grammar is in the
+[wire README](../wire/README.md).
 
 ## Known limitations (future work)
 

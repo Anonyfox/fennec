@@ -44,23 +44,34 @@ place with sockets/TLS/state — one small surface to audit for the limits and t
 - **Read-only mode** rejects every mutation; only a vetted command set is implemented (no
   `shutdown`/`eval`/`fsync`/...). **TLS** optional via `tls-eio`.
 
-## Dev: on by default
+## The one knob: `MONGO_URL`
 
-`fennec dev` defaults the backend to the embedded engine (`MONGO_URL=:embedded:…`, no mongod to
-install or run), and `Fennec_pulse_app.start ~sw ~net ~db ()` then auto-opens an **unauthenticated
-loopback** wire endpoint (`expose_in_dev`) — so during development `mongosh "mongodb://localhost:27017"`
-just works with zero setup. The port is **`FENNEC_MONGO_PORT`** (default 27017, the official port), the
-same knob in dev and prod; set it to `off`/`0` to suppress the endpoint (what the e2e harness does).
+Backend, database, and any mongosh endpoint all come from a single env var — no userland config. Three
+schemes (the SQLite → server progression):
 
-## Prod: one explicit line
+| `MONGO_URL` | backend | mongosh |
+|---|---|---|
+| `:memory:` | minimongo (ephemeral) | — |
+| `burrow:///abs/path` | embedded engine, storage only | — |
+| `burrow://[user:pass@]host:port/abs/path[?tls&readonly]` | embedded + wire endpoint | yes |
+| `mongodb://…` | real server | (mongosh the server directly) |
 
-```ocaml
-(* in Fennec.serve ~on_start:(fun ~sw ~sleep:_ ~net -> …) *)
-Fennec_pulse_mongo.expose ~sw ~net
-  ~users:[ Fennec_pulse_mongo.wire_user ~user:"admin" ~password:secret ]
-  ?tls (* a Tls.Config.server for remote exposure *) ()
-(* then: mongosh "mongodb://admin:secret@host:27017?tls=true" *)
-```
+For `burrow://` the **authority is the wire endpoint** — the mirror of `mongodb://`'s `host:port`:
+present ⇒ expose there (SCRAM when `user:pass`, else unauthenticated — only sane on loopback); absent ⇒
+storage only. The path's **trailing segment is the database name** and its on-disk directory (`mongosh
+use other` ⇒ a sibling dir).
+
+- **Dev** (type nothing): `fennec dev` generates `burrow://localhost:27017/<abs>/…/dev-<port>/fennec`, so
+  `mongosh "mongodb://localhost:27017"` just works. No dev special-case — the URL carries the authority.
+- **Prod, exposed**: `MONGO_URL=burrow://admin:secret@0.0.0.0:27017/var/lib/app` → `mongosh
+  "mongodb://admin:secret@host:27017"`.
+- **Prod, storage only**: `MONGO_URL=burrow:///var/lib/app`.
+- **Tests**: `:memory:` (unit) or a storage-only `burrow:///tmp/…` per suite (integration, isolated, no
+  endpoint).
+
+`Fennec_pulse_app.start ~sw ~net ()` calls `expose_from_env`, which reads the URL and opens the endpoint
+when the authority is present — zero app code. `Fennec_pulse_mongo.expose ~sw ~net ~users … ?tls ()` stays
+as an escape hatch (custom users, or a TLS wire endpoint until `?tls` is wired for the auto path).
 
 ## Validation
 
@@ -72,8 +83,9 @@ Fennec_pulse_mongo.expose ~sw ~net
   runs insertMany / aggregate / countDocuments / sorted-find — asserting on what mongosh printed.
 - `../../fennec/pulse/mongo/test/test_wire_tls.ml`: the driver authenticates + runs CRUD **over TLS**
   (self-signed cert, `Tls_eio` termination) — SCRAM over the encrypted channel.
-- `test_wire_server.ml` also drives `expose_in_dev` directly: an unauthenticated dev endpoint on
-  `FENNEC_MONGO_PORT`, fronting the embedded engine `MONGO_URL` points at.
+- `test_wire_server.ml` also drives `expose_from_env` directly: a `burrow://` authority with no creds
+  opens an unauthenticated endpoint fronting the engine the path points at.
+- `runtime`'s `test_runtime.ml` covers the URL parser (the three schemes + authority/db parsing).
 
 ## Known gaps
 

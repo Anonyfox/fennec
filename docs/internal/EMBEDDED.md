@@ -1,8 +1,15 @@
 # EMBEDDED — a native, in-process MongoDB engine (codename: Burrow)
 
-> Status: **concept / terrain map**, now moving into first experiments (the LMDB foundation).
-> **Burrow** is the name — the flagship embedded engine *within* `fennec-mongo` (a fennec's burrow:
-> on disk, in-process, where the data lives). Naming & packaging are decided — see §3.
+> Status: **built and shipped.** Burrow is implemented, differential-tested vs minimongo + mongod, and
+> wired in behind `Backend.S`. A mongosh/driver wire endpoint and GridFS exist too.
+>
+> **URL scheme update (supersedes this doc's `:embedded:` / `:port:` names):** the implemented selector
+> is a single `MONGO_URL` with three schemes — `:memory:` (minimongo), `burrow://[user:pass@][host:port]
+> /<abs-path>[?tls&readonly]` (this engine; the path's trailing segment is the db, and an authority opens
+> the mongosh wire endpoint there — so `:embedded:` and `:port:` are now ONE `burrow://` URL), and
+> `mongodb://…` (real server). Parsed once in `Fennec_mongo_driver.Runtime.backend`. The grammar lives in
+> [`mongo/wire/README.md`](../../mongo/wire/README.md); the rest of this doc keeps the original
+> `:embedded:`/`:port:` terminology for the design narrative.
 
 ## 1. What this is
 

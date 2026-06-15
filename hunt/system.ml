@@ -209,11 +209,13 @@ let server_bc () = Test_proto.server_bc () (* the built server bytecode, if prov
 
 (* Spawn THIS app's `fennec dev` (extra [args] appended), in the app dir, captured + reaped on
    teardown like any spawn. The standing-server primitive for System suites. Pair with {!wait_ready}.
-   We suppress the embedded Mongo wire endpoint ([FENNEC_MONGO_PORT=off]): `fennec dev` now defaults to
-   the embedded engine and would otherwise auto-open a loopback mongosh endpoint on 27017, which a
-   developer's own running dev server (or another scenario) could already hold — e2e drives the app over
-   HTTP, not the wire, so the endpoint is pure noise here. *)
-let dev ?(args = []) sb = spawn sb ~env:[ ("FENNEC_MONGO_PORT", "off") ] ~cwd:(app_dir ()) (fennec () :: "dev" :: args)
+   We pin MONGO_URL to a storage-only burrow:// path inside this scenario's sandbox: each scenario gets
+   a fresh, isolated embedded database (real Mongo-compatible, no mongod), and because the URL has NO
+   authority there is no mongosh wire endpoint to fight a developer's :27017 or another scenario — e2e
+   drives the app over HTTP, not the wire. (An explicit MONGO_URL in the spawn env would still win.) *)
+let dev ?(args = []) sb =
+  let mongo_url = "burrow://" ^ Filename.concat sb.dir "e2e-db" in
+  spawn sb ~env:[ ("MONGO_URL", mongo_url) ] ~cwd:(app_dir ()) (fennec () :: "dev" :: args)
 
 let wait_output p ?(timeout = 10.0) sub =
   let clock = Eio.Stdenv.clock p.sb.env in

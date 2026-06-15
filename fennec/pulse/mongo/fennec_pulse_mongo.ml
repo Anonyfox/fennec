@@ -115,7 +115,7 @@ let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.han
 
 (* Burrow — the native, in-process, on-disk MongoDB-compatible engine (fennec-mongo.burrow). One
    engine per on-disk database directory, shared across that database's collections; selected by a
-   [:embedded:] MONGO_URL. Durable by default (group-committed F_FULLFSYNC). *)
+   burrow:// MONGO_URL (the path's trailing segment is the db). Durable by default (group-committed F_FULLFSYNC). *)
 module Burrow_engine = Burrow.Engine
 
 let embedded_engines : (string, Burrow_engine.t) Hashtbl.t = Hashtbl.create 8
@@ -158,7 +158,7 @@ let bw_observe e (q : Backend.query) ~added ~changed ~removed =
 (* ---- runtime-selectable backend ----------------------------------------- *)
 
 (* A runtime-selectable backend: in-memory, this native driver, OR the embedded Burrow engine, behind
-   ONE Backend.S, so an app picks at boot (real mongo / :embedded: / :memory:) with no type change
+   ONE Backend.S, so an app picks at boot (real mongo / burrow:// / :memory:) with no type change
    downstream. The per-op dispatch references the outer (native / burrow) ops — non-recursive [let],
    so no shadowing. *)
 module Dynamic = struct
@@ -178,27 +178,15 @@ module Dynamic = struct
      drives Live's change-stream daemons. *)
   let mongo_url_env = Runtime.mongo_url_env
 
-  (* [:embedded:] selects Burrow; an optional path after it is the base directory (default
-     ./.fennec/burrow), under which each database is its own subdirectory. *)
-  let embedded_prefix = ":embedded:"
-
-  let is_embedded u =
-    let p = embedded_prefix in
-    String.length u >= String.length p && String.sub u 0 (String.length p) = p
-
-  let embedded_dir url db =
-    let rest = String.sub url (String.length embedded_prefix) (String.length url - String.length embedded_prefix) in
-    let base = if rest = "" then Filename.concat (Sys.getcwd ()) ".fennec/burrow" else rest in
-    Filename.concat base db
-
-  let from_env ?poll ~sw ~db ~name () =
-    match Runtime.url () with
-    | Some u when is_embedded u -> Embedded (embedded_collection ~sw ~dir:(embedded_dir u db) ~name)
-    | _ -> (
-      match Runtime.state () with
-      | Runtime.Missing -> missing (Runtime.unavailable_message ())
-      | Runtime.Memory -> mem (Minimongo.create ())
-      | Runtime.Mongo { uri; db = _ } -> real ?poll ~sw (connect uri) ~db ~name)
+  (* the single MONGO_URL parser ({!Runtime.backend}) picks the engine: minimongo (:memory:), the
+     embedded Burrow engine (burrow://, data dir = base/db from the URL path), or the native driver
+     (mongodb://). The db comes from the URL, not from app code. *)
+  let from_env ?poll ~sw ~name () =
+    match Runtime.backend () with
+    | Runtime.Missing -> missing (Runtime.unavailable_message ())
+    | Runtime.Memory -> mem (Minimongo.create ())
+    | Runtime.Burrow { base; db; _ } -> Embedded (embedded_collection ~sw ~dir:(Filename.concat base db) ~name)
+    | Runtime.Mongo { uri; db } -> real ?poll ~sw (connect uri) ~db ~name
 
   let insert c d =
     match c with
@@ -285,7 +273,7 @@ end
 
    {!expose} opens a MongoDB wire-protocol TCP listener in front of the embedded Burrow engine, so any
    real client — mongosh, Compass, a driver — connects exactly as it would to a hosted mongod and runs
-   ad-hoc queries. It shares the SAME engine cache as the [:embedded:] backend (keyed by directory), so
+   ad-hoc queries. It shares the SAME engine cache as the burrow:// backend (keyed by directory), so
    it sees the app's live data and its writes funnel through the same group-committing writer (no
    concurrent-writer hazard). Secure by default: binds loopback, requires SCRAM-SHA-256 when any user is
    configured, never speaks [$where]/JS, caps message size, and offers a read-only mode + TLS. *)
@@ -293,44 +281,25 @@ end
 let wire_rng_ready = ref false
 let ensure_wire_rng () = if not !wire_rng_ready then (Mirage_crypto_rng_unix.use_default (); wire_rng_ready := true)
 
-(* the wire endpoint port: [FENNEC_MONGO_PORT] if set, else the official MongoDB port — configured the
-   same way in dev and prod *)
-let mongo_wire_default_port = 27017
-
-let mongo_wire_port () =
-  match Sys.getenv_opt "FENNEC_MONGO_PORT" with
-  | Some s -> ( match int_of_string_opt (String.trim s) with Some p when p > 0 -> p | _ -> mongo_wire_default_port)
-  | None -> mongo_wire_default_port
-
-(* the embedded engine's base directory, read from [MONGO_URL] ([:embedded:<base>]) so the endpoint
-   fronts the SAME engine the app uses (shared per-directory cache); falls back to the conventional dir *)
-let mongo_wire_default_base = "./.fennec/burrow"
-
-let is_embedded_url u =
-  let p = ":embedded:" in
-  String.length u >= String.length p && String.sub u 0 (String.length p) = p
-
-(* whether the app's backend is the embedded engine (MONGO_URL = :embedded:…) *)
-let embedded_in_use () = match Runtime.url () with Some u -> is_embedded_url u | None -> false
-
-let embedded_base_of_env () =
-  match Runtime.url () with
-  | Some u when is_embedded_url u ->
-    let p = ":embedded:" in
-    let rest = String.sub u (String.length p) (String.length u - String.length p) in
-    if String.trim rest = "" then mongo_wire_default_base else rest
-  | _ -> mongo_wire_default_base
-
 type wire_user = { wu_name : string; wu_password : string }
 
 let wire_user ~user ~password = { wu_name = user; wu_password = password }
 
-let expose ~sw ~net ?addr ?base_dir ?(users = []) ?require_auth ?(read_only = false) ?tls
-    ?(max_message_bytes = 48_000_000) ?(max_connections = 1000) () =
+(* a burrow:// authority host -> an Eio bind address (0.0.0.0/empty => all interfaces; else loopback or
+   a dotted-quad) *)
+let ipaddr_of_host h =
+  match h with
+  | "" | "0.0.0.0" | "::" -> Eio.Net.Ipaddr.V4.any
+  | "localhost" | "127.0.0.1" -> Eio.Net.Ipaddr.V4.loopback
+  | _ -> (
+    match List.map int_of_string_opt (String.split_on_char '.' h) with
+    | [ Some a; Some b; Some c; Some d ] when a < 256 && b < 256 && c < 256 && d < 256 ->
+      Eio.Net.Ipaddr.of_raw (String.init 4 (fun i -> Char.chr (List.nth [ a; b; c; d ] i)))
+    | _ -> Eio.Net.Ipaddr.V4.loopback)
+
+let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_wire_port)) ?(base_dir = "./.fennec/burrow")
+    ?(users = []) ?require_auth ?(read_only = false) ?tls ?(max_message_bytes = 48_000_000) ?(max_connections = 1000) () =
   ensure_wire_rng ();
-  (* default the port from FENNEC_MONGO_PORT (else 27017) on loopback, and the data dir from MONGO_URL *)
-  let addr = match addr with Some a -> a | None -> `Tcp (Eio.Net.Ipaddr.V4.loopback, mongo_wire_port ()) in
-  let base_dir = match base_dir with Some d -> d | None -> embedded_base_of_env () in
   let require_auth = match require_auth with Some b -> b | None -> users <> [] in
   if require_auth && users = [] then
     invalid_arg "Fennec_pulse_mongo.expose: require_auth is set but no users were configured (nobody could connect)";
@@ -400,14 +369,18 @@ let expose ~sw ~net ?addr ?base_dir ?(users = []) ?require_auth ?(read_only = fa
     Printf.printf "fennec: mongo-wire endpoint on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
   with e -> Printf.eprintf "fennec: mongo-wire endpoint NOT started on %s — %s\n%!" where (Printexc.to_string e)
 
-(* Auto-exposed by the dev runtime (Fennec_pulse_app.start). In dev, when the backend is the embedded
-   engine, open an UNAUTHENTICATED loopback wire endpoint so `mongosh mongodb://localhost:<port>` just
-   works with zero setup — the frictionless dev DB. No-op outside dev or when the backend isn't embedded
-   (a real-mongo / :memory: app has nothing to front here). Production must call {!expose} explicitly
-   with users (and TLS for remote). The port is FENNEC_MONGO_PORT (else 27017); binding is best-effort. *)
-let expose_in_dev ~sw ~net () =
-  let is_dev = match Sys.getenv_opt "FENNEC_ENV" (* = Dev_proto.env_mode *) with Some "production" -> false | _ -> true in
-  (* FENNEC_MONGO_PORT=off|0|none turns the auto endpoint off — e.g. parallel e2e instances that don't
-     want a second listener fighting over the port *)
-  let disabled = match Sys.getenv_opt "FENNEC_MONGO_PORT" with Some ("off" | "0" | "none" | "") -> true | _ -> false in
-  if is_dev && (not disabled) && embedded_in_use () then expose ~sw ~net ~require_auth:false ()
+(* The auto path the framework calls (Fennec_pulse_app.start). The MONGO_URL alone decides everything:
+   if it is a burrow:// URL WITH an authority, open the mongosh wire endpoint there — bind host:port,
+   SCRAM when the URL carries user:pass, read-only when ?readonly. No authority (or any other backend)
+   => no endpoint. So dev's zero-config endpoint comes from `fennec dev` generating a loopback authority,
+   not from a dev branch here. (?tls=true is parsed but TLS reuse for the wire endpoint is not yet wired
+   — use an explicit {!expose} ~tls for a TLS wire endpoint; we log and serve plaintext.) *)
+let expose_from_env ~sw ~net () =
+  match Runtime.backend () with
+  | Runtime.Burrow { base; expose = Some s; _ } ->
+    if s.tls then
+      Printf.eprintf "fennec: mongo-wire ?tls=true is not yet wired for the auto endpoint — serving plaintext on %s:%d\n%!" s.host s.port;
+    let users = match (s.user, s.pass) with Some u, Some p -> [ wire_user ~user:u ~password:p ] | _ -> [] in
+    expose ~sw ~net ~addr:(`Tcp (ipaddr_of_host s.host, s.port)) ~base_dir:base ~users ~require_auth:(s.user <> None)
+      ~read_only:s.read_only ()
+  | _ -> ()
