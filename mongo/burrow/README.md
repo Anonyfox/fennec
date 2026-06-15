@@ -26,9 +26,9 @@ is pure values and typed handles.
 | `Catalog` | collection / index / validator metadata (persisted in a meta sub-DB), rebuilt on open | ✅ |
 | `Record` | the clustered `_id` record store — record bytes keyed by encoded `_id` | ✅ |
 | `Index` | secondary index access method (key++`_id` entries); maintenance + multikey/compound | ✅ |
-| `Plan` | the plan IR — point (`_id`) / index-range / collection-scan | ✅ |
-| `Planner` | `(selector, sort) → Plan` — `_id` point + equality/range index selection | ✅ (sort-via-index, selectivity heuristic, `$or`/intersection: future) |
-| `Executor` | interpret a `Plan` → docs; residual `Matcher`; sort/skip/limit; projection | ✅ |
+| `Plan` | the plan IR — point (`_id`) / index-range list / index-union / collection-scan | ✅ |
+| `Planner` | `(selector, sort) → Plan` — `_id` point, equality/range/compound/`$in`/`$or` index selection, selectivity scoring, sort-via-index | ✅ (index-intersection / covering: future) |
+| `Executor` | interpret a `Plan` → docs; residual `Matcher`; sort/skip/limit; projection; streaming early-termination for sorted+limit | ✅ |
 | `Write` | insert / update / remove / upsert (`Modifier`) + index maintenance + unique + validator (one txn) | ✅ |
 | `Observe` | live observeChanges: post-write recompute + diff → added/changed/removed | ✅ (in-process) |
 | `Engine` | open/close lifecycle, single-writer lock, the public API | ✅ |
@@ -63,9 +63,13 @@ so the public pulse backend can depend on them.)
 - **Oplog / resumable change streams** — in-process `observe_changes` works; resume-token-based change
   streams across reconnects/restarts are deferred.
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
-- **Planner** — sort-via-index, `$or`/index-intersection, covering indexes, selectivity costing.
+- **Planner** — equality/range/compound/`$in`/`$or` index selection, selectivity scoring, and
+  sort-via-index (with streaming early-termination for sorted+limit) are done; index-INTERSECTION (AND
+  of two indexes) and covering-index reads (serving a projection without fetching the record) are future.
 - **Index** — descending-field *range* (asc range + any-direction equality work); special index types
   (text/geo) fall back to collection scan (still correct via the residual matcher).
+- A filtered `count` still fetches matching records; only the unfiltered count is served at the storage
+  layer. (See the benchmark in `engine/bench`.)
 - **Map growth** — fixed 128 GB virtual map (sparse; grows on disk as used); online `MDB_MAP_FULL`
   grow-and-retry is deferred (blocked by LMDB's no-active-txns constraint).
 - **`Decimal128`** stored as its canonical string (round-trips losslessly; not the 16-byte wire form);
