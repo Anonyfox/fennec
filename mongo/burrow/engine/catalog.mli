@@ -9,17 +9,23 @@ type index = {
   iname : string;
   keys : (string * int) list;  (** field path, direction (1 asc | -1 desc) *)
   unique : bool;
+  mutable multikey : bool;  (** set once any document indexes an array field — gates sort-via-index *)
   db : Store.db;  (** the index sub-DB: encoded-key ++ _id -> record key *)
 }
 
 type collection = {
   name : string;
   records : Record.t;
+  meta : Store.db;  (** the shared metadata sub-DB (so a write can persist index flags in its txn) *)
   mutable indexes : index list;
   mutable validator : Bson.t option;
 }
 
 type t
+
+val persist_index : [ `W ] Store.txn -> collection -> index -> unit
+(** Persist [idx]'s current spec (keys / unique / multikey) into the metadata DB, within the caller's
+    write txn — used to durably record an index flipping to multikey. *)
 
 val open_ : Store.t -> t
 (** Open the catalog over a store, rebuilding all in-memory metadata + sub-DB handles from [meta]. *)

@@ -2,11 +2,18 @@ module Store = Burrow_store.Store
 module Bin = Burrow_binary
 module B = Bson
 
-type index = { iname : string; keys : (string * int) list; unique : bool; db : Store.db }
+type index = {
+  iname : string;
+  keys : (string * int) list;
+  unique : bool;
+  mutable multikey : bool; (* set once any document indexes an array field — gates sort-via-index *)
+  db : Store.db;
+}
 
 type collection = {
   name : string;
   records : Record.t;
+  meta : Store.db; (* the shared metadata sub-DB, so writes can persist index flags in their txn *)
   mutable indexes : index list;
   mutable validator : B.t option;
 }
@@ -41,7 +48,12 @@ let parse_keys : B.t -> (string * int) list = function
   | _ -> []
 
 let keys_doc (keys : (string * int) list) : B.t = B.Document (List.map (fun (f, d) -> (f, B.Int d)) keys)
-let index_spec_doc keys unique = B.Document [ ("keys", keys_doc keys); ("unique", B.Bool unique) ]
+
+let index_spec_doc keys unique multikey =
+  B.Document [ ("keys", keys_doc keys); ("unique", B.Bool unique); ("multikey", B.Bool multikey) ]
+
+let persist_index txn (c : collection) (idx : index) =
+  Store.put txn c.meta (ikey c.name idx.iname) (Bin.encode (index_spec_doc idx.keys idx.unique idx.multikey))
 
 let open_ store =
   let meta = Store.db store "meta" in
@@ -70,7 +82,7 @@ let open_ store =
   List.iter
     (fun name ->
       let records = Record.make (Store.db store (rec_db_name name)) in
-      Hashtbl.replace t.colls name { name; records; indexes = []; validator = None })
+      Hashtbl.replace t.colls name { name; records; meta; indexes = []; validator = None })
     !coll_names;
   (* phase 3: attach indexes *)
   List.iter
@@ -81,8 +93,9 @@ let open_ store =
         let spec = Bin.decode data in
         let kd = Option.value ~default:(B.Document []) (B.get spec "keys") in
         let unique = match B.get spec "unique" with Some (B.Bool b) -> b | _ -> false in
+        let multikey = match B.get spec "multikey" with Some (B.Bool b) -> b | _ -> false in
         let db = Store.db store (idx_db_name coll iname) in
-        c.indexes <- { iname; keys = parse_keys kd; unique; db } :: c.indexes)
+        c.indexes <- { iname; keys = parse_keys kd; unique; multikey; db } :: c.indexes)
     !idx_entries;
   (* phase 4: validators *)
   List.iter
@@ -100,7 +113,7 @@ let collection t name =
   | None ->
     let records = Record.make (Store.db t.store (rec_db_name name)) in
     Store.write t.store (fun txn -> Store.put txn t.meta (ckey name) "");
-    let c = { name; records; indexes = []; validator = None } in
+    let c = { name; records; meta = t.meta; indexes = []; validator = None } in
     Hashtbl.replace t.colls name c;
     c
 
@@ -112,8 +125,8 @@ let ensure_index t c ~name ~keys ~unique =
     let parsed = parse_keys keys in
     let db = Store.db t.store (idx_db_name c.name name) in
     Store.write t.store (fun txn ->
-        Store.put txn t.meta (ikey c.name name) (Bin.encode (index_spec_doc parsed unique)));
-    let idx = { iname = name; keys = parsed; unique; db } in
+        Store.put txn t.meta (ikey c.name name) (Bin.encode (index_spec_doc parsed unique false)));
+    let idx = { iname = name; keys = parsed; unique; multikey = false; db } in
     c.indexes <- idx :: c.indexes;
     Some idx
   end

@@ -141,12 +141,7 @@ let ensure_index t (c : collection) ~name ~keys ~unique =
   with_write t (fun () ->
       match Catalog.ensure_index t.cat c ~name ~keys ~unique with
       | None -> ()
-      | Some idx ->
-        (* backfill existing records into the new index (one write txn) *)
-        Store.write t.store (fun txn ->
-            Record.iter txn c.records (fun ~id_key ~doc ->
-                Index.add txn idx ~doc ~record_key:id_key;
-                true)))
+      | Some idx -> Store.write t.store (fun txn -> Write.backfill_index txn c idx))
 
 let drop_index t (c : collection) ~name = with_write t (fun () -> Catalog.drop_index t.cat c ~name)
 let index_names (c : collection) = Catalog.index_names c

@@ -23,3 +23,6 @@ val update : [ `W ] Store.txn -> Catalog.collection -> multi:bool -> upsert:bool
 
 val remove : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> int
 (** Remove all documents matching the selector (and their index entries); returns the count. *)
+
+val backfill_index : [ `W ] Store.txn -> Catalog.collection -> Catalog.index -> unit
+(** Populate a freshly-created index from the existing records, setting its multikey flag as needed. *)

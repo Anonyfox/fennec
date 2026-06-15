@@ -36,8 +36,20 @@ let force_id id = function
 
 (* ---- index maintenance (over the collection's indexes) ------------------------------------- *)
 
+(* the first time a document indexes an array for [idx], flip + persist its multikey flag (within this
+   write txn), so sort-via-index stays disabled for it — durably, across reopen *)
+let note_multikey txn (c : Catalog.collection) (idx : Catalog.index) doc =
+  if (not idx.Catalog.multikey) && Index.is_multikey_doc idx doc then begin
+    idx.Catalog.multikey <- true;
+    Catalog.persist_index txn c idx
+  end
+
 let index_all txn (c : Catalog.collection) ~record_key ~doc =
-  List.iter (fun idx -> Index.add txn idx ~doc ~record_key) c.indexes
+  List.iter
+    (fun idx ->
+      note_multikey txn c idx doc;
+      Index.add txn idx ~doc ~record_key)
+    c.indexes
 
 let unindex_all txn (c : Catalog.collection) ~record_key ~doc =
   List.iter (fun idx -> Index.remove txn idx ~doc ~record_key) c.indexes
@@ -45,9 +57,17 @@ let unindex_all txn (c : Catalog.collection) ~record_key ~doc =
 let reindex txn (c : Catalog.collection) ~record_key ~old_doc ~new_doc =
   List.iter
     (fun idx ->
+      note_multikey txn c idx new_doc;
       Index.remove txn idx ~doc:old_doc ~record_key;
       Index.add txn idx ~doc:new_doc ~record_key)
     c.indexes
+
+(* populate a freshly-created index from every existing record (and set its multikey flag) *)
+let backfill_index txn (c : Catalog.collection) (idx : Catalog.index) =
+  Record.iter txn c.records (fun ~id_key ~doc ->
+      note_multikey txn c idx doc;
+      Index.add txn idx ~doc ~record_key:id_key;
+      true)
 
 (* ---- insert -------------------------------------------------------------------------------- *)
 

@@ -47,6 +47,9 @@ let%test "Burrow agrees with a real mongod across find/count/distinct/update/rem
           let mc = Mongo.collection ~sw conn ~db:"bdiff" ~name:"c" in
           let eng = Eng.open_ ~durability:S.No_sync (tmpdir ()) in
           let bc = Eng.collection eng "c" in
+          (* index the Burrow side so the index access paths + sort-via-index are what gets compared *)
+          Eng.ensure_index eng bc ~name:"age_1" ~keys:(B.doc [ ("age", B.int 1) ]) ~unique:false;
+          Eng.ensure_index eng bc ~name:"name_1" ~keys:(B.doc [ ("name", B.int 1) ]) ~unique:false;
           let docs =
             [ B.doc [ ("_id", B.str "1"); ("name", B.str "ann"); ("age", B.int 30); ("tags", B.array [ B.str "a"; B.str "b" ]) ];
               B.doc [ ("_id", B.str "2"); ("name", B.str "bob"); ("age", B.int 25); ("tags", B.array [ B.str "b" ]) ];
@@ -68,6 +71,15 @@ let%test "Burrow agrees with a real mongod across find/count/distinct/update/rem
             set (Mongo.distinct mc "age" (B.doc [])) = set (Eng.distinct eng bc ~key:"age" ~selector:(B.doc []))
             && set (Mongo.distinct mc "tags" (B.doc [])) = set (Eng.distinct eng bc ~key:"tags" ~selector:(B.doc []))
           in
+          (* sort-via-index (Burrow uses age_1) must produce the SAME sequence as mongod, including the
+             _id tiebreak — order-preserving comparison *)
+          let eq_ordered a b = List.length a = List.length b && List.for_all2 (fun x y -> B.equal (norm x) (norm y)) a b in
+          let sort = B.doc [ ("age", B.int 1); ("_id", B.int 1) ] in
+          let sorted_ok =
+            eq_ordered
+              (Mongo.find mc (Backend.query ~sort ()))
+              (Eng.find eng bc ~selector:(B.doc []) ~sort ~skip:0 ~limit:0 ~fields:(B.doc []))
+          in
           let usel = B.doc [ ("age", B.int 30) ] and umod = B.doc [ ("$set", B.doc [ ("active", B.bool true) ]) ] in
           let nu_m = Mongo.update mc ~multi:true ~upsert:false usel umod in
           let nu_b = Eng.update eng bc ~multi:true ~upsert:false usel umod in
@@ -83,6 +95,6 @@ let%test "Burrow agrees with a real mongod across find/count/distinct/update/rem
           let am = Mongo.aggregate mc agg_pipeline and ab = Eng.aggregate eng bc agg_pipeline in
           let agg_ok = List.length am = List.length ab && List.for_all2 (fun x y -> B.equal (norm x) (norm y)) am ab in
           Eng.close eng;
-          find_ok && count_ok && distinct_ok && update_ok && remove_ok && agg_ok)
+          find_ok && count_ok && distinct_ok && sorted_ok && update_ok && remove_ok && agg_ok)
 
 let () = exit (Fennec_hunt_unit.run ())

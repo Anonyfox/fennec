@@ -19,6 +19,12 @@ let field_values doc field : B.t list =
   | Some (B.Document _) -> [ B.Null ]
   | Some v -> [ v ]
 
+(* whether [doc] indexes an array for any of [idx]'s fields — the index must then be flagged multikey *)
+let is_multikey_doc (idx : Catalog.index) (doc : B.t) =
+  List.exists
+    (fun (field, _) -> match Query.Matcher.get_path doc field with Some (B.Array _) -> true | _ -> false)
+    idx.Catalog.keys
+
 let keys_for_doc (idx : Catalog.index) (doc : B.t) : string list =
   let combos =
     List.fold_left

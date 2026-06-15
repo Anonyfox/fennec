@@ -19,6 +19,9 @@ val keys_for_doc : Catalog.index -> Bson.t -> string list
 (** The encoded key tuples for a document (multikey / compound expansion), deduped, without the
     record-key suffix. *)
 
+val is_multikey_doc : Catalog.index -> Bson.t -> bool
+(** Whether [doc] indexes an array for any of [idx]'s fields (so [idx] must be flagged multikey). *)
+
 val add : [ `W ] Store.txn -> Catalog.index -> doc:Bson.t -> record_key:string -> unit
 val remove : [ `W ] Store.txn -> Catalog.index -> doc:Bson.t -> record_key:string -> unit
 (** The executor scans an index directly via {!Store.iter} over [(Catalog.index).db]; bound predicates

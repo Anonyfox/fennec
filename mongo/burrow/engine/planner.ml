@@ -1,50 +1,104 @@
 module B = Bson
 
-(* a literal scalar (not an operator doc, composite, or array) *)
 let is_scalar = function B.Document _ | B.Array _ -> false | _ -> true
 let is_pointable = is_scalar
+let has_ops kvs = List.exists (fun (k, _) -> String.length k > 0 && k.[0] = '$') kvs
 
-(* Try to turn the selector's constraint on an index's first field into scan bounds. Equality works on
-   any direction; a range ($gt/$gte/$lt/$lte) only on an ascending first field for now (a descending
-   field's bytes are complemented, so range bounds would have to swap + invert — deferred). *)
-let index_bounds (idx : Catalog.index) selector : Plan.t option =
-  match idx.Catalog.keys with
-  | [] -> None
-  | (field, dir) :: _ -> (
-    match B.get selector field with
-    | None -> None
-    | Some (B.Document kvs) when List.exists (fun (k, _) -> String.length k > 0 && k.[0] = '$') kvs ->
-      if dir <> 1 then None
-      else begin
+(* what the selector says about one field *)
+type fc =
+  | Eq of B.t
+  | Range of { lo : B.t option; excl_lo : bool; hi : B.t option; excl_hi : bool }
+  | In of B.t list
+  | Unconstrained
+
+let constraint_of selector field : fc =
+  match B.get selector field with
+  | None -> Unconstrained
+  | Some (B.Document kvs) when has_ops kvs -> (
+    match List.assoc_opt "$in" kvs with
+    | Some (B.Array vs) when vs <> [] && List.for_all is_scalar vs -> In vs
+    | Some _ -> Unconstrained (* $in with composite values / non-array: not an index point *)
+    | None ->
+      let lo = ref None and excl_lo = ref false and hi = ref None and excl_hi = ref false and any = ref false in
+      List.iter
+        (fun (op, x) ->
+          if is_scalar x then
+            match op with
+            | "$eq" -> lo := Some x; hi := Some x; any := true
+            | "$gte" -> lo := Some x; excl_lo := false; any := true
+            | "$gt" -> lo := Some x; excl_lo := true; any := true
+            | "$lte" -> hi := Some x; excl_hi := false; any := true
+            | "$lt" -> hi := Some x; excl_hi := true; any := true
+            | _ -> ())
+        kvs;
+      if !any then Range { lo = !lo; excl_lo = !excl_lo; hi = !hi; excl_hi = !excl_hi } else Unconstrained)
+  | Some v when is_scalar v -> Eq v
+  | Some _ -> Unconstrained (* a subdocument / array literal is not a scalar index point *)
+
+(* Build the index ranges for a selector: consume leading EQUALITY fields into a shared prefix, then a
+   single trailing range (ascending field only), or a [$in] fan-out on the leading field, or a prefix
+   scan when the next field is unconstrained. [None] when the index can't be used at all. *)
+let build_index (idx : Catalog.index) selector : Plan.range list option =
+  let prefix_range prefix = { Plan.lo = Some prefix; excl_lo = false; hi = Some prefix; excl_hi = false } in
+  let rec go fields prefix =
+    match fields with
+    | [] -> if prefix = "" then None else Some [ prefix_range prefix ]
+    | (field, dir) :: rest -> (
+      match constraint_of selector field with
+      | Eq v -> go rest (prefix ^ Index.encode_value v dir)
+      | In vs when prefix = "" ->
+        Some (List.map (fun v -> let e = Index.encode_value v dir in { Plan.lo = Some e; excl_lo = false; hi = Some e; excl_hi = false }) vs)
+      | Range { lo; excl_lo; hi; excl_hi } when dir = 1 ->
         let enc x = Index.encode_value x dir in
-        let lo = ref None and excl_lo = ref false and hi = ref None and excl_hi = ref false in
-        let usable = ref false in
-        List.iter
-          (fun (op, x) ->
-            if is_scalar x then
-              match op with
-              | "$eq" -> lo := Some (enc x); hi := Some (enc x); usable := true
-              | "$gte" -> lo := Some (enc x); excl_lo := false; usable := true
-              | "$gt" -> lo := Some (enc x); excl_lo := true; usable := true
-              | "$lte" -> hi := Some (enc x); excl_hi := false; usable := true
-              | "$lt" -> hi := Some (enc x); excl_hi := true; usable := true
-              | _ -> ())
-          kvs;
-        if !usable then
-          Some (Plan.Index_scan { index = idx.Catalog.iname; lo = !lo; excl_lo = !excl_lo; hi = !hi; excl_hi = !excl_hi })
-        else None
-      end
-    | Some v when is_scalar v ->
-      let e = Index.encode_value v dir in
-      Some (Plan.Index_scan { index = idx.Catalog.iname; lo = Some e; excl_lo = false; hi = Some e; excl_hi = false })
-    | Some _ -> None (* subdocument / array equality: no scalar index point *))
+        let lo' = match lo with Some v -> Some (prefix ^ enc v) | None -> if prefix = "" then None else Some prefix in
+        let hi' = match hi with Some v -> Some (prefix ^ enc v) | None -> if prefix = "" then None else Some prefix in
+        Some [ { Plan.lo = lo'; excl_lo = (match lo with Some _ -> excl_lo | None -> false);
+                 hi = hi'; excl_hi = (match hi with Some _ -> excl_hi | None -> false) } ]
+      | _ -> if prefix = "" then None else Some [ prefix_range prefix ])
+  in
+  go idx.Catalog.keys ""
 
-let plan (indexes : Catalog.index list) ~selector ~sort:_ : Plan.t =
+let sort_spec = function
+  | B.Document kvs -> List.map (fun (f, v) -> (f, match v with B.Int n -> n | B.Float x -> int_of_float x | _ -> 1)) kvs
+  | _ -> []
+
+let all_asc keys = List.for_all (fun (_, d) -> d = 1) keys
+
+(* The index's forward-scan order — its key fields ascending, then the [_id] record-key suffix
+   ascending — satisfies the requested sort iff the sort is a prefix of the (all-ascending,
+   non-multikey) index keys, with a trailing [("_id", 1)] permitted only AFTER every key field is
+   consumed (that's where the suffix sits). This is what lets the executor skip the in-memory sort. *)
+let serves_sort (idx : Catalog.index) sort =
+  (not idx.Catalog.multikey)
+  && all_asc idx.Catalog.keys
+  &&
+  let rec go ss keys =
+    match (ss, keys) with
+    | [], _ -> true
+    | [ ("_id", 1) ], [] -> true
+    | (sf, sd) :: st, (kf, kd) :: kt -> sf = kf && sd = 1 && kd = 1 && go st kt
+    | _ -> false
+  in
+  let ss = sort_spec sort in
+  ss <> [] && go ss idx.Catalog.keys
+
+let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
   match B.get selector "_id" with
   | Some v when is_pointable v -> Plan.Id_point v
   | _ ->
-    let rec first = function
-      | [] -> Plan.Collection_scan
-      | idx :: rest -> ( match index_bounds idx selector with Some p -> p | None -> first rest)
-    in
-    first indexes
+    let usable = List.filter_map (fun idx -> match build_index idx selector with Some r -> Some (idx, r) | None -> None) indexes in
+    let single = function [ _ ] -> true | _ -> false in
+    let scan (idx : Catalog.index) ranges sorted = Plan.Index_scan { index = idx.Catalog.iname; ranges; sorted } in
+    match
+      (* a filter index whose order also satisfies the sort: scan it, no in-memory sort needed *)
+      List.find_opt (fun (idx, r) -> single r && serves_sort idx sort) usable
+    with
+    | Some (idx, r) -> scan idx r true
+    | None -> (
+      match usable with
+      | (idx, r) :: _ -> scan idx r false (* filter by index, then sort in memory *)
+      | [] -> (
+        (* no filter index — use one purely to produce the sort order, if one fits *)
+        match List.find_opt (fun idx -> serves_sort idx sort) indexes with
+        | Some idx -> scan idx [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] true
+        | None -> Plan.Collection_scan))
