@@ -41,7 +41,12 @@ let allocate ~base (suites : string list) : t list =
           [
             (D.env_port, string_of_int port);
             (D.env_dev_livereload, "0");
+            (* unit/http/browser default to the fast, per-server-isolated in-memory engine; the
+               system/e2e tier exercises a real per-scenario burrow:// engine. *)
             (Runtime.mongo_url_env, Runtime.memory_url);
+            (* a per-suite database name, so even a shared real-mongo run (an explicit mongodb:// with
+               no /db) keeps suites independent — no two suites ever share a database. *)
+            ("FENNEC_DB", Printf.sprintf "fennec_test_%d" port);
           ];
         suite_env = [ (D.env_test_url, url) ];
       })
