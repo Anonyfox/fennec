@@ -12,3 +12,8 @@ module R = Fennec_pulse.Reactive.Make (Fennec_pulse.Backend.Mini)
    minimongo are linked and translated to JS *)
 let () = ignore (R.publish : string -> _ -> unit)
 let () = ignore (Fennec_pulse.Backend.query : ?selector:_ -> ?sort:_ -> ?skip:_ -> ?limit:_ -> ?fields:_ -> unit -> _)
+
+(* also pin the browser-shipped Accounts client into the closure — it transitively links Fur + the DDP
+   client, so if a native dependency ever leaks into the client-side accounts facade (or its frontend
+   deps), it surfaces in this same closure check instead of breaking a real client bundle silently *)
+let () = ignore (Fennec_accounts_client.current_user_id : unit -> _)

@@ -22,11 +22,11 @@ fi
 violations=$(printf '%s\n' "$units" \
   | grep -iE "Burrow|Mongo_ffi|Mongoc|Fennec_mongo_dynamic|Fennec_mongo_driver|Lmdb|Wire_server|Adapters|Tls_eio" || true)
 if [ -n "$violations" ]; then
-  echo "JS BOUNDARY VIOLATION: native units are reachable from the reactive (fennec.pulse) closure —" >&2
+  echo "JS BOUNDARY VIOLATION: native units are reachable from the client-bundle closure (fennec.pulse / accounts client / Fur) —" >&2
   printf '%s\n' "$violations" | sed 's/^/    /' >&2
   echo "fennec.pulse must depend only on the PURE seam (fennec-mongo.backend); the native backends live" >&2
   echo "in fennec-mongo.dynamic (libmongoc + LMDB + TLS), which must never reach a JS-shipped lib." >&2
   exit 1
 fi
 
-echo "js-boundary OK: fennec.pulse closure is native-free ($(printf '%s\n' "$units" | wc -l | tr -d ' ') units) — safe to cross-compile to JS"
+echo "js-boundary OK: client-bundle closure (fennec.pulse + accounts client + Fur) is native-free ($(printf '%s\n' "$units" | wc -l | tr -d ' ') units) — safe to cross-compile to JS"

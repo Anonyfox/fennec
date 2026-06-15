@@ -18,7 +18,6 @@ module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
 module Dev_proto = Fennec_core.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
 module Accounts = Fennec_server.Accounts
-module Mongo_runtime = Fennec_mongo_driver.Runtime
 
 (* The presentation layer — Fur. ONE namespace ([open Fennec.Fur]) for everything that turns data
    into what a client sees: components & signals (live SPA, isomorphic core), standalone [Page]s
