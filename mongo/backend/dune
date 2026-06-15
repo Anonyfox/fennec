@@ -1,0 +1,23 @@
+; fennec-mongo.backend — THE storage seam (Backend.S + query) and the runtime selection of a concrete
+; backend from MONGO_URL (minimongo / embedded Burrow / native driver), plus the mongosh wire endpoint.
+; Owned by the mongo package, behind one signature; the reactive layer and the accounts store are pure
+; consumers of this seam. Modules: Seam (the signature + Mini), Adapters (Native/Embedded/Dynamic +
+; expose), Wire_server (the OP_MSG server functor); fennec_mongo_backend.ml flattens them.
+(library
+ (name fennec_mongo_backend)
+ (public_name fennec-mongo.backend)
+ (libraries
+  fennec-mongo.bson
+  fennec-mongo.minimongo
+  fennec-mongo.query
+  fennec-mongo.driver
+  fennec-mongo.ffi
+  fennec-mongo.burrow
+  fennec-mongo.wire
+  base64
+  tls
+  tls-eio
+  mirage-crypto-rng
+  mirage-crypto-rng.unix
+  eio
+  unix))

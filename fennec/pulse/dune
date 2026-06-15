@@ -10,5 +10,6 @@
   fennec-mongo.bson
   fennec-mongo.query
   fennec-mongo.minimongo
+  fennec-mongo.backend
   fennec.pulse.method
   fennec.pulse.collection))
