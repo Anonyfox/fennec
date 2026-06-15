@@ -1,0 +1,5 @@
+; Spec-exactness (byte vectors + round-trip) and bounds-safety for the wire BSON codec + framing, and
+; the SCRAM-SHA-256 handshake against the RFC 7677 test vector.
+(tests
+ (names test_bson_wire test_frame test_scram)
+ (libraries fennec-mongo.wire fennec-mongo.bson base64))

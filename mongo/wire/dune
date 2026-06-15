@@ -1,0 +1,8 @@
+; fennec-mongo.wire — the MongoDB wire protocol, pure and IO-free: a spec-exact BSON codec, OP_MSG /
+; OP_QUERY framing, and the SCRAM-SHA-256 server handshake. No sockets and no backend live here, so the
+; security-critical parsing and auth are unit/property/fuzz testable as plain values; the Eio TCP
+; server that drives them lives one layer up (fennec.pulse.mongo.wire), over a Backend.S.
+(library
+ (name mongo_wire)
+ (public_name fennec-mongo.wire)
+ (libraries fennec-mongo.bson base64 digestif))
