@@ -208,9 +208,12 @@ let root () = Test_proto.root ()          (* the workspace root *)
 let server_bc () = Test_proto.server_bc () (* the built server bytecode, if provided *)
 
 (* Spawn THIS app's `fennec dev` (extra [args] appended), in the app dir, captured + reaped on
-   teardown like any spawn. The standing-server primitive for System suites — no FENNEC_* in
-   userland. Pair with {!wait_ready}. *)
-let dev ?(args = []) sb = spawn sb ~cwd:(app_dir ()) (fennec () :: "dev" :: args)
+   teardown like any spawn. The standing-server primitive for System suites. Pair with {!wait_ready}.
+   We suppress the embedded Mongo wire endpoint ([FENNEC_MONGO_PORT=off]): `fennec dev` now defaults to
+   the embedded engine and would otherwise auto-open a loopback mongosh endpoint on 27017, which a
+   developer's own running dev server (or another scenario) could already hold — e2e drives the app over
+   HTTP, not the wire, so the endpoint is pure noise here. *)
+let dev ?(args = []) sb = spawn sb ~env:[ ("FENNEC_MONGO_PORT", "off") ] ~cwd:(app_dir ()) (fennec () :: "dev" :: args)
 
 let wait_output p ?(timeout = 10.0) sub =
   let clock = Eio.Stdenv.clock p.sb.env in

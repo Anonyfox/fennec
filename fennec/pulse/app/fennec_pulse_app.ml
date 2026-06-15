@@ -10,7 +10,12 @@ module T = Fennec_pulse.Typed.Make (R)
 
 (* the ambient connection config (Eio switch + db), set once at boot by [start] *)
 let _cfg : (Eio.Switch.t * string) option ref = ref None
-let start ~sw ~db () = _cfg := Some (sw, db)
+
+let start ~sw ~net ~db () =
+  _cfg := Some (sw, db);
+  (* dev convenience: when the backend is the embedded engine, front it over the MongoDB wire protocol
+     on loopback so `mongosh` works with zero setup. No-op outside dev / non-embedded backends. *)
+  Fennec_pulse_mongo.expose_in_dev ~sw ~net ()
 let cfg () = match !_cfg with Some x -> x | None -> failwith "Fennec_pulse_app: call start before using collections"
 
 (* one reactive collection per name (stable mux uid; indexes reconciled once on creation), re-wrapped

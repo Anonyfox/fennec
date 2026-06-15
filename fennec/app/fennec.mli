@@ -320,6 +320,7 @@ val serve :
   ?tls:Tls.t ->
   ?acme:Acme.config ->
   ?on_error:(request_error -> Http.response) ->
-  ?on_start:(sw:Eio.Switch.t -> sleep:(float -> unit) -> unit) ->
+  ?on_start:
+     (sw:Eio.Switch.t -> sleep:(float -> unit) -> net:[ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t -> unit) ->
   Endpoint.t list ->
   unit

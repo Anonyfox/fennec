@@ -3,8 +3,11 @@
 
    The lifecycle is deliberately one point of truth for the CLI:
    - explicit MONGO_URL wins;
-   - fennec dev auto-starts/adopts a stable local mongod when available;
+   - fennec dev defaults to the in-process embedded engine (Burrow) — no mongod needed (see ensure_dev);
    - fennec test defaults to explicit :memory: and starts per-suite mongods only for --mongo.
+
+   This module still owns real-mongod lifecycles (start/launch) for --mongo and for callers that set an
+   explicit MONGO_URL; dev no longer auto-starts one.
 
    We own spawned mongods with the pure-Unix Mongod lifecycle. When a stable dev port is already
    answering (for example after a SIGKILL leak), we can adopt it for the session by initiating the
@@ -68,32 +71,20 @@ let launch () =
     Printf.eprintf "--mongo: could not launch mongod — database-backed features remain unavailable.\n%s\n%!" msg;
     None
 
-let dev_port ~base_port = base_port + 80
-let dev_dbpath ~root ~base_port =
-  Filename.concat root (Printf.sprintf "_build/.fennec/mongo/dev-%d" base_port)
+(* the embedded engine's data directory for a dev session — gitignored and keyed by base port, so two
+   `fennec dev` servers (or parallel e2e instances) on different ports never share an LMDB map *)
+let dev_embedded_dir ~root ~base_port =
+  Filename.concat root (Printf.sprintf "_build/.fennec/burrow/dev-%d" base_port)
 
 let ensure_dev ~root ~base_port () =
   match Runtime.url () with
-  | Some _ -> None
-  | None -> (
-    match Mongod.find () with
-    | None ->
-      Printf.eprintf
-        "fennec dev: MongoDB not auto-started because mongod was not found. Database-backed \
-         features will fail until MONGO_URL is set.\n%s\n%!"
-        (Mongod.install_hint ());
-      None
-    | Some _ ->
-      let dev_port = dev_port ~base_port in
-      let path = dev_dbpath ~root ~base_port in
-      match start ~port:dev_port ~dbpath:path () with
-      | Ok t ->
-        export t;
-        Printf.eprintf "fennec dev: MongoDB at 127.0.0.1:%d (%s)\n%!" (port t) (dbpath t);
-        Some t
-      | Error msg ->
-        Printf.eprintf
-          "fennec dev: MongoDB auto-start failed — database-backed features will fail until \
-           MONGO_URL is set.\n%s\n%!"
-          msg;
-        None)
+  | Some _ -> None (* an explicit MONGO_URL (real mongo / :memory: / :embedded:) always wins *)
+  | None ->
+    (* Default to the in-process embedded engine (Burrow): always available, nothing to install or
+       carry around, and reactive observe works via the engine's in-process change path. mongosh-style
+       access is the app's wire endpoint (auto-exposed in dev). A real mongod is still opt-in by setting
+       MONGO_URL=mongodb://… , and `fennec test --mongo` still launches one per suite. *)
+    let dir = dev_embedded_dir ~root ~base_port in
+    Unix.putenv Runtime.mongo_url_env (Printf.sprintf ":embedded:%s" dir);
+    Printf.eprintf "fennec dev: embedded MongoDB (Burrow) at %s\n%!" dir;
+    None

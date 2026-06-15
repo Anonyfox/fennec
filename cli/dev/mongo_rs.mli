@@ -35,7 +35,9 @@ val stop : t -> unit
 val launch : unit -> t option
 
 (** [ensure_dev ~root ~base_port ()] is the default [fennec dev] behavior. If [MONGO_URL] is already
-    set it does nothing. Otherwise it auto-starts/adopts a local mongod when available, using a
-    stable port derived from [base_port] and a gitignored [_build/.fennec] data directory. If
-    [mongod] is unavailable or startup fails, it prints a warning and leaves [MONGO_URL] unset. *)
+    set it does nothing (an explicit URL — real mongo, [:memory:], or [:embedded:] — always wins).
+    Otherwise it points [MONGO_URL] at the in-process embedded engine ([:embedded:] + a gitignored,
+    per-base-port [_build/.fennec/burrow/dev-<base_port>] directory): always available, no [mongod] to
+    install or run. Returns [None] (there is no process to own); a real local mongod is opt-in via an
+    explicit [MONGO_URL] or [fennec test --mongo]. *)
 val ensure_dev : root:string -> base_port:int -> unit -> t option

@@ -32,8 +32,9 @@ let state () =
 
 let unavailable_message () =
   "MONGO_URL is not set. Database-backed Fennec features are unavailable in this process. Set \
-   MONGO_URL for production, run through `fennec dev` for an auto-managed local MongoDB when \
-   mongod is installed, or set MONGO_URL=:memory: explicitly for tests."
+   MONGO_URL for production (a real mongodb:// URI, or :embedded:<dir> for the in-process engine), \
+   run through `fennec dev` (which defaults to the embedded engine — no mongod needed), or set \
+   MONGO_URL=:memory: explicitly for tests."
 
 let warn_if_missing () =
   match state () with

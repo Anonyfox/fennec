@@ -223,7 +223,7 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
   (* in TLS-mode production the app is on :443; a :80 front does the HTTP→HTTPS redirect (+ serves
      the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
   if Option.is_some tls_source && not is_dev then Fennec_server.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
-  (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) | None -> ());
+  (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) ~net:(Eio.Stdenv.net env) | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
      line first. The dev supervisor owns the terminal: report named URLs for its banner, else stay quiet. *)

@@ -106,7 +106,14 @@ Fennec_pulse_mongo.expose ~sw ~net:(Eio.Stdenv.net env)
 Secure by default (loopback bind, SCRAM-SHA-256 required when any user is set, no `$where`/JS, capped
 message size, optional read-only + TLS). It shares this engine's per-directory cache, so writes from
 mongosh funnel through the same group-committing writer (no concurrent-writer hazard). Validated against
-the **real libmongoc driver** and **real mongosh** (full CRUD + SCRAM). See the wire README for details.
+the **real libmongoc driver**, **real mongosh**, and **over TLS** (full CRUD + SCRAM). See the wire
+README for details.
+
+In **dev**, this is automatic: `fennec dev` defaults the backend to this engine (no mongod) and
+auto-opens an unauthenticated loopback endpoint on `FENNEC_MONGO_PORT` (default 27017), so `mongosh`
+connects with zero setup. The **e2e/system harness** therefore runs against the embedded engine for free
+(per-`base_port` data dirs keep parallel instances isolated; it sets `FENNEC_MONGO_PORT=off` so the
+endpoint never fights for a port). Production opts in explicitly via `Fennec_pulse_mongo.expose`.
 
 ## Known limitations (future work)
 

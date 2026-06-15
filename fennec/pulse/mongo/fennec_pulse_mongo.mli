@@ -80,12 +80,25 @@ val expose :
   ?max_connections:int ->
   unit ->
   unit
-(** [expose ~sw ~net () ] starts the wire endpoint as a background fiber under [sw] (returns once bound;
-    a bind failure raises). Defaults: [addr] = loopback [:27017]; [base_dir] = ["./.fennec/burrow"]
-    (must match the app's [:embedded:] base so they share engines); [users] = none; [require_auth] =
-    [true] iff any user is given (set [~require_auth:false] only for a trusted localhost socket);
-    [read_only] = [false]; [max_message_bytes] = 48 MB; [max_connections] = 1000. Raises
-    [Invalid_argument] if [require_auth] holds with no users. *)
+(** [expose ~sw ~net () ] starts the wire endpoint as a background daemon fiber under [sw] (returns once
+    bound, and is torn down when [sw] ends). Binding is best-effort: a port clash or listen error is
+    logged and skipped — it never takes down the app's web server. Defaults:
+    - [addr] = loopback on [FENNEC_MONGO_PORT] (else 27017, the official MongoDB port) — so the port is
+      env-configurable in dev and prod without code changes;
+    - [base_dir] = the [:embedded:<dir>] base parsed from [MONGO_URL] (else ["./.fennec/burrow"]), so the
+      endpoint fronts exactly the engine the app uses;
+    - [users] = none; [require_auth] = [true] iff any user is given (set [~require_auth:false] only for a
+      trusted localhost socket); [read_only] = [false]; [max_message_bytes] = 48 MB;
+      [max_connections] = 1000.
+    Raises [Invalid_argument] if [require_auth] holds with no users. *)
+
+val expose_in_dev : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> unit
+(** What the dev runtime calls automatically (via {!Fennec_pulse_app.start}): in dev
+    ([FENNEC_ENV] <> ["production"]) and when the backend is the embedded engine, opens an
+    {e unauthenticated} loopback wire endpoint (port [FENNEC_MONGO_PORT], else 27017) so
+    [mongosh mongodb://localhost:27017] just works with no setup. A no-op outside dev, on a non-embedded
+    backend, or when [FENNEC_MONGO_PORT] is ["off"]/["0"]/["none"] (the switch e2e/CI uses to suppress
+    the endpoint). For production, call {!expose} explicitly with [~users] (and [~tls]). *)
 
 (** A runtime-selectable backend — in-memory or this native driver behind one
     {!Fennec_pulse.Backend.S}, so an app chooses at boot from the global framework Mongo state

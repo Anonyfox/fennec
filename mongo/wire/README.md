@@ -44,13 +44,22 @@ place with sockets/TLS/state — one small surface to audit for the limits and t
 - **Read-only mode** rejects every mutation; only a vetted command set is implemented (no
   `shutdown`/`eval`/`fsync`/...). **TLS** optional via `tls-eio`.
 
-## One-liner
+## Dev: on by default
+
+`fennec dev` defaults the backend to the embedded engine (`MONGO_URL=:embedded:…`, no mongod to
+install or run), and `Fennec_pulse_app.start ~sw ~net ~db ()` then auto-opens an **unauthenticated
+loopback** wire endpoint (`expose_in_dev`) — so during development `mongosh "mongodb://localhost:27017"`
+just works with zero setup. The port is **`FENNEC_MONGO_PORT`** (default 27017, the official port), the
+same knob in dev and prod; set it to `off`/`0` to suppress the endpoint (what the e2e harness does).
+
+## Prod: one explicit line
 
 ```ocaml
-(* in Fennec.serve ~on_start, where sw is the server's long-lived switch *)
-Fennec_pulse_mongo.expose ~sw ~net:(Eio.Stdenv.net env)
-  ~users:[ Fennec_pulse_mongo.wire_user ~user:"admin" ~password:secret ] ()
-(* then: mongosh "mongodb://admin:secret@127.0.0.1:27017" *)
+(* in Fennec.serve ~on_start:(fun ~sw ~sleep:_ ~net -> …) *)
+Fennec_pulse_mongo.expose ~sw ~net
+  ~users:[ Fennec_pulse_mongo.wire_user ~user:"admin" ~password:secret ]
+  ?tls (* a Tls.Config.server for remote exposure *) ()
+(* then: mongosh "mongodb://admin:secret@host:27017?tls=true" *)
 ```
 
 ## Validation
@@ -61,6 +70,10 @@ Fennec_pulse_mongo.expose ~sw ~net:(Eio.Stdenv.net env)
   SCRAM and runs full CRUD against the server (and a wrong password is rejected).
 - `../../fennec/pulse/mongo/test/test_wire_mongosh.ml`: **real mongosh** connects, authenticates, and
   runs insertMany / aggregate / countDocuments / sorted-find — asserting on what mongosh printed.
+- `../../fennec/pulse/mongo/test/test_wire_tls.ml`: the driver authenticates + runs CRUD **over TLS**
+  (self-signed cert, `Tls_eio` termination) — SCRAM over the encrypted channel.
+- `test_wire_server.ml` also drives `expose_in_dev` directly: an unauthenticated dev endpoint on
+  `FENNEC_MONGO_PORT`, fronting the embedded engine `MONGO_URL` points at.
 
 ## Known gaps
 

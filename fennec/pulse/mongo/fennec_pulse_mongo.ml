@@ -293,13 +293,44 @@ end
 let wire_rng_ready = ref false
 let ensure_wire_rng () = if not !wire_rng_ready then (Mirage_crypto_rng_unix.use_default (); wire_rng_ready := true)
 
+(* the wire endpoint port: [FENNEC_MONGO_PORT] if set, else the official MongoDB port — configured the
+   same way in dev and prod *)
+let mongo_wire_default_port = 27017
+
+let mongo_wire_port () =
+  match Sys.getenv_opt "FENNEC_MONGO_PORT" with
+  | Some s -> ( match int_of_string_opt (String.trim s) with Some p when p > 0 -> p | _ -> mongo_wire_default_port)
+  | None -> mongo_wire_default_port
+
+(* the embedded engine's base directory, read from [MONGO_URL] ([:embedded:<base>]) so the endpoint
+   fronts the SAME engine the app uses (shared per-directory cache); falls back to the conventional dir *)
+let mongo_wire_default_base = "./.fennec/burrow"
+
+let is_embedded_url u =
+  let p = ":embedded:" in
+  String.length u >= String.length p && String.sub u 0 (String.length p) = p
+
+(* whether the app's backend is the embedded engine (MONGO_URL = :embedded:…) *)
+let embedded_in_use () = match Runtime.url () with Some u -> is_embedded_url u | None -> false
+
+let embedded_base_of_env () =
+  match Runtime.url () with
+  | Some u when is_embedded_url u ->
+    let p = ":embedded:" in
+    let rest = String.sub u (String.length p) (String.length u - String.length p) in
+    if String.trim rest = "" then mongo_wire_default_base else rest
+  | _ -> mongo_wire_default_base
+
 type wire_user = { wu_name : string; wu_password : string }
 
 let wire_user ~user ~password = { wu_name = user; wu_password = password }
 
-let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 27017)) ?(base_dir = "./.fennec/burrow")
-    ?(users = []) ?require_auth ?(read_only = false) ?tls ?(max_message_bytes = 48_000_000) ?(max_connections = 1000) () =
+let expose ~sw ~net ?addr ?base_dir ?(users = []) ?require_auth ?(read_only = false) ?tls
+    ?(max_message_bytes = 48_000_000) ?(max_connections = 1000) () =
   ensure_wire_rng ();
+  (* default the port from FENNEC_MONGO_PORT (else 27017) on loopback, and the data dir from MONGO_URL *)
+  let addr = match addr with Some a -> a | None -> `Tcp (Eio.Net.Ipaddr.V4.loopback, mongo_wire_port ()) in
+  let base_dir = match base_dir with Some d -> d | None -> embedded_base_of_env () in
   let require_auth = match require_auth with Some b -> b | None -> users <> [] in
   if require_auth && users = [] then
     invalid_arg "Fennec_pulse_mongo.expose: require_auth is set but no users were configured (nobody could connect)";
@@ -361,6 +392,22 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 27017)) ?(base_di
       server_nonce = (fun () -> Base64.encode_string (Mirage_crypto_rng.generate 18));
       tls }
   in
-  Server.run ~sw ~net ~addr config;
   let where = match addr with `Tcp (ip, port) -> Format.asprintf "%a:%d" Eio.Net.Ipaddr.pp ip port | `Unix p -> p in
-  Printf.printf "fennec: mongo-wire endpoint listening on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
+  (* binding the side-channel endpoint is best-effort: a clash (another dev server already holding the
+     port) or any listen error must never take down the app's web server — log and carry on *)
+  try
+    Server.run ~sw ~net ~addr config;
+    Printf.printf "fennec: mongo-wire endpoint on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
+  with e -> Printf.eprintf "fennec: mongo-wire endpoint NOT started on %s — %s\n%!" where (Printexc.to_string e)
+
+(* Auto-exposed by the dev runtime (Fennec_pulse_app.start). In dev, when the backend is the embedded
+   engine, open an UNAUTHENTICATED loopback wire endpoint so `mongosh mongodb://localhost:<port>` just
+   works with zero setup — the frictionless dev DB. No-op outside dev or when the backend isn't embedded
+   (a real-mongo / :memory: app has nothing to front here). Production must call {!expose} explicitly
+   with users (and TLS for remote). The port is FENNEC_MONGO_PORT (else 27017); binding is best-effort. *)
+let expose_in_dev ~sw ~net () =
+  let is_dev = match Sys.getenv_opt "FENNEC_ENV" (* = Dev_proto.env_mode *) with Some "production" -> false | _ -> true in
+  (* FENNEC_MONGO_PORT=off|0|none turns the auto endpoint off — e.g. parallel e2e instances that don't
+     want a second listener fighting over the port *)
+  let disabled = match Sys.getenv_opt "FENNEC_MONGO_PORT" with Some ("off" | "0" | "none" | "") -> true | _ -> false in
+  if is_dev && (not disabled) && embedded_in_use () then expose ~sw ~net ~require_auth:false ()
