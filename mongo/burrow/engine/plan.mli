@@ -16,6 +16,8 @@ type t =
       index : string;  (** the index name; the executor resolves it on the collection *)
       ranges : range list;  (** scanned and unioned (deduped by record key) — one each for [$in] values *)
       sorted : bool;  (** the scan order already satisfies the query sort, so the executor skips sorting *)
+      reverse : bool;  (** scan back-to-front (LAST->PREV) — an ascending index serving a descending
+                           sort (or vice versa); only paired with a single full range *)
     }
   | Index_union of (string * range list) list
       (** union (deduped by record key) of per-index scans — one entry per [$or] clause when every

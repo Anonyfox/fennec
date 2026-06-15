@@ -154,6 +154,9 @@ let () =
   check_ord desc 3 7;
   check_ord (doc [ ("b", i 1); ("_id", i 1) ]) 0 0;
   check_ord ~sel:(doc [ ("a", doc [ ("$gt", i 1); ("$lt", i 5) ]) ]) asc 2 5;
+  (* reverse scan: an ascending index (a_1) serving a fully-descending sort, full + streaming *)
+  check_ord (doc [ ("a", i (-1)); ("_id", i (-1)) ]) 0 0;
+  check_ord (doc [ ("a", i (-1)); ("_id", i (-1)) ]) 4 8;
 
   (* distinct + count parity across a battery of selectors *)
   for _ = 1 to 50 do

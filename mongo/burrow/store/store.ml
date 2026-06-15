@@ -76,12 +76,13 @@ let clear txn db = L.drop txn db false
 
 (* Forward scan from an optional lower bound. Opening/closing the cursor brackets the loop; [f]
    decides when to stop (e.g. once the key leaves the index range). *)
-let iter txn db ?from f =
+let iter txn db ?from ?(rev = false) f =
   let cur = L.cursor_open txn db in
   Fun.protect ~finally:(fun () -> L.cursor_close cur) @@ fun () ->
-  let start = match from with Some k -> L.cursor_seek cur k | None -> L.cursor_move cur L.first in
-  let rec loop = function
-    | None -> ()
-    | Some (key, data) -> if f ~key ~data then loop (L.cursor_move cur L.next)
+  let start =
+    if rev then L.cursor_move cur L.last
+    else match from with Some k -> L.cursor_seek cur k | None -> L.cursor_move cur L.first
   in
+  let step = if rev then L.prev else L.next in
+  let rec loop = function None -> () | Some (key, data) -> if f ~key ~data then loop (L.cursor_move cur step) in
   loop start

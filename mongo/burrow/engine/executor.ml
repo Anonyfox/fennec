@@ -18,9 +18,10 @@ let range_stop (r : Plan.range) entry =
 let range_emit (r : Plan.range) entry =
   match r.Plan.lo with Some e when r.Plan.excl_lo -> not (String.starts_with ~prefix:e entry) | _ -> true
 
-(* scan one index range, appending fresh record keys (deduped via [seen]) to [acc] in scan order *)
-let scan_range txn (idx : Catalog.index) seen acc (r : Plan.range) =
-  Store.iter txn idx.Catalog.db ?from:r.Plan.lo (fun ~key ~data ->
+(* scan one index range, appending fresh record keys (deduped via [seen]) to [acc] in scan order.
+   [~rev] scans back-to-front (only used with a full range, where stop/emit are trivially true). *)
+let scan_range ?(rev = false) txn (idx : Catalog.index) seen acc (r : Plan.range) =
+  Store.iter txn idx.Catalog.db ?from:r.Plan.lo ~rev (fun ~key ~data ->
       if range_stop r key then false
       else begin
         if range_emit r key && not (Hashtbl.mem seen data) then begin
@@ -38,12 +39,12 @@ let candidates txn (c : Catalog.collection) (plan : Plan.t) : B.t list =
   match plan with
   | Plan.Id_point id -> ( match Record.get txn c.records ~id with Some d -> [ d ] | None -> [])
   | Plan.Collection_scan -> full_scan txn c
-  | Plan.Index_scan { index; ranges; _ } -> (
+  | Plan.Index_scan { index; ranges; reverse; _ } -> (
     match find_index c index with
     | None -> full_scan txn c (* index vanished concurrently: correctness over speed *)
     | Some idx ->
       let seen = Hashtbl.create 64 and acc = ref [] in
-      List.iter (scan_range txn idx seen acc) ranges;
+      List.iter (scan_range ~rev:reverse txn idx seen acc) ranges;
       List.filter_map (fun rk -> Record.get_by_key txn c.records rk) (List.rev !acc))
   | Plan.Index_union pairs ->
     (* every named index must exist, else the union would miss a clause's matches — fall back to scan *)
@@ -74,7 +75,7 @@ let project fields = if fields = empty then Fun.id else Query.Projection.apply (
    match as we go, and STOP once we have [skip + limit] matches — so a paginated sorted query never
    scans, fetches, or sorts the whole result set. The index is non-multikey (a sorted plan requires
    it), so each record appears once; no dedup needed. *)
-let find_sorted_limited txn (c : Catalog.collection) idx (r : Plan.range) ~selector ~skip ~limit ~fields =
+let find_sorted_limited ?(rev = false) txn (c : Catalog.collection) idx (r : Plan.range) ~selector ~skip ~limit ~fields =
   let need = skip + limit in
   let proj = project fields in
   (* with no residual selector every entry matches, so the skip region is a pure index walk — fetch
@@ -82,7 +83,7 @@ let find_sorted_limited txn (c : Catalog.collection) idx (r : Plan.range) ~selec
   let no_filter = selector = empty in
   let seen = ref 0 and kept = ref [] in
   let keep_page data = if !seen > skip then match Record.get_by_key txn c.records data with Some d -> kept := proj d :: !kept | None -> () in
-  Store.iter txn idx.Catalog.db ?from:r.Plan.lo (fun ~key ~data ->
+  Store.iter txn idx.Catalog.db ?from:r.Plan.lo ~rev (fun ~key ~data ->
       if range_stop r key then false
       else begin
         (if range_emit r key then
@@ -99,9 +100,9 @@ let find_sorted_limited txn (c : Catalog.collection) idx (r : Plan.range) ~selec
 
 let rec find txn (c : Catalog.collection) plan ~selector ~sort ~skip ~limit ~fields =
   match plan with
-  | Plan.Index_scan { index; ranges = [ r ]; sorted = true } when limit > 0 -> (
+  | Plan.Index_scan { index; ranges = [ r ]; sorted = true; reverse } when limit > 0 -> (
     match find_index c index with
-    | Some idx -> find_sorted_limited txn c idx r ~selector ~skip ~limit ~fields
+    | Some idx -> find_sorted_limited ~rev:reverse txn c idx r ~selector ~skip ~limit ~fields
     | None -> (* index vanished: fall back to the general path *) find_general txn c plan ~selector ~sort ~skip ~limit ~fields)
   | _ -> find_general txn c plan ~selector ~sort ~skip ~limit ~fields
 

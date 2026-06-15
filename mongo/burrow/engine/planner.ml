@@ -76,18 +76,28 @@ let sort_spec = function
    index keys (direction for direction), with a trailing [("_id", 1)] permitted only AFTER every key
    field is consumed (that's where the suffix sits). So an ascending index serves an ascending sort and
    a descending index serves a descending sort, both by a forward scan. Lets the executor skip the sort. *)
-let serves_sort (idx : Catalog.index) sort =
-  (not idx.Catalog.multikey)
-  &&
-  let rec go ss keys =
-    match (ss, keys) with
-    | [], _ -> true
-    | [ ("_id", 1) ], [] -> true
-    | (sf, sd) :: st, (kf, kd) :: kt -> sf = kf && sd = kd && go st kt
-    | _ -> false
-  in
-  let ss = sort_spec sort in
-  ss <> [] && go ss idx.Catalog.keys
+(* Which scan direction (if any) makes the index's order satisfy the sort, with no in-memory sort. The
+   key fields scan in their own directions and the [_id] record-key suffix is ascending. FORWARD
+   ([Some 1]) matches the sort to the index dirs + a trailing [_id:1]; REVERSE ([Some (-1)]) matches the
+   FLIPPED dirs + a trailing [_id:-1] (a back-to-front scan — e.g. an ascending index serving a
+   descending sort). Non-multikey only. *)
+let serves_sort_dir (idx : Catalog.index) sort : int option =
+  if idx.Catalog.multikey then None
+  else
+    let ss = sort_spec sort in
+    if ss = [] then None
+    else
+      let matches flip trail =
+        let rec go ss keys =
+          match (ss, keys) with
+          | [], _ -> true
+          | [ ("_id", d) ], [] -> d = trail
+          | (sf, sd) :: st, (kf, kd) :: kt -> sf = kf && sd = flip * kd && go st kt
+          | _ -> false
+        in
+        go ss idx.Catalog.keys
+      in
+      if matches 1 1 then Some 1 else if matches (-1) (-1) then Some (-1) else None
 
 (* an estimate of how tight a scan is — higher = fewer candidates. Purely a cost heuristic; any usable
    index is correct (the residual matcher filters), so this only affects speed. *)
@@ -131,18 +141,21 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
   | _ ->
     let usable = List.filter_map (fun idx -> match build_index idx selector with Some r -> Some (idx, r) | None -> None) indexes in
     let single = function [ _ ] -> true | _ -> false in
-    let scan (idx : Catalog.index) ranges sorted = Plan.Index_scan { index = idx.Catalog.iname; ranges; sorted } in
+    let scan (idx : Catalog.index) ranges sorted reverse = Plan.Index_scan { index = idx.Catalog.iname; ranges; sorted; reverse } in
     let want_sort = sort_spec sort <> [] in
+    let full = [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] in
+    (* a filter index serves the sort only by a FORWARD scan — reverse needs a full range, not bounds *)
+    let serves_fwd idx = serves_sort_dir idx sort = Some 1 in
     match usable with
     | [] -> (
       (* no single filter index: an all-indexed top-level $or becomes a union; else use an index purely
-         for the sort order if one fits; else scan *)
+         for the sort order (either direction) if one fits; else scan *)
       match try_or_union indexes selector with
       | Some u -> u
       | None ->
         if want_sort then (
-          match List.find_opt (fun idx -> serves_sort idx sort) indexes with
-          | Some idx -> scan idx [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] true
+          match List.find_map (fun idx -> Option.map (fun d -> (idx, d)) (serves_sort_dir idx sort)) indexes with
+          | Some (idx, d) -> scan idx full true (d < 0)
           | None -> Plan.Collection_scan)
         else Plan.Collection_scan)
     | _ ->
@@ -151,11 +164,11 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
       let bidx, branges, _ =
         List.fold_left (fun (bi, br, bs) (idx, r, sc) -> if sc > bs then (idx, r, sc) else (bi, br, bs)) (List.hd scored) (List.tl scored)
       in
-      if single branges && serves_sort bidx sort then scan bidx branges true (* tight filter AND ordered *)
+      if single branges && serves_fwd bidx then scan bidx branges true false (* tight filter AND ordered *)
       else if want_sort && not (is_eq_point branges) then
         (* tightest filter is an open range and we must sort: prefer an index that yields the order, to
            skip sorting a potentially large result *)
-        match List.find_opt (fun (idx, r) -> single r && serves_sort idx sort) usable with
-        | Some (idx, r) -> scan idx r true
-        | None -> scan bidx branges false
-      else scan bidx branges false
+        match List.find_opt (fun (idx, r) -> single r && serves_fwd idx) usable with
+        | Some (idx, r) -> scan idx r true false
+        | None -> scan bidx branges false false
+      else scan bidx branges false false
