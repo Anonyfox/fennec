@@ -48,10 +48,10 @@ Opt-in app-wide RBAC is native: typed `Accounts.Roles.Role.t` / `Permission.t` v
 `require_role` / `require_permission` guards that deny by default.
 Persistence is one Mongo-shaped `Accounts.Store.t`. The native framework path consumes the global
 Mongo state: real `MONGO_URL` for production, explicit `MONGO_URL=:memory:` for test instances, and
-a clear missing-Mongo warning/error state otherwise. `Store.minimongo ()` remains the fast reference
-backend for tests/examples, and `Store.mongo db` is the production Mongo backend, with users,
-identity links, challenges, passkeys, organizations, MFA enrollments, SCIM state, audit, and index
-setup under one handle. Design notes:
+a clear missing-Mongo error state otherwise. The store is built from `MONGO_URL` alone — ONE
+backend-blind store over minimongo / embedded Burrow / native mongod, with users, identity links,
+challenges, passkeys, organizations, MFA enrollments, SCIM state, audit, and index setup under one
+handle (`Store.minimongo ()` stays the fast reference backend for tests). Design notes:
 [`docs/internal/ACCOUNTS.md`](../docs/internal/ACCOUNTS.md).
 
 ## Server — `fennec.server`

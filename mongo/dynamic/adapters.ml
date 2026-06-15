@@ -171,7 +171,7 @@ module Dynamic = struct
   let mem m = Mem m
   let real ?poll ~sw conn ~db ~name = Native (collection ?poll ~sw conn ~db ~name)
   let missing message = Missing message
-  let unavailable message = failwith ("Fennec.Pulse.Mongo: " ^ message)
+  let unavailable message = failwith ("Fennec.Mongo: " ^ message)
 
   (* The convention the fennec CLI speaks: MONGO_URL is the one database location. `fennec dev`
      auto-starts/adopts a local mongod when possible; `fennec test` sets :memory: by default and
@@ -320,7 +320,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
   ensure_wire_rng ();
   let require_auth = match require_auth with Some b -> b | None -> users <> [] in
   if require_auth && users = [] then
-    invalid_arg "Fennec_pulse_mongo.expose: require_auth is set but no users were configured (nobody could connect)";
+    invalid_arg "Fennec_mongo.expose: require_auth is set but no users were configured (nobody could connect)";
   (* derive a SCRAM-SHA-256 verifier per user once; the plaintext password is never retained *)
   let table = Hashtbl.create 8 in
   List.iter

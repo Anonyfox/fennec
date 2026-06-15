@@ -209,9 +209,11 @@ When no Mongo URL exists, anonymous identity stays `None` but database operation
 Lower-level tests and adapters can still create one `Accounts.Store.t` explicitly; provider flows use its
 identity, challenge, passkey, org, MFA, SCIM, and audit facets automatically.
 
-- `Store.minimongo ()`: fast in-memory reference backend for tests/examples.
-- `Store.mongo ?prefix db`: native MongoDB backend using the same BSON schema.
-- `Store.ensure_indexes store`: idempotent Mongo index setup; no-op for Minimongo.
+- `Store.memory ()` (alias `memory_store ()`): in-process store for tests, examples, and prototypes.
+- The framework builds the real store itself from `MONGO_URL` — ONE backend-blind store over `Dynamic`
+  (minimongo / embedded Burrow / native mongod); there is no `Store.mongo` constructor to call, and the
+  store works identically on every backend (burrow included).
+- `Store.ensure_indexes store`: idempotent index setup (username and email are unique+sparse everywhere).
 - `Store.users`, `Store.identities`, `Store.challenges`, `Store.passkeys`, `Store.orgs`,
   `Store.mfa`, `Store.scim`, and `Store.audit`: low-level facets for tests, migrations, and modules
   that need a concrete sub-store.

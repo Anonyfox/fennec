@@ -1125,6 +1125,22 @@ let complete_login_unless_mfa t ~strategy user =
   if has_active_mfa t user then Result.map (fun step_up -> Step_up_required step_up) (login_step_up t ~strategy user)
   else Result.map (fun (user, token) -> Complete_login (user, token)) (finish_login t ~strategy user)
 
+(* Account-enumeration timing defense: when the selector matches no user, still verify the password against
+   a precomputed dummy hash so a missing account costs the same PBKDF2 as a wrong password — no timing
+   oracle reveals whether an email/username exists. The dummy hash is memoised per process and the verify
+   result is always discarded, so a hasher mismatch (e.g. across test hashers) is harmless. *)
+let _enum_guard_hash : string option Atomic.t = Atomic.make None
+let enumeration_guard (hasher : password_hasher) ~password =
+  let hash =
+    match Atomic.get _enum_guard_hash with
+    | Some h -> h
+    | None ->
+      let h = try hasher.hash ~password:"fennec-account-enumeration-guard" with _ -> "" in
+      Atomic.set _enum_guard_hash (Some h);
+      h
+  in
+  (try ignore (hasher.verify ~password ~hash) with _ -> ())
+
 let login_with_password_completion t selector ~password =
   match t.password_hasher with
   | None -> Error Password_not_configured
@@ -1132,6 +1148,7 @@ let login_with_password_completion t selector ~password =
     match find_by_selector t selector with
     | Error _ as e -> e
     | Ok None ->
+      enumeration_guard hasher ~password;
       record_audit ~mechanism:Audit.Password t Audit.Login_failure Audit.Anonymous
         (Audit.Failure "user_not_found");
       Error User_not_found
@@ -5965,6 +5982,17 @@ let%test "Store.unavailable lets the framework boot but fails account writes cle
   match create_user a ~email:"ada@example.com" () with
   | Error (Store_error msg) -> msg = "no mongo configured"
   | _ -> false
+
+let%test "login on an unknown account still runs a password verify (enumeration timing defense)" =
+  let verifies = ref 0 in
+  let hasher =
+    Password.{ hash = (fun ~password -> "h$" ^ password); verify = (fun ~password:_ ~hash:_ -> incr verifies; false) }
+  in
+  let a = make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:hasher () in
+  (* a login for a user that does NOT exist must still invoke [verify] (the constant-work dummy), so the
+     not-found path costs the same as a wrong password — no account-enumeration timing oracle *)
+  let r = login_with_password a (By_email "ghost@example.com") ~password:"pw" in
+  r = Error User_not_found && !verifies >= 1
 
 let%test "Store.minimongo persists identity links for external login" =
   let store = Store.minimongo () in

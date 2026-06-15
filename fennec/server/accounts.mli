@@ -452,12 +452,14 @@ val make :
 (** The process-native Accounts service.
 
     Fennec treats Accounts as its one identity/session substrate, not as a pluggable auth adapter.
-    The native service is created lazily from the global framework Mongo state. A real [MONGO_URL]
-    selects the native Mongo-backed store; explicit [MONGO_URL=:memory:] selects the in-process
-    Mongo-shaped store for tests; a missing URL leaves anonymous identity as [None] and makes
-    database-backed Accounts operations fail clearly. [FENNEC_ACCOUNTS_SECRET] supplies the stable
-    cookie/token secret, otherwise an ephemeral process-local secret is minted. Userland does not
-    pass Accounts through the framework. *)
+    The native service is built once and memoized for the process (eagerly at boot via {!boot}) from the
+    global framework Mongo state. A real [MONGO_URL] selects the native store — minimongo / embedded
+    Burrow / mongod, all behind one backend-blind store; explicit [MONGO_URL=:memory:] selects minimongo
+    for tests; a missing URL leaves anonymous identity as [None] and makes database-backed Accounts
+    operations fail clearly. [FENNEC_ACCOUNTS_SECRET] supplies the stable cookie/token secret, otherwise
+    an ephemeral process-local secret is minted. Userland does not pass Accounts through the framework.
+    NOTE: memoized on first use, so it pins the [MONGO_URL] seen then — a test that needs a specific
+    backend builds a store directly (e.g. {!Store.memory}) or runs as its own process. *)
 val current : unit -> t
 
 (** Native Accounts identity paw. It verifies the configured Accounts cookie and assigns the current
