@@ -126,6 +126,23 @@ let best_usable (indexes : Catalog.index list) selector =
     in
     Some (idx, r)
 
+(* how many leading fields a single index covers with EQUALITY from the selector — its "reach". Used to
+   decide whether intersecting separate indexes adds selectivity a single index doesn't already have. *)
+let rec eq_reach_keys keys selector n =
+  match keys with (f, _) :: rest -> (match constraint_of selector f with Eq _ -> eq_reach_keys rest selector (n + 1) | _ -> n) | [] -> n
+
+let eq_reach (idx : Catalog.index) selector = eq_reach_keys idx.Catalog.keys selector 0
+
+(* one usable index per DISTINCT leading field that has an equality bound (intersection candidates) *)
+let distinct_eq_indexes usable =
+  let seen = Hashtbl.create 8 in
+  List.filter_map
+    (fun (idx, ranges) ->
+      match idx.Catalog.keys with
+      | (f, _) :: _ when is_eq_point ranges && not (Hashtbl.mem seen f) -> Hashtbl.add seen f (); Some (idx.Catalog.iname, ranges)
+      | _ -> None)
+    usable
+
 (* a top-level [$or] where EVERY clause is index-served becomes a union of per-clause index scans
    (deduped). If any clause lacks an index the union would miss matches, so we bail (collection scan). *)
 let try_or_union (indexes : Catalog.index list) selector : Plan.t option =
@@ -165,10 +182,16 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
         List.fold_left (fun (bi, br, bs) (idx, r, sc) -> if sc > bs then (idx, r, sc) else (bi, br, bs)) (List.hd scored) (List.tl scored)
       in
       if single branges && serves_fwd bidx then scan bidx branges true false (* tight filter AND ordered *)
-      else if want_sort && not (is_eq_point branges) then
-        (* tightest filter is an open range and we must sort: prefer an index that yields the order, to
-           skip sorting a potentially large result *)
-        match List.find_opt (fun (idx, r) -> single r && serves_fwd idx) usable with
-        | Some (idx, r) -> scan idx r true false
-        | None -> scan bidx branges false false
-      else scan bidx branges false false
+      else
+        let eqs = distinct_eq_indexes usable in
+        let max_reach = List.fold_left (fun m (idx, _) -> max m (eq_reach idx selector)) 0 usable in
+        (* intersect equality conditions on separate fields only when it covers MORE fields than the
+           best single index (so it never loses to a covering compound index) *)
+        if List.length eqs >= 2 && List.length eqs > max_reach then Plan.Index_intersect eqs
+        else if want_sort && not (is_eq_point branges) then
+          (* tightest filter is an open range and we must sort: prefer an index that yields the order, to
+             skip sorting a potentially large result *)
+          match List.find_opt (fun (idx, r) -> single r && serves_fwd idx) usable with
+          | Some (idx, r) -> scan idx r true false
+          | None -> scan bidx branges false false
+        else scan bidx branges false false

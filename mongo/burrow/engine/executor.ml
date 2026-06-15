@@ -31,6 +31,12 @@ let scan_range ?(rev = false) txn (idx : Catalog.index) seen acc (r : Plan.range
         true
       end)
 
+(* all (deduped) record keys an index yields for the given ranges, in scan order *)
+let scan_keys txn (idx : Catalog.index) ranges =
+  let seen = Hashtbl.create 256 and acc = ref [] in
+  List.iter (scan_range txn idx seen acc) ranges;
+  List.rev !acc
+
 let find_index (c : Catalog.collection) index = List.find_opt (fun i -> i.Catalog.iname = index) c.indexes
 
 (* candidate documents from the access path (a superset of the matches; the residual matcher filters).
@@ -56,6 +62,25 @@ let candidates txn (c : Catalog.collection) (plan : Plan.t) : B.t list =
       List.filter_map (fun rk -> Record.get_by_key txn c.records rk) (List.rev !acc)
     end
     else full_scan txn c
+  | Plan.Index_intersect pairs -> (
+    if not (List.for_all (fun (index, _) -> find_index c index <> None) pairs) then full_scan txn c
+    else
+      match pairs with
+      | [] -> full_scan txn c
+      | (i0, r0) :: rest ->
+        let keys index ranges = match find_index c index with Some idx -> scan_keys txn idx ranges | None -> [] in
+        let keys0 = keys i0 r0 in
+        (* keep the running intersection in [set]; iterate keys0 order at the end for determinism *)
+        let set = Hashtbl.create 256 in
+        List.iter (fun k -> Hashtbl.replace set k ()) keys0;
+        List.iter
+          (fun (index, ranges) ->
+            let here = Hashtbl.create 256 in
+            List.iter (fun k -> if Hashtbl.mem set k then Hashtbl.replace here k ()) (keys index ranges);
+            Hashtbl.reset set;
+            Hashtbl.iter (fun k () -> Hashtbl.replace set k ()) here)
+          rest;
+        List.filter_map (fun k -> if Hashtbl.mem set k then Record.get_by_key txn c.records k else None) keys0)
 
 let matched txn c plan ~selector =
   let cs = candidates txn c plan in

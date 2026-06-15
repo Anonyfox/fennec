@@ -22,4 +22,7 @@ type t =
   | Index_union of (string * range list) list
       (** union (deduped by record key) of per-index scans — one entry per [$or] clause when every
           clause is index-served; the residual matcher then applies the full selector *)
+  | Index_intersect of (string * range list) list
+      (** INTERSECTION (by record key) of per-index scans — for an AND of equality conditions on
+          separately-indexed fields that no single index covers; the residual matcher confirms *)
   | Collection_scan  (** full scan in [_id] order; the residual matcher filters *)
