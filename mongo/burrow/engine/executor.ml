@@ -45,6 +45,16 @@ let candidates txn (c : Catalog.collection) (plan : Plan.t) : B.t list =
       let seen = Hashtbl.create 64 and acc = ref [] in
       List.iter (scan_range txn idx seen acc) ranges;
       List.filter_map (fun rk -> Record.get_by_key txn c.records rk) (List.rev !acc))
+  | Plan.Index_union pairs ->
+    (* every named index must exist, else the union would miss a clause's matches — fall back to scan *)
+    if List.for_all (fun (index, _) -> find_index c index <> None) pairs then begin
+      let seen = Hashtbl.create 64 and acc = ref [] in
+      List.iter
+        (fun (index, ranges) -> match find_index c index with Some idx -> List.iter (scan_range txn idx seen acc) ranges | None -> ())
+        pairs;
+      List.filter_map (fun rk -> Record.get_by_key txn c.records rk) (List.rev !acc)
+    end
+    else full_scan txn c
 
 let matched txn c plan ~selector =
   let cs = candidates txn c plan in

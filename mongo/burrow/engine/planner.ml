@@ -98,6 +98,26 @@ let score (idx : Catalog.index) ranges =
   | r :: _ -> range_score r / (1 + List.length ranges) (* $in: less selective the more values *)
   | [] -> 0
 
+(* the most selective single index usable for a (sub-)selector *)
+let best_usable (indexes : Catalog.index list) selector =
+  match List.filter_map (fun idx -> match build_index idx selector with Some r -> Some (idx, r) | None -> None) indexes with
+  | [] -> None
+  | usable ->
+    let scored = List.map (fun (idx, r) -> (idx, r, score idx r)) usable in
+    let idx, r, _ =
+      List.fold_left (fun (bi, br, bs) (i, rr, s) -> if s > bs then (i, rr, s) else (bi, br, bs)) (List.hd scored) (List.tl scored)
+    in
+    Some (idx, r)
+
+(* a top-level [$or] where EVERY clause is index-served becomes a union of per-clause index scans
+   (deduped). If any clause lacks an index the union would miss matches, so we bail (collection scan). *)
+let try_or_union (indexes : Catalog.index list) selector : Plan.t option =
+  match B.get selector "$or" with
+  | Some (B.Array (_ :: _ as clauses)) ->
+    let per = List.map (fun cl -> Option.map (fun (idx, r) -> (idx.Catalog.iname, r)) (best_usable indexes cl)) clauses in
+    if List.for_all Option.is_some per then Some (Plan.Index_union (List.filter_map Fun.id per)) else None
+  | _ -> None
+
 let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
   match B.get selector "_id" with
   | Some v when is_pointable v -> Plan.Id_point v
@@ -107,13 +127,17 @@ let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
     let scan (idx : Catalog.index) ranges sorted = Plan.Index_scan { index = idx.Catalog.iname; ranges; sorted } in
     let want_sort = sort_spec sort <> [] in
     match usable with
-    | [] ->
-      (* no filter index — use one purely to produce the sort order, if one fits *)
-      if want_sort then (
-        match List.find_opt (fun idx -> serves_sort idx sort) indexes with
-        | Some idx -> scan idx [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] true
-        | None -> Plan.Collection_scan)
-      else Plan.Collection_scan
+    | [] -> (
+      (* no single filter index: an all-indexed top-level $or becomes a union; else use an index purely
+         for the sort order if one fits; else scan *)
+      match try_or_union indexes selector with
+      | Some u -> u
+      | None ->
+        if want_sort then (
+          match List.find_opt (fun idx -> serves_sort idx sort) indexes with
+          | Some idx -> scan idx [ { Plan.lo = None; excl_lo = false; hi = None; excl_hi = false } ] true
+          | None -> Plan.Collection_scan)
+        else Plan.Collection_scan)
     | _ ->
       (* the most selective usable index *)
       let scored = List.map (fun (idx, r) -> (idx, r, score idx r)) usable in

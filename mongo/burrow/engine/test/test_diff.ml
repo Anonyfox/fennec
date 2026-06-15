@@ -46,7 +46,7 @@ let () =
 
   let rand_in () = B.array (List.filter_map (fun v -> if Random.bool () then Some (i v) else None) [ 0; 1; 2; 3; 4; 5 ]) in
   let rand_selector () =
-    match Random.int 9 with
+    match Random.int 11 with
     | 0 -> empty
     | 1 -> doc [ ("a", i (Random.int 6)) ]
     | 2 -> doc [ ("b", s bstrs.(Random.int 3)) ]
@@ -55,7 +55,9 @@ let () =
     | 5 -> doc [ ("arr", i (1 + Random.int 3)) ]
     | 6 -> doc [ ("a", i (Random.int 6)); ("b", s bstrs.(Random.int 3)) ] (* compound a+b *)
     | 7 -> doc [ ("a", doc [ ("$in", rand_in ()) ]) ] (* $in on an indexed field *)
-    | _ -> doc [ ("a", doc [ ("$gte", i 2) ]); ("b", s "x") ]
+    | 8 -> doc [ ("a", doc [ ("$gte", i 2) ]); ("b", s "x") ]
+    | 9 -> doc [ ("$or", B.array [ doc [ ("a", i (Random.int 6)) ]; doc [ ("b", s bstrs.(Random.int 3)) ] ]) ] (* all-indexed $or -> union *)
+    | _ -> doc [ ("$or", B.array [ doc [ ("a", i (Random.int 6)) ]; doc [ ("zzz", i 5) ] ]) ] (* mixed $or -> scan fallback *)
   in
 
   let both_find sel =
@@ -103,7 +105,9 @@ let () =
     [ empty; doc [ ("arr", i 1) ]; doc [ ("arr", i 2) ]; doc [ ("arr", i 3) ];
       doc [ ("a", doc [ ("$gte", i 0) ]) ]; doc [ ("a", i 2) ]; doc [ ("b", s "x") ]; doc [ ("b", s "w") ];
       doc [ ("a", doc [ ("$in", B.array [ i 0; i 2; i 4 ]) ]) ]; (* $in path *)
-      doc [ ("a", i 3); ("b", s "y") ] (* compound path *) ]
+      doc [ ("a", i 3); ("b", s "y") ]; (* compound path *)
+      doc [ ("$or", B.array [ doc [ ("a", i 1) ]; doc [ ("b", s "z") ] ]) ]; (* $or-union path *)
+      doc [ ("$or", B.array [ doc [ ("arr", i 2) ]; doc [ ("a", i 4) ] ]) ] ]
   in
   (* ordered parity (sequence, not just set): sort on the indexed [a] with an [_id] tiebreak (a TOTAL
      order, so it's deterministic across engines regardless of storage order), asc + desc, paginated and
