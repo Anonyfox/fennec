@@ -43,6 +43,50 @@ val collection : ?poll:float -> sw:Eio.Switch.t -> connection -> db:string -> na
 
 include Fennec_pulse.Backend.S with type collection := collection
 
+(** {1 mongosh / driver exposure}
+
+    Open a MongoDB wire-protocol endpoint in front of the embedded Burrow engine, so any real client —
+    mongosh, Compass, an official driver — connects exactly as it would to a hosted mongod and runs
+    ad-hoc queries against the app's live embedded data. It is the wire protocol over TCP (optionally
+    TLS), not HTTP — which is precisely why unmodified mongosh works.
+
+    The endpoint shares the same per-directory engine cache as the [:embedded:] backend, so it sees the
+    app's data and its writes go through the same group-committing writer (no concurrent-writer hazard).
+    It is secure by default: loopback bind, SCRAM-SHA-256 required whenever any user is configured, no
+    [$where]/JS (so no server-side code injection), a capped message size, and optional read-only / TLS.
+
+    One line in [Fennec.serve ~on_start] (where [sw] is the server's long-lived switch):
+    {[ Fennec_pulse_mongo.expose ~sw ~net:(Eio.Stdenv.net env)
+         ~users:[ Fennec_pulse_mongo.wire_user ~user:"admin" ~password:secret ] () ]}
+    then [mongosh "mongodb://admin:secret@127.0.0.1:27017"]. *)
+
+(** A principal allowed to authenticate over the wire endpoint (SCRAM-SHA-256). *)
+type wire_user
+
+val wire_user : user:string -> password:string -> wire_user
+(** [wire_user ~user ~password] is a credential for {!expose}. The password is turned into a SCRAM
+    verifier at startup and never retained in plaintext. *)
+
+val expose :
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  ?addr:Eio.Net.Sockaddr.stream ->
+  ?base_dir:string ->
+  ?users:wire_user list ->
+  ?require_auth:bool ->
+  ?read_only:bool ->
+  ?tls:Tls.Config.server ->
+  ?max_message_bytes:int ->
+  ?max_connections:int ->
+  unit ->
+  unit
+(** [expose ~sw ~net () ] starts the wire endpoint as a background fiber under [sw] (returns once bound;
+    a bind failure raises). Defaults: [addr] = loopback [:27017]; [base_dir] = ["./.fennec/burrow"]
+    (must match the app's [:embedded:] base so they share engines); [users] = none; [require_auth] =
+    [true] iff any user is given (set [~require_auth:false] only for a trusted localhost socket);
+    [read_only] = [false]; [max_message_bytes] = 48 MB; [max_connections] = 1000. Raises
+    [Invalid_argument] if [require_auth] holds with no users. *)
+
 (** A runtime-selectable backend — in-memory or this native driver behind one
     {!Fennec_pulse.Backend.S}, so an app chooses at boot from the global framework Mongo state
     ([MONGO_URL] or explicit [":memory:"]) with no type change downstream:

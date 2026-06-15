@@ -21,6 +21,9 @@ val collection : t -> string -> collection
 
 val collection_opt : t -> string -> collection option
 
+val collection_names : t -> string list
+(** The names of all collections currently in the catalog (for [listCollections] / [listDatabases]). *)
+
 val insert : t -> collection -> Bson.t -> string
 (** Insert a document (minting an ObjectId [_id] when absent); returns the [_id] as a string. *)
 
@@ -58,4 +61,10 @@ val fence : t -> collection -> (unit -> unit) -> unit
 val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> unit
 val drop_index : t -> collection -> name:string -> unit
 val index_names : collection -> string list
+
+val index_specs : collection -> (string * (string * int) list * bool) list
+(** Each secondary index as [(name, keys, unique)] with [keys = (field, 1|-1) list] — for
+    [listIndexes] / [createIndexes] bookkeeping over the wire (the clustered [_id_] index is implicit
+    and added by the caller). *)
+
 val set_validator : t -> collection -> Bson.t option -> unit

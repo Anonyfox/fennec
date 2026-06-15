@@ -113,6 +113,7 @@ let close t =
 let store t = t.store
 let collection t name = with_write t (fun () -> Catalog.collection t.cat name)
 let collection_opt t name = Catalog.collection_opt t.cat name
+let collection_names t = List.map (fun (c : Catalog.collection) -> c.Catalog.name) (Catalog.collections t.cat)
 
 (* ---- ids ---------------------------------------------------------------------------------- *)
 
@@ -223,4 +224,7 @@ let ensure_index t (c : collection) ~name ~keys ~unique =
 
 let drop_index t (c : collection) ~name = with_write t (fun () -> Catalog.drop_index t.cat c ~name)
 let index_names (c : collection) = Catalog.index_names c
+
+let index_specs (c : collection) =
+  List.map (fun (i : Catalog.index) -> (i.Catalog.iname, i.Catalog.keys, i.Catalog.unique)) c.Catalog.indexes
 let set_validator t (c : collection) v = with_write t (fun () -> Catalog.set_validator t.cat c v)

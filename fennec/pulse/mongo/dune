@@ -14,5 +14,11 @@
   fennec-mongo.bson
   fennec-mongo.query
   fennec-mongo.burrow
+  fennec-mongo.wire
+  base64
+  tls
+  tls-eio
+  mirage-crypto-rng
+  mirage-crypto-rng.unix
   eio
   unix))

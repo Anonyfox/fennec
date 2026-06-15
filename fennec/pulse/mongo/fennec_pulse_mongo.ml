@@ -280,3 +280,87 @@ module Dynamic = struct
     | Embedded e -> Burrow_engine.set_validator e.eng e.ecoll v
     | Missing message -> unavailable message
 end
+
+(* ---- mongosh / driver exposure: the embedded engine over the MongoDB wire protocol ----------
+
+   {!expose} opens a MongoDB wire-protocol TCP listener in front of the embedded Burrow engine, so any
+   real client — mongosh, Compass, a driver — connects exactly as it would to a hosted mongod and runs
+   ad-hoc queries. It shares the SAME engine cache as the [:embedded:] backend (keyed by directory), so
+   it sees the app's live data and its writes funnel through the same group-committing writer (no
+   concurrent-writer hazard). Secure by default: binds loopback, requires SCRAM-SHA-256 when any user is
+   configured, never speaks [$where]/JS, caps message size, and offers a read-only mode + TLS. *)
+
+let wire_rng_ready = ref false
+let ensure_wire_rng () = if not !wire_rng_ready then (Mirage_crypto_rng_unix.use_default (); wire_rng_ready := true)
+
+type wire_user = { wu_name : string; wu_password : string }
+
+let wire_user ~user ~password = { wu_name = user; wu_password = password }
+
+let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 27017)) ?(base_dir = "./.fennec/burrow")
+    ?(users = []) ?require_auth ?(read_only = false) ?tls ?(max_message_bytes = 48_000_000) ?(max_connections = 1000) () =
+  ensure_wire_rng ();
+  let require_auth = match require_auth with Some b -> b | None -> users <> [] in
+  if require_auth && users = [] then
+    invalid_arg "Fennec_pulse_mongo.expose: require_auth is set but no users were configured (nobody could connect)";
+  (* derive a SCRAM-SHA-256 verifier per user once; the plaintext password is never retained *)
+  let table = Hashtbl.create 8 in
+  List.iter
+    (fun u ->
+      (* MongoDB's SCRAM salt length is (hash_size - 4): SHA-256 -> 28, SHA-1 -> 16. The server reserves
+         the trailing 4 bytes for PBKDF2's block index, and drivers (libmongoc, mongosh) enforce exactly
+         this length — a 16- or 32-byte salt is rejected outright. *)
+      let salt = Mirage_crypto_rng.generate 28 in
+      Hashtbl.replace table u.wu_name (Mongo_wire.Scram.make_credential ~salt ~iterations:15000 ~password:u.wu_password))
+    users;
+  let dir_of db = Filename.concat base_dir db in
+  let module Db = struct
+    type coll = embedded
+
+    let collection ~db ~name = embedded_collection ~sw ~dir:(dir_of db) ~name
+    let collection_names ~db = Burrow_engine.collection_names (embedded_engine ~sw (dir_of db))
+
+    let database_names () =
+      if (try Sys.is_directory base_dir with _ -> false) then
+        Sys.readdir base_dir |> Array.to_list
+        |> List.filter (fun n -> try Sys.is_directory (Filename.concat base_dir n) with _ -> false)
+      else []
+
+    let insert e d = Burrow_engine.insert e.eng e.ecoll d
+    let find e ~selector ~sort ~skip ~limit ~fields = Burrow_engine.find e.eng e.ecoll ~selector ~sort ~skip ~limit ~fields
+    let count e sel = Burrow_engine.count e.eng e.ecoll ~selector:sel
+    let update e ~multi ~upsert q m = Burrow_engine.update e.eng e.ecoll ~multi ~upsert q m
+    let remove e sel = Burrow_engine.remove e.eng e.ecoll sel
+
+    (* $lookup / $unionWith resolve sibling collections in the same engine *)
+    let aggregate e p =
+      let empty = Bson.Document [] in
+      let lookup name =
+        let c = Burrow_engine.collection e.eng name in
+        Burrow_engine.find e.eng c ~selector:empty ~sort:empty ~skip:0 ~limit:0 ~fields:empty
+      in
+      Burrow_engine.aggregate e.eng e.ecoll ~lookup p
+
+    let distinct e key sel = Burrow_engine.distinct e.eng e.ecoll ~key ~selector:sel
+    let ensure_index e ~name ~keys ~unique = Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique
+    let drop_index e ~name = Burrow_engine.drop_index e.eng e.ecoll ~name
+    let index_specs e = Burrow_engine.index_specs e.ecoll
+
+    (* v1 drop empties the collection (its catalog entry/sub-DBs remain); a true drop awaits engine support *)
+    let drop_collection ~db ~name =
+      let e = embedded_collection ~sw ~dir:(dir_of db) ~name in
+      ignore (Burrow_engine.remove e.eng e.ecoll (Bson.Document []))
+  end in
+  let module Server = Wire_server.Make (Db) in
+  let config : Wire_server.config =
+    { require_auth;
+      lookup = (fun name -> Hashtbl.find_opt table name);
+      read_only;
+      max_message_bytes;
+      max_connections;
+      server_nonce = (fun () -> Base64.encode_string (Mirage_crypto_rng.generate 18));
+      tls }
+  in
+  Server.run ~sw ~net ~addr config;
+  let where = match addr with `Tcp (ip, port) -> Format.asprintf "%a:%d" Eio.Net.Ipaddr.pp ip port | `Unix p -> p in
+  Printf.printf "fennec: mongo-wire endpoint listening on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
