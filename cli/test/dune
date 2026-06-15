@@ -9,5 +9,6 @@
   test_assets
   test_tty
   test_pool
-  test_reaper)
- (libraries fennec_dev fennec.core fennec_testcmd))
+  test_reaper
+  test_mongo_rs)
+ (libraries fennec_dev fennec.core fennec_testcmd unix))
