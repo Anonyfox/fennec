@@ -124,5 +124,15 @@ module Dynamic : sig
       [Fennec.serve ~on_start] (the captured [sw] drives Live's change-stream daemons). *)
   val from_env : ?poll:float -> sw:Eio.Switch.t -> name:string -> unit -> collection
 
+  (** [set_switch sw] installs the ambient Eio switch the data layer forks its daemons into.
+      {!Fennec.serve} calls it once, inside its switch, at boot — so {!val:collection} opens a backend by
+      name without threading [sw] through every call. *)
+  val set_switch : Eio.Switch.t -> unit
+
+  (** [collection ?poll ~name ()] is {!from_env} on the {!set_switch} ambient switch — the no-thread entry
+      point the framework uses once {!Fennec.serve} has booted the data layer. Before boot it yields a
+      collection whose operations fail with a clear message (never a silent in-memory fallback). *)
+  val collection : ?poll:float -> name:string -> unit -> collection
+
   include Fennec_pulse.Backend.S with type collection := collection
 end

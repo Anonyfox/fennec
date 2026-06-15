@@ -53,12 +53,11 @@ module Pulse = Fennec_pulse_app
 
 let realtime_ddp = Pulse.serve_ddp ~path:"/ddp" ()
 
-(* runs once in the server's Eio context (serve ~on_start): start the facade, seed, publish, method.
-   [Pulse.start] consumes the global Mongo state, so there is no app config branch here. Writes
-   validate against Task.collection (an invalid value cannot reach the database); [Pulse.publish] is
-   ONE call that wires both the live DDP publication AND the flicker-free SSR seed. *)
-let setup_realtime ~sw ~net =
-  Pulse.start ~sw ~net ();
+(* runs once in the server's Eio context (serve ~on_start): seed, publish, method. The data layer is
+   already booted by Fennec.serve (ambient switch + any mongosh endpoint, all from MONGO_URL), so there
+   is no app config branch here. Writes validate against Task.collection (an invalid value cannot reach
+   the database); [Pulse.publish] is ONE call that wires both the live DDP publication AND the SSR seed. *)
+let setup_realtime () =
   Pulse.seed Task.collection
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
   Pulse.publish Task.collection;
@@ -116,4 +115,4 @@ let admin =
 (* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
    watches the served bundles and pings the server's dev control socket, which relays
    a CSS hot-swap or full reload to the browser. The server watches nothing. *)
-let () = Fennec.serve ~on_start:(fun ~sw ~sleep:_ ~net -> setup_realtime ~sw ~net) [ web; admin ]
+let () = Fennec.serve ~on_start:(fun ~sw:_ ~sleep:_ ~net:_ -> setup_realtime ()) [ web; admin ]

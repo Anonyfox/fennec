@@ -14,5 +14,6 @@
   fennec.web
   fennec.pulse.codec
   fennec-mongo.driver
+  fennec-mongo.dynamic
   eio
   eio_main))

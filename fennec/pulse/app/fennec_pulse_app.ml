@@ -1,6 +1,6 @@
 (* The server data facade. Wraps the Reactive/server/Typed functors over the production Dynamic
    backend (mem-or-mongo, chosen by the global Mongo env) into ONE ambient module. A server file
-   does: Pulse.start → declare collections' publications/methods → done. No functor aliases, no
+   does: declare collections' publications/methods → done. No functor aliases, no
    per-collection backend threading, no double-declared SSR publication. *)
 
 module D = Fennec_pulse_mongo.Dynamic
@@ -8,17 +8,8 @@ module R = Fennec_pulse.Reactive.Make (D)
 module RT = Fennec_pulse_server.Make (R)
 module T = Fennec_pulse.Typed.Make (R)
 
-(* the ambient Eio switch, set once at boot by [start]. The database name comes from MONGO_URL, not from
-   app code, so there is nothing else to thread. *)
-let _sw : Eio.Switch.t option ref = ref None
-
-let start ~sw ~net () =
-  _sw := Some sw;
-  (* MONGO_URL alone decides: a burrow:// URL with an authority fronts the embedded engine over the
-     MongoDB wire protocol so `mongosh` connects (zero setup in dev, where `fennec dev` generates a
-     loopback authority). No-op for :memory: / mongodb:// / a burrow:// URL without an authority. *)
-  Fennec_pulse_mongo.expose_from_env ~sw ~net ()
-let sw () = match !_sw with Some sw -> sw | None -> failwith "Fennec_pulse_app: call start before using collections"
+(* No app-level lifecycle: [Fennec.serve] installs the ambient Eio switch and (for a burrow:// authority)
+   opens the mongosh wire endpoint at boot — all from MONGO_URL. Collections resolve via [D.collection]. *)
 
 (* one reactive collection per name (stable mux uid; indexes reconciled once on creation), re-wrapped
    per call as a cheap typed handle *)
@@ -30,7 +21,7 @@ let collection (def : 'a Def.t) : 'a T.t =
     match Hashtbl.find_opt _reactives name with
     | Some c -> c
     | None ->
-        let c = R.Collection.create ~name (D.from_env ~sw:(sw ()) ~name ()) in
+        let c = R.Collection.create ~name (D.collection ~name ()) in
         Hashtbl.replace _reactives name c;
         T.reconcile c (Def.all_indexes def);
         T.install_validator c (Def.validator def);

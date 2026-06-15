@@ -188,6 +188,22 @@ module Dynamic = struct
     | Runtime.Burrow { base; db; _ } -> Embedded (embedded_collection ~sw ~dir:(Filename.concat base db) ~name)
     | Runtime.Mongo { uri; db } -> real ?poll ~sw (connect uri) ~db ~name
 
+  (* The ambient Eio switch the data layer forks its long-lived daemons into (Live's change-streams, the
+     embedded engine, the wire endpoint). [Fennec.serve] installs it ONCE, inside its switch, at startup
+     (see {!Fennec.serve}); then app and accounts code open a backend collection by name via [collection]
+     without threading [sw] through every call. Set before any collection is opened, so a plain ref set
+     once on the boot fiber is enough — no cross-domain sharing. *)
+  let ambient_switch : Eio.Switch.t option ref = ref None
+  let set_switch sw = ambient_switch := Some sw
+
+  (* Open the MONGO_URL-selected collection [name] on the ambient switch — the no-thread entry point for
+     [Fennec.serve]-hosted code. Before the switch is installed (only possible by reaching the data layer
+     outside [serve]) it yields a [Missing] collection whose ops fail with a clear message, never silently. *)
+  let collection ?poll ~name () =
+    match !ambient_switch with
+    | Some sw -> from_env ?poll ~sw ~name ()
+    | None -> missing "Fennec data layer is not booted — Fennec.serve installs the Eio switch at startup"
+
   let insert c d =
     match c with
     | Mem m -> Mini.insert m d
@@ -384,3 +400,11 @@ let expose_from_env ~sw ~net () =
     expose ~sw ~net ~addr:(`Tcp (ipaddr_of_host s.host, s.port)) ~base_dir:base ~users ~require_auth:(s.user <> None)
       ~read_only:s.read_only ()
   | _ -> ()
+
+(* The one data-layer boot the framework runs inside [Fennec.serve]'s switch, before any connection is
+   served: install the ambient Eio switch (so app + accounts collections open by name, no [sw] threading)
+   and — for a burrow:// URL with an authority — front the embedded engine over the MongoDB wire protocol
+   so `mongosh` connects. MONGO_URL alone decides everything; there is no app-level "start". *)
+let boot ~sw ~net () =
+  Dynamic.set_switch sw;
+  expose_from_env ~sw ~net ()

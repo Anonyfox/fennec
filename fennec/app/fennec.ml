@@ -157,6 +157,11 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
   in
   Eio.Switch.run @@ fun sw ->
   if livereload_on then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
+  (* Boot the data layer inside the long-lived switch, BEFORE any endpoint is served: install the ambient
+     Eio switch (so app + accounts collections open by name — no [sw] threading) and, when MONGO_URL is a
+     burrow:// URL with an authority, front the embedded engine over the MongoDB wire protocol so `mongosh`
+     connects (zero-config in dev). MONGO_URL alone decides the backend; there is no app-level "start". *)
+  Fennec_mongo_dynamic.boot ~sw ~net:(Eio.Stdenv.net env) ();
   (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
      clean up after) we'd otherwise keep the port and make the next `fennec dev` fail to bind.
      The supervisor (our direct parent) passes its pid as FENNEC_DEV_PARENT; we exit the moment

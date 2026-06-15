@@ -7,20 +7,19 @@
     from the [@@deriving collection] models; writes validate against them (an invalid value cannot
     reach the database); reads decode with the skip policy.
 
-    The everyday server file is five lines — start, seed, publish, a method, the DDP paw:
+    The everyday server file is four lines — seed, publish, a method, the DDP paw (no lifecycle call):
 
     {[ module Pulse = Fennec_pulse_app
 
        let ddp = Pulse.serve_ddp ~path:"/ddp" ()           (* the websocket paw, at module init *)
 
-       let setup ~sw ~net =                                 (* inside Fennec.serve ~on_start *)
-         Pulse.start ~sw ~net ();                            (* db + backend + endpoint all from MONGO_URL *)
+       let setup () =                                       (* inside Fennec.serve ~on_start *)
          Pulse.seed Task.collection [ { Task.id = ""; title = "Buy milk"; body = "" } ];
          Pulse.publish Task.collection;                     (* ONE call: live cursor + SSR seed *)
          Pulse.method_ Site_methods.add_task (fun _inv title ->
              Pulse.insert Task.collection { Task.id = ""; title; body = "" })
 
-       let () = Fennec.serve ~on_start:(fun ~sw ~sleep:_ ~net -> setup ~sw ~net) [ web ] ]} *)
+       let () = Fennec.serve ~on_start:(fun ~sw:_ ~sleep:_ ~net:_ -> setup ()) [ web ] ]} *)
 
 (** The production backend (mem-or-mongo, chosen by the global Mongo env). *)
 module D = Fennec_pulse_mongo.Dynamic
@@ -35,15 +34,10 @@ module T : module type of Fennec_pulse.Typed.Make (R)
 
 (** {1 Lifecycle} *)
 
-(** [start ~sw ~net ()] records the ambient Eio switch consumed by every subsequent collection. Call it
-    once, first, inside [Fennec.serve ~on_start] (which passes [~net] alongside [~sw]). The database name
-    comes from [MONGO_URL] (the engine, db, and any mongosh endpoint are all decided there — no app
-    config). If the URL is a [burrow://] one with an authority, it also opens the MongoDB wire endpoint
-    (see {!Fennec_pulse_mongo.expose_from_env}) so [mongosh] connects. *)
-val start : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> unit
-
-(** The DDP websocket paw for the endpoint pipeline — the one server→client realtime channel.
-    Safe to call at module-init time (it does not need {!start}). *)
+(** The DDP websocket paw for the endpoint pipeline — the one server→client realtime channel. Safe to
+    call at module-init time. The data layer needs no app-level start: [Fennec.serve] installs the ambient
+    Eio switch and (for a [burrow://] URL with an authority) opens the [mongosh] wire endpoint at boot,
+    all decided by [MONGO_URL]. *)
 val serve_ddp : ?path:string -> unit -> Fennec_paw.Paw.t
 
 (** {1 Collections} *)
