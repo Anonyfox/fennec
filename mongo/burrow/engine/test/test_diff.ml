@@ -30,11 +30,11 @@ let () =
   let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp "diff") in
   let c = Eng.collection eng "t" in
   let mm = MM.create () in
-  Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"b_1" ~keys:(doc [ ("b", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"arr_1" ~keys:(doc [ ("arr", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"a_b_1" ~keys:(doc [ ("a", i 1); ("b", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"a_desc" ~keys:(doc [ ("a", i (-1)) ]) ~unique:false; (* descending index *)
+  Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"b_1" ~keys:(doc [ ("b", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"arr_1" ~keys:(doc [ ("arr", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"a_b_1" ~keys:(doc [ ("a", i 1); ("b", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"a_desc" ~keys:(doc [ ("a", i (-1)) ]) ~unique:false ~sparse:false; (* descending index *)
 
   Random.init 0xD1FF;
   let next_id = ref 0 in

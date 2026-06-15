@@ -26,14 +26,20 @@ let is_multikey_doc (idx : Catalog.index) (doc : B.t) =
     idx.Catalog.keys
 
 let keys_for_doc (idx : Catalog.index) (doc : B.t) : string list =
-  let combos =
-    List.fold_left
-      (fun acc (field, dir) ->
-        let encs = List.map (fun v -> encode_value v dir) (field_values doc field) in
-        List.concat_map (fun prefix -> List.map (fun e -> prefix ^ e) encs) acc)
-      [ "" ] idx.Catalog.keys
-  in
-  List.sort_uniq String.compare combos
+  (* a sparse index indexes nothing for a document that omits ALL its key fields — so [add]/[remove] make
+     no entry and [check_unique] (which iterates these keys) sees no collision: several docs that all lack
+     the field never clash on a shared "absent" key (MongoDB sparse, for the single-field accounts indexes). *)
+  if idx.Catalog.sparse && List.for_all (fun (field, _) -> Query.Matcher.get_path doc field = None) idx.Catalog.keys
+  then []
+  else
+    let combos =
+      List.fold_left
+        (fun acc (field, dir) ->
+          let encs = List.map (fun v -> encode_value v dir) (field_values doc field) in
+          List.concat_map (fun prefix -> List.map (fun e -> prefix ^ e) encs) acc)
+        [ "" ] idx.Catalog.keys
+    in
+    List.sort_uniq String.compare combos
 
 let add txn (idx : Catalog.index) ~doc ~record_key =
   List.iter (fun k -> Store.put txn idx.Catalog.db (k ^ record_key) record_key) (keys_for_doc idx doc)

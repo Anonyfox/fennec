@@ -86,12 +86,12 @@ let () =
       (* indexes (where each engine supports them) *)
       List.iter
         (fun (nm, keys) ->
-          Eng.ensure_index eng bc ~name:nm ~keys ~unique:false;
-          Mongo.ensure_index mc ~name:nm ~keys ~unique:false)
+          Eng.ensure_index eng bc ~name:nm ~keys ~unique:false ~sparse:false;
+          Mongo.ensure_index mc ~name:nm ~keys ~unique:false ~sparse:false)
         [ ("uid_1", doc [ ("uid", B.int 1) ]); ("status_1", doc [ ("status", B.int 1) ]);
           ("score_1", doc [ ("score", B.int 1) ]); ("created_-1", doc [ ("created", B.int (-1)) ]);
           ("status_created", doc [ ("status", B.int 1); ("created", B.int (-1)) ]) ];
-      List.iter (fun (nm, fields) -> MM.ensure_index mm ~name:nm ~fields ~unique:false)
+      List.iter (fun (nm, fields) -> MM.ensure_index mm ~name:nm ~fields ~unique:false ~sparse:false)
         [ ("uid_1", [ "uid" ]); ("status_1", [ "status" ]); ("score_1", [ "score" ]); ("created_1", [ "created" ]) ];
 
       Printf.printf "\n=== Burrow vs mongod vs minimongo — %d docs ===\n\n" n;

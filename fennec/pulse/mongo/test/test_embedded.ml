@@ -25,7 +25,7 @@ let () =
    | None -> assert false);
 
   (* index + range query through the seam *)
-  D.ensure_index c ~name:"age_1" ~keys:(B.doc [ ("age", B.int 1) ]) ~unique:false;
+  D.ensure_index c ~name:"age_1" ~keys:(B.doc [ ("age", B.int 1) ]) ~unique:false ~sparse:false;
   assert (List.length (D.find c (qy ~selector:(B.doc [ ("age", B.doc [ ("$gte", B.int 30) ]) ]) ())) = 1);
 
   (* update *)

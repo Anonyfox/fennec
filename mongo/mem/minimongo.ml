@@ -42,12 +42,14 @@ type t = {
   mutable rorder : string list; (* ids newest-first (reverse insertion order); O(1) insert *)
   fan : change Fanout.t; (* the change stream: enqueued under [lock], delivered outside *)
   gen_id : unit -> string; (* must be pure/non-blocking: runs under [lock] *)
-  mutable indexes : (string * (string list * bool)) list; (* name -> (key fields, unique) *)
-  mutable uniq : (string * (string list * (Bson.t option list, string) Hashtbl.t)) list;
-      (* per UNIQUE index: its key fields + a live (key-tuple -> id) map, maintained on every commit
-         so the uniqueness check is O(#unique indexes) hash lookups instead of a full store scan
-         (which made bulk-loading N docs O(U·N²)). The key is the raw [Bson.t option list] tuple, so
-         the map's polymorphic equality is byte-identical to the prior [key_of x = key_of y] test. *)
+  mutable indexes : (string * (string list * bool * bool)) list; (* name -> (key fields, unique, sparse) *)
+  mutable uniq : (string * (string list * bool * (Bson.t option list, string) Hashtbl.t)) list;
+      (* per UNIQUE index: its key fields, its [sparse] flag, and a live (key-tuple -> id) map, maintained
+         on every commit so the uniqueness check is O(#unique indexes) hash lookups instead of a full store
+         scan (which made bulk-loading N docs O(U·N²)). The key is the raw [Bson.t option list] tuple, so
+         the map's polymorphic equality is byte-identical to the prior [key_of x = key_of y] test. A sparse
+         index skips documents that omit ALL its key fields, so several username-less / email-less users
+         never collide on a "missing" key (MongoDB sparse semantics for the single-field accounts indexes). *)
   mutable validator : Bson.t option;
       (* the collection's [{$jsonSchema: …}] document (from a model's codec) or [None]. When set,
          writes are checked against it in-engine — dev/test parity with the validator mongod enforces. *)
@@ -65,6 +67,10 @@ exception Unique_violation of string
 (* the key tuple a unique index reads from a doc (top-level fields) *)
 let key_of fields d = List.map (fun f -> get d f) fields
 
+(* a sparse index ignores a document that has NONE of its key fields — so several docs that all omit the
+   field do not collide on the same "absent" key tuple ([get] yields [None] for an absent field). *)
+let all_absent fields d = List.for_all (fun f -> get d f = None) fields
+
 let with_lock m f =
   Mutex.lock m;
   match f () with
@@ -75,16 +81,17 @@ let with_lock m f =
       Mutex.unlock m;
       raise e
 
-let ensure_index t ~name ~fields ~unique =
+let ensure_index t ~name ~fields ~unique ~sparse =
   with_lock t.lock (fun () ->
-      t.indexes <- (name, (fields, unique)) :: List.remove_assoc name t.indexes;
+      t.indexes <- (name, (fields, unique, sparse)) :: List.remove_assoc name t.indexes;
       t.uniq <- List.remove_assoc name t.uniq;
       if unique then begin
         (* build the side-map from current data; last writer wins on any PRE-EXISTING duplicate,
-           matching the prior behavior of validating only on subsequent writes, never on ensure *)
+           matching the prior behavior of validating only on subsequent writes, never on ensure. A sparse
+           index never maps a document that omits all its key fields. *)
         let m = Hashtbl.create 64 in
-        Hashtbl.iter (fun id d -> Hashtbl.replace m (key_of fields d) id) t.store;
-        t.uniq <- (name, (fields, m)) :: t.uniq
+        Hashtbl.iter (fun id d -> if not (sparse && all_absent fields d) then Hashtbl.replace m (key_of fields d) id) t.store;
+        t.uniq <- (name, (fields, sparse, m)) :: t.uniq
       end)
 
 let drop_index t ~name =
@@ -98,23 +105,26 @@ let index_names t = List.map fst t.indexes
    index via the side-map instead of a full store scan *)
 let check_unique_unlocked t ~self_id (d : doc) =
   List.iter
-    (fun (name, (fields, m)) ->
-      match Hashtbl.find_opt m (key_of fields d) with
-      | Some other when other <> self_id -> raise (Unique_violation name)
-      | _ -> ())
+    (fun (name, (fields, sparse, m)) ->
+      if not (sparse && all_absent fields d) then
+        match Hashtbl.find_opt m (key_of fields d) with
+        | Some other when other <> self_id -> raise (Unique_violation name)
+        | _ -> ())
     t.uniq
 
 (* keep the unique side-maps in sync with a committed change — call under [t.lock], AFTER the store
    mutation. [old]/[nw] are the doc before/after (None on insert/remove respectively). *)
 let index_commit t ~id ~old ~nw =
   List.iter
-    (fun (_name, (fields, m)) ->
+    (fun (_name, (fields, sparse, m)) ->
       (match old with
-      | Some o -> (
+      | Some o when not (sparse && all_absent fields o) -> (
           let ko = key_of fields o in
           match Hashtbl.find_opt m ko with Some i when i = id -> Hashtbl.remove m ko | _ -> ())
-      | None -> ());
-      match nw with Some n -> Hashtbl.replace m (key_of fields n) id | None -> ())
+      | _ -> ());
+      match nw with
+      | Some n when not (sparse && all_absent fields n) -> Hashtbl.replace m (key_of fields n) id
+      | _ -> ())
     t.uniq
 
 (* ---- $jsonSchema validation (dev/test parity with mongod's installed validator) --------------

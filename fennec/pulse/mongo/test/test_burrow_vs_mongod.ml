@@ -48,8 +48,8 @@ let%test "Burrow agrees with a real mongod across find/count/distinct/update/rem
           let eng = Eng.open_ ~sw ~durability:S.No_sync (tmpdir ()) in
           let bc = Eng.collection eng "c" in
           (* index the Burrow side so the index access paths + sort-via-index are what gets compared *)
-          Eng.ensure_index eng bc ~name:"age_1" ~keys:(B.doc [ ("age", B.int 1) ]) ~unique:false;
-          Eng.ensure_index eng bc ~name:"name_1" ~keys:(B.doc [ ("name", B.int 1) ]) ~unique:false;
+          Eng.ensure_index eng bc ~name:"age_1" ~keys:(B.doc [ ("age", B.int 1) ]) ~unique:false ~sparse:false;
+          Eng.ensure_index eng bc ~name:"name_1" ~keys:(B.doc [ ("name", B.int 1) ]) ~unique:false ~sparse:false;
           let docs =
             [ B.doc [ ("_id", B.str "1"); ("name", B.str "ann"); ("age", B.int 30); ("tags", B.array [ B.str "a"; B.str "b" ]) ];
               B.doc [ ("_id", B.str "2"); ("name", B.str "bob"); ("age", B.int 25); ("tags", B.array [ B.str "b" ]) ];

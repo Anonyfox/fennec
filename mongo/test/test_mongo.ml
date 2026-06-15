@@ -303,7 +303,7 @@ let%test "_id point-lookup fast path agrees with the scan (hit, miss, and extra-
 
 let%test "unique index: insert collision, remove frees the key, update retargets the key" =
   let c = C.create () in
-  C.ensure_index c ~name:"u" ~fields:[ "email" ] ~unique:true;
+  C.ensure_index c ~name:"u" ~fields:[ "email" ] ~unique:true ~sparse:false;
   let id_a = C.insert c (d [ ("email", Bson.str "a") ]) in
   let collision = (try ignore (C.insert c (d [ ("email", Bson.str "a") ])); false with C.Unique_violation _ -> true) in
   let _ = C.remove_id c id_a (* "a" is free again *) in
@@ -324,8 +324,20 @@ let%test "unique index: insert collision, remove frees the key, update retargets
 let%test "ensure_index reserves keys already present in the store" =
   let c = C.create () in
   let _ = C.insert c (d [ ("email", Bson.str "z") ]) in
-  C.ensure_index c ~name:"u2" ~fields:[ "email" ] ~unique:true;
+  C.ensure_index c ~name:"u2" ~fields:[ "email" ] ~unique:true ~sparse:false;
   (try ignore (C.insert c (d [ ("email", Bson.str "z") ])); false with C.Unique_violation _ -> true)
+
+let%test "sparse unique index: docs that omit the field never collide on the missing key; present values stay unique" =
+  let c = C.create () in
+  C.ensure_index c ~name:"uemail" ~fields:[ "email" ] ~unique:true ~sparse:true;
+  (* several docs with NO email coexist — a NON-sparse unique index would reject the 2nd as a null collision *)
+  let _ = C.insert c (d [ ("name", Bson.str "a") ]) in
+  let _ = C.insert c (d [ ("name", Bson.str "b") ]) in
+  let absent_ok = (try ignore (C.insert c (d [ ("name", Bson.str "c") ])); true with C.Unique_violation _ -> false) in
+  (* present values are still unique *)
+  let _ = C.insert c (d [ ("email", Bson.str "x") ]) in
+  let present_collides = (try ignore (C.insert c (d [ ("email", Bson.str "x") ])); false with C.Unique_violation _ -> true) in
+  absent_ok && present_collides
 
 let%test "upsert seeds embedded-document equality fields" =
   let c = C.create () in

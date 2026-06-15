@@ -21,9 +21,9 @@ let () =
   Eio.Switch.run @@ fun sw ->
   let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp "mk") in
   let c = Eng.collection eng "t" in
-  Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"b_1" ~keys:(doc [ ("b", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"arr_1" ~keys:(doc [ ("arr", i 1) ]) ~unique:false;
+  Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"b_1" ~keys:(doc [ ("b", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"arr_1" ~keys:(doc [ ("arr", i 1) ]) ~unique:false ~sparse:false;
   let q sel = ids (Eng.find eng c ~selector:sel ~sort:empty ~skip:0 ~limit:0 ~fields:empty) in
   ignore (Eng.insert eng c (doc [ ("_id", s "X"); ("a", i 0); ("b", s "x"); ("arr", B.array [ i 1; i 2 ]) ]));
 

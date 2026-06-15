@@ -10,7 +10,7 @@ module MinimongoStore = struct
   let find c ~selector ~sort = Minimongo.fetch (Minimongo.find c ~selector ~sort ())
   let remove c sel = Minimongo.remove c sel
   let fields_of = function B.Document kvs -> List.map fst kvs | _ -> []
-  let ensure_index c ~name ~keys ~unique = Minimongo.ensure_index c ~name ~fields:(fields_of keys) ~unique
+  let ensure_index c ~name ~keys ~unique = Minimongo.ensure_index c ~name ~fields:(fields_of keys) ~unique ~sparse:false
 end
 
 module G = Gridfs.Make (MinimongoStore)

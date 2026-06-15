@@ -58,7 +58,7 @@ val observe_changes :
 val fence : t -> collection -> (unit -> unit) -> unit
 (** Run [k] once all changes committed so far are delivered — immediate, since delivery is synchronous. *)
 
-val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> unit
+val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> unit
 val drop_index : t -> collection -> name:string -> unit
 val index_names : collection -> string list
 

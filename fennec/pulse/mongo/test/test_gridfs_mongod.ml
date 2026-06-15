@@ -24,7 +24,7 @@ module BurrowStore = struct
   let insert (e, c) d = ignore (Eng.insert e c d)
   let find (e, c) ~selector ~sort = Eng.find e c ~selector ~sort ~skip:0 ~limit:0 ~fields:(B.Document [])
   let remove (e, c) sel = Eng.remove e c sel
-  let ensure_index (e, c) ~name ~keys ~unique = Eng.ensure_index e c ~name ~keys ~unique
+  let ensure_index (e, c) ~name ~keys ~unique = Eng.ensure_index e c ~name ~keys ~unique ~sparse:false
 end
 
 module MongodStore = struct
@@ -33,7 +33,7 @@ module MongodStore = struct
   let insert c d = ignore (Mongo.insert c d)
   let find c ~selector ~sort = Mongo.find c (Backend.query ~selector ~sort ())
   let remove c sel = Mongo.remove c sel
-  let ensure_index c ~name ~keys ~unique = Mongo.ensure_index c ~name ~keys ~unique
+  let ensure_index c ~name ~keys ~unique = Mongo.ensure_index c ~name ~keys ~unique ~sparse:false
 end
 
 module MiniStore = struct
@@ -42,7 +42,7 @@ module MiniStore = struct
   let insert c d = ignore (Minimongo.insert c d)
   let find c ~selector ~sort = Minimongo.fetch (Minimongo.find c ~selector ~sort ())
   let remove c sel = Minimongo.remove c sel
-  let ensure_index c ~name ~keys ~unique = Minimongo.ensure_index c ~name ~fields:(fields_of keys) ~unique
+  let ensure_index c ~name ~keys ~unique = Minimongo.ensure_index c ~name ~fields:(fields_of keys) ~unique ~sparse:false
 end
 
 module Gb = Gridfs.Make (BurrowStore)

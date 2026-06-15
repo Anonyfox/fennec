@@ -33,8 +33,8 @@ let () =
   (* full-scan baseline before any index *)
   assert (ids (q (doc [ ("age", i 30) ])) = [ "b"; "c" ]);
 
-  Eng.ensure_index eng c ~name:"age_1" ~keys:(doc [ ("age", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"tags_1" ~keys:(doc [ ("tags", i 1) ]) ~unique:false;
+  Eng.ensure_index eng c ~name:"age_1" ~keys:(doc [ ("age", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"tags_1" ~keys:(doc [ ("tags", i 1) ]) ~unique:false ~sparse:false;
 
   (* equality + ranges via the index match the scan answers *)
   assert (ids (q (doc [ ("age", i 30) ])) = [ "b"; "c" ]);
@@ -57,7 +57,7 @@ let () =
   assert (ids (q (doc [ ("age", i 30) ])) = []);
 
   (* unique index *)
-  Eng.ensure_index eng c ~name:"u_1" ~keys:(doc [ ("u", i 1) ]) ~unique:true;
+  Eng.ensure_index eng c ~name:"u_1" ~keys:(doc [ ("u", i 1) ]) ~unique:true ~sparse:false;
   ignore (Eng.insert eng c (doc [ ("_id", s "p"); ("u", i 1) ]));
   let dup =
     try
@@ -87,3 +87,38 @@ let () =
   assert dup2;
   Eng.close eng2;
   print_string "engine indexes: OK\n"
+
+(* Sparse unique index: documents that omit ALL the index's key fields are not indexed, so several of them
+   coexist (a non-sparse unique index would reject the second as a duplicate "missing" key), while present
+   values stay unique — and the sparse flag survives a reopen (persisted in the catalog). MongoDB sparse. *)
+let () =
+  Eio_main.run @@ fun _env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = tmp "sparse" in
+  let eng = Eng.open_ ~sw ~durability:S.No_sync dir in
+  let c = Eng.collection eng "u" in
+  Eng.ensure_index eng c ~name:"email_1" ~keys:(doc [ ("email", i 1) ]) ~unique:true ~sparse:true;
+  (* three docs with NO email: all accepted (a non-sparse unique index would reject the 2nd and 3rd) *)
+  ignore (Eng.insert eng c (doc [ ("_id", s "a") ]));
+  ignore (Eng.insert eng c (doc [ ("_id", s "b") ]));
+  ignore (Eng.insert eng c (doc [ ("_id", s "c"); ("name", s "c") ]));
+  (* present values stay unique *)
+  ignore (Eng.insert eng c (doc [ ("_id", s "d"); ("email", s "x@y") ]));
+  let collide =
+    try ignore (Eng.insert eng c (doc [ ("_id", s "e"); ("email", s "x@y") ])); false
+    with Burrow.Write.Duplicate_key _ -> true
+  in
+  assert collide;
+  assert (ids (Eng.find eng c ~selector:empty ~sort:empty ~skip:0 ~limit:0 ~fields:empty) = [ "a"; "b"; "c"; "d" ]);
+  (* reopen: the persisted sparse flag must reload, so absent-email docs still coexist and present stays unique *)
+  Eng.close eng;
+  let eng2 = Eng.open_ ~sw ~durability:S.No_sync dir in
+  let c2 = Eng.collection eng2 "u" in
+  ignore (Eng.insert eng2 c2 (doc [ ("_id", s "f") ]));
+  let collide2 =
+    try ignore (Eng.insert eng2 c2 (doc [ ("_id", s "g"); ("email", s "x@y") ])); false
+    with Burrow.Write.Duplicate_key _ -> true
+  in
+  assert collide2;
+  Eng.close eng2;
+  print_string "engine sparse unique: OK\n"

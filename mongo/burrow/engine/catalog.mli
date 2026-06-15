@@ -9,6 +9,7 @@ type index = {
   iname : string;
   keys : (string * int) list;  (** field path, direction (1 asc | -1 desc) *)
   unique : bool;
+  sparse : bool;  (** skip a document that omits ALL key fields (MongoDB sparse) *)
   mutable multikey : bool;  (** set once any document indexes an array field — gates sort-via-index *)
   db : Store.db;  (** the index sub-DB: encoded-key ++ _id -> record key *)
 }
@@ -39,7 +40,7 @@ val collection_opt : t -> string -> collection option
 val collections : t -> collection list
 val index_names : collection -> string list
 
-val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> index option
+val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> index option
 (** Idempotent by [name]. Returns [Some idx] when newly created (the caller backfills existing records
     into it), or [None] if an index of that name already existed. *)
 

@@ -83,8 +83,10 @@ let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
 let fence _c k = k ()
 
 (* index ops on the native driver — name-explicit so reconcile matches; list returns names *)
-let ensure_index c ~name ~keys ~unique =
-  let opts = if unique then [ ("unique", B.Bool true) ] else [] in
+let ensure_index c ~name ~keys ~unique ~sparse =
+  let opts =
+    (if unique then [ ("unique", B.Bool true) ] else []) @ (if sparse then [ ("sparse", B.Bool true) ] else [])
+  in
   ignore (Coll.create_index c ~keys ~opts ~name ())
 let drop_index c ~name = Coll.drop_index c ~name
 let index_names c =
@@ -258,11 +260,11 @@ module Dynamic = struct
     | Native r -> fence r k
     | Embedded e -> Burrow_engine.fence e.eng e.ecoll k
     | Missing message -> unavailable message
-  let ensure_index c ~name ~keys ~unique =
+  let ensure_index c ~name ~keys ~unique ~sparse =
     match c with
-    | Mem m -> Mini.ensure_index m ~name ~keys ~unique
-    | Native r -> ensure_index r ~name ~keys ~unique
-    | Embedded e -> Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique
+    | Mem m -> Mini.ensure_index m ~name ~keys ~unique ~sparse
+    | Native r -> ensure_index r ~name ~keys ~unique ~sparse
+    | Embedded e -> Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique ~sparse
     | Missing message -> unavailable message
   let drop_index c ~name =
     match c with
@@ -358,7 +360,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
       Burrow_engine.aggregate e.eng e.ecoll ~lookup p
 
     let distinct e key sel = Burrow_engine.distinct e.eng e.ecoll ~key ~selector:sel
-    let ensure_index e ~name ~keys ~unique = Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique
+    let ensure_index e ~name ~keys ~unique ~sparse = Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique ~sparse
     let drop_index e ~name = Burrow_engine.drop_index e.eng e.ecoll ~name
     let index_specs e = Burrow_engine.index_specs e.ecoll
 

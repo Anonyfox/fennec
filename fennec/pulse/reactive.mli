@@ -139,7 +139,7 @@ module type REACTIVE = sig
     val insert : t -> doc -> string
 
     (** Index ops on the underlying backend (the typed layer reconciles declared indexes at boot). *)
-    val ensure_index : t -> name:string -> keys:Bson.t -> unique:bool -> unit
+    val ensure_index : t -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> unit
 
     val drop_index : t -> name:string -> unit
     val index_names : t -> string list

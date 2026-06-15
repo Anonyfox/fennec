@@ -216,9 +216,9 @@ let fence _t (_c : collection) k = k ()
 
 (* ---- index / validator DDL ---------------------------------------------------------------- *)
 
-let ensure_index t (c : collection) ~name ~keys ~unique =
+let ensure_index t (c : collection) ~name ~keys ~unique ~sparse =
   with_write t (fun () ->
-      match Catalog.ensure_index t.cat c ~name ~keys ~unique with
+      match Catalog.ensure_index t.cat c ~name ~keys ~unique ~sparse with
       | None -> ()
       | Some idx -> Store.write t.store (fun txn -> Write.backfill_index txn c idx))
 

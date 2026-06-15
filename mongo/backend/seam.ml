@@ -47,9 +47,10 @@ module type S = sig
       external stream (a real mongod) may run [k] immediately (best-effort; documented there). *)
   val fence : collection -> (unit -> unit) -> unit
 
-  (** Declare an index ([keys] = key spec, [unique] enforced); idempotent by [name]. Native →
-      mongod createIndex; Mini → unique enforcement + name tracking (dev/test parity). *)
-  val ensure_index : collection -> name:string -> keys:Bson.t -> unique:bool -> unit
+  (** Declare an index ([keys] = key spec, [unique] enforced; [sparse] skips documents that omit ALL key
+      fields). Idempotent by [name]. Native → mongod createIndex; Mini/Burrow → unique enforcement + name
+      tracking (dev/test parity, sparse included). *)
+  val ensure_index : collection -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> unit
 
   (** Drop an index by name (idempotent). *)
   val drop_index : collection -> name:string -> unit
@@ -93,7 +94,8 @@ module Mini : S with type collection = Minimongo.t = struct
   let fence = Minimongo.on_drained
 
   let fields_of_keys = function Bson.Document kvs -> List.map fst kvs | _ -> []
-  let ensure_index c ~name ~keys ~unique = Minimongo.ensure_index c ~name ~fields:(fields_of_keys keys) ~unique
+  let ensure_index c ~name ~keys ~unique ~sparse =
+    Minimongo.ensure_index c ~name ~fields:(fields_of_keys keys) ~unique ~sparse
   let drop_index c ~name = Minimongo.drop_index c ~name
   let index_names = Minimongo.index_names
   let ensure_validator c v = Minimongo.set_validator c v

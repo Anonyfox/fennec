@@ -27,8 +27,8 @@ let () =
   Eio.Switch.run @@ fun sw ->
   let eng = Eng.open_ ~sw ~durability:S.No_sync (tmp ()) in
   let c = Eng.collection eng "t" in
-  Eng.ensure_index eng c ~name:"n_1" ~keys:(doc [ ("n", i 1) ]) ~unique:false;
-  Eng.ensure_index eng c ~name:"g_1" ~keys:(doc [ ("g", i 1) ]) ~unique:false;
+  Eng.ensure_index eng c ~name:"n_1" ~keys:(doc [ ("n", i 1) ]) ~unique:false ~sparse:false;
+  Eng.ensure_index eng c ~name:"g_1" ~keys:(doc [ ("g", i 1) ]) ~unique:false ~sparse:false;
   let n = 100_000 in
   Random.init 1;
   Printf.printf "Burrow engine bench — %d documents, indexes on n (0..%d) and g (0..9)\n%!" n n;

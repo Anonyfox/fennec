@@ -73,7 +73,7 @@ exception Validation_error of string
 
 (** Declare an index by name + key fields. [unique] is enforced in-engine; non-unique is tracked
     (for reconcile) but doesn't accelerate scans yet. *)
-val ensure_index : t -> name:string -> fields:string list -> unique:bool -> unit
+val ensure_index : t -> name:string -> fields:string list -> unique:bool -> sparse:bool -> unit
 
 val drop_index : t -> name:string -> unit
 val index_names : t -> string list

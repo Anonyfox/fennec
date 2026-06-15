@@ -35,7 +35,7 @@ module type DB = sig
   val remove : coll -> B.t -> int
   val aggregate : coll -> B.t list -> B.t list
   val distinct : coll -> string -> B.t -> B.t list
-  val ensure_index : coll -> name:string -> keys:B.t -> unique:bool -> unit
+  val ensure_index : coll -> name:string -> keys:B.t -> unique:bool -> sparse:bool -> unit
   val drop_index : coll -> name:string -> unit
   val index_specs : coll -> (string * (string * int) list * bool) list  (* name, keys, unique *)
   val drop_collection : db:string -> name:string -> unit
@@ -317,7 +317,8 @@ module Make (Db : DB) = struct
     List.iter
       (fun ix ->
         let keys = ddoc ix "key" in
-        Db.ensure_index c ~name:(Option.value ~default:(default_index_name keys) (dstr ix "name")) ~keys ~unique:(dbool ix "unique"))
+        Db.ensure_index c ~name:(Option.value ~default:(default_index_name keys) (dstr ix "name")) ~keys
+          ~unique:(dbool ix "unique") ~sparse:(dbool ix "sparse"))
       (darr cmd "indexes");
     let after = List.length (Db.index_specs c) + 1 in
     B.Document [ ("createdCollectionAutomatically", B.Bool false); ("numIndexesBefore", B.Int before); ("numIndexesAfter", B.Int after); ok ]

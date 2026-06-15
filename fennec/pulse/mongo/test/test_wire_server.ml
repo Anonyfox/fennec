@@ -44,7 +44,7 @@ let%test "real libmongoc driver authenticates (SCRAM-SHA-256) + runs CRUD agains
     assert (Mongo.count c (B.doc [ ("price", B.doc [ ("$gte", B.int 20) ]) ]) = 2);
 
     (* index + indexed query *)
-    Mongo.ensure_index c ~name:"price_1" ~keys:(B.doc [ ("price", B.int 1) ]) ~unique:false;
+    Mongo.ensure_index c ~name:"price_1" ~keys:(B.doc [ ("price", B.int 1) ]) ~unique:false ~sparse:false;
     assert (Mongo.count c (B.doc [ ("price", B.int 30) ]) = 1);
 
     (* update one *)

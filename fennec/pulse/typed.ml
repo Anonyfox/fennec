@@ -29,7 +29,7 @@ module Make (R : Reactive.REACTIVE) = struct
     List.iter
       (fun (name, ix) ->
         if not (List.mem name have) then
-          try R.Collection.ensure_index coll ~name ~keys:(Index.keys_bson ix) ~unique:(Index.is_unique ix)
+          try R.Collection.ensure_index coll ~name ~keys:(Index.keys_bson ix) ~unique:(Index.is_unique ix) ~sparse:false
           with e ->
             let msg = Printf.sprintf "fennec/index: could not build %s — %s" name (Printexc.to_string e) in
             if strict then failwith msg else prerr_endline msg)

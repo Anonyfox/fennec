@@ -82,7 +82,7 @@ module type REACTIVE = sig
     val insert : t -> doc -> string
 
     (** Index ops on the underlying backend (the typed layer reconciles declared indexes at boot). *)
-    val ensure_index : t -> name:string -> keys:Bson.t -> unique:bool -> unit
+    val ensure_index : t -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> unit
 
     val drop_index : t -> name:string -> unit
     val index_names : t -> string list
@@ -337,7 +337,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
             (id, Bson.Document (("_id", Bson.Object_id id) :: kvs))
 
     (* index ops delegate to the backend — the typed layer's boot reconcile drives these *)
-    let ensure_index c ~name ~keys ~unique = B.ensure_index c.backend ~name ~keys ~unique
+    let ensure_index c ~name ~keys ~unique ~sparse = B.ensure_index c.backend ~name ~keys ~unique ~sparse
     let drop_index c ~name = B.drop_index c.backend ~name
     let index_names c = B.index_names c.backend
     let ensure_validator c v = B.ensure_validator c.backend v

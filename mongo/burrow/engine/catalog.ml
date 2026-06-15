@@ -6,6 +6,7 @@ type index = {
   iname : string;
   keys : (string * int) list;
   unique : bool;
+  sparse : bool; (* a sparse index skips a document that omits ALL its key fields (MongoDB sparse) *)
   mutable multikey : bool; (* set once any document indexes an array field — gates sort-via-index *)
   db : Store.db;
 }
@@ -49,11 +50,13 @@ let parse_keys : B.t -> (string * int) list = function
 
 let keys_doc (keys : (string * int) list) : B.t = B.Document (List.map (fun (f, d) -> (f, B.Int d)) keys)
 
-let index_spec_doc keys unique multikey =
-  B.Document [ ("keys", keys_doc keys); ("unique", B.Bool unique); ("multikey", B.Bool multikey) ]
+let index_spec_doc keys unique sparse multikey =
+  B.Document
+    [ ("keys", keys_doc keys); ("unique", B.Bool unique); ("sparse", B.Bool sparse); ("multikey", B.Bool multikey) ]
 
 let persist_index txn (c : collection) (idx : index) =
-  Store.put txn c.meta (ikey c.name idx.iname) (Bin.encode (index_spec_doc idx.keys idx.unique idx.multikey))
+  Store.put txn c.meta (ikey c.name idx.iname)
+    (Bin.encode (index_spec_doc idx.keys idx.unique idx.sparse idx.multikey))
 
 let open_ store =
   let meta = Store.db store "meta" in
@@ -93,9 +96,10 @@ let open_ store =
         let spec = Bin.decode data in
         let kd = Option.value ~default:(B.Document []) (B.get spec "keys") in
         let unique = match B.get spec "unique" with Some (B.Bool b) -> b | _ -> false in
+        let sparse = match B.get spec "sparse" with Some (B.Bool b) -> b | _ -> false in
         let multikey = match B.get spec "multikey" with Some (B.Bool b) -> b | _ -> false in
         let db = Store.db store (idx_db_name coll iname) in
-        c.indexes <- { iname; keys = parse_keys kd; unique; multikey; db } :: c.indexes)
+        c.indexes <- { iname; keys = parse_keys kd; unique; sparse; multikey; db } :: c.indexes)
     !idx_entries;
   (* phase 4: validators *)
   List.iter
@@ -119,14 +123,14 @@ let collection t name =
 
 let index_names c = List.map (fun i -> i.iname) c.indexes
 
-let ensure_index t c ~name ~keys ~unique =
+let ensure_index t c ~name ~keys ~unique ~sparse =
   if List.exists (fun i -> i.iname = name) c.indexes then None
   else begin
     let parsed = parse_keys keys in
     let db = Store.db t.store (idx_db_name c.name name) in
     Store.write t.store (fun txn ->
-        Store.put txn t.meta (ikey c.name name) (Bin.encode (index_spec_doc parsed unique false)));
-    let idx = { iname = name; keys = parsed; unique; multikey = false; db } in
+        Store.put txn t.meta (ikey c.name name) (Bin.encode (index_spec_doc parsed unique sparse false)));
+    let idx = { iname = name; keys = parsed; unique; sparse; multikey = false; db } in
     c.indexes <- idx :: c.indexes;
     Some idx
   end
