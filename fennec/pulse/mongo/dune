@@ -1,7 +1,7 @@
-; Compatibility re-export: the backend implementations + Dynamic selector + mongosh wire endpoint moved
-; to fennec-mongo.backend (the mongo package). This thin shim keeps Fennec_pulse_mongo working for
-; existing consumers; it will be removed once they point at fennec-mongo.backend directly.
+; Compatibility re-export: the native backends + Dynamic selector + mongosh wire endpoint moved to
+; fennec-mongo.dynamic (the mongo package). This thin shim keeps Fennec_pulse_mongo working for existing
+; consumers; it will be removed once they point at fennec-mongo.dynamic directly.
 (library
  (name fennec_pulse_mongo)
  (public_name fennec.pulse.mongo)
- (libraries fennec.pulse fennec-mongo.backend fennec-mongo.minimongo fennec-mongo.bson eio tls))
+ (libraries fennec.pulse fennec-mongo.dynamic fennec-mongo.minimongo fennec-mongo.bson eio tls))

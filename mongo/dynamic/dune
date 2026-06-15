@@ -1,0 +1,23 @@
+; fennec-mongo.dynamic — the concrete NATIVE backends (driver / embedded Burrow), the runtime MONGO_URL
+; selector (Dynamic), and the mongosh wire endpoint, over the pure seam (fennec-mongo.backend). Links
+; libmongoc + LMDB + TLS, so it is SERVER-ONLY and never ships to JS (the reactive layer depends only on
+; the pure seam). Modules: Adapters (Native/Embedded/Dynamic + expose), Wire_server; fennec_mongo_dynamic
+; flattens them.
+(library
+ (name fennec_mongo_dynamic)
+ (public_name fennec-mongo.dynamic)
+ (libraries
+  fennec-mongo.backend
+  fennec-mongo.bson
+  fennec-mongo.query
+  fennec-mongo.driver
+  fennec-mongo.ffi
+  fennec-mongo.burrow
+  fennec-mongo.wire
+  base64
+  tls
+  tls-eio
+  mirage-crypto-rng
+  mirage-crypto-rng.unix
+  eio
+  unix))

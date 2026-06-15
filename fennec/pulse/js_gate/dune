@@ -1,0 +1,14 @@
+; JS-BOUNDARY GATE — see check_js_boundary.sh. js_gate links the reactive stack (fennec.pulse) over the
+; in-memory backend; the rule asserts its bytecode closure contains NO native unit, so a native dep
+; leaking into fennec.pulse fails the build (caught by `dune runtest` / `fennec test`). This is the
+; insurance that the reactive layer stays JS-compilable.
+(executable
+ (name js_gate)
+ (modes byte)
+ (libraries fennec.pulse fennec-mongo.minimongo))
+
+(rule
+ (alias runtest)
+ (deps js_gate.bc check_js_boundary.sh)
+ (action
+  (run sh check_js_boundary.sh js_gate.bc)))

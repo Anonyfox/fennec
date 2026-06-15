@@ -15,7 +15,7 @@ module Runtime = Driver.Runtime
 module Ffi = Fennec_mongo_ffi.Mongo_ffi
 module Diff = Query.Diff
 module Id = Query.Id
-module Backend = Seam (* the storage seam — now a sibling module in this lib (fennec-mongo.backend) *)
+module Backend = Fennec_mongo_backend (* the PURE storage seam lib (Backend.S + query + Mini) *)
 module B = Bson
 
 let available = Ffi.available
