@@ -48,12 +48,21 @@ let build_index (idx : Catalog.index) selector : Plan.range list option =
       | Eq v -> go rest (prefix ^ Index.encode_value v dir)
       | In vs when prefix = "" ->
         Some (List.map (fun v -> let e = Index.encode_value v dir in { Plan.lo = Some e; excl_lo = false; hi = Some e; excl_hi = false }) vs)
-      | Range { lo; excl_lo; hi; excl_hi } when dir = 1 ->
+      | Range { lo; excl_lo; hi; excl_hi } ->
         let enc x = Index.encode_value x dir in
-        let lo' = match lo with Some v -> Some (prefix ^ enc v) | None -> if prefix = "" then None else Some prefix in
-        let hi' = match hi with Some v -> Some (prefix ^ enc v) | None -> if prefix = "" then None else Some prefix in
-        Some [ { Plan.lo = lo'; excl_lo = (match lo with Some _ -> excl_lo | None -> false);
-                 hi = hi'; excl_hi = (match hi with Some _ -> excl_hi | None -> false) } ]
+        let openb = if prefix = "" then None else Some prefix in
+        let mk = function Some x -> Some (prefix ^ enc x) | None -> openb in
+        let r =
+          if dir = 1 then
+            (* ascending: value-low -> byte-low, value-high -> byte-high *)
+            { Plan.lo = mk lo; excl_lo = (match lo with Some _ -> excl_lo | None -> false);
+              hi = mk hi; excl_hi = (match hi with Some _ -> excl_hi | None -> false) }
+          else
+            (* descending (complemented bytes reverse the order): value-high -> byte-low, value-low -> byte-high *)
+            { Plan.lo = mk hi; excl_lo = (match hi with Some _ -> excl_hi | None -> false);
+              hi = mk lo; excl_hi = (match lo with Some _ -> excl_lo | None -> false) }
+        in
+        Some [ r ]
       | _ -> if prefix = "" then None else Some [ prefix_range prefix ])
   in
   go idx.Catalog.keys ""
@@ -62,21 +71,19 @@ let sort_spec = function
   | B.Document kvs -> List.map (fun (f, v) -> (f, match v with B.Int n -> n | B.Float x -> int_of_float x | _ -> 1)) kvs
   | _ -> []
 
-let all_asc keys = List.for_all (fun (_, d) -> d = 1) keys
-
-(* The index's forward-scan order — its key fields ascending, then the [_id] record-key suffix
-   ascending — satisfies the requested sort iff the sort is a prefix of the (all-ascending,
-   non-multikey) index keys, with a trailing [("_id", 1)] permitted only AFTER every key field is
-   consumed (that's where the suffix sits). This is what lets the executor skip the in-memory sort. *)
+(* The index's forward-scan order — its key fields in their own directions, then the [_id] record-key
+   suffix ascending — satisfies the requested sort iff the sort matches a prefix of the (non-multikey)
+   index keys (direction for direction), with a trailing [("_id", 1)] permitted only AFTER every key
+   field is consumed (that's where the suffix sits). So an ascending index serves an ascending sort and
+   a descending index serves a descending sort, both by a forward scan. Lets the executor skip the sort. *)
 let serves_sort (idx : Catalog.index) sort =
   (not idx.Catalog.multikey)
-  && all_asc idx.Catalog.keys
   &&
   let rec go ss keys =
     match (ss, keys) with
     | [], _ -> true
     | [ ("_id", 1) ], [] -> true
-    | (sf, sd) :: st, (kf, kd) :: kt -> sf = kf && sd = 1 && kd = 1 && go st kt
+    | (sf, sd) :: st, (kf, kd) :: kt -> sf = kf && sd = kd && go st kt
     | _ -> false
   in
   let ss = sort_spec sort in
