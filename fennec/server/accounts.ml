@@ -7,6 +7,8 @@ module Bson = Bson
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 module Json = Fennec_mongo_json.Json
 module Mongo_runtime = Fennec_mongo_driver.Runtime
+module Backend_dyn = Fennec_mongo_dynamic.Dynamic (* the runtime-selected storage backend (minimongo / Burrow / mongod) behind one Backend.S *)
+module Backend_seam = Fennec_mongo_backend (* the pure seam — for its shared [query] constructor *)
 module Identity = Accounts_identity
 module Challenge = Accounts_challenge
 module Password = Accounts_password
@@ -4820,125 +4822,92 @@ module Store = struct
     in
     { users; identities; challenges; passkeys; orgs; mfa; scim; audit; ensure_indexes = (fun () -> ()) }
 
-  let minimongo_collection () =
-    let c = Minimongo.create () in
+  (* ONE collection adapter over the runtime-selected backend (minimongo / embedded Burrow / native
+     mongod — all behind {!Fennec_mongo_dynamic.Dynamic}): the accounts store speaks this 5-op
+     {!Collection_store.t}, and the backend choice (MONGO_URL) is invisible above here. *)
+  let backend_collection (c : Backend_dyn.collection) : Collection_store.collection =
+    let q selector = Backend_seam.query ~selector () in
     {
-      Collection_store.find_one = (fun filter -> Minimongo.find_one c ~selector:filter ());
-      find = (fun filter -> Minimongo.fetch (Minimongo.find c ~selector:filter ()));
-      insert_one =
-        (fun doc ->
-          try
-            ignore (Minimongo.insert c doc);
-            Ok ()
-          with exn -> Error (Printexc.to_string exn));
+      Collection_store.find_one = (fun filter -> Backend_dyn.find_one c (q filter));
+      find = (fun filter -> Backend_dyn.find c (q filter));
+      insert_one = (fun doc -> try ignore (Backend_dyn.insert c doc); Ok () with exn -> Error (Printexc.to_string exn));
       update_one =
         (fun ~filter ~update ->
-          try Ok (Minimongo.update c ~multi:false ~upsert:false filter update)
+          try Ok (Backend_dyn.update c ~multi:false ~upsert:false filter update)
           with exn -> Error (Printexc.to_string exn));
-      delete_many =
-        (fun filter ->
-          try Ok (Minimongo.remove c filter) with exn -> Error (Printexc.to_string exn));
+      delete_many = (fun filter -> try Ok (Backend_dyn.remove c filter) with exn -> Error (Printexc.to_string exn));
     }
 
   let memory = memory_store
 
-  let minimongo () =
-    Collection_store.make
-      {
-        users = minimongo_collection ();
-        identities = minimongo_collection ();
-        challenges = minimongo_collection ();
-        passkeys = minimongo_collection ();
-        orgs = minimongo_collection ();
-        org_memberships = minimongo_collection ();
-        org_invites = minimongo_collection ();
-        mfa_enrollments = minimongo_collection ();
-        scim_connections = minimongo_collection ();
-        scim_users = minimongo_collection ();
-        scim_groups = minimongo_collection ();
-        audit = minimongo_collection ();
-      }
-
-  let mongo_collection db name =
-    let module Coll = Fennec_mongo_driver.Collection in
-    let c = Fennec_mongo_driver.Database.collection db name in
-    let int_field reply k =
-      match Bson.get reply k with Some v -> ( match Bson.as_float v with Some f -> int_of_float f | None -> 0) | None -> 0
-    in
-    {
-      Collection_store.find_one = (fun filter -> Coll.find_one c ~filter ());
-      find = (fun filter -> Coll.find c ~filter ());
-      insert_one =
-        (fun doc -> try Ok (ignore (Coll.insert_one c doc)) with exn -> Error (Printexc.to_string exn));
-      update_one =
-        (fun ~filter ~update ->
-          try
-            let reply = Coll.update_one c ~filter ~update in
-            Ok (int_field reply "n")
-          with exn -> Error (Printexc.to_string exn));
-      delete_many =
-        (fun filter ->
-          try
-            let reply = Coll.delete_many c ~filter in
-            Ok (int_field reply "n")
-          with exn -> Error (Printexc.to_string exn));
-    }
-
-  let mongo ?(prefix = "accounts") db =
-    let module Coll = Fennec_mongo_driver.Collection in
+  (* The unified accounts store over ANY backend. [open_collection] yields a raw {!Backend_dyn} collection
+     by name (the ambient [Dynamic.collection] at boot, or a test maker); each is wrapped for CRUD and the
+     raw handle is kept for index DDL. username and emails.address are UNIQUE + SPARSE, so absent usernames
+     / email-less users never collide while present values stay unique — on every backend (minimongo,
+     Burrow, mongod). There is no per-flavor branch: the engine is chosen once, by MONGO_URL, inside
+     {!Fennec_mongo_dynamic.Dynamic}. *)
+  let backend ?(prefix = "accounts") ~open_collection () =
     let name suffix = prefix ^ "_" ^ suffix in
-    let users_c = Fennec_mongo_driver.Database.collection db (name "users") in
-    let identities_c = Fennec_mongo_driver.Database.collection db (name "identities") in
-    let challenges_c = Fennec_mongo_driver.Database.collection db (name "challenges") in
-    let passkeys_c = Fennec_mongo_driver.Database.collection db (name "passkeys") in
-    let orgs_c = Fennec_mongo_driver.Database.collection db (name "orgs") in
-    let org_memberships_c = Fennec_mongo_driver.Database.collection db (name "org_memberships") in
-    let org_invites_c = Fennec_mongo_driver.Database.collection db (name "org_invites") in
-    let mfa_enrollments_c = Fennec_mongo_driver.Database.collection db (name "mfa_enrollments") in
-    let scim_connections_c = Fennec_mongo_driver.Database.collection db (name "scim_connections") in
-    let scim_users_c = Fennec_mongo_driver.Database.collection db (name "scim_users") in
-    let scim_groups_c = Fennec_mongo_driver.Database.collection db (name "scim_groups") in
-    let audit_c = Fennec_mongo_driver.Database.collection db (name "audit") in
+    let users_c = open_collection (name "users") in
+    let identities_c = open_collection (name "identities") in
+    let challenges_c = open_collection (name "challenges") in
+    let passkeys_c = open_collection (name "passkeys") in
+    let orgs_c = open_collection (name "orgs") in
+    let org_memberships_c = open_collection (name "org_memberships") in
+    let org_invites_c = open_collection (name "org_invites") in
+    let mfa_enrollments_c = open_collection (name "mfa_enrollments") in
+    let scim_connections_c = open_collection (name "scim_connections") in
+    let scim_users_c = open_collection (name "scim_users") in
+    let scim_groups_c = open_collection (name "scim_groups") in
+    let audit_c = open_collection (name "audit") in
     let ensure_indexes () =
-      let unique_sparse = [ ("unique", Bson.bool true); ("sparse", Bson.bool true) ] in
-      ignore (Coll.create_index users_c ~keys:(Bson.doc [ ("username", Bson.int 1) ]) ~opts:unique_sparse ~name:"uniq_username" ());
-      ignore (Coll.create_index users_c ~keys:(Bson.doc [ ("emails.address", Bson.int 1) ]) ~opts:unique_sparse ~name:"uniq_email" ());
-      ignore (Coll.create_index identities_c ~keys:(Bson.doc [ ("userId", Bson.int 1) ]) ~name:"by_user" ());
-      ignore (Coll.create_index identities_c ~keys:(Bson.doc [ ("stableKey", Bson.int 1) ]) ~name:"by_stable_key" ());
-      ignore (Coll.create_index challenges_c ~keys:(Bson.doc [ ("expiresAt", Bson.int 1) ]) ~name:"by_expiry" ());
-      ignore (Coll.create_index challenges_c ~keys:(Bson.doc [ ("metadata.userId", Bson.int 1) ]) ~name:"by_user" ());
-      ignore (Coll.create_index challenges_c ~keys:(Bson.doc [ ("metadata.email", Bson.int 1) ]) ~name:"by_email" ());
-      ignore (Coll.create_index passkeys_c ~keys:(Bson.doc [ ("userId", Bson.int 1) ]) ~name:"by_user" ());
-      ignore (Coll.create_index orgs_c ~keys:(Bson.doc [ ("domains.name", Bson.int 1) ]) ~name:"by_domain" ());
-      ignore (Coll.create_index org_memberships_c ~keys:(Bson.doc [ ("orgId", Bson.int 1) ]) ~name:"by_org" ());
-      ignore (Coll.create_index org_memberships_c ~keys:(Bson.doc [ ("userId", Bson.int 1) ]) ~name:"by_user" ());
-      ignore (Coll.create_index org_invites_c ~keys:(Bson.doc [ ("orgId", Bson.int 1) ]) ~name:"by_org" ());
-      ignore (Coll.create_index org_invites_c ~keys:(Bson.doc [ ("email", Bson.int 1) ]) ~name:"by_email" ());
-      ignore (Coll.create_index org_invites_c ~keys:(Bson.doc [ ("expiresAt", Bson.int 1) ]) ~name:"by_expiry" ());
-      ignore (Coll.create_index mfa_enrollments_c ~keys:(Bson.doc [ ("userId", Bson.int 1) ]) ~name:"by_user" ());
-      ignore (Coll.create_index scim_connections_c ~keys:(Bson.doc [ ("orgId", Bson.int 1) ]) ~name:"by_org" ());
-      ignore (Coll.create_index scim_users_c ~keys:(Bson.doc [ ("connectionId", Bson.int 1) ]) ~name:"by_connection" ());
-      ignore (Coll.create_index scim_groups_c ~keys:(Bson.doc [ ("connectionId", Bson.int 1) ]) ~name:"by_connection" ());
-      ignore (Coll.create_index audit_c ~keys:(Bson.doc [ ("targetUserId", Bson.int 1) ]) ~name:"by_target_user" ());
-      ignore (Coll.create_index audit_c ~keys:(Bson.doc [ ("orgId", Bson.int 1) ]) ~name:"by_org" ());
-      ignore (Coll.create_index audit_c ~keys:(Bson.doc [ ("kind", Bson.int 1) ]) ~name:"by_kind" ());
-      ignore (Coll.create_index audit_c ~keys:(Bson.doc [ ("at", Bson.int (-1)) ]) ~name:"by_time" ())
+      let idx c ~iname ~keys ?(unique = false) ?(sparse = false) () =
+        Backend_dyn.ensure_index c ~name:iname ~keys ~unique ~sparse
+      in
+      let k1 f = Bson.doc [ (f, Bson.int 1) ] in
+      idx users_c ~iname:"uniq_username" ~keys:(k1 "username") ~unique:true ~sparse:true ();
+      idx users_c ~iname:"uniq_email" ~keys:(k1 "emails.address") ~unique:true ~sparse:true ();
+      idx identities_c ~iname:"by_user" ~keys:(k1 "userId") ();
+      idx identities_c ~iname:"by_stable_key" ~keys:(k1 "stableKey") ();
+      idx challenges_c ~iname:"by_expiry" ~keys:(k1 "expiresAt") ();
+      idx challenges_c ~iname:"by_user" ~keys:(k1 "metadata.userId") ();
+      idx challenges_c ~iname:"by_email" ~keys:(k1 "metadata.email") ();
+      idx passkeys_c ~iname:"by_user" ~keys:(k1 "userId") ();
+      idx orgs_c ~iname:"by_domain" ~keys:(k1 "domains.name") ();
+      idx org_memberships_c ~iname:"by_org" ~keys:(k1 "orgId") ();
+      idx org_memberships_c ~iname:"by_user" ~keys:(k1 "userId") ();
+      idx org_invites_c ~iname:"by_org" ~keys:(k1 "orgId") ();
+      idx org_invites_c ~iname:"by_email" ~keys:(k1 "email") ();
+      idx org_invites_c ~iname:"by_expiry" ~keys:(k1 "expiresAt") ();
+      idx mfa_enrollments_c ~iname:"by_user" ~keys:(k1 "userId") ();
+      idx scim_connections_c ~iname:"by_org" ~keys:(k1 "orgId") ();
+      idx scim_users_c ~iname:"by_connection" ~keys:(k1 "connectionId") ();
+      idx scim_groups_c ~iname:"by_connection" ~keys:(k1 "connectionId") ();
+      idx audit_c ~iname:"by_target_user" ~keys:(k1 "targetUserId") ();
+      idx audit_c ~iname:"by_org" ~keys:(k1 "orgId") ();
+      idx audit_c ~iname:"by_kind" ~keys:(k1 "kind") ();
+      idx audit_c ~iname:"by_time" ~keys:(Bson.doc [ ("at", Bson.int (-1)) ]) ()
     in
     Collection_store.make ~ensure_indexes
       {
-        users = mongo_collection db (name "users");
-        identities = mongo_collection db (name "identities");
-        challenges = mongo_collection db (name "challenges");
-        passkeys = mongo_collection db (name "passkeys");
-        orgs = mongo_collection db (name "orgs");
-        org_memberships = mongo_collection db (name "org_memberships");
-        org_invites = mongo_collection db (name "org_invites");
-        mfa_enrollments = mongo_collection db (name "mfa_enrollments");
-        scim_connections = mongo_collection db (name "scim_connections");
-        scim_users = mongo_collection db (name "scim_users");
-        scim_groups = mongo_collection db (name "scim_groups");
-        audit = mongo_collection db (name "audit");
+        users = backend_collection users_c;
+        identities = backend_collection identities_c;
+        challenges = backend_collection challenges_c;
+        passkeys = backend_collection passkeys_c;
+        orgs = backend_collection orgs_c;
+        org_memberships = backend_collection org_memberships_c;
+        org_invites = backend_collection org_invites_c;
+        mfa_enrollments = backend_collection mfa_enrollments_c;
+        scim_connections = backend_collection scim_connections_c;
+        scim_users = backend_collection scim_users_c;
+        scim_groups = backend_collection scim_groups_c;
+        audit = backend_collection audit_c;
       }
+
+  (* The in-process minimongo store: a fresh Minimongo per collection, needing no Eio switch — [backend]
+     with a memory maker. It is the BSON-accurate reference backend for the inline tests (the same codecs
+     as Burrow / native mongod); the framework reaches the engines by MONGO_URL via {!native_store}. *)
+  let minimongo () = backend ~open_collection:(fun _ -> Backend_dyn.mem (Minimongo.create ())) ()
 
   let users t = t.users
   let identities t = t.identities
@@ -4960,20 +4929,11 @@ let native_secret () =
 let native_store () =
   match Mongo_runtime.backend () with
   | Missing -> Store.unavailable ()
-  | Memory -> Store.minimongo ()
-  | Burrow _ ->
-    (* The accounts store on the embedded engine isn't wired yet: it must reuse the app's single engine
-       instance (two opens of one LMDB dir would break the single-writer invariant), which needs a
-       shared engine registry. Until then, accounts needs :memory: (dev/test) or a mongodb:// server. *)
-    Store.unavailable
-      ~message:
-        "Accounts is not yet available on the embedded (burrow://) backend. Use MONGO_URL=:memory: for \
-         dev/test, or a mongodb:// server for production accounts."
-      ()
-  | Mongo { uri; db = db_name } ->
-    let client = Fennec_mongo_driver.Client.connect ~uri () in
-    let db = Fennec_mongo_driver.Database.create client db_name in
-    let store = Store.mongo db in
+  | Memory | Burrow _ | Mongo _ ->
+    (* ONE backend-blind store over the MONGO_URL-selected engine (minimongo / embedded Burrow / mongod),
+       opened by name on the ambient Eio switch {!Fennec.serve} installs at boot; indexes are ensured
+       idempotently. Burrow now works exactly like the rest — no special case, no "not yet wired" gap. *)
+    let store = Store.backend ~open_collection:(fun name -> Backend_dyn.collection ~name ()) () in
     Store.ensure_indexes store;
     store
 
@@ -4989,6 +4949,13 @@ let current () =
 
 let native_paw () : Paw.t =
  fun c -> paw (current ()) () c
+
+(* Eagerly build the (memoized) native store at boot — inside {!Fennec.serve}'s switch, after the data
+   layer's ambient switch is installed — so the engine opens and indexes are ensured BEFORE the first
+   request, not lazily on it. Accounts stays incremental opt-in: an app that never authenticates pays only
+   this one build, and with no MONGO_URL the store is the no-op {!Store.unavailable} — a request without a
+   session cookie simply has [user_id = None]. *)
+let boot () = ignore (current ())
 
 (* ---- inline tests ---- *)
 

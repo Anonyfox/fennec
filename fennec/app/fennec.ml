@@ -162,6 +162,11 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
      burrow:// URL with an authority, front the embedded engine over the MongoDB wire protocol so `mongosh`
      connects (zero-config in dev). MONGO_URL alone decides the backend; there is no app-level "start". *)
   Fennec_mongo_dynamic.boot ~sw ~net:(Eio.Stdenv.net env) ();
+  (* eager accounts: build the (memoized) store now — inside the switch, after the ambient switch is
+     installed — so the engine opens + indexes are ensured at boot, not on the first authenticated
+     request. Opt-in is preserved: no MONGO_URL ⇒ the no-op store, and a request with no session cookie
+     resolves to [user_id = None] without touching the database. *)
+  Accounts.boot ();
   (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
      clean up after) we'd otherwise keep the port and make the next `fennec dev` fail to bind.
      The supervisor (our direct parent) passes its pid as FENNEC_DEV_PARENT; we exit the moment

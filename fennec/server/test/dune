@@ -4,3 +4,15 @@
 (executable
  (name acme_pebble_test)
  (libraries fennec.server eio eio_main eio.unix x509 mirage-crypto-rng.unix))
+
+; Accounts backend parity over the embedded Burrow engine — self-contained (a temp dir, no mongod),
+; so it runs under `dune runtest` and fails the build if accounts ever breaks on burrow://.
+(executable
+ (name accounts_backends_test)
+ (libraries fennec.server fennec-mongo.dynamic eio eio_main eio.unix unix mirage-crypto-rng.unix))
+
+(rule
+ (alias runtest)
+ (deps accounts_backends_test.exe)
+ (action
+  (run ./accounts_backends_test.exe)))

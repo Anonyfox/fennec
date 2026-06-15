@@ -223,16 +223,6 @@ module Store : sig
   (** In-process, mutex-guarded store for tests and examples. *)
   val memory : unit -> t
 
-  (** Minimongo-backed store. It is the fast reference backend for Accounts semantics and uses the
-      same BSON codecs as native Mongo. *)
-  val minimongo : unit -> t
-
-  (** Native MongoDB-backed store using the same document schema as {!minimongo}. [prefix] defaults
-      to ["accounts"] and creates collections such as ["accounts_users"],
-      ["accounts_identities"], and ["accounts_challenges"]. Call {!ensure_indexes} during
-      application startup before accepting auth traffic. *)
-  val mongo : ?prefix:string -> Fennec_mongo_driver.Database.t -> t
-
   (** Store used by the native framework path when no [MONGO_URL] is configured. Anonymous request
       identity remains [None], but database-backed Accounts operations fail with a clear
       [Store_error]. Applications normally do not construct this directly. *)
@@ -473,6 +463,12 @@ val current : unit -> t
 (** Native Accounts identity paw. It verifies the configured Accounts cookie and assigns the current
     request user id/auth context. With no login cookie, identity is simply [None]. *)
 val native_paw : unit -> Paw.t
+
+(** Eagerly build the memoized native store — call once at boot, inside [Fennec.serve]'s switch and after
+    the data layer is up — so the engine opens and indexes are ensured before the first request rather
+    than lazily on it. With no [MONGO_URL] this builds the cheap no-op store; accounts stays incremental
+    opt-in (a request with no session cookie still resolves to [None]). *)
+val boot : unit -> unit
 
 (** Register a hook that can reject or observe login attempts. Hooks run after credentials verify and
     before a session is issued. Returning [Error reason] rejects the login. *)
