@@ -32,6 +32,7 @@ let () =
   Eng.ensure_index eng c ~name:"a_1" ~keys:(doc [ ("a", i 1) ]) ~unique:false;
   Eng.ensure_index eng c ~name:"b_1" ~keys:(doc [ ("b", i 1) ]) ~unique:false;
   Eng.ensure_index eng c ~name:"arr_1" ~keys:(doc [ ("arr", i 1) ]) ~unique:false;
+  Eng.ensure_index eng c ~name:"a_b_1" ~keys:(doc [ ("a", i 1); ("b", i 1) ]) ~unique:false;
 
   Random.init 0xD1FF;
   let next_id = ref 0 in
@@ -43,15 +44,18 @@ let () =
     else doc base
   in
 
+  let rand_in () = B.array (List.filter_map (fun v -> if Random.bool () then Some (i v) else None) [ 0; 1; 2; 3; 4; 5 ]) in
   let rand_selector () =
-    match Random.int 7 with
+    match Random.int 9 with
     | 0 -> empty
     | 1 -> doc [ ("a", i (Random.int 6)) ]
     | 2 -> doc [ ("b", s bstrs.(Random.int 3)) ]
     | 3 -> doc [ ("a", doc [ ("$gte", i (Random.int 6)) ]) ]
     | 4 -> doc [ ("a", doc [ ("$gt", i 1); ("$lt", i 5) ]) ]
     | 5 -> doc [ ("arr", i (1 + Random.int 3)) ]
-    | _ -> doc [ ("a", i (Random.int 6)); ("b", s "x") ]
+    | 6 -> doc [ ("a", i (Random.int 6)); ("b", s bstrs.(Random.int 3)) ] (* compound a+b *)
+    | 7 -> doc [ ("a", doc [ ("$in", rand_in ()) ]) ] (* $in on an indexed field *)
+    | _ -> doc [ ("a", doc [ ("$gte", i 2) ]); ("b", s "x") ]
   in
 
   let both_find sel =
@@ -97,37 +101,54 @@ let () =
      operation that causes it (not when a much later query happens to hit the lost entry) *)
   let probes =
     [ empty; doc [ ("arr", i 1) ]; doc [ ("arr", i 2) ]; doc [ ("arr", i 3) ];
-      doc [ ("a", doc [ ("$gte", i 0) ]) ]; doc [ ("a", i 2) ]; doc [ ("b", s "x") ]; doc [ ("b", s "w") ] ]
+      doc [ ("a", doc [ ("$gte", i 0) ]) ]; doc [ ("a", i 2) ]; doc [ ("b", s "x") ]; doc [ ("b", s "w") ];
+      doc [ ("a", doc [ ("$in", B.array [ i 0; i 2; i 4 ]) ]) ]; (* $in path *)
+      doc [ ("a", i 3); ("b", s "y") ] (* compound path *) ]
   in
+  (* ordered parity (sequence, not just set): sort on the indexed [a] with an [_id] tiebreak (a TOTAL
+     order, so it's deterministic across engines regardless of storage order), asc + desc, paginated and
+     filtered. This is what makes a later sort-via-index optimization catchable. *)
+  let ord ?(sel = empty) sort skip limit =
+    ( Eng.find eng c ~selector:sel ~sort ~skip ~limit ~fields:empty,
+      MM.fetch (MM.find mm ~selector:sel ~sort ~skip ~limit ()) )
+  in
+  let check_ord ?(sel = empty) sort skip limit =
+    let b, m = ord ~sel sort skip limit in
+    if b <> m then begin
+      Printf.eprintf "ORDER DIVERGE sort=%s sel=%s burrow=%d minimongo=%d\n%!" (B.to_string sort) (B.to_string sel)
+        (List.length b) (List.length m);
+      assert false
+    end
+  in
+  let asc = doc [ ("a", i 1); ("_id", i 1) ] and desc = doc [ ("a", i (-1)); ("_id", i 1) ] in
   for n = 1 to 4000 do
-    let desc = step () in
+    let desc_str = step () in
     List.iter
       (fun sel ->
         let b, m = both_find sel in
         if b <> m then begin
           Printf.eprintf "DIVERGE after step %d: %s\n  probe sel=%s  burrow=%d  minimongo=%d\n%!"
-            n desc (B.to_string sel) (List.length b) (List.length m);
+            n desc_str (B.to_string sel) (List.length b) (List.length m);
           List.iter (fun d -> if not (List.mem d m) then Printf.eprintf "  only burrow: %s\n%!" (B.to_string d)) b;
           List.iter (fun d -> if not (List.mem d b) then Printf.eprintf "  only mmongo: %s\n%!" (B.to_string d)) m;
           assert false
         end)
-      probes
+      probes;
+    if n mod 11 = 0 then begin
+      check_ord asc (n mod 7) 5;
+      check_ord desc 0 (1 + (n mod 9));
+      check_ord ~sel:(doc [ ("a", doc [ ("$gte", i 2) ]) ]) asc 0 0
+    end
   done;
   check_all ();
 
-  (* ORDERED parity: sort must produce the same sequence (not just the same set) as minimongo. Sort by
-     [a] then [_id] (a total order — _id is unique), with skip/limit, exercising the paginated path. *)
-  let ord sort skip limit =
-    ( Eng.find eng c ~selector:empty ~sort ~skip ~limit ~fields:empty,
-      MM.fetch (MM.find mm ~selector:empty ~sort ~skip ~limit ()) )
-  in
-  let by_id = doc [ ("_id", i 1) ] and by_a_id = doc [ ("a", i 1); ("_id", i 1) ] in
-  let b1, m1 = ord by_id 0 0 in
-  assert (b1 = m1);
-  let b2, m2 = ord by_a_id 5 10 in
-  assert (b2 = m2);
-  let b3, m3 = ord (doc [ ("a", i (-1)); ("_id", i 1) ]) 3 7 in
-  assert (b3 = m3);
+  (* final-state ordered parity across more sorts: _id, indexed a (asc/desc, paginated), string b,
+     and a filtered+sorted (range selector + sort), all with an _id tiebreak for determinism *)
+  check_ord (doc [ ("_id", i 1) ]) 0 0;
+  check_ord asc 5 10;
+  check_ord desc 3 7;
+  check_ord (doc [ ("b", i 1); ("_id", i 1) ]) 0 0;
+  check_ord ~sel:(doc [ ("a", doc [ ("$gt", i 1); ("$lt", i 5) ]) ]) asc 2 5;
 
   (* distinct + count parity across a battery of selectors *)
   for _ = 1 to 50 do
