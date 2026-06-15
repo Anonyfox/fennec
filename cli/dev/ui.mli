@@ -27,7 +27,9 @@ val start : t -> dir:string -> unit
 (** First server up: print the named clickable dev URL(s) ([(name, url)] pairs), the host-routed
     [gateway] URL (prod-identical selection), and "ready in <ms>". Idempotent — only the first call
     prints (later calls just refresh the stored URLs), so a server restart doesn't reprint. *)
-val ready : t -> urls:(string * string) list -> gateway:string -> ms:float option -> unit
+val ready :
+  t -> urls:(string * string) list -> gateway:string -> backend:string option -> ms:float option -> unit
+(** [backend] is the resolved data backend (from MONGO_URL), shown as a [data →] line in the cascade. *)
 
 (** A backend rebuild that restarted the server (the page will full-reload). *)
 val rebuilt : t -> trigger:string list -> ms:float option -> unit

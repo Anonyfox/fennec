@@ -146,7 +146,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   let on_line : Server_proc.parsed -> unit = function
     | Server_proc.Urls urls ->
       (match !server with Up up -> up.busy_port <- None (* it bound — any earlier "port busy" is stale *) | Down -> ());
-      Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url;
+      Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url ~backend:(Mongo_rs.summary ());
       if not !agent_ready_sent then begin
         agent_ready_sent := true;
         emit_verdict (Verdict.Ready { url = gateway_url; dir = (match targets with t :: _ -> Filename.dirname t | [] -> ".") })

@@ -42,3 +42,7 @@ val launch : unit -> t option
     unauthenticated mongosh endpoint from that authority. Returns [None] (no process to own); a real
     local mongod is opt-in via an explicit [MONGO_URL] or [fennec test --mongo]. *)
 val ensure_dev : root:string -> base_port:int -> unit -> t option
+
+val summary : unit -> string option
+(** A one-line summary of the resolved data backend (from [MONGO_URL]) for the dev ready banner —
+    [":memory:"], the embedded engine + its [mongosh] URL, or a real server. [None] when unset. *)

@@ -203,7 +203,7 @@ let start t ~dir =
   t.dir <- dir;
   t.out (Printf.sprintf "\n  %s %s\n\n" "🦊" "fennec dev")
 
-let ready t ~urls ~gateway ~ms =
+let ready t ~urls ~gateway ~backend ~ms =
   if not t.ready_shown then begin
     t.ready_shown <- true;
     (match ms with Some m -> t.builds <- t.builds + 1; t.total_ms <- t.total_ms +. m | None -> ());
@@ -212,6 +212,9 @@ let ready t ~urls ~gateway ~ms =
     (* the host-routed gateway: prod-identical selection — reach any domain here via its Host header
        (or an /etc/hosts entry). Dim, because the per-endpoint URLs above are the everyday targets. *)
     Buffer.add_string block (Printf.sprintf "     %s %s\n" (dim t "host routing →") (Tty.hyperlink t.caps ~url:gateway ~text:(dim t gateway)));
+    (* the resolved data backend (from MONGO_URL), in the same cascade — :memory:, the embedded engine
+       and its mongosh URL, or a real server *)
+    (match backend with Some b -> Buffer.add_string block (Printf.sprintf "     %s %s\n" (dim t "data →") (dim t b)) | None -> ());
     let timing = match ms with Some m -> Printf.sprintf "ready in %.0fms" m | None -> "ready" in
     Buffer.add_string block (Printf.sprintf "     %s\n" (dim t (Printf.sprintf "%s · watching %s" timing t.dir)));
     if t.caps.interactive then (erase_region t; t.out (Buffer.contents block); draw_region t) else t.out (Buffer.contents block)
@@ -241,15 +244,17 @@ let%test_unit "plain mode — content" =
   let ui = create ~out ~caps:Tty.plain () in
   start ui ~dir:"examples/site";
   chk "banner shows the fox + name" (contains_ (take ()) "fennec dev");
-  ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~ms:(Some 412.);
+  ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000"
+    ~backend:(Some "embedded · mongosh mongodb://localhost:27017") ~ms:(Some 412.);
   let s = take () in
   chk "ready shows the endpoint URL" (contains_ s "http://localhost:4001");
   chk "ready shows the endpoint name" (contains_ s "web");
   chk "ready shows the gateway URL" (contains_ s "http://localhost:4000");
   chk "ready shows the host-routing label" (contains_ s "host routing");
+  chk "ready shows the data backend" (contains_ s "mongosh mongodb://localhost:27017");
   chk "ready shows the time" (contains_ s "ready in 412ms");
   chk "ready shows the watched dir" (contains_ s "watching examples/site");
-  ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~ms:(Some 99.);
+  ready ui ~urls:[ ("web", "http://localhost:4001") ] ~gateway:"http://localhost:4000" ~backend:None ~ms:(Some 99.);
   chk "ready is idempotent (a second report prints nothing)" (take () = "");
   rebuilt ui ~trigger:[ "index.mlx changed" ] ~ms:(Some 38.);
   let s = take () in

@@ -89,5 +89,16 @@ let ensure_dev ~root ~base_port () =
     let path = Filename.concat (dev_embedded_dir ~root ~base_port) Runtime.default_db in
     let url = Printf.sprintf "burrow://localhost:%d%s" Runtime.default_wire_port path in
     Unix.putenv Runtime.mongo_url_env url;
-    Printf.eprintf "fennec dev: embedded MongoDB (Burrow) at %s — mongosh on 127.0.0.1:%d\n%!" path Runtime.default_wire_port;
+    (* the backend is surfaced once, in the ready banner (see {!summary}), not printed early here *)
     None
+
+(* a one-line summary of the resolved data backend (from MONGO_URL) for the dev ready banner *)
+let summary () =
+  match Runtime.backend () with
+  | Runtime.Memory -> Some ":memory: (in-memory)"
+  | Runtime.Burrow { expose = Some e; _ } ->
+    let host = if e.Runtime.host = "0.0.0.0" then "localhost" else e.Runtime.host in
+    Some (Printf.sprintf "embedded · mongosh mongodb://%s:%d" host e.Runtime.port)
+  | Runtime.Burrow { expose = None; _ } -> Some "embedded (storage only)"
+  | Runtime.Mongo { uri; _ } -> Some uri
+  | Runtime.Missing -> None
