@@ -34,6 +34,23 @@
     ({!get}/{!post}/…, with [:name] / [*rest] path captures). *)
 include module type of Pipeline
 
+(** {1 Serve — the one-call entry point}
+
+    [serve endpoints] builds a {!Host_router} from [endpoints] and runs it over Eio, owning the event
+    loop (the [app.listen] of Paw). [?tls] terminates TLS in-process from an already-loaded
+    certificate ({!Tls_termination}); [?acme] obtains and renews certificates automatically via
+    Let's Encrypt — serving the HTTP-01 challenge and an HTTP→HTTPS front on :80 — for the domains the
+    router answers. The listen port comes from [$FENNEC_PORT] (else 4000 in dev, [$PORT], or 443/80
+    when terminating TLS). A clashing route table or a busy port prints a message and exits. For finer
+    control — your own Eio env, a prebuilt router — use {!Host_router.build} + {!Server.run}. *)
+val serve :
+  ?tls:Tls_termination.t ->
+  ?acme:Acme.config ->
+  ?on_error:(Server.request_error -> Http.response) ->
+  ?on_listen:((string * string) list -> unit) ->
+  Endpoint.t list ->
+  unit
+
 (** {1 The connection} *)
 
 (** The per-request carrier: the parsed request, the response being built, path params, and typed

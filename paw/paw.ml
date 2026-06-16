@@ -5,6 +5,57 @@
 
 include Pipeline
 
+(** {1 Serve — the one-call entry point} *)
+
+(* [serve endpoints] = build the host router + run the Eio acceptor, owning the event loop — the
+   [app.listen] of Paw. ?tls terminates TLS from a loaded cert; ?acme manages Let's Encrypt certs
+   automatically (HTTP-01 challenge + an HTTP->HTTPS front on :80). A clashing route table or a busy
+   port fails loudly. Drop to Host_router.build + Server.run for your own Eio env / prebuilt router. *)
+let serve ?tls ?acme ?on_error ?on_listen endpoints =
+  let run ~env ~tls ~on_demand router =
+    match Server.run ?tls ?on_demand ?on_error ?on_listen ~env router with
+    | Ok () -> ()
+    | Error (`Port_in_use port) ->
+      Printf.eprintf "paw: port %d is already in use\n%!" port;
+      exit 1
+    | Error (`Bad_plan msg) ->
+      Printf.eprintf "paw: %s\n%!" msg;
+      exit 1
+  in
+  match Host_router.build (List.map (fun e -> (Endpoint.name e, Endpoint.hosts e, e)) endpoints) with
+  | Error errs ->
+    prerr_endline (Host_router.describe_errors errs);
+    exit 1
+  | Ok router -> (
+    Eio_main.run @@ fun env ->
+    match acme with
+    | Some cfg ->
+      Eio.Switch.run @@ fun sw ->
+      let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
+      (* certify the concrete hosts the router answers; wildcards too once a DNS provider is set *)
+      let derived =
+        List.concat_map
+          (fun e ->
+            List.filter_map
+              (fun h ->
+                match Host_pattern.of_string h with
+                | Ok (Host_pattern.Exact d) -> Some d
+                | Ok (Host_pattern.Suffix s) when Acme.dns_enabled cfg -> Some ("*" ^ s)
+                | _ -> None)
+              (Endpoint.hosts e))
+          endpoints
+        |> List.sort_uniq compare
+      in
+      let domains = match Acme.domains_override cfg with Some d -> d | None -> derived in
+      let ({ source; on_demand } : Acme.running) =
+        Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg
+      in
+      Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
+      run ~env ~tls:(Some source) ~on_demand router
+    | None ->
+      let tls = Option.map (fun t () -> Some t) tls in
+      run ~env ~tls ~on_demand:None router)
+
 (** {1 The connection} *)
 module Conn = Conn
 
