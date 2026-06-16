@@ -8,11 +8,6 @@
    opens one module. The prebuilt batteries live under {!Paw} as submodules
    ([Paw.Logger], [Paw.Session], [Paw.Csrf], …), each a [make] returning a paw. *)
 
-(* A stable handle to the fennec-paw library facade. Below, [module Paw = struct … end]
-   re-exports a curated slice of it under [Fennec.Paw]; that local module shadows the library
-   name, so the runtime/TLS/host-routing types we re-export (Server, Tls_termination, … which
-   the curated slice deliberately omits) reach the library through [Paw_lib]. *)
-module Paw_lib = Paw
 module Conn = Paw.Conn
 module Endpoint = Paw.Endpoint
 module Tls = Paw.Tls_termination (* in-process HTTPS termination: load a cert+key, pass to serve ~tls *)
@@ -44,29 +39,12 @@ module Fur = struct
   module Respond = Fennec_web.Respond (* JSON output building blocks (hand-built APIs) *)
 end
 
-(* The verb namespace: the primitive + its algebra + the route verbs (from
-   [Paw]) plus every prebuilt battery as a submodule. So userland reaches
-   for [Paw.seq], [Paw.get], and [Paw.Logger.make ()] / [Paw.Session.make ~secret ()]
-   from one place — each battery [make] returns a plain [Paw.t]. *)
-module Paw = struct
-  include Paw
-  module Logger = Paw.Logger
-  module Security_headers = Paw.Security_headers
-  module Request_id = Paw.Request_id
-  module Method_override = Paw.Method_override
-  module Basic_auth = Paw.Basic_auth
-  module Force_https = Paw.Force_https
-  module Cors = Paw.Cors
-  module Rate_limit = Paw.Rate_limit
-  module Metrics = Paw.Metrics
-  module Websocket = Paw.Websocket
-  module Static = Paw.Static
-  module Session = Paw.Session
-  module Accounts = Fennec_server.Accounts
-  module Csrf = Paw.Csrf
-end
+(* The whole fennec-paw library, under one name: the pipeline primitive + algebra, the flat endpoint
+   builder ([Paw.endpoint () |> Paw.use … |> Paw.get …]), the conn-pipe response verbs, and every
+   prebuilt battery ([Paw.Logger], [Paw.Session], …) — each [make] returns a plain [Paw.t]. *)
+module Paw = Paw
 
-type request_error = Paw_lib.Server.request_error =
+type request_error = Paw.Server.request_error =
   | Handler_exception of exn * Http.request
   | Handler_timeout of Http.request
   | No_route of Http.request
@@ -228,22 +206,22 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
           (fun e ->
             List.filter_map
               (fun h ->
-                match Paw_lib.Host_pattern.of_string h with
-                | Ok (Paw_lib.Host_pattern.Exact d) -> Some d
-                | Ok (Paw_lib.Host_pattern.Suffix s) when Paw_lib.Acme.dns_enabled cfg -> Some ("*" ^ s)
+                match Paw.Host_pattern.of_string h with
+                | Ok (Paw.Host_pattern.Exact d) -> Some d
+                | Ok (Paw.Host_pattern.Suffix s) when Paw.Acme.dns_enabled cfg -> Some ("*" ^ s)
                 | _ -> None)
               (Endpoint.hosts e))
           endpoints
         |> List.sort_uniq compare
       in
-      let domains = match Paw_lib.Acme.domains_override cfg with Some d -> d | None -> derived in
-      let r = Paw_lib.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg in
-      (Some r.Paw_lib.Acme.source, r.Paw_lib.Acme.on_demand))
+      let domains = match Paw.Acme.domains_override cfg with Some d -> d | None -> derived in
+      let r = Paw.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg in
+      (Some r.Paw.Acme.source, r.Paw.Acme.on_demand))
     else match tls with Some t -> (Some (fun () -> Some t), None) | None -> (None, None)
   in
   (* in TLS-mode production the app is on :443; a :80 front does the HTTP→HTTPS redirect (+ serves
      the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
-  if Option.is_some tls_source && not is_dev then Paw_lib.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
+  if Option.is_some tls_source && not is_dev then Paw.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
   (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) ~net:(Eio.Stdenv.net env) | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
@@ -256,12 +234,12 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
   (* the routing table is the single source of truth for which domains we answer. Build it from the
      endpoints (name + host patterns); an invalid config (clashing domains, two catch-alls, a bad
      pattern, …) fails loudly here rather than mis-routing at runtime. *)
-  match Paw_lib.Host_router.build (List.map (fun e -> (Endpoint.name e, Endpoint.hosts e, e)) endpoints) with
+  match Paw.Host_router.build (List.map (fun e -> (Endpoint.name e, Endpoint.hosts e, e)) endpoints) with
   | Error errs ->
-    Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Paw_lib.Host_router.describe_errors errs);
+    Printf.eprintf "fennec: invalid endpoint configuration —\n%s\n%!" (Paw.Host_router.describe_errors errs);
     exit 1
   | Ok router -> (
-    match Paw_lib.Server.run ~timeout ~max_conns ?tls:tls_source ?on_demand ?on_error ~dev:is_dev ~on_listen:announce ~env router with
+    match Paw.Server.run ~timeout ~max_conns ?tls:tls_source ?on_demand ?on_error ~dev:is_dev ~on_listen:announce ~env router with
     | Ok () -> ()
     | Error (`Port_in_use port) ->
       Printf.eprintf "%s\n%!" (Dev_proto.port_busy_line port);

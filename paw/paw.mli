@@ -10,14 +10,13 @@
 
     {[
       let app =
-        Paw.seq
-          [ Paw.Logger.make ();
-            Paw.get "/" (fun c -> Paw.Conn.html c "<h1>hello</h1>");
-            Paw.get "/users/:id" (fun c ->
-              Paw.Conn.text c (Option.value (Paw.Conn.path_param c "id") ~default:"?")) ]
+        Paw.endpoint ()
+        |> Paw.use (Paw.Logger.make ())
+        |> Paw.get "/" (fun c -> c |> Paw.html "<h1>hello</h1>")
+        |> Paw.get "/users/:id" (fun c ->
+               c |> Paw.text (Option.value (Paw.param c "id") ~default:"?"))
 
-      (* in a test, with no socket: *)
-      let resp = Paw.run app (Paw.Http.make_request ~meth:Paw.Http.GET ~path:"/users/42" ())
+      let () = Paw.serve [ app ]
     ]}
 
     {2 How it's organized}
@@ -28,11 +27,28 @@
     battery), [ws/] (websockets), [server/] (the Eio runtime), [tls/] (HTTPS/ACME), [dev/]. It
     depends on no other fennec library. *)
 
-(** {1 The pipeline}
+(** {1 The pipeline primitive}
 
-    The primitive [type t = Conn.t -> Conn.t], its algebra ({!seq}/{!run}/…) and the route verbs
-    ({!get}/{!post}/…, with [:name] / [*rest] path captures). *)
-include module type of Pipeline
+    A paw is [type t = Conn.t -> Conn.t]; compose with {!seq} (the first to answer wins). {!run}
+    drives a pipeline to a response in memory (for tests); {!serve} / {!Server.run} drive it over a
+    socket. The verbs that build apps ({!get}/{!use}/…) are below; the raw route-as-paw forms are
+    under {!Route}. *)
+type t = Conn.t -> Conn.t
+
+(** Compose paws left-to-right; the first to answer wins, the rest are skipped. *)
+val seq : t list -> t
+
+(** The identity paw — declines everything (the unit of {!seq}). *)
+val pass : t
+
+(** Run a pipeline to a response — an unanswered conn becomes a 404. Handy for pure tests. *)
+val run : t -> Http.request -> Http.response
+
+(** Run a pipeline over a request, returning the final conn (e.g. to inspect a websocket upgrade). *)
+val run_conn : t -> Http.request -> Conn.t
+
+(** A paw from a [request -> response option] (e.g. static files): answers on [Some], else declines. *)
+val fallthrough : (Http.request -> Http.response option) -> t
 
 (** {1 Route-as-paw primitives}
 
@@ -151,12 +167,65 @@ val redirect : ?status:int -> string -> Conn.t -> Conn.t
 (** Stream a file from disk as the response. *)
 val send_file : ?content_type:string -> path:string -> Conn.t -> Conn.t
 
-(** [endpoint paws] builds an {!Endpoint} from a flat list of paws (middleware and routes, in
-    declaration order) — the quick path for one app on one host ([?hosts] defaults to the catch-all
-    ["*"]). Routes are a collection (first-match), so they read as a list rather than a [|>] chain;
-    for the two-phase builder — middleware that runs {e only} on a matched route (auth, rate
-    limiting) — use the {!Endpoint} combinators, which {e do} pipe ([Endpoint.make () |> use … |> get …]). *)
-val endpoint : ?name:string -> ?hosts:string list -> t list -> Endpoint.t
+(** {1 The endpoint — flat-pipe app assembly}
+
+    Start with {!endpoint} and pipe middleware and routes onto it, one per line; hand the result(s) to
+    {!serve}. These are {!Endpoint} verbs lifted to [Paw.] — the endpoint is the last argument, so they
+    chain with [|>]; the only nesting is the handler, the one [fun c -> …] that genuinely is nested.
+
+    {[
+      let app =
+        Paw.endpoint ~name:"api" ~hosts:[ "api.example.com" ]
+        |> Paw.use (Paw.Logger.make ())
+        |> Paw.use_matched (Paw.Rate_limit.make ())          (* only on a matched route, not 404s *)
+        |> Paw.get "/health" (fun c -> c |> Paw.json {|{"ok":true}|})
+        |> Paw.post "/users" create
+
+      let () = Paw.serve [ app ]
+    ]} *)
+
+(** An empty endpoint to pipe onto. [~name] labels it (host routing + logs); [~hosts] is the Host
+    patterns it answers ([["*"]] catch-all by default). *)
+val endpoint : ?name:string -> ?hosts:string list -> unit -> Endpoint.t
+
+(** Add always-run middleware (runs on every request, including 404s). *)
+val use : t -> Endpoint.t -> Endpoint.t
+
+(** Add matched-only middleware — runs solely when a route matches, so misses still 404 (the place
+    for auth and rate limiting). *)
+val use_matched : t -> Endpoint.t -> Endpoint.t
+
+(** Add an always-run paw at the {e front} of the pipeline. *)
+val prepend : t -> Endpoint.t -> Endpoint.t
+
+(** Add several always-run paws at once. *)
+val pipe : t list -> Endpoint.t -> Endpoint.t
+
+(** Add several matched-only paws at once. *)
+val pipe_matched : t list -> Endpoint.t -> Endpoint.t
+
+(** Route a GET matching [pattern] to a handler ([:name] captures a segment, a trailing [*rest] the
+    tail — read them back with {!param}). *)
+val get : string -> t -> Endpoint.t -> Endpoint.t
+
+(** Route a POST. *)
+val post : string -> t -> Endpoint.t -> Endpoint.t
+
+(** Route a PUT. *)
+val put : string -> t -> Endpoint.t -> Endpoint.t
+
+(** Route a DELETE. *)
+val delete : string -> t -> Endpoint.t -> Endpoint.t
+
+(** Route a PATCH. *)
+val patch : string -> t -> Endpoint.t -> Endpoint.t
+
+(** Register GET+POST for [pattern] to one handler (a form: render on GET, accept on POST). *)
+val form : string -> t -> Endpoint.t -> Endpoint.t
+
+(** Mount a [path -> string option] sub-app (an SSR renderer or embedded asset map) under [?at]
+    (default ["/"]); it answers when it returns [Some]. *)
+val app : ?at:string -> (string -> string option) -> Endpoint.t -> Endpoint.t
 
 (** {1 HTTP vocabulary}
 

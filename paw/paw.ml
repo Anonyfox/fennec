@@ -3,7 +3,16 @@
     pipeline/, ws/, dev/). A paw touches a connection ([Conn.t -> Conn.t]); compose
     with {!seq}, the first to answer wins. *)
 
-include Pipeline
+(* the paw algebra — a paw is [Conn.t -> Conn.t]; compose with [seq], the first to answer wins.
+   The route/middleware verbs (get/use/…) below build {!Endpoint}s; the raw route-as-paw forms live
+   under {!Route}. *)
+type t = Pipeline.t
+
+let seq = Pipeline.seq
+let pass = Pipeline.pass
+let run = Pipeline.run
+let run_conn = Pipeline.run_conn
+let fallthrough = Pipeline.fallthrough
 
 (** {1 Route-as-paw primitives} *)
 
@@ -109,9 +118,27 @@ let text ?status ?headers body c = Conn.text ?status ?headers c body
 let redirect ?status url c = Conn.redirect ?status c url
 let send_file ?content_type ~path c = Conn.send_file c ?content_type ~path ()
 
-(* Build an endpoint from a flat list of paws (middleware + routes, in declaration order) — the quick
-   path for one app on one host. Drop to Endpoint.make for the two-phase (matched-only) builder. *)
-let endpoint ?(name = "app") ?(hosts = [ "*" ]) paws = Endpoint.pipe paws (Endpoint.make ~name ~hosts ())
+(** {1 The endpoint — flat-pipe app assembly}
+
+    Start with [endpoint] and pipe middleware and routes onto it, one per line; hand the result(s) to
+    {!serve}. These are {!Endpoint} verbs lifted to [Paw.] (the endpoint is the last argument, so they
+    chain with [|>]); the raw route-as-paw forms are under {!Route}. *)
+
+(* [endpoint ()] — an empty endpoint to pipe onto (config via [~name] / [~hosts]). *)
+let endpoint ?(name = "app") ?(hosts = [ "*" ]) () = Endpoint.make ~name ~hosts ()
+
+let use = Endpoint.use
+let use_matched = Endpoint.use_matched
+let prepend = Endpoint.prepend
+let pipe = Endpoint.pipe
+let pipe_matched = Endpoint.pipe_matched
+let get = Endpoint.get
+let post = Endpoint.post
+let put = Endpoint.put
+let delete = Endpoint.delete
+let patch = Endpoint.patch
+let form = Endpoint.form
+let app = Endpoint.app
 
 (** {1 HTTP vocabulary} *)
 module Http = Http

@@ -20,11 +20,6 @@
 
 (** {1 Core types} *)
 
-(** A handle to the full {!Paw} library facade. The curated {!Fennec.Paw} below re-exports only the
-    pipeline + battery slice an app needs and shadows the library name; the runtime/TLS/host-routing
-    re-exports (request errors, {!Tls}, {!Cert_store}, {!Acme}) reach the library through this. *)
-module Paw_lib = Paw
-
 (** The request-scoped connection carrier (see {!Paw.Conn}). *)
 module Conn = Paw.Conn
 
@@ -81,127 +76,13 @@ module Fur : sig
   module Respond : module type of Fennec_web.Respond
 end
 
-(** {1 Paw — the pipeline primitive + prebuilt batteries}
+(** {1 Paw — the HTTP toolkit}
 
-    A paw is [Conn.t -> Conn.t]. Compose with {!Paw.seq}; the first to answer wins.
-    The batteries (logger, session, CSRF, …) are submodules, each a [make] returning a paw. *)
-module Paw : sig
-  type t = Conn.t -> Conn.t
-
-  val seq : t list -> t
-  val pass : t
-  val run_conn : t -> Http.request -> Conn.t
-  val run : t -> Http.request -> Http.response
-  val on : Http.meth -> string -> t -> t
-  val get : string -> t -> t
-  val post : string -> t -> t
-  val put : string -> t -> t
-  val delete : string -> t -> t
-  val patch : string -> t -> t
-  val fallthrough : (Http.request -> Http.response option) -> t
-
-  module Logger : sig
-    val make : ?sink:(string -> unit) -> unit -> t
-  end
-
-  module Security_headers : sig
-    val make : ?extra:(string * string) list -> unit -> t
-  end
-
-  module Request_id : sig
-    val make : ?header:string -> unit -> t
-  end
-
-  module Method_override : sig
-    val make : ?field:string -> ?header:string -> unit -> t
-  end
-
-  module Basic_auth : sig
-    (** HTTP Basic auth middleware. Put it in {!Endpoint.use_matched} or
-        {!Endpoint.pipe_matched} when protecting only real routes, so missing URLs still return
-        404. Use it in the always phase only when every request to the endpoint must be
-        challenged. *)
-    val make : username:string -> password:string -> ?realm:string -> unit -> t
-  end
-
-  module Force_https : sig
-    val make : ?status:int -> ?hsts:int -> unit -> t
-  end
-
-  module Cors : sig
-    (** Which origins to allow: [Any], or an explicit allowlist (reflected when matched). *)
-    type origin = Paw.Cors.origin = Any | These of string list
-
-    val make :
-      ?origins:origin ->
-      ?methods:string list ->
-      ?headers:string list ->
-      ?expose:string list ->
-      ?credentials:bool ->
-      ?max_age:int ->
-      unit ->
-      t
-  end
-
-  module Rate_limit : sig
-    val make :
-      ?key:(Conn.t -> string) -> ?capacity:int -> ?per_second:float -> ?now:(unit -> float) -> unit -> t
-  end
-
-  module Metrics : sig
-    val make : (meth:string -> path:string -> status:int -> duration_ms:float -> unit) -> t
-  end
-
-  module Websocket : sig
-    val make : string -> (Paw.Ws_channel.t -> unit) -> t
-  end
-
-  module Static : sig
-    type source = Paw.Static.source =
-      | Dir of string
-      | Embedded of string * (string -> string option)
-
-    val make : ?cache_control:string -> source -> t
-  end
-
-  (** Signed cookie-backed sessions for login state, flash data, preferences, and other small
-      request-to-request values. Add {!Paw.Session.make} early in the paw pipeline, then read and
-      write with {!Paw.Session.get}, {!Paw.Session.set},
-      {!Paw.Session.delete}, or {!Paw.Session.clear} downstream. For a one-off
-      response cookie, use {!Conn.set_cookie} / {!Conn.delete_cookie} instead. *)
-  module Session : sig
-    (** Optional server-side session storage. Without a store, the signed cookie carries the
-        session map directly. *)
-    type store = Paw.Session.store
-
-    (** Build the session paw. [secret] signs the cookie; without [~store] the signed cookie
-        carries the session map, and with [~store] it carries only a signed server-side id. Use
-        this for login state and other signed cookie-backed values that persist across requests. *)
-    val make :
-      secret:string ->
-      ?cookie:string ->
-      ?path:string ->
-      ?lifetime:float ->
-      ?same_site:Cookie.same_site ->
-      ?http_only:bool ->
-      ?secure:bool ->
-      ?store:store ->
-      unit ->
-      t
-  end
-
-  module Accounts = Fennec_server.Accounts
-
-  module Csrf : sig
-    val make :
-      secret:string ->
-      ?field:string ->
-      ?header:string ->
-      ?safe:string list ->
-      unit ->
-      t
-  end
-end
+    The whole {{!Paw}fennec-paw} library, re-exported: the pipeline primitive and its algebra, the
+    flat endpoint builder ([Paw.endpoint () |> Paw.use … |> Paw.get …]), the conn-pipe response verbs
+    ([c |> Paw.set_status … |> Paw.json …]), and the middleware battery ([Paw.Logger], [Paw.Session],
+    [Paw.Csrf], …). See the [fennec-paw] docs for the full surface. *)
+module Paw = Paw
 
 (** {1 Helpers} *)
 
@@ -231,7 +112,7 @@ val both : (unit -> 'a) -> (unit -> 'b) -> 'a * 'b
 (** {1 Error handling} *)
 
 (** Request-scoped errors that flow through the unified error funnel. *)
-type request_error = Paw_lib.Server.request_error =
+type request_error = Paw.Server.request_error =
   | Handler_exception of exn * Http.request  (** a handler or middleware raised *)
   | Handler_timeout of Http.request  (** the per-request deadline expired *)
   | No_route of Http.request  (** no endpoint matched the Host header (and no ["*"] default) *)
@@ -242,7 +123,7 @@ type request_error = Paw_lib.Server.request_error =
     HTTPS directly, no reverse proxy. *)
 module Tls : sig
   (** A loaded server TLS configuration. *)
-  type t = Paw_lib.Tls_termination.t
+  type t = Paw.Tls_termination.t
 
   (** [of_files ~cert ~key] loads a PEM certificate chain + private key from the given file paths.
       @raise Failure on a malformed certificate, key, or configuration. *)
@@ -254,10 +135,10 @@ end
 
 (** Pluggable storage for ACME account keys + issued certificates. The default ({!Acme.auto} with no
     [~store]) is a file store; an ephemeral or multi-replica deployment provides its own (a k8s
-    Secret / S3 / Redis / DB) by building a {!t}. See {!Paw_lib.Cert_store}. *)
+    Secret / S3 / Redis / DB) by building a {!t}. See {!Paw.Cert_store}. *)
 module Cert_store : sig
   (** A cert store — a record of operations (so an external backend is just a value, no functor). *)
-  type t = Paw_lib.Cert_store.t = {
+  type t = Paw.Cert_store.t = {
     get : string -> string option;
     put : string -> string -> unit;
     delete : string -> unit;
@@ -274,14 +155,14 @@ end
 (** Automatic HTTPS via ACME (Let's Encrypt): HTTP-01 for the host router's concrete domains, a
     {!Cert_store}-backed cert, and zero-downtime renewal. Pass {!Acme.auto} to {!serve} as [~acme].
     Wildcards (DNS-01) and a dynamic catch-all (on-demand TLS) are out of scope. See
-    {!Paw_lib.Acme}. *)
+    {!Paw.Acme}. *)
 module Acme : sig
   (** ACME configuration. *)
-  type config = Paw_lib.Acme.config
+  type config = Paw.Acme.config
 
   (** A DNS provider for DNS-01 / wildcard certs — implement over your provider (Cloudflare /
       Route 53 / …). [upsert_txt] sets the TXT record [name] to [value]; [remove_txt] deletes it. *)
-  type dns_provider = Paw_lib.Acme.dns_provider = { upsert_txt : name:string -> value:string -> unit; remove_txt : name:string -> unit }
+  type dns_provider = Paw.Acme.dns_provider = { upsert_txt : name:string -> value:string -> unit; remove_txt : name:string -> unit }
 
   (** [auto ?email ?store ?staging ?domains ?directory ?dns_provider ()] — automatic certificates.
       Never raises; a missing email leaves HTTPS off. Env overrides code: [FENNEC_ACME_EMAIL],

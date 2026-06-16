@@ -111,33 +111,34 @@ let hello_secret = "hello-handler-demo-secret-key-1234"
 let () = Fur_email.install Site_styles.inline
 
 let web =
-  Endpoint.make ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
-  |> Endpoint.pipe
-       (Pwa.paw web_pwa ~assets:Assets.lookup ~precache:[ "/_apps/web/main.js"; "/_apps/web/main.css" ]
-       :: realtime_ddp :: common)
-  |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true,"app":"web"}|})
-  |> Endpoint.get "/api/greeting" (fun c -> Conn.text c greeting)
-  |> Endpoint.get "/api/browser-only" (fun c -> Conn.text c browser_only)
+  Paw.endpoint ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
+  |> Paw.use (Pwa.paw web_pwa ~assets:Assets.lookup ~precache:[ "/_apps/web/main.js"; "/_apps/web/main.css" ])
+  |> Paw.use realtime_ddp
+  |> Paw.pipe common
+  |> Paw.get "/api/health" (fun c -> c |> Paw.json {|{"ok":true,"app":"web"}|})
+  |> Paw.get "/api/greeting" (fun c -> c |> Paw.text greeting)
+  |> Paw.get "/api/browser-only" (fun c -> c |> Paw.text browser_only)
   (* streaming: a chunked (SSE-style) body and a streamed file download *)
-  |> Endpoint.get "/api/stream"
+  |> Paw.get "/api/stream"
        (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
-  |> Endpoint.get "/api/download" (fun c -> Conn.send_file c ~path:download_path ())
+  |> Paw.get "/api/download" (fun c -> c |> Paw.send_file ~path:download_path)
   (* the middle layer: a server-rendered FORM HANDLER at /hello (typed form input + validation + CSRF +
      flash, no client JS — see frontend/handlers/hello.mlx). Session + CSRF paws back its flash + token;
-     [Endpoint.form] registers GET+POST to the one ppx-generated [serve] (it dispatches by method). *)
-  |> Endpoint.pipe [ Paw.Session.make ~secret:hello_secret (); Paw.Csrf.make ~secret:hello_secret () ]
-  |> Endpoint.form "/hello" Site_handlers.Hello.serve
+     [Paw.form] registers GET+POST to the one ppx-generated [serve] (it dispatches by method). *)
+  |> Paw.use (Paw.Session.make ~secret:hello_secret ())
+  |> Paw.use (Paw.Csrf.make ~secret:hello_secret ())
+  |> Paw.form "/hello" Site_handlers.Hello.serve
   (* standalone HANDLERS — mounted MANUALLY at any path, central-router style. The same handler
      (Site_handlers.Greet.serve, a hydrated SPA with its own bundle) is wired at two paths to show
      reuse: a query-string route and a path-param route. Adding a handler = drop a .mlx + one line here. *)
-  |> Endpoint.get "/greet" Site_handlers.Greet.serve
-  |> Endpoint.get "/hi/:name" Site_handlers.Greet.serve
+  |> Paw.get "/greet" Site_handlers.Greet.serve
+  |> Paw.get "/hi/:name" Site_handlers.Greet.serve
   (* the dev mailbox — mounted ONLY in dev (Fennec.dev_only); in production these routes do not exist.
      "/dev/send-test-mail" is a demo trigger: hit it and the email shows up at /dev/mailbox live. *)
   |> Fennec.dev_only (fun e ->
          e
-         |> Endpoint.get "/dev/mailbox" Site_handlers.Dev_mailbox.serve
-         |> Endpoint.get "/dev/send-test-mail" (fun c ->
+         |> Paw.get "/dev/mailbox" Site_handlers.Dev_mailbox.serve
+         |> Paw.get "/dev/send-test-mail" (fun c ->
                 (* the body is a [%%style] component, rendered for email by Fur_email — authored exactly
                    like a web component, minus the JS. No stylesheet, no tokens: the ambient styles are
                    auto-installed by Site_styles and var(--brand) was resolved at build time. *)
@@ -148,16 +149,16 @@ let web =
                      (make ~from:(Address.v ~name:"Fennec" "no-reply@fennec.dev")
                         ~to_:[ Address.v ~name:"You" "you@example.com" ] ~subject:"Welcome to Fennec"
                         ~text:"Welcome aboard — confirm your email to get started." ~html ()));
-                Conn.text c "sent — open /dev/mailbox"))
-  |> Endpoint.app
+                c |> Paw.text "sent — open /dev/mailbox"))
+  |> Paw.app
        (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
           ~source:api_source ~mounts:[ Web_app.Routes.mount ])
 
 let admin =
-  Endpoint.make ~name:"admin" ~hosts:[ "admin.localhost" ] () (* scoped by host; more specific, so it wins *)
-  |> Endpoint.pipe common
-  |> Endpoint.app (Fur_ssr.handler ~styles:Site_styles.css ~mounts:[ Admin_app.Routes.mount ])
-  |> Endpoint.pipe_matched [ Paw.Basic_auth.make ~username:"admin" ~password:"admin" ~realm:"Admin" () ]
+  Paw.endpoint ~name:"admin" ~hosts:[ "admin.localhost" ] () (* scoped by host; more specific, so it wins *)
+  |> Paw.pipe common
+  |> Paw.app (Fur_ssr.handler ~styles:Site_styles.css ~mounts:[ Admin_app.Routes.mount ])
+  |> Paw.use_matched (Paw.Basic_auth.make ~username:"admin" ~password:"admin" ~realm:"Admin" ())
 
 (* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
    watches the served bundles and pings the server's dev control socket, which relays
