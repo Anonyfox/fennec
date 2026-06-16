@@ -452,11 +452,11 @@ it stays a clean standalone package.
      per-query views with caches + transition routing; interval polling only as an overflow guard
      above a stream budget), and `Server` (the single-node replica-set lifecycle). Blocking calls run
      in an Eio systhread.
-   - (d) ✓ **Backend.S over real mongo DONE** — `fennec/pulse/mongo` (`fennec.pulse.mongo`, native): a
-     thin `Fennec_pulse.Backend.S` adapter over the driver. `observe_changes` is REAL CHANGE STREAMS
+   - (d) ✓ **Backend.S over real mongo DONE** — `mongo/dynamic` (`fennec-mongo.dynamic`, native): a
+     thin `Fennec_mongo_backend.S` adapter over the driver. `observe_changes` is REAL CHANGE STREAMS
      via `Live` (not polling) — the existing set replayed synchronously (ready-after-data), then
-     field-level deltas off the stream. `Reactive.Make (Fennec_pulse_mongo)` compiles, so the whole
-     reactive/DDP/realtime stack runs over real mongo unchanged.
+     field-level deltas off the stream. `Reactive.Make (Fennec_mongo_dynamic.Dynamic)` compiles, so the
+     whole reactive/DDP/realtime stack runs over real mongo unchanged.
    - (e) ✓ **correctness DONE** — `test_diff`: insert / find ($eq/$gte/array/$in/$or) / multi-$set /
      remove / count / **aggregate** ($match→$sort→$project) agree between `Backend.Mini` and a real
      mongod. `test_observe`: a live insert/update/remove becomes added/changed/removed over a real

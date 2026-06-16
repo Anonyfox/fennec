@@ -34,8 +34,9 @@ track the useful Meteor vocabulary (`userId`, `setUserId`, `createUser`, `login`
   writes the user and password together.
 - Password rotation uses one store operation, `set_password_hash_and_bump`, so adapters can update
   the password hash and revocation epoch atomically.
-- `Store.minimongo ()` is the fast reference backend for tests and examples; `Store.mongo db` uses
-  native MongoDB collections with the same codecs and idempotent index setup.
+- The framework builds ONE backend-blind store from `MONGO_URL` (minimongo / embedded Burrow / native
+  mongod, the same codecs + idempotent index setup on each); there is no `Store.mongo` constructor.
+  `Store.memory ()` is the fast in-process backend for tests and examples.
 - `password_hasher` provides PBKDF2-HMAC-SHA256 using existing dependencies.
 - `password_hasher` remains injectable so an Argon2id adapter can be supplied without changing the
   Accounts API.
@@ -795,8 +796,9 @@ store instead of growing a giant `Accounts.make` configuration record.
 
 Accounts persistence is deliberately Mongo-shaped:
 
-- `Store.minimongo ()`: instant in-memory backend for tests/examples using real BSON documents.
-- `Store.mongo ?prefix db`: native MongoDB backend over `fennec-mongo.driver`; collections default
+- `Store.memory ()`: instant in-process backend for tests/examples.
+- The framework store from `MONGO_URL` (backend-blind over `Dynamic` — minimongo / embedded Burrow /
+  native mongod); there is no `Store.mongo` constructor. Collections default
   to `accounts_users`, `accounts_tokens`, `accounts_identities`, `accounts_challenges`,
   `accounts_passkeys`, `accounts_orgs`, `accounts_org_memberships`, `accounts_org_invites`,
   `accounts_mfa_enrollments`, `accounts_scim_connections`, `accounts_scim_users`,

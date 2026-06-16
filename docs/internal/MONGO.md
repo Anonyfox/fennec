@@ -20,12 +20,12 @@ DDP, the dev/test CLI).
         ▼            ▼                           ▼
    Missing       Memory                       Mongo {uri; db}
  (fail-clear)  Minimongo (mongo/mem)     native driver → libmongoc (mongo/driver + ffi)
-        └──────── ONE Fennec_pulse.Backend.S (CRUD + observe_changes + fence + indexes) ────────┘
-                     │   selected at runtime by Fennec_pulse_mongo.Dynamic (Mem|Native|Missing)
+        └──────── ONE Fennec_mongo_backend.S (CRUD + observe_changes + fence + indexes) ────────┘
+                     │   selected at runtime by Fennec_mongo_dynamic.Dynamic (Mem | Native | Embedded | Missing)
                      ▼
         Reactive.Make(Dynamic)            (publish / subscribe / methods / observe-mux)
         Typed.Make / collection runtime   (codec validation, index reconcile, $jsonSchema gen)
-        Fennec_pulse_app facade           (Pulse.start / collection / publish / method_ / serve_ddp)
+        Fennec_pulse_app facade           (collection / publish / method_ / serve_ddp — auto-booted, no start)
                      │
         DDP over WebSocket  ── ejson wire codec + doc_hash resync ──►  browser Minimongo + merge_store
 ```
@@ -35,7 +35,7 @@ Three things make the whole stack cohere:
 1. **`Bson.t` is the lingua franca.** Every layer speaks the same in-memory BSON value
    (`mongo/bson/bson.ml`). The query engine, Minimongo, the driver bridge, Pulse, Accounts, and
    the DDP wire all pass `Bson.t` — never a parallel document type.
-2. **One `Backend.S` seam** (`fennec/pulse/backend.ml`) abstracts storage to CRUD + a single
+2. **One `Backend.S` seam** (`mongo/backend/seam.ml`) abstracts storage to CRUD + a single
    `observe_changes` + a write `fence`. In-memory and native libmongoc are interchangeable behind it.
 3. **The pure core compiles to JS unchanged.** `bson`, `json`, `query/*`, and `mem/*` depend only on
    Stdlib (+ `re` for `$regex`), so the *same* Minimongo + query engine runs server-side and in the
@@ -213,7 +213,7 @@ This is what turns "self-contained, no pre-install but mongod" from a hope into 
 
 ---
 
-## 5. The Backend seam + runtime selection (`fennec/pulse/backend.ml`, `fennec/pulse/mongo/`)
+## 5. The Backend seam + runtime selection (`mongo/backend/`, `mongo/dynamic/`)
 
 **`Backend.S`** — the storage contract: `insert/update/remove/find/find_one/count/aggregate/distinct`
 over `Bson.t` + a shared `query = {selector; sort; skip; limit; fields}` + `observe_changes` +
@@ -221,16 +221,18 @@ over `Bson.t` + a shared `query = {selector; sort; skip; limit; fields}` + `obse
 
 - **`Backend.Mini`** adapts Minimongo: `observe_changes` passes the *full* query (→ windowed live
   observe); `fence = Minimongo.on_drained` (**exact**).
-- **`Fennec_pulse_mongo`** is `Backend.S` over the native driver: writes go through driver
+- **`Fennec_mongo_dynamic`** is `Backend.S` over the native driver: writes go through driver
   collection/`command`, `observe_changes` uses `Live` (real change streams). Its `fence` is
   **best-effort (runs `k` immediately)** — mongod's change-stream delivery is async and v1 carries no
   resume-token plumbing, so a method's `updated` can briefly precede its deltas under lag (the
   resume-token fence is a noted seam). `aggregate` ignores the in-memory `lookup` hook (mongod does it).
-- **`Fennec_pulse_mongo.Dynamic`** is the runtime-selectable backend: `type collection = Mem of
-  Minimongo.t | Native of Coll.t | Missing of string`, one `Backend.S`, per-op dispatch.
-  `from_env ~sw ~db ~name` reads `Runtime.state ()` → `Mem (Minimongo.create ())` for `:memory:`, a
-  `Native` driver collection for a uri, or `Missing` (ops fail clearly) when unset. Built inside
-  `Fennec.serve ~on_start` so the captured `sw` drives Live's change-stream daemons.
+- **`Fennec_mongo_dynamic.Dynamic`** is the runtime-selectable backend: `type collection = Mem of
+  Minimongo.t | Native of Coll.t | Embedded of … | Missing of string`, one `Backend.S`, per-op dispatch.
+  `from_env ~sw ~name` reads `Runtime.backend ()` → `Mem (Minimongo.create ())` for `:memory:`, an
+  `Embedded` Burrow collection for `burrow://…`, a `Native` driver collection for `mongodb://…`, or
+  `Missing` (ops fail clearly) when unset; the db comes from the URL. `Fennec.serve` installs an ambient
+  switch (`set_switch`) and auto-boots the data layer + any mongosh wire endpoint (`boot`), so app and
+  accounts code open collections by name via `Dynamic.collection ~name` — there is no `Pulse.start`.
 
 ---
 
@@ -245,11 +247,12 @@ over `Bson.t` + a shared `query = {selector; sort; skip; limit; fields}` + `obse
   (bsonType widened for ints per EJSON reality; `opt` = absence from `required`, not a union;
   variants → `oneOf` with a tag enum; deliberately **no `additionalProperties`** so legacy docs stay
   writable). `Def.validator` exposes it.
-- **`Fennec_pulse_app`** (`pulse/app/`) — the ambient facade an app actually uses:
-  `start ~sw ~db` stashes config; `collection def` memoizes one `R.Collection` per name and
-  reconciles its indexes once; `publish def` is **one call** that wires *both* the live DDP
-  publication *and* the SSR seed; `method_` registers a typed handler; `serve_ddp` is the DDP paw.
-  Example wiring is `examples/site/server.ml` (`Pulse.start`/`seed`/`publish`/`method_` in `~on_start`).
+- **`Fennec_pulse_app`** (`pulse/app/`) — the ambient facade an app actually uses: there is NO `start`
+  (the data layer is auto-booted by `Fennec.serve`); `collection def` memoizes one `R.Collection` per
+  name (over `Dynamic.collection ~name`) and reconciles its indexes once; `publish def` is **one call**
+  that wires *both* the live DDP publication *and* the SSR seed; `method_` registers a typed handler;
+  `serve_ddp` is the DDP paw. Example wiring is `examples/site/server.ml` (`seed`/`publish`/`method_` in
+  `~on_start`).
 
 ---
 
@@ -367,7 +370,7 @@ Status as of branch `mongo-close-gaps` (off `main` @ `b69d76d`).
 | C driver: vendored build | `mongo/vendor/build.sh`, `mongo/config/discover.ml`, `mongo/portability/check.sh` |
 | C driver: stubs + FFI | `mongo/ffi/{mongoc_stubs.c,mongo_ffi.ml}` |
 | C driver: safe OCaml | `mongo/driver/{internal,client,collection,database,change_stream,live,runtime,server}.ml`, `mongo/mongod/mongod.ml` |
-| Backend seam + selection | `fennec/pulse/backend.ml`, `fennec/pulse/mongo/fennec_pulse_mongo.ml` |
+| Backend seam + selection | `mongo/backend/seam.ml`, `mongo/dynamic/{adapters,wire_server}.ml` |
 | Typed/Codec/Schema/facade | `fennec/pulse/{typed.ml,collection/*,codec/*,app/fennec_pulse_app.ml}` |
 | Accounts store | `fennec/server/accounts.ml` (`Collection_store`, `Codec`, `Store`) |
 | DDP wire | `fennec/ddp/{ejson,message,doc_hash}.ml` |

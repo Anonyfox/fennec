@@ -10,6 +10,12 @@
 > `mongodb://…` (real server). Parsed once in `Fennec_mongo_driver.Runtime.backend`. The grammar lives in
 > [`mongo/wire/README.md`](../../mongo/wire/README.md); the rest of this doc keeps the original
 > `:embedded:`/`:port:` terminology for the design narrative.
+>
+> **Module relocation:** the seam and the runtime selector now live in the mongo package — `Backend.S` in
+> `fennec-mongo.backend` (`mongo/backend/`) and `Fennec_mongo_dynamic.Dynamic` (with the `Embedded` case)
+> plus the wire server in `fennec-mongo.dynamic` (`mongo/dynamic/`). `Fennec.serve` auto-boots the data
+> layer (no `Pulse.start`). Where this doc says `Fennec_pulse.Backend` / `Fennec_pulse_mongo`, read
+> `Fennec_mongo_backend` / `Fennec_mongo_dynamic`.
 
 ## 1. What this is
 
@@ -34,8 +40,8 @@ Two front doors, one engine:
   official driver (and our own libmongoc path) connects to it unchanged. This is the
   client-compatibility deliverable; it is a thin server over the same engine.
 
-It drops in behind the existing `Fennec_pulse.Backend.S` seam: `Runtime` learns `:embedded:`/`:port:`
-sentinels next to `:memory:`, `Fennec_pulse_mongo.Dynamic` gains an `Embedded` case, and **Pulse /
+It drops in behind the existing `Fennec_mongo_backend.S` seam: `Runtime` learns `:embedded:`/`:port:`
+sentinels next to `:memory:`, `Fennec_mongo_dynamic.Dynamic` gains an `Embedded` case, and **Pulse /
 Reactive / Typed do not change at all.**
 
 ## 2. Locked requirements (the non-negotiables)
@@ -99,7 +105,7 @@ fennec-mongo.bson  ──(reused)──┐         fennec-mongo.query ──(reu
   fennec-mongo.burrow.wire   (NEW, native, OPTIONAL: OP_MSG server + command layer + RS facade)
                                │   deps: burrow, eio, eio.unix
                                ▼
-  (selection)  Fennec_pulse_mongo.Dynamic gains `Embedded` → Backend.S over burrow
+  (selection)  Fennec_mongo_dynamic.Dynamic gains `Embedded` → Backend.S over burrow
 ```
 
 **The JS-safety boundary (enforced):**
