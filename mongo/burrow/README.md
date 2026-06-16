@@ -40,7 +40,7 @@ inherits minimongo's operator coverage exactly (the differential test proves it)
 
 ## The `burrow://` Backend.S adapter — built
 
-`Fennec_pulse.Backend.S` is in the `fennec` package; `fennec` depends on `fennec-mongo`, so Burrow
+`Fennec_mongo_backend.S` is in the `fennec` package; `fennec` depends on `fennec-mongo`, so Burrow
 (in `fennec-mongo`) cannot depend *up* on it. The engine therefore exposes a Backend-shaped API, and the
 adapter that wraps it lives in **`fennec/pulse/mongo/`** (`fennec_pulse_mongo.ml`), beside the Mini and
 Native adapters: an `Embedded` op set + a `Dynamic.Embedded` case. The single `MONGO_URL` parser
@@ -100,8 +100,8 @@ against the app's live data. It is built as a clean separate layer, [`fennec-mon
 in `fennec.pulse.mongo`:
 
 ```ocaml
-Fennec_pulse_mongo.expose ~sw ~net:(Eio.Stdenv.net env)
-  ~users:[ Fennec_pulse_mongo.wire_user ~user:"admin" ~password:secret ] ()
+Fennec_mongo_dynamic.expose ~sw ~net:(Eio.Stdenv.net env)
+  ~users:[ Fennec_mongo_dynamic.wire_user ~user:"admin" ~password:secret ] ()
 (* then: mongosh "mongodb://admin:secret@127.0.0.1:27017" *)
 ```
 

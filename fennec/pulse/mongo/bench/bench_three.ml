@@ -4,8 +4,8 @@
    wherever a real index beats an in-memory scan. mongod is launched outside Eio_main; ops run inside.
    Skips when the native driver / mongod isn't available. *)
 
-module Mongo = Fennec_pulse_mongo
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Backend = Fennec_mongo_backend
 module M = Fennec_mongo_mongod.Mongod
 module Eng = Burrow.Engine
 module S = Burrow_store.Store

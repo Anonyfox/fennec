@@ -6,9 +6,9 @@
    mongod is launched OUTSIDE Eio_main (its Unix process management must not race Eio's SIGCHLD
    handling); the backend ops then run inside Eio_main (each blocking call offloads to a systhread). *)
 
-module Mongo = Fennec_pulse_mongo
-module Mini = Fennec_pulse.Backend.Mini
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Mini = Fennec_mongo_backend.Mini
+module Backend = Fennec_mongo_backend
 module M = Fennec_mongo_mongod.Mongod
 module Diff = Query.Diff
 module B = Bson

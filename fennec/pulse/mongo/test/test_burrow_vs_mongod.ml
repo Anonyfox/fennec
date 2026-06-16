@@ -5,8 +5,8 @@
    no mongod is installed. mongod is launched outside Eio_main (its process management must not race
    Eio's SIGCHLD); the ops run inside Eio_main. *)
 
-module Mongo = Fennec_pulse_mongo
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Backend = Fennec_mongo_backend
 module M = Fennec_mongo_mongod.Mongod
 module Eng = Burrow.Engine
 module S = Burrow_store.Store

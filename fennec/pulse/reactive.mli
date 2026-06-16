@@ -1,4 +1,4 @@
-(** The reactive Meteor-style surface as a functor over a storage {!Backend.S} — one surface,
+(** The reactive Meteor-style surface as a functor over a storage {!Fennec_mongo_backend.S} — one surface,
     instantiated on the in-memory engine ({!Mini}, pure → also JS) and, later, a native driver. The
     abstract collection type lets a single suite prove feature parity across backends.
 
@@ -8,7 +8,7 @@
     Most apps reach this surface through the {!Fennec_pulse_app} facade rather than instantiating it
     by hand; the raw functor looks like:
 
-    {[ module R = Fennec_pulse.Reactive.Make (Fennec_pulse.Backend.Mini)
+    {[ module R = Fennec_pulse.Reactive.Make (Fennec_mongo_backend.Mini)
 
        let tasks = R.Collection.create ~name:"tasks" (Minimongo.create ())
        let () = R.publish "tasks" (fun _pub -> R.Cursor (R.cursor tasks ()))
@@ -326,7 +326,7 @@ module type REACTIVE = sig
 end
 
 (** Build the reactive surface over a storage backend. *)
-module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collection
+module Make (B : Fennec_mongo_backend.S) : REACTIVE with type backend_collection = B.collection
 
 (** The in-memory instance — pure, also compiles to JavaScript; the default for dev and test. *)
 module Mini : REACTIVE with type backend_collection = Minimongo.t

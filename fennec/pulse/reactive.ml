@@ -185,7 +185,7 @@ module type REACTIVE = sig
   end
 end
 
-module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collection = struct
+module Make (B : Fennec_mongo_backend.S) : REACTIVE with type backend_collection = B.collection = struct
   type backend_collection = B.collection
 
   exception Error of { code : string; reason : string }
@@ -291,7 +291,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 
     type cursor = {
       coll : t;
-      q : Backend.query;
+      q : Fennec_mongo_backend.query;
       cur_transform : cursor_transform;
     }
 
@@ -362,7 +362,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
         ?(skip = 0) ?(limit = 0) ?(fields = Bson.Document []) ?(transform = Inherit) () : cursor =
       {
         coll = c;
-        q = Backend.query ~selector ~sort ~skip ~limit ~fields ();
+        q = Fennec_mongo_backend.query ~selector ~sort ~skip ~limit ~fields ();
         cur_transform = transform;
       }
 
@@ -386,7 +386,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
          collection's own lock) — locks never nest, so A→B and B→A joins can't deadlock *)
       let lookup from =
         match with_lock _reg_lock (fun () -> Hashtbl.find_opt _collections from) with
-        | Some bk -> B.find bk (Backend.query ())
+        | Some bk -> B.find bk (Fennec_mongo_backend.query ())
         | None -> []
       in
       B.aggregate c.backend ~lookup pipeline
@@ -402,9 +402,9 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
          backend's modified-count: a real-Mongo upsert that INSERTS reports nModified=0 (the new
          doc is "upserted", not "modified"), whereas Meteor's numberAffected counts it as 1. *)
       let ids docs = List.map Query.Diff.doc_id docs in
-      let before_ids = ids (B.find c.backend (Backend.query ~selector:sel ())) in
+      let before_ids = ids (B.find c.backend (Fennec_mongo_backend.query ~selector:sel ())) in
       let n = B.update c.backend ~multi ~upsert:true sel m in
-      let after_ids = ids (B.find c.backend (Backend.query ~selector:sel ())) in
+      let after_ids = ids (B.find c.backend (Fennec_mongo_backend.query ~selector:sel ())) in
       let inserted = List.length after_ids > List.length before_ids in
       (* the inserted id is the one now present that was not before — not merely [after]'s head,
          which would be wrong when the selector also matched pre-existing documents *)
@@ -418,7 +418,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
     let observe_changes (cur : cursor) ?(added = fun _ _ -> ())
         ?(changed = fun _ _ _ -> ()) ?(removed = fun _ -> ()) () : live_handle =
       let h = B.observe_changes cur.coll.backend cur.q ~added ~changed ~removed in
-      { stop = h.Backend.stop }
+      { stop = h.Fennec_mongo_backend.stop }
 
     (* ordered, document-level observe: re-fetch the sorted window on each event and diff (pure).
        The full Meteor callback family — added/addedAt, changed/changedAt, removed/removedAt,
@@ -486,7 +486,7 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
           ~changed:(fun _ _ _ -> recompute ())
           ~removed:(fun _ -> recompute ())
       in
-      { stop = h.Backend.stop }
+      { stop = h.Fennec_mongo_backend.stop }
 
     (* NO allow/deny, deliberately: client writes go through METHODS, full stop — the one blessed
        path. Rule machinery for direct client mutations is the part of Meteor its own community
@@ -794,4 +794,4 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
 end
 
 (* the in-memory instance — pure, also compiles to JavaScript *)
-module Mini = Make (Backend.Mini)
+module Mini = Make (Fennec_mongo_backend.Mini)

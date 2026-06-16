@@ -4,8 +4,8 @@
    a real GridFS client would read. The SAME pure Gridfs functor is instantiated over each store. Skips
    when the native driver / mongod isn't available. *)
 
-module Mongo = Fennec_pulse_mongo
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Backend = Fennec_mongo_backend
 module M = Fennec_mongo_mongod.Mongod
 module Eng = Burrow.Engine
 module S = Burrow_store.Store

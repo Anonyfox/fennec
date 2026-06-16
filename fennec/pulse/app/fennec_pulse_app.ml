@@ -3,7 +3,7 @@
    does: declare collections' publications/methods → done. No functor aliases, no
    per-collection backend threading, no double-declared SSR publication. *)
 
-module D = Fennec_pulse_mongo.Dynamic
+module D = Fennec_mongo_dynamic.Dynamic
 module R = Fennec_pulse.Reactive.Make (D)
 module RT = Fennec_pulse_server.Make (R)
 module T = Fennec_pulse.Typed.Make (R)

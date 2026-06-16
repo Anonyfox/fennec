@@ -33,6 +33,6 @@ let canon (b : Bson.t) : string =
   canon_buf buf b;
   Buffer.contents buf
 
-let of_query ~collection (q : Backend.query) : string =
+let of_query ~collection (q : Fennec_mongo_backend.query) : string =
   String.concat "\x00"
     [ collection; canon q.selector; canon q.sort; string_of_int q.skip; string_of_int q.limit; canon q.fields ]

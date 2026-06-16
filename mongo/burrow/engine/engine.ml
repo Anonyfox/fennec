@@ -4,7 +4,7 @@
    child transaction (per-write failure isolation), and commits the parent ONCE — so one ~8 ms
    F_FULLFSYNC is amortized across the whole batch (≈125 → 100k+ durable writes/s under load). DDL
    (catalog/index/validator) takes the same write lock the writer holds, so no two write transactions
-   ever overlap. The {!Fennec_pulse.Backend.S} adapter wrapping this lives in [fennec/pulse/mongo/]. *)
+   ever overlap. The {!Fennec_mongo_backend.S} adapter wrapping this lives in [mongo/dynamic/]. *)
 
 module Store = Burrow_store.Store
 module B = Bson

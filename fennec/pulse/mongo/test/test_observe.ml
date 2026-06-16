@@ -6,8 +6,8 @@
    The observe daemon + the mutating fiber are cooperatively scheduled in one Eio domain, so the
    shared event lists are race-free; [settle] gives the change stream a moment to deliver. *)
 
-module Mongo = Fennec_pulse_mongo
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Backend = Fennec_mongo_backend
 module Server = Fennec_mongo_driver.Server
 module B = Bson
 

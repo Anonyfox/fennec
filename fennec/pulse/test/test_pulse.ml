@@ -5,6 +5,7 @@
    registry is module-global). *)
 
 open Fennec_pulse
+module Backend = Fennec_mongo_backend
 module R = Reactive.Mini
 module C = R.Collection
 module B = Bson

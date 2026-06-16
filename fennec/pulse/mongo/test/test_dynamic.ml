@@ -2,8 +2,8 @@
    This proves the in-memory selection end to end (no mongod needed) and that Reactive.Make accepts
    Dynamic exactly as it accepts a single backend — the enabler for "real mongo one flag away". *)
 
-module D = Fennec_pulse_mongo.Dynamic
-module Backend = Fennec_pulse.Backend
+module D = Fennec_mongo_dynamic.Dynamic
+module Backend = Fennec_mongo_backend
 module B = Bson
 module Runtime = Fennec_mongo_driver.Runtime
 

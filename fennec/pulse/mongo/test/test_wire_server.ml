@@ -5,8 +5,8 @@
    are all correct end to end. The server fronts the embedded Burrow engine. Skips when the native
    driver wasn't compiled in. *)
 
-module Mongo = Fennec_pulse_mongo
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Backend = Fennec_mongo_backend
 module B = Bson
 
 let tmpdir () =

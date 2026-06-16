@@ -7,7 +7,8 @@
  (names test_diff test_observe test_dynamic test_embedded test_burrow_vs_mongod test_gridfs_mongod
    test_wire_server test_wire_mongosh test_wire_tls)
  (libraries
-  fennec.pulse.mongo
+  fennec-mongo.dynamic
+  fennec-mongo.backend
   fennec.pulse
   fennec-mongo.mongod
   fennec-mongo.driver

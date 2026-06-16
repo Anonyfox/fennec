@@ -4,7 +4,7 @@
    Burrow engine); it only needs `mongosh` on PATH, and skips (passes) otherwise. mongosh runs as a
    subprocess via Eio.Process so the scheduler stays free to let the server fiber answer it. *)
 
-module Mongo = Fennec_pulse_mongo
+module Mongo = Fennec_mongo_dynamic
 
 let tmpdir () =
   let d = Filename.concat (Filename.get_temp_dir_name ()) (Printf.sprintf "burrow_mongosh_%d" (Unix.getpid ())) in

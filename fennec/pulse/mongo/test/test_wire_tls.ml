@@ -3,8 +3,8 @@
    SCRAM-SHA-256 handshake over the encrypted channel, and run CRUD. Skips when the native driver isn't
    available. *)
 
-module Mongo = Fennec_pulse_mongo
-module Backend = Fennec_pulse.Backend
+module Mongo = Fennec_mongo_dynamic
+module Backend = Fennec_mongo_backend
 module B = Bson
 
 let tmpdir () =

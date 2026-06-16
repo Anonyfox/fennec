@@ -1,7 +1,7 @@
 (* Engine — the public Burrow API: lifecycle, collections, document operations, indexing, validation,
    and live observation. Reads run on immutable MVCC snapshots; writes serialize through a single-writer
-   lock and commit durably off the Eio scheduler. The {!Fennec_pulse.Backend.S} adapter in
-   [fennec/pulse/mongo/] wraps this (mapping its [query] record to the labeled arguments here). *)
+   lock and commit durably off the Eio scheduler. The {!Fennec_mongo_backend.S} adapter in
+   [mongo/dynamic/] wraps this (mapping its [query] record to the labeled arguments here). *)
 
 module Store = Burrow_store.Store
 

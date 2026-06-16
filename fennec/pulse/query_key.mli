@@ -3,7 +3,7 @@
     sharing); two genuinely different queries always map to different keys, so distinct subscriptions
     never collapse onto a single observe.
 
-    {[ let q = Backend.query ~selector:(Bson.doc [ "done", Bson.Bool false ]) () in
+    {[ let q = Fennec_mongo_backend.query ~selector:(Bson.doc [ "done", Bson.Bool false ]) () in
        let key = Query_key.of_query ~collection:"tasks" q
        (* two cursors with the same (collection, query) ⇒ same key ⇒ one shared observe *) ]} *)
 
@@ -13,4 +13,4 @@ val canon : Bson.t -> string
 
 (** [of_query ~collection q] is the multiplexer key for a cursor over [collection] running query [q].
     Same (collection, query) ⇒ same key ⇒ one shared backend observe. *)
-val of_query : collection:string -> Backend.query -> string
+val of_query : collection:string -> Fennec_mongo_backend.query -> string

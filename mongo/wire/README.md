@@ -24,7 +24,7 @@ fennec-mongo.wire            (PURE — no sockets, no backend, no Eio)
 fennec.pulse.mongo  (the ONLY IO — Eio + tls-eio; Wire_server.Make over a small DB interface)
   └─ Wire_server  TCP accept loop (daemon fiber); per-conn auth + cursor state; resource limits; TLS.
                   Dispatches a parsed command -> a DB op -> a reply doc. Backend-agnostic.
-     expose       Fennec_pulse_mongo.expose — fronts the embedded Burrow engine, sharing its per-dir
+     expose       Fennec_mongo_dynamic.expose — fronts the embedded Burrow engine, sharing its per-dir
                   engine cache so mongosh sees the app's live data and writes use the same writer.
 ```
 
@@ -69,8 +69,8 @@ use other` ⇒ a sibling dir).
 - **Tests**: `:memory:` (unit) or a storage-only `burrow:///tmp/…` per suite (integration, isolated, no
   endpoint).
 
-`Fennec_pulse_app.start ~sw ~net ()` calls `expose_from_env`, which reads the URL and opens the endpoint
-when the authority is present — zero app code. `Fennec_pulse_mongo.expose ~sw ~net ~users … ?tls ()` stays
+`Fennec.serve` auto-boots `Fennec_mongo_dynamic.boot`, which calls `expose_from_env`, which reads the URL and opens the endpoint
+when the authority is present — zero app code. `Fennec_mongo_dynamic.expose ~sw ~net ~users … ?tls ()` stays
 as an escape hatch (custom users, or a TLS wire endpoint until `?tls` is wired for the auto path).
 
 ## Validation

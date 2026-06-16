@@ -6,7 +6,7 @@
 (executable
  (name js_gate)
  (modes byte)
- (libraries fennec.pulse fennec-mongo.minimongo fennec.accounts.client))
+ (libraries fennec.pulse fennec-mongo.backend fennec-mongo.minimongo fennec.accounts.client))
 
 (rule
  (alias runtest)

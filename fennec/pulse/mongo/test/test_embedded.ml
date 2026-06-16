@@ -1,8 +1,8 @@
 (* The embedded Burrow backend through the runtime-selectable Dynamic seam: a [burrow://] MONGO_URL
    selects it (the path's trailing segment is the db), and the full Backend.S surface (insert / find /
    find_one / count / index+range query / update / observeChanges / remove) works end-to-end, no mongod. *)
-module D = Fennec_pulse_mongo.Dynamic
-module Backend = Fennec_pulse.Backend
+module D = Fennec_mongo_dynamic.Dynamic
+module Backend = Fennec_mongo_backend
 module B = Bson
 
 let tmpdir = Filename.concat (Filename.get_temp_dir_name ()) ("burrow_emb_" ^ string_of_int (Unix.getpid ()))

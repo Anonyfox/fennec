@@ -22,7 +22,7 @@
        let () = Fennec.serve ~on_start:(fun ~sw:_ ~sleep:_ ~net:_ -> setup ()) [ web ] ]} *)
 
 (** The production backend (mem-or-mongo, chosen by the global Mongo env). *)
-module D = Fennec_pulse_mongo.Dynamic
+module D = Fennec_mongo_dynamic.Dynamic
 
 (** The reactive engine over {!D} — exposed so the publication/invocation/cursor types are nameable
     for advanced publications and method handlers. *)

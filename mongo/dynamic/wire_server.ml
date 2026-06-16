@@ -3,14 +3,14 @@
    per-connection auth + cursor state, enforces the resource limits, and dispatches each command to a
    backend.
 
-   It is a functor over {!DB} — a small operations interface (richer than {!Fennec_pulse.Backend.S}
+   It is a functor over {!DB} — a small operations interface (richer than {!Fennec_mongo_backend.S}
    only by the catalog listing the wire needs) — so the same server fronts the embedded Burrow engine
    (the point) and is unit-testable over an in-memory backend with no socket. It does NOT depend on
    [Backend], [mirage-crypto], or the engine: randomness enters as the [server_nonce] closure the caller
    supplies, so the security-sensitive pieces stay either pure (the wire core) or injected.
 
    Security posture (the caller chooses via {!config}): bind address is the caller's (loopback by
-   default in {!Fennec_pulse_mongo.expose}); SCRAM-SHA-256 auth gates every non-handshake command when
+   default in {!Fennec_mongo_dynamic.expose}); SCRAM-SHA-256 auth gates every non-handshake command when
    [require_auth]; an oversized or malformed frame drops only that connection (never the server); there
    is no [$where]/JS, so there is no server-side code injection; a read-only mode rejects every mutation;
    and only a vetted command set is implemented (no [shutdown]/[eval]/[fsync]/...). *)

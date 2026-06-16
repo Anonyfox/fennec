@@ -1,4 +1,4 @@
-(* Native MongoDB backend — a {!Fennec_pulse.Backend.S} over the ported driver layer
+(* Native MongoDB backend — a {!Fennec_mongo_backend.S} over the ported driver layer
    ({!Fennec_mongo_driver}: Client/Collection/Live), so the reactive/DDP/realtime stack runs over a
    real mongod with no other change (it is the same seam Minimongo implements in memory).
 
@@ -387,7 +387,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
     Printf.printf "fennec: mongo-wire endpoint on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
   with e -> Printf.eprintf "fennec: mongo-wire endpoint NOT started on %s — %s\n%!" where (Printexc.to_string e)
 
-(* The auto path the framework calls (Fennec_pulse_app.start). The MONGO_URL alone decides everything:
+(* The auto path the framework calls ({!boot}, from [Fennec.serve]). The MONGO_URL alone decides everything:
    if it is a burrow:// URL WITH an authority, open the mongosh wire endpoint there — bind host:port,
    SCRAM when the URL carries user:pass, read-only when ?readonly. No authority (or any other backend)
    => no endpoint. So dev's zero-config endpoint comes from `fennec dev` generating a loopback authority,
