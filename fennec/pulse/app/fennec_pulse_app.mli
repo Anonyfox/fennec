@@ -38,7 +38,7 @@ module T : module type of Fennec_pulse.Typed.Make (R)
     call at module-init time. The data layer needs no app-level start: [Fennec.serve] installs the ambient
     Eio switch and (for a [burrow://] URL with an authority) opens the [mongosh] wire endpoint at boot,
     all decided by [MONGO_URL]. *)
-val serve_ddp : ?path:string -> unit -> Fennec_paw.Paw.t
+val serve_ddp : ?path:string -> unit -> Paw.t
 
 (** {1 Collections} *)
 

@@ -2,9 +2,9 @@
    [per_second] tokens/sec; each request spends one. Empty bucket → 429 + Retry-After. The bucket
    table is guarded by a mutex so it is correct across the server's worker domains. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 type bucket = { mutable tokens : float; mutable last : float }
 

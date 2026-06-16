@@ -7,7 +7,7 @@
          | Ok post -> save post; Respond.model ~status:201 conn Post.codec post
          | Error errs -> Respond.errors conn errs ]} *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 
 (** The raw request body. *)
 val body : Conn.t -> string

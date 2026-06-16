@@ -3,8 +3,8 @@
    the server's job (it sees the pending upgrade on the conn) — so a websocket is just a paw.
    Livereload is built on this same primitive (see Livereload.paw). *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
+module Conn = Paw.Conn
+module Paw = Paw
 
-let make (path : string) (setup : Fennec_core.Ws_channel.t -> unit) : Paw.t =
+let make (path : string) (setup : Paw.Ws_channel.t -> unit) : Paw.t =
  fun c -> if Conn.path c = path then Conn.upgrade c setup else c

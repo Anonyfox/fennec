@@ -4,7 +4,7 @@
    ([@non_empty]/[@max_len]/[@email]/[@min]…) enforced and per-field errors for re-rendering. No HTML
    building: forms are authored as plain .mlx markup; this module only READS the request. *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 
 (* strip refinement wrappers to the structural kind (for the coercion message) *)
 let rec strip (v : Codec.view) : Codec.view = match v with Codec.V_check (_, inner) -> strip inner | v -> v
@@ -154,7 +154,7 @@ let page (v : Fur.vnode) : outcome = Page v
 
 (* ──────────────────────────── tests ──────────────────────────── *)
 
-module H = Fennec_core.Http
+module H = Paw.Http
 
 type signup = { email : string; age : int; tags : string list; subscribe : bool }
 

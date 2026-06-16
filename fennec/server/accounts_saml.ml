@@ -193,8 +193,8 @@ let redirect_url (request : request) =
   let saml_request = Base64.encode_string (raw_deflate (authn_request_xml request)) in
   let relay_state = Challenge.token_to_string request.relay_state in
   let q =
-    "SAMLRequest=" ^ Fennec_core.Http.percent_encode saml_request ^ "&RelayState="
-    ^ Fennec_core.Http.percent_encode relay_state
+    "SAMLRequest=" ^ Paw.Http.percent_encode saml_request ^ "&RelayState="
+    ^ Paw.Http.percent_encode relay_state
   in
   request.connection.sso_url ^ (if String.contains request.connection.sso_url '?' then "&" else "?") ^ q
 
@@ -203,13 +203,13 @@ let signed_redirect_url (request : request) ~signing_key =
   let relay_state = Challenge.token_to_string request.relay_state in
   let sig_alg = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256" in
   let q =
-    "SAMLRequest=" ^ Fennec_core.Http.percent_encode saml_request ^ "&RelayState="
-    ^ Fennec_core.Http.percent_encode relay_state ^ "&SigAlg=" ^ Fennec_core.Http.percent_encode sig_alg
+    "SAMLRequest=" ^ Paw.Http.percent_encode saml_request ^ "&RelayState="
+    ^ Paw.Http.percent_encode relay_state ^ "&SigAlg=" ^ Paw.Http.percent_encode sig_alg
   in
   match X509.Private_key.sign `SHA256 ~scheme:`RSA_PKCS1 signing_key (`Message q) with
   | Error (`Msg msg) -> Error (Signing_error msg)
   | Ok signature ->
-    let q = q ^ "&Signature=" ^ Fennec_core.Http.percent_encode (Base64.encode_string signature) in
+    let q = q ^ "&Signature=" ^ Paw.Http.percent_encode (Base64.encode_string signature) in
     Ok (request.connection.sso_url ^ (if String.contains request.connection.sso_url '?' then "&" else "?") ^ q)
 
 type state = {
@@ -1074,13 +1074,13 @@ let%test "signed_redirect_url signs redirect binding query" =
       | None -> false
       | Some i ->
         let q = String.sub url (i + 1) (String.length url - i - 1) in
-        let params = Fennec_core.Http.parse_query q in
+        let params = Paw.Http.parse_query q in
         let q_to_sign =
-          "SAMLRequest=" ^ Fennec_core.Http.percent_encode (List.assoc "SAMLRequest" params)
+          "SAMLRequest=" ^ Paw.Http.percent_encode (List.assoc "SAMLRequest" params)
           ^ "&RelayState="
-          ^ Fennec_core.Http.percent_encode (List.assoc "RelayState" params)
+          ^ Paw.Http.percent_encode (List.assoc "RelayState" params)
           ^ "&SigAlg="
-          ^ Fennec_core.Http.percent_encode (List.assoc "SigAlg" params)
+          ^ Paw.Http.percent_encode (List.assoc "SigAlg" params)
         in
         match (List.assoc_opt "Signature" params, Base64.decode (List.assoc "Signature" params)) with
         | Some _, Ok signature ->

@@ -11,4 +11,4 @@
   test_pool
   test_reaper
   test_mongo_rs)
- (libraries fennec_dev fennec.core fennec_testcmd unix))
+ (libraries fennec_dev fennec-paw fennec_testcmd unix))

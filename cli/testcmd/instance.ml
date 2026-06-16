@@ -11,7 +11,7 @@
      the future — an isolated database URL).
    - [suite_env] points the suite at that instance ([FENNEC_TEST_URL]). *)
 
-module D = Fennec_core.Dev_proto
+module D = Paw.Dev_proto
 module Runtime = Fennec_mongo_driver.Runtime
 
 (* per-suite port block: generous headroom for gateway + endpoint ports, human-readable in

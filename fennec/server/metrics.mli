@@ -9,4 +9,4 @@
 
 (** Build the metrics paw from a [report] callback. *)
 val make :
-  (meth:string -> path:string -> status:int -> duration_ms:float -> unit) -> Fennec_paw.Paw.t
+  (meth:string -> path:string -> status:int -> duration_ms:float -> unit) -> Paw.t

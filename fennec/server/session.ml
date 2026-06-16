@@ -10,11 +10,11 @@
    past half its life is auto-refreshed (its cookie re-set) on the next request. Add {!make}
    early in a pipeline, then read/write with {!get}/{!set} downstream. Constant-time verify. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module Assigns = Fennec_paw.Assigns
-module H = Fennec_core.Http
-module Cookie = Fennec_core.Cookie
+module Conn = Paw.Conn
+module Paw = Paw
+module Assigns = Paw.Assigns
+module H = Paw.Http
+module Cookie = Paw.Cookie
 
 (* ---- crypto + (de)serialization (pure) ---- *)
 
@@ -207,7 +207,7 @@ let finalize_ c = Conn.apply_before_send c (Option.get (Conn.resp c))
 let cookie_kv_ set_cookie =
   match String.index_opt set_cookie ';' with Some i -> String.sub set_cookie 0 i | None -> set_cookie
 let set_cookie_ c =
-  match Fennec_core.Headers.get_all (finalize_ c).H.headers "set-cookie" with s :: _ -> s | [] -> ""
+  match Paw.Headers.get_all (finalize_ c).H.headers "set-cookie" with s :: _ -> s | [] -> ""
 
 let%test "read within the same request" =
   let sp = make ~secret:secret_ () in
@@ -221,7 +221,7 @@ let%test_unit "a session cookie is set after a write" =
   let c1 = set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let r1 = finalize_ c1 in
-  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let set1 = match Paw.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
   Fennec_hunt_unit.check "cookie is set" (set1 <> "");
   Fennec_hunt_unit.check "cookie is HttpOnly" (cookie_kv_ set1 <> set1)
 
@@ -231,7 +231,7 @@ let%test "session restored on the next request" =
   let c1 = set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let r1 = finalize_ c1 in
-  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let set1 = match Paw.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
   let kv = cookie_kv_ set1 in
   let c2 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
   get c2 "user" = Some "ada"
@@ -242,13 +242,13 @@ let%test "unchanged session emits no Set-Cookie" =
   let c1 = set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let r1 = finalize_ c1 in
-  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let set1 = match Paw.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
   let kv = cookie_kv_ set1 in
   let c3 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
   let _ = get c3 "user" in
   let c3 = Conn.text c3 "x" in
   let r3 = finalize_ c3 in
-  Fennec_core.Headers.get_all r3.H.headers "set-cookie" = []
+  Paw.Headers.get_all r3.H.headers "set-cookie" = []
 
 let%test "tampered cookie yields empty session" =
   let sp = make ~secret:secret_ () in
@@ -256,7 +256,7 @@ let%test "tampered cookie yields empty session" =
   let c1 = set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let r1 = finalize_ c1 in
-  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let set1 = match Paw.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
   let kv = cookie_kv_ set1 in
   let c4 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv ^ "x") ] "/")) in
   get c4 "user" = None
@@ -267,7 +267,7 @@ let%test "clear empties the session" =
   let c1 = set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let r1 = finalize_ c1 in
-  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let set1 = match Paw.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
   let kv = cookie_kv_ set1 in
   let c5 = sp (Conn.make (req_ ~headers:[ ("Cookie", kv) ] "/")) in
   let c5 = clear c5 in
@@ -350,7 +350,7 @@ let%test "cookie is HttpOnly (has attributes after ;)" =
   let c1 = set c1 "user" "ada" in
   let c1 = Conn.text c1 "ok" in
   let r1 = finalize_ c1 in
-  let set1 = match Fennec_core.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
+  let set1 = match Paw.Headers.get_all r1.H.headers "set-cookie" with [ s ] -> s | _ -> "" in
   cookie_kv_ set1 <> set1  (* has attributes after ';' *)
 
 let%test "store: data is in the server store" =

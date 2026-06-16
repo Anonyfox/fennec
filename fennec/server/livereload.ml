@@ -12,7 +12,7 @@
    exists only to (a) hold the browser sockets ([register]) and (b) deliver the
    CLI's frontend-edit signal to them ([broadcast]).
 
-   Wire it by pointing the [Fennec_core.Dev.endpoint] websocket at [register]; the
+   Wire it by pointing the [Paw.Dev.endpoint] websocket at [register]; the
    dev control listener (see Fennec.serve) calls [broadcast]. *)
 
 type t = {
@@ -58,8 +58,8 @@ let count t = Hashtbl.length t.clients
        that socket. It passes the conn through (the app still answers).
    Because it runs before the answering paws, the injection hook is registered even
    though the app short-circuits the pipeline. *)
-let is_html_response (r : Fennec_core.Http.response) : bool =
-  match Fennec_core.Http_semantics.header r.Fennec_core.Http.headers "content-type" with
+let is_html_response (r : Paw.Http.response) : bool =
+  match Paw.Http_semantics.header r.Paw.Http.headers "content-type" with
   (* tolerate casing/whitespace in the value: "Text/HTML", " text/html; charset=utf-8", … all
      count — otherwise such a page would silently get no script AND no no-cache override *)
   | Some ct ->
@@ -67,14 +67,14 @@ let is_html_response (r : Fennec_core.Http.response) : bool =
     String.length ct >= 9 && String.sub ct 0 9 = "text/html"
   | None -> false
 
-let paw (t : t) : Fennec_paw.Paw.t =
+let paw (t : t) : Paw.t =
  fun c ->
-  if Fennec_paw.Conn.path c = Fennec_core.Dev.endpoint then
-    Fennec_paw.Conn.upgrade c (fun (ch : Fennec_core.Ws_channel.t) ->
-        let unregister = register t ch.Fennec_core.Ws_channel.send in
-        ch.Fennec_core.Ws_channel.on_close <- unregister)
+  if Paw.Conn.path c = Paw.Dev.endpoint then
+    Paw.Conn.upgrade c (fun (ch : Paw.Ws_channel.t) ->
+        let unregister = register t ch.Paw.Ws_channel.send in
+        ch.Paw.Ws_channel.on_close <- unregister)
   else
-    Fennec_paw.Conn.before_send c (fun r ->
+    Paw.Conn.before_send c (fun r ->
         if is_html_response r then
           (* inject the client script AND force the dev page to revalidate (no-cache): a reload
              after a restart must fetch the fresh SSR, not a heuristically-cached old page. The
@@ -83,7 +83,7 @@ let paw (t : t) : Fennec_paw.Paw.t =
             ("cache-control", "no-cache")
             :: List.filter
                  (fun (k, _) -> String.lowercase_ascii k <> "cache-control")
-                 r.Fennec_core.Http.headers
+                 r.Paw.Http.headers
           in
-          { r with Fennec_core.Http.body = Fennec_core.Dev.inject_html r.Fennec_core.Http.body; headers }
+          { r with Paw.Http.body = Paw.Dev.inject_html r.Paw.Http.body; headers }
         else r)

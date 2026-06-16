@@ -1,6 +1,6 @@
 (* The `fennec test` ⟷ suite environment contract. The CLI SETS these per suite; a suite
    (via {!Http.hunt} / {!Run}) READS them. One source of truth — no stringly-typed drift,
-   the same discipline as the dev wire (Fennec_core.Dev_proto), but kept here so the testing
+   the same discipline as the dev wire (Paw.Dev_proto), but kept here so the testing
    package stays free of any framework dependency. *)
 
 (* the suite's target instance URL — set per-suite by the harness so each suite hits its own
@@ -24,7 +24,7 @@ let resolve ~explicit ~from_env =
 let resolve_url ~explicit = resolve ~explicit ~from_env:(target_url ())
 
 (* ── System cut: the harness contract `fennec test system` sets, a System suite reads. MIRROR of
-   Fennec_core.Dev_proto.env_test_* (the CLI side); equality guarded by a test in hunt/test.
+   Paw.Dev_proto.env_test_* (the CLI side); equality guarded by a test in hunt/test.
    Typed accessors so a suite never hand-rolls getenv for these — see Fennec_hunt.System. *)
 let env_bin = "FENNEC_BIN"
 let env_app_dir = "FENNEC_APP_DIR"

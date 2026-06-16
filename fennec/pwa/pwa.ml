@@ -167,15 +167,15 @@ let version_of ~(assets : string -> string option) (precache : string list) : st
     precache;
   String.sub (Digest.to_hex (Digest.string (Buffer.contents buf))) 0 12
 
-let paw (cfg : t) ~(assets : string -> string option) ~(precache : string list) : Fennec_paw.Paw.t =
+let paw (cfg : t) ~(assets : string -> string option) ~(precache : string list) : Paw.t =
   let version = version_of ~assets precache in
   let manifest_body = manifest cfg in
   let sw_body = service_worker cfg ~version ~precache in
   let manifest_path = cfg.scope ^ "manifest.webmanifest" in
   let sw_path = cfg.scope ^ "sw.js" in
   fun c ->
-    let open Fennec_paw in
-    if Conn.meth c <> Fennec_core.Http.GET then c
+    let open Paw in
+    if Conn.meth c <> Paw.Http.GET then c
     else
       match Conn.path c with
       | p when p = manifest_path ->

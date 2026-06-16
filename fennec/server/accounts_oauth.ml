@@ -1,6 +1,6 @@
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity
-module H = Fennec_core.Http
+module H = Paw.Http
 module Bson = Bson
 
 type provider = {

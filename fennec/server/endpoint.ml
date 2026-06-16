@@ -12,9 +12,9 @@
    For simple apps (no pipe_matched), the matched list is empty and behavior is identical to a
    flat pipeline — zero DX cost for the common case. *)
 
-module Paw = Fennec_paw.Paw
-module Conn = Fennec_paw.Conn
-module H = Fennec_core.Http
+module Paw = Paw
+module Conn = Paw.Conn
+module H = Paw.Http
 
 type t = {
   name : string;

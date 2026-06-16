@@ -8,15 +8,15 @@
    opens one module. The prebuilt batteries live under {!Paw} as submodules
    ([Paw.Logger], [Paw.Session], [Paw.Csrf], …), each a [make] returning a paw. *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 module Endpoint = Fennec_server.Endpoint
 module Tls = Fennec_server.Tls_termination (* in-process HTTPS termination: load a cert+key, pass to serve ~tls *)
 module Cert_store = Fennec_server.Cert_store (* pluggable ACME cert storage: file (default) / memory / custom *)
 module Acme = Fennec_server.Acme (* automatic HTTPS (Let's Encrypt): serve ~acme:(Acme.auto ~email ()) *)
 module Livereload = Fennec_server.Livereload
-module Http = Fennec_core.Http
-module Cookie = Fennec_core.Cookie
-module Dev_proto = Fennec_core.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
+module Http = Paw.Http
+module Cookie = Paw.Cookie
+module Dev_proto = Paw.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
 module Accounts = Fennec_server.Accounts
 module Mail = Fennec_mail (* outbound email: one MAIL_URL knob (unset ⇒ logged to stdout in dev) *)
 
@@ -40,11 +40,11 @@ module Fur = struct
 end
 
 (* The verb namespace: the primitive + its algebra + the route verbs (from
-   [Fennec_paw.Paw]) plus every prebuilt battery as a submodule. So userland reaches
+   [Paw]) plus every prebuilt battery as a submodule. So userland reaches
    for [Paw.seq], [Paw.get], and [Paw.Logger.make ()] / [Paw.Session.make ~secret ()]
    from one place — each battery [make] returns a plain [Paw.t]. *)
 module Paw = struct
-  include Fennec_paw.Paw
+  include Paw
   module Logger = Fennec_server.Logger
   module Security_headers = Fennec_server.Security_headers
   module Request_id = Fennec_server.Request_id

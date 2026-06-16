@@ -8,9 +8,9 @@
    and {!make} rejects unsafe requests whose token isn't [Ok]. Constant-time throughout.
    Requires {!Session.make} earlier in the pipeline. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 (** Why a CSRF token did or didn't validate. [Expired]/[Wrong_session] happen in normal use
     (a form or session that aged out); [Invalid] means a bad signature or forged payload. *)
@@ -22,7 +22,7 @@ let now () = Unix.gettimeofday ()
 
 (* the app signing secret the {!make} paw stashes on the conn, so {!token} needs no [~secret] at the
    call site (the form-render path reads it from the request) *)
-let secret_key : string Fennec_paw.Assigns.key = Fennec_paw.Assigns.key "fennec.csrf.secret"
+let secret_key : string Paw.Assigns.key = Paw.Assigns.key "fennec.csrf.secret"
 
 (* ──── b64e ──── *)
 
@@ -237,7 +237,7 @@ let%test_unit "GET is not gated" =
   let g = Conn.text g "form" in
   let cookie =
     match
-      Fennec_core.Headers.get_all
+      Paw.Headers.get_all
         (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
         "set-cookie"
     with
@@ -256,7 +256,7 @@ let%test_unit "POST with valid header passes" =
   let g = Conn.text g "form" in
   let cookie =
     match
-      Fennec_core.Headers.get_all
+      Paw.Headers.get_all
         (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
         "set-cookie"
     with
@@ -275,7 +275,7 @@ let%test_unit "POST with valid body token passes" =
   let g = Conn.text g "form" in
   let cookie =
     match
-      Fennec_core.Headers.get_all
+      Paw.Headers.get_all
         (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
         "set-cookie"
     with
@@ -296,7 +296,7 @@ let%test_unit "POST with no token -> 403" =
   let g = Conn.text g "form" in
   let cookie =
     match
-      Fennec_core.Headers.get_all
+      Paw.Headers.get_all
         (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
         "set-cookie"
     with
@@ -316,7 +316,7 @@ let%test_unit "POST with bad token -> 403" =
   let g = Conn.text g "form" in
   let cookie =
     match
-      Fennec_core.Headers.get_all
+      Paw.Headers.get_all
         (Conn.apply_before_send g (Option.value (Conn.resp g) ~default:(H.text ""))).H.headers
         "set-cookie"
     with

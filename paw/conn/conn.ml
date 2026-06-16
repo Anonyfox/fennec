@@ -21,7 +21,7 @@
    This file mirrors conn.mli's sections: consumption, readers, assigns, builders,
    answerers. Server-side only — conns never cross to the client. *)
 
-module H = Fennec_core.Http
+module H = Http
 
 (* The connection's lifecycle. [Unset] = still flowing (the pipeline continues);
    anything else = answered (downstream paws are skipped). A sum type instead of a
@@ -45,7 +45,7 @@ type t = {
   mutable resp_headers : (string * string) list;         (* accumulated, most-recent first *)
   mutable resp_body : string;
   mutable state : state;
-  mutable upgrade : (Fennec_core.Ws_channel.t -> unit) option;
+  mutable upgrade : (Ws_channel.t -> unit) option;
   mutable stream : stream option;                         (* a pending streamed response *)
   mutable before_send : (H.response -> H.response) list;  (* prepended (O(1)); applied FIFO *)
   mutable assigns : Assigns.t;
@@ -53,7 +53,7 @@ type t = {
   mutable query_params : (string * string) list option;
   mutable cookies : (string * string) list option;
   mutable body_params : (string * string) list option;   (* form fields *)
-  mutable files : Fennec_core.Multipart.part list option; (* multipart uploads *)
+  mutable files : Multipart.part list option; (* multipart uploads *)
   mutable meth_override : H.meth option;                   (* set by a method-override paw *)
   mutable path_params : (string * string) list;           (* captured by a :param / *splat route *)
 }
@@ -104,10 +104,10 @@ let remote_ip (c : t) : string option = c.req.H.remote_ip
 let version (c : t) : string = c.req.H.version
 
 (* a request header, case-insensitive (the first value if repeated) *)
-let req_header (c : t) (k : string) : string option = Fennec_core.Headers.get c.req.H.headers k
+let req_header (c : t) (k : string) : string option = Headers.get c.req.H.headers k
 
 (* all values for a (possibly repeated) request header, in order *)
-let req_headers (c : t) (k : string) : string list = Fennec_core.Headers.get_all c.req.H.headers k
+let req_headers (c : t) (k : string) : string list = Headers.get_all c.req.H.headers k
 
 (* query params, percent-decoded, parsed + cached on first read *)
 let query_params (c : t) : (string * string) list =
@@ -126,8 +126,8 @@ let cookies (c : t) : (string * string) list =
   | Some ck -> ck
   | None ->
     let ck =
-      match Fennec_core.Headers.get c.req.H.headers "cookie" with
-      | Some h -> Fennec_core.Cookie.parse_header h
+      match Headers.get c.req.H.headers "cookie" with
+      | Some h -> Cookie.parse_header h
       | None -> []
     in
     c.cookies <- Some ck;
@@ -138,22 +138,22 @@ let cookie (c : t) (name : string) : string option = List.assoc_opt name (cookie
 (* parse the body's form fields + file parts by content type, once, into the caches *)
 let ensure_body (c : t) : unit =
   if c.body_params = None then begin
-    let ct = Option.value (Fennec_core.Headers.get c.req.H.headers "content-type") ~default:"" in
+    let ct = Option.value (Headers.get c.req.H.headers "content-type") ~default:"" in
     let lct = String.lowercase_ascii ct in
     let params, files =
       if String.starts_with ~prefix:"application/x-www-form-urlencoded" lct then
         (H.parse_query c.req.H.body, [])
       else if String.starts_with ~prefix:"multipart/form-data" lct then
-        match Fennec_core.Multipart.boundary_of_content_type ct with
+        match Multipart.boundary_of_content_type ct with
         | Some b ->
-          let parts = Fennec_core.Multipart.parse ~boundary:b c.req.H.body in
+          let parts = Multipart.parse ~boundary:b c.req.H.body in
           let fields =
             List.filter_map
-              (fun (p : Fennec_core.Multipart.part) ->
+              (fun (p : Multipart.part) ->
                 if p.filename = None then Some (p.name, p.data) else None)
               parts
           in
-          let files = List.filter (fun (p : Fennec_core.Multipart.part) -> p.filename <> None) parts in
+          let files = List.filter (fun (p : Multipart.part) -> p.filename <> None) parts in
           (fields, files)
         | None -> ([], [])
       else ([], [])
@@ -165,9 +165,9 @@ let ensure_body (c : t) : unit =
 let body_params (c : t) : (string * string) list = ensure_body c; Option.value c.body_params ~default:[]
 let body_param (c : t) (k : string) : string option = List.assoc_opt k (body_params c)
 
-let files (c : t) : Fennec_core.Multipart.part list = ensure_body c; Option.value c.files ~default:[]
-let file (c : t) (name : string) : Fennec_core.Multipart.part option =
-  List.find_opt (fun (p : Fennec_core.Multipart.part) -> p.name = name) (files c)
+let files (c : t) : Multipart.part list = ensure_body c; Option.value c.files ~default:[]
+let file (c : t) (name : string) : Multipart.part option =
+  List.find_opt (fun (p : Multipart.part) -> p.name = name) (files c)
 
 let path_params (c : t) : (string * string) list = c.path_params
 let path_param (c : t) (k : string) : string option = List.assoc_opt k c.path_params
@@ -209,7 +209,7 @@ let set_header (c : t) (k : string) (v : string) : t =
 let set_cookie (c : t) ?path ?domain ?max_age ?expires ?secure ?http_only ?same_site
     (name : string) (value : string) : t =
   let sc =
-    Fennec_core.Cookie.to_set_cookie ~name ~value ?path ?domain ?max_age ?expires ?secure
+    Cookie.to_set_cookie ~name ~value ?path ?domain ?max_age ?expires ?secure
       ?http_only ?same_site ()
   in
   c.resp_headers <- ("set-cookie", sc) :: c.resp_headers;
@@ -218,7 +218,7 @@ let set_cookie (c : t) ?path ?domain ?max_age ?expires ?secure ?http_only ?same_
 (* expire a cookie now (empty value, Max-Age=0, Expires in the past) *)
 let delete_cookie (c : t) ?path ?domain (name : string) : t =
   let sc =
-    Fennec_core.Cookie.to_set_cookie ~name ~value:"" ?path ?domain ~max_age:0 ~expires:0.0 ()
+    Cookie.to_set_cookie ~name ~value:"" ?path ?domain ~max_age:0 ~expires:0.0 ()
   in
   c.resp_headers <- ("set-cookie", sc) :: c.resp_headers;
   c
@@ -244,8 +244,8 @@ let before_send (c : t) (f : H.response -> H.response) : t =
 let respond (c : t) (r : H.response) : t =
   c.status <- r.H.status;
   let prior =
-    if Fennec_core.Headers.mem r.H.headers "content-type" then
-      Fennec_core.Headers.delete c.resp_headers "content-type"
+    if Headers.mem r.H.headers "content-type" then
+      Headers.delete c.resp_headers "content-type"
     else c.resp_headers
   in
   c.resp_headers <- r.H.headers @ prior;
@@ -271,7 +271,7 @@ let redirect ?(status = 302) (c : t) (location : string) : t =
 
 (* stream a file from disk; the content type defaults to the path's MIME type *)
 let send_file (c : t) ?content_type ~(path : string) () : t =
-  let ct = match content_type with Some t -> t | None -> Fennec_core.Mime.of_path path in
+  let ct = match content_type with Some t -> t | None -> Mime.of_path path in
   c.stream <- Some (File (path, ct));
   c.state <- Streaming;
   c
@@ -285,7 +285,7 @@ let send_chunked (c : t) ?(content_type = "application/octet-stream")
   c
 
 (* answer by upgrading to a websocket; [setup] receives the live channel *)
-let upgrade (c : t) (setup : Fennec_core.Ws_channel.t -> unit) : t =
+let upgrade (c : t) (setup : Ws_channel.t -> unit) : t =
   c.upgrade <- Some setup;
   c.state <- Upgraded;
   c
@@ -386,7 +386,7 @@ let%test "set_cookie does not answer" =
 let%test "one Set-Cookie emitted" =
   let c = json (set_cookie (make (req_ "/")) "sid" "xyz") "{}" in
   let setcs = match resp c with
-    | Some r -> Fennec_core.Headers.get_all r.H.headers "set-cookie"
+    | Some r -> Headers.get_all r.H.headers "set-cookie"
     | None -> []
   in
   List.length setcs = 1
@@ -394,7 +394,7 @@ let%test "one Set-Cookie emitted" =
 let%test "Set-Cookie carries the value" =
   let c = json (set_cookie (make (req_ "/")) "sid" "xyz") "{}" in
   let setcs = match resp c with
-    | Some r -> Fennec_core.Headers.get_all r.H.headers "set-cookie"
+    | Some r -> Headers.get_all r.H.headers "set-cookie"
     | None -> []
   in
   match setcs with [ s ] -> contains_ s "sid=xyz" | _ -> false
@@ -429,8 +429,8 @@ let%test_unit "uploaded file" =
                   ~headers:[ ("content-type", "multipart/form-data; boundary=B") ] ~body:mp ()) in
   match file c "f" with
   | Some p ->
-    Fennec_hunt_unit.check "uploaded filename" (p.Fennec_core.Multipart.filename = Some "x.txt");
-    Fennec_hunt_unit.check_eq "uploaded data" ~expected:"DATA" ~got:p.Fennec_core.Multipart.data
+    Fennec_hunt_unit.check "uploaded filename" (p.Multipart.filename = Some "x.txt");
+    Fennec_hunt_unit.check_eq "uploaded data" ~expected:"DATA" ~got:p.Multipart.data
   | None -> Fennec_hunt_unit.check "uploaded file present" false
 
 (* ──── build-vs-answer + state ──── *)
@@ -567,7 +567,7 @@ let%test "delete_cookie expires the cookie (Max-Age=0)" =
   let c = text (delete_cookie (make (req_ "/")) "sid") "x" in
   match resp c with
   | Some r ->
-    (match Fennec_core.Headers.get_all r.H.headers "set-cookie" with
+    (match Headers.get_all r.H.headers "set-cookie" with
      | [ s ] -> contains_ s "Max-Age=0"
      | _ -> false)
   | None -> false

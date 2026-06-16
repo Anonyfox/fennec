@@ -4,11 +4,11 @@
    when a paw requested one), and dispatches across endpoints by Host + port. The
    only non-portable part of the framework. Framing lives in [Ws]. *)
 
-module CH = Fennec_core.Http
+module CH = Paw.Http
 
 (* the live websocket channel type lives in core (Ws_channel) so paws can
    reference it; the server provides the concrete [send] *)
-type ws = Fennec_core.Ws_channel.t = {
+type ws = Paw.Ws_channel.t = {
   send : string -> unit;
   mutable on_text : string -> unit;
   mutable on_close : unit -> unit;
@@ -136,7 +136,7 @@ let is_ws_upgrade (p : parsed) =
   | Some v -> contains (String.lowercase_ascii v) "websocket"
   | None -> false
 
-let has_header_ci headers k = Fennec_core.Headers.mem headers k
+let has_header_ci headers k = Paw.Headers.mem headers k
 
 (* write the bytes directly to the buffer — no per-line Printf.sprintf allocation *)
 let bw = Eio.Buf_write.string
@@ -271,9 +271,9 @@ let want_keep_alive (p : parsed) : bool =
   | Some v when contains v "keep-alive" -> true
   | _ -> is_11
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module Headers = Fennec_core.Headers
+module Conn = Paw.Conn
+module Paw = Paw
+module Headers = Paw.Headers
 
 (* Write a STREAMED response — the body is produced without buffering it in memory.
    [resp] carries the status + headers (after before_send); its body is ignored. *)
@@ -490,14 +490,14 @@ let peek_sni flow =
     with _ -> None)
 
 let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
-  let dev = match dev with Some d -> d | None -> ( try Sys.getenv Fennec_core.Dev_proto.env_mode <> "production" with Not_found -> true) in
+  let dev = match dev with Some d -> d | None -> ( try Sys.getenv Paw.Dev_proto.env_mode <> "production" with Not_found -> true) in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
      ~parallelism / FENNEC_PARALLELISM. (Named "parallelism", not "domains", which now means hosts.) *)
   let parallelism =
     match parallelism with
     | Some n -> max 1 n
-    | None -> ( match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_parallelism) int_of_string_opt with Some n -> max 1 n | None -> if dev then 1 else Domain.recommended_domain_count ())
+    | None -> ( match Option.bind (Sys.getenv_opt Paw.Dev_proto.env_parallelism) int_of_string_opt with Some n -> max 1 n | None -> if dev then 1 else Domain.recommended_domain_count ())
   in
   let domain_mgr = Eio.Stdenv.domain_mgr env in
   let clock = Eio.Stdenv.clock env in
@@ -510,7 +510,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
      $PORT (Heroku/Render/Fly/… — you're behind their router, serving plain HTTP on the assigned
      port); else 443 when terminating TLS in-process (HTTPS, with :80 doing redirect + ACME), else 80. *)
   let base =
-    match Option.bind (Sys.getenv_opt Fennec_core.Dev_proto.env_port) int_of_string_opt with
+    match Option.bind (Sys.getenv_opt Paw.Dev_proto.env_port) int_of_string_opt with
     | Some p -> p
     | None ->
       if dev then 4000

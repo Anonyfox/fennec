@@ -9,7 +9,7 @@
     Add {!make} early, read/write with {!get}/{!set} downstream. Constant-time verify.
 
     Use sessions for signed cookie-backed request-to-request state such as "remember the
-    logged-in user". Use {!Fennec_paw.Conn.set_cookie} / {!Fennec_paw.Conn.delete_cookie} for a
+    logged-in user". Use {!Paw.Conn.set_cookie} / {!Paw.Conn.delete_cookie} for a
     single unsessioned response cookie.
 
     {[
@@ -27,9 +27,9 @@ val sign : secret:string -> string -> string
 val verify : secret:string -> string -> string option
 
 (** The request scheme as the client sees it, honouring an upstream [X-Forwarded-Proto] (behind a
-    TLS-terminating proxy {!Fennec_paw.Conn.scheme} is the inner ["http"]). This is what the [Secure]
+    TLS-terminating proxy {!Paw.Conn.scheme} is the inner ["http"]). This is what the [Secure]
     cookie default keys on; exposed so other cookie-issuing code (e.g. the login cookie) matches it. *)
-val forwarded_scheme : Fennec_paw.Conn.t -> string
+val forwarded_scheme : Paw.Conn.t -> string
 
 (** A server-side session store (keyed by session id). Provide your own (Redis, SQL, …) or
     use {!memory_store}. *)
@@ -45,25 +45,25 @@ val memory_store : ?ttl:float -> unit -> store
 
 (** Whether {!make} ran upstream on this conn (so {!get}/{!set} are meaningful). A dependent
     paw can use this to fail loudly on a misordered pipeline. *)
-val active : Fennec_paw.Conn.t -> bool
+val active : Paw.Conn.t -> bool
 
 (** A session value, if {!make} ran and the key is set. Typical login checks read a user id
     or account id here in downstream handlers or matched-route middleware. *)
-val get : Fennec_paw.Conn.t -> string -> string option
+val get : Paw.Conn.t -> string -> string option
 
 (** The session map (reserved ["_"]-prefixed keys hidden). *)
-val get_all : Fennec_paw.Conn.t -> (string * string) list
+val get_all : Paw.Conn.t -> (string * string) list
 
 (** Set a value (returns the same conn, for piping). Use after successful login or any handler
     that changes request-to-request state; the session paw writes the refreshed signed cookie at
     the end of the response. *)
-val set : Fennec_paw.Conn.t -> string -> string -> Fennec_paw.Conn.t
+val set : Paw.Conn.t -> string -> string -> Paw.Conn.t
 
 (** Remove one key. *)
-val delete : Fennec_paw.Conn.t -> string -> Fennec_paw.Conn.t
+val delete : Paw.Conn.t -> string -> Paw.Conn.t
 
 (** Empty the session. *)
-val clear : Fennec_paw.Conn.t -> Fennec_paw.Conn.t
+val clear : Paw.Conn.t -> Paw.Conn.t
 
 (** The session paw. [secret] signs the cookie; [lifetime] is the max age (seconds, default
     1 day). With [store], the cookie holds a signed id and the data lives server-side;
@@ -78,9 +78,9 @@ val make :
   ?cookie:string ->
   ?path:string ->
   ?lifetime:float ->
-  ?same_site:Fennec_core.Cookie.same_site ->
+  ?same_site:Paw.Cookie.same_site ->
   ?http_only:bool ->
   ?secure:bool ->
   ?store:store ->
   unit ->
-  Fennec_paw.Paw.t
+  Paw.t

@@ -61,4 +61,4 @@ val head_html : t -> string
 (** [paw cfg ~assets ~precache] serves [<scope>manifest.webmanifest] and [<scope>sw.js] (with
     [Service-Worker-Allowed: <scope>]); [assets] is the same lookup the static paw serves from, and
     [precache] the asset URLs to install offline (bundles, css, icons). Declines everything else. *)
-val paw : t -> assets:(string -> string option) -> precache:string list -> Fennec_paw.Paw.t
+val paw : t -> assets:(string -> string option) -> precache:string list -> Paw.t

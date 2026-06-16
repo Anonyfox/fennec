@@ -11,7 +11,7 @@ module R = Fennec_pulse.Reactive.Mini
 module D = Fennec_pulse_server.Make (R)
 module Msg = Fennec_ddp.Message
 module Ws = Fennec_server.Ws
-module Wsc = Fennec_core.Ws_channel
+module Wsc = Paw.Ws_channel
 module B = Bson
 
 (* a server-side unmasked text frame written immediately (mirrors Cdp.ws_send, server-side) *)

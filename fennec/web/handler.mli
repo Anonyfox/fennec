@@ -10,7 +10,7 @@
          | Ok m -> ignore (Messages.create m); Handler.redirect conn "/thanks" ~flash:"Sent!"
          | Error errs -> Handler.html ~status:422 conn (Contact_form.view ~errors:errs ()) ]} *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 
 (** A minimal static document shell (head + scoped styles + body; no seed, no bundle). *)
 val default_template : Fur.Doc.ctx -> Fur.vnode

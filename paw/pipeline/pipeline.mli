@@ -20,7 +20,7 @@
             post "/api/ping" (fun c -> Conn.json c {|{"pong":true}|}) ]
 
       let resp =
-        run app (Fennec_core.Http.make_request ~meth:Fennec_core.Http.GET ~path:"/users/42" ())
+        run app (Http.make_request ~meth:Http.GET ~path:"/users/42" ())
     ]} *)
 
 (** A paw is just a function; write one as [fun c -> …]. *)
@@ -37,17 +37,17 @@ val pass : t
 
 (** Run a pipeline over a request, returning the final conn (the server inspects it for an
     HTTP response or a websocket upgrade). *)
-val run_conn : t -> Fennec_core.Http.request -> Conn.t
+val run_conn : t -> Http.request -> Conn.t
 
 (** Run a pipeline to a response (an unanswered conn becomes a 404). Handy for pure tests. *)
-val run : t -> Fennec_core.Http.request -> Fennec_core.Http.response
+val run : t -> Http.request -> Http.response
 
 (** {1 Constructors} *)
 
 (** A method+path route. The pattern may contain [:name] (captures one segment) and a
     trailing [*name] (captures the rest), read back with {!Conn.path_param}; a plain pattern
     is an exact match. The paw runs the handler on a match, else declines. *)
-val on : Fennec_core.Http.meth -> string -> t -> t
+val on : Http.meth -> string -> t -> t
 
 (** Route a GET request matching [pattern] to [handler]. Sugar for [on GET]. *)
 val get : string -> t -> t
@@ -66,4 +66,4 @@ val patch : string -> t -> t
 
 (** A paw from a [request -> response option] (e.g. static files): answers on [Some], else
     declines. *)
-val fallthrough : (Fennec_core.Http.request -> Fennec_core.Http.response option) -> t
+val fallthrough : (Http.request -> Http.response option) -> t

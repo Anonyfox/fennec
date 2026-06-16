@@ -1,12 +1,12 @@
 ; Unit tests for the orchestration — DSL, runner, failure formatter, Http layer — against an
-; in-memory fake backend (no real browser), deterministic. test_http also links fennec.core,
+; in-memory fake backend (no real browser), deterministic. test_http also links fennec-paw,
 ; SOLELY to assert the env-contract mirror (Test_proto vs Dev_proto) agrees — a drift guard;
 ; the hunt LIBRARY itself never depends on the framework.
 
 (tests
  (names test test_http)
  (modules test test_http fake)
- (libraries fennec-hunt fennec.core eio eio_main yojson))
+ (libraries fennec-hunt fennec-paw eio eio_main yojson))
 
 ; Dogfood: the inline Unit runtime + ppx, tested end-to-end. Uses the ppx to expand
 ; let%test / let%test_unit, registers tests, runs them. Proves the full pipeline.

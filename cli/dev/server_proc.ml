@@ -4,7 +4,7 @@
    pipe). The line CLASSIFIER is pure and total (unit-tested); the EFFECT of each line stays with
    the supervisor, which passes [drain] an [on_line] callback. *)
 
-module Dev_proto = Fennec_core.Dev_proto
+module Dev_proto = Paw.Dev_proto
 
 type t = { pid : int; fd : Unix.file_descr; carry : Buffer.t }
 

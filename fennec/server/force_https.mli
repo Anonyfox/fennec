@@ -9,4 +9,4 @@
     so a redirected POST is not silently turned into a GET) is the redirect status. [hsts],
     if given, is a [Strict-Transport-Security] max-age (seconds) emitted on already-secure
     responses (with [includeSubDomains]) so the browser upgrades future requests itself. *)
-val make : ?status:int -> ?hsts:int -> unit -> Fennec_paw.Paw.t
+val make : ?status:int -> ?hsts:int -> unit -> Paw.t

@@ -7,7 +7,7 @@
     {[
       let paw =
         Websocket.make "/ws" (fun ch ->
-            ch.Fennec_core.Ws_channel.on_text <- (fun msg -> ch.send ("echo: " ^ msg));
+            ch.Paw.Ws_channel.on_text <- (fun msg -> ch.send ("echo: " ^ msg));
             ch.on_close <- (fun () -> ()))
     ]} *)
-val make : string -> (Fennec_core.Ws_channel.t -> unit) -> Fennec_paw.Paw.t
+val make : string -> (Paw.Ws_channel.t -> unit) -> Paw.t

@@ -418,7 +418,7 @@ let run_browser (opts : options) : int =
    one-line entry) — so we build the server + webroot + that runner once, then run it ONCE with the
    harness env. It executes every registered scenario serially (they share dev's fixed ports),
    honours [--grep], and skips [@manual] scenarios unless [--manual] is passed. The harness contract
-   (the env_test_ fields of Fennec_core.Dev_proto): FENNEC_BIN (this binary), FENNEC_APP_DIR (the
+   (the env_test_ fields of Paw.Dev_proto): FENNEC_BIN (this binary), FENNEC_APP_DIR (the
    cwd to run `fennec dev` in), FENNEC_SERVER_BC (the built server, for leftover-reclaim), FENNEC_ROOT.
    Returns the runner's exit code (0 = all passed). *)
 let orchestrate_system ~(args : string list) : int =
@@ -454,7 +454,7 @@ let orchestrate_system ~(args : string list) : int =
            let e = Sys.executable_name in
            if Filename.is_relative e then Filename.concat cwd e else e
          in
-         let module D = Fennec_core.Dev_proto in
+         let module D = Paw.Dev_proto in
          let env =
            [ (D.env_test_bin, fennec_bin);
              (D.env_test_app_dir, cwd);

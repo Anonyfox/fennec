@@ -20,8 +20,8 @@
       |> Endpoint.pipe_matched [ Paw.Basic_auth.make ~username ~password () ]
     ]} *)
 
-(** Re-exports {!Fennec_paw.Paw} for convenience in endpoint definitions. *)
-module Paw = Fennec_paw.Paw
+(** Re-exports {!Paw} for convenience in endpoint definitions. *)
+module Paw = Paw
 
 (** A named, host-scoped application with a two-phase paw pipeline. *)
 type t

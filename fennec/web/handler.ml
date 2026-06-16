@@ -5,7 +5,7 @@
    needs. A handler is a [Conn.t -> Conn.t] that reads typed inputs ({!Form}/{!Action}), runs its
    Pulse/Accounts logic, and answers with one of these. *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 module Session = Fennec_server.Session
 module Csrf = Fennec_server.Csrf
 
@@ -51,7 +51,7 @@ let method_field (verb : string) : Fur.vnode =
 
 (* ──────────────────────────── tests ──────────────────────────── *)
 
-module H = Fennec_core.Http
+module H = Paw.Http
 
 let contains hay needle =
   let nh = String.length hay and nn = String.length needle in

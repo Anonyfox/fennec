@@ -1,5 +1,5 @@
 (** DDP-over-WebSocket server wiring: bridges a {!Fennec_pulse.Reactive} instance to a
-    {!Fennec_ddp.Session} and serves it over a live {!Fennec_core.Ws_channel.t}. The bridge is
+    {!Fennec_ddp.Session} and serves it over a live {!Paw.Ws_channel.t}. The bridge is
     delta-driven — publications feed the session's sink straight from [observe_changes] (no merge
     box, no polling) — and methods route through the reactive instance's [call], with a reactive
     [Error] mapped to the DDP error payload.
@@ -20,16 +20,16 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) : sig
       connection identity for tests/custom transports; the normal framework websocket paw derives it
       from native Accounts. [remote_ip] is the client's peer IP, used by the Accounts auth methods
       for rate limiting (the framework paw fills it from the [Conn]). *)
-  val serve : ?user_id:string -> ?remote_ip:string -> ?session_id:string -> Fennec_core.Ws_channel.t -> unit
+  val serve : ?user_id:string -> ?remote_ip:string -> ?session_id:string -> Paw.Ws_channel.t -> unit
 
   (** [serve_sockjs ?user_id ?remote_ip ?session_id ch] is {!serve} for a SockJS channel: it sends
       the open frame, then unwraps/wraps DDP messages in SockJS array frames (for the unmodified
       Meteor browser client). *)
-  val serve_sockjs : ?user_id:string -> ?remote_ip:string -> ?session_id:string -> Fennec_core.Ws_channel.t -> unit
+  val serve_sockjs : ?user_id:string -> ?remote_ip:string -> ?session_id:string -> Paw.Ws_channel.t -> unit
 
   (** [paw ?path ()] is the websocket paw serving DDP at [path] (default [/websocket]). It
       automatically seeds the DDP session user id (and the client IP for auth rate limiting) from the
       [Conn], and installs the built-in Accounts methods ([login], [logout], [currentUser], ...).
       [?user_id] is only for custom/test transports that intentionally override native Accounts. *)
-  val paw : ?path:string -> ?user_id:(Fennec_paw.Conn.t -> string option) -> unit -> Fennec_paw.Paw.t
+  val paw : ?path:string -> ?user_id:(Paw.Conn.t -> string option) -> unit -> Paw.t
 end

@@ -25,4 +25,4 @@ val make :
   ?credentials:bool ->
   ?max_age:int ->
   unit ->
-  Fennec_paw.Paw.t
+  Paw.t

@@ -4,9 +4,9 @@
    Strict-Transport-Security) — [extra] takes precedence. Header names are matched
    case-insensitively, so an extra never duplicates a default. Declines (passes through). *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 let lower = String.lowercase_ascii
 let has k hs = List.exists (fun (hk, _) -> lower hk = lower k) hs
@@ -26,7 +26,7 @@ let make ?(extra = []) () : Paw.t =
 
 (* ──── security_headers tests ──── *)
 
-module Headers_ = Fennec_core.Headers
+module Headers_ = Paw.Headers
 let req_ path = H.make_request ~meth:H.GET ~path ()
 let finalize_ c = Conn.apply_before_send c (Option.value (Conn.resp c) ~default:(H.text ~status:404 ""))
 

@@ -5,7 +5,7 @@
     build, and survive anything (a total, exception-wrapped loop). The substantive logic lives in
     the tested sibling modules — {!Artifact}, {!Pidfile}, {!Assets}, {!Crash_limiter}, the server
     child + its line classifier ({!Server_proc}), held-port reclaim ({!Port}), and the shared
-    CLI<->server wire ({!Fennec_core.Dev_proto}). This module is the glue that wires them to dune:
+    CLI<->server wire ({!Paw.Dev_proto}). This module is the glue that wires them to dune:
     it holds the server as a [Down | Up] state (so a live pid can't pair with a dead pipe or a
     stale port), the dev control socket, the esbuild worker, and status logging.
 

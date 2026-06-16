@@ -7,8 +7,8 @@
       let response = Responder.finalize ~now:(Unix.time ()) ~req response
     ]} *)
 
-(** Re-exports {!Fennec_core.Http} for use in the responder's type signatures. *)
-module H = Fennec_core.Http
+(** Re-exports {!Paw.Http} for use in the responder's type signatures. *)
+module H = Paw.Http
 
 (** Finalize [resp] for [req]. [now] is epoch seconds (for [Date] / conditional). *)
 val finalize : ?now:float -> req:H.request -> H.response -> H.response

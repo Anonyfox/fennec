@@ -2,9 +2,9 @@
    field or the X-HTTP-Method-Override header. Only POST is rewritten; anything else passes
    through untouched. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 let make ?(field = "_method") ?(header = "x-http-method-override") () : Paw.t =
  fun c ->

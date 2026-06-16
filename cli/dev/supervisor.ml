@@ -9,7 +9,7 @@
    It is TOTAL: every iteration is exception-wrapped, so no syscall, dead child, or parser
    surprise can take the process down. *)
 
-module Dev_proto = Fennec_core.Dev_proto (* the shared CLI<->server wire (env names, stderr line formats, exit code) *)
+module Dev_proto = Paw.Dev_proto (* the shared CLI<->server wire (env names, stderr line formats, exit code) *)
 
 let ef = Printf.eprintf (* last-resort raw stderr (preflight + the total-loop guard) *)
 let now () = Unix.gettimeofday ()

@@ -2,11 +2,11 @@
    Codec model (API input); path/query scalars coerce with the stdlib. HTML form bodies go through
    {!Form.read} (string coercion); this module is the JSON + scalar side. *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 
 (* the raw request body *)
-let body (conn : Conn.t) : string = (Conn.req conn).Fennec_core.Http.body
+let body (conn : Conn.t) : string = (Conn.req conn).Paw.Http.body
 
 (* decode a JSON request body into a codec's type — the API-input counterpart of {!Form.read}.
    Validation/refinements apply exactly as for forms; errors come back per-field. *)
@@ -42,7 +42,7 @@ let query_int_default ~default (conn : Conn.t) (name : string) : int = Option.va
 
 (* ──────────────────────────── tests ──────────────────────────── *)
 
-module H = Fennec_core.Http
+module H = Paw.Http
 
 type t = { name : string; age : int }
 

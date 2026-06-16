@@ -3,9 +3,9 @@
    Access-Control-Allow-Origin (+ credentials / exposed headers). A request without an Origin header
    is not a CORS request and passes through untouched. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 (* which origins to allow: any, or an explicit allowlist (reflected back when matched) *)
 type origin = Any | These of string list

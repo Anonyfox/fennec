@@ -9,4 +9,4 @@
 
 (** Build the method-override paw. [field] (default ["_method"]) is the form field consulted
     when the [header] (default ["x-http-method-override"]) is absent. *)
-val make : ?field:string -> ?header:string -> unit -> Fennec_paw.Paw.t
+val make : ?field:string -> ?header:string -> unit -> Paw.t

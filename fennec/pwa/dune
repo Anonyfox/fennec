@@ -9,4 +9,4 @@
  (name fennec_pwa)
  (public_name fennec.pwa)
  (wrapped false)
- (libraries fennec.core fennec.paw))
+ (libraries fennec-paw ))

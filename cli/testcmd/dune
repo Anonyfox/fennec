@@ -1,6 +1,6 @@
 ; The `fennec test` orchestration, as a library of focused modules (instance allocation,
 ; suite discovery, the run loop) so the testable logic is unit-tested in isolation. The CLI
-; `test` subcommand is a thin call into it. Depends on fennec.core (the Dev_proto env wire)
+; `test` subcommand is a thin call into it. Depends on fennec-paw (the Dev_proto env wire)
 ; and fennec_dev (server spawn / port / discovery, reused from the dev supervisor) — NOT on the
 ; full fennec-hunt (browser/http/system), so the `fennec` binary stays a lean install. The `docs`
 ; cut delegates to fennec_docs (doc-coverage). fennec-hunt.prop is the lean property-test layer
@@ -11,7 +11,7 @@
  (libraries
   unix
   threads.posix
-  fennec.core
+  fennec-paw
   fennec_dev
   fennec-mongo.mongod
   fennec-mongo.driver

@@ -11,4 +11,4 @@
 (** Build the security-headers paw. [extra] headers (e.g. a [Content-Security-Policy] or
     [Strict-Transport-Security]) are added and take precedence over the defaults and any
     existing same-named header (matched case-insensitively). *)
-val make : ?extra:(string * string) list -> unit -> Fennec_paw.Paw.t
+val make : ?extra:(string * string) list -> unit -> Paw.t

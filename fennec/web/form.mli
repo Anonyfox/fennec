@@ -9,7 +9,7 @@
          | Ok m -> ignore (Messages.create m); Handler.redirect conn "/thanks" ~flash:"Sent!"
          | Error errs -> Handler.html ~status:422 conn (Contact_page.view ~errors:errs ()) ]} *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 
 (** Where {!read} takes the pairs from: the request [Body] (a POSTed form — the default) or the
     [Query] string (a GET filter/search form). *)

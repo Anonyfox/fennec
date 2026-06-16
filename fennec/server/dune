@@ -9,8 +9,7 @@
  ; tls-eio + tls + x509 + the RNG: in-process HTTPS termination (Server.run ?tls). digestif/base64
  ; for the WS handshake; zlib for gzip/permessage-deflate.
  (libraries
-  fennec.core
-  fennec.paw
+  fennec-paw
   fennec-mongo.bson
   fennec-mongo.bson_json
   fennec-mongo.minimongo

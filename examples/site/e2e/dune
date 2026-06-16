@@ -39,7 +39,7 @@
  (libraries
   eio
   eio_main
-  fennec.core
+  fennec-paw
   fennec.server
   fennec.pulse.server
   fennec.pulse

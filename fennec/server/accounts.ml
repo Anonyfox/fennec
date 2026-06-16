@@ -1,8 +1,8 @@
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module Assigns = Fennec_paw.Assigns
-module H = Fennec_core.Http
-module Cookie = Fennec_core.Cookie
+module Conn = Paw.Conn
+module Paw = Paw
+module Assigns = Paw.Assigns
+module H = Paw.Http
+module Cookie = Paw.Cookie
 module Bson = Bson
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 module Json = Fennec_mongo_json.Json
@@ -7046,7 +7046,7 @@ let finalize_ c = Conn.apply_before_send c (Option.get (Conn.resp c))
 let cookie_kv_ set_cookie =
   match String.index_opt set_cookie ';' with Some i -> String.sub set_cookie 0 i | None -> set_cookie
 
-let location_ r = Fennec_core.Headers.get r.H.headers "location"
+let location_ r = Paw.Headers.get r.H.headers "location"
 
 let url_path_ url =
   match String.index_opt url '?' with
@@ -7081,7 +7081,7 @@ let%test "paw assigns user_id from signed login cookie" =
     | Ok (_, token) ->
       let c0 = Conn.make (req_ "/") in
       let c1 = Conn.text (set_login_cookie a c0 token) "ok" in
-      let set_cookie = match Fennec_core.Headers.get_all (finalize_ c1).H.headers "set-cookie" with s :: _ -> s | [] -> "" in
+      let set_cookie = match Paw.Headers.get_all (finalize_ c1).H.headers "set-cookie" with s :: _ -> s | [] -> "" in
       let c2 = paw a () (Conn.make (req_ ~headers:[ ("Cookie", cookie_kv_ set_cookie) ] "/")) in
       user_id c2 = Some u.id)
 
@@ -7117,7 +7117,7 @@ let%test "session_paw works standalone and marks the response private" =
     | Ok (_, token) ->
       let r = Paw.run (session_paw a ~path:"/me" ()) (req_ ~headers:[ ("Cookie", a.cookie ^ "=" ^ token) ] "/me") in
       r.H.status = 200
-      && Fennec_core.Headers.get r.H.headers "cache-control" = Some "no-store"
+      && Paw.Headers.get r.H.headers "cache-control" = Some "no-store"
       && (match Bson_json.of_string r.H.body with
          | Bson.Document _ as doc -> Bson.get_string doc "userId" = Some u.id
          | _ -> false))
@@ -7149,7 +7149,7 @@ let%test "password_reset_paw sets a login cookie after consuming a reset token" 
       let r = Paw.run app (post_form_ "/reset" body) in
       r.H.status = 302
       && location_ r = Some "/"
-      && Fennec_core.Headers.mem r.H.headers "set-cookie"
+      && Paw.Headers.mem r.H.headers "set-cookie"
       && Result.is_ok (login_with_password a (By_username "ada") ~password:"new"))
 
 let%test "password_reset_paw redirects to MFA without setting a login cookie" =
@@ -7166,7 +7166,7 @@ let%test "password_reset_paw redirects to MFA without setting a login cookie" =
       let body = "token=" ^ H.percent_encode (Challenge.token_to_string reset.token) ^ "&password=new" in
       let r = Paw.run app (post_form_ "/reset" body) in
       r.H.status = 302 && mfa_redirect_ok_ a u.id r
-      && not (Fennec_core.Headers.mem r.H.headers "set-cookie"))
+      && not (Paw.Headers.mem r.H.headers "set-cookie"))
 
 let%test "enrollment_paw sets the first password and login cookie" =
   let a = test_accounts () in
@@ -7181,7 +7181,7 @@ let%test "enrollment_paw sets the first password and login cookie" =
       let r = Paw.run app (post_form_ "/enroll" body) in
       r.H.status = 302
       && location_ r = Some "/"
-      && Fennec_core.Headers.mem r.H.headers "set-cookie"
+      && Paw.Headers.mem r.H.headers "set-cookie"
       && Result.is_ok (login_with_password a (By_username "ada") ~password:"pw"))
 
 let%test "email_verification_request_paw requires a logged-in user and sends a token" =
@@ -7236,7 +7236,7 @@ let%test "email_verification_paw verifies email and sets a login cookie" =
       in
       r.H.status = 302
       && location_ r = Some "/"
-      && Fennec_core.Headers.mem r.H.headers "set-cookie"
+      && Paw.Headers.mem r.H.headers "set-cookie"
       && verified)
 
 let%test "email_verification_paw redirects to MFA without setting a login cookie" =
@@ -7257,7 +7257,7 @@ let%test "email_verification_paw redirects to MFA without setting a login cookie
              ())
       in
       r.H.status = 302 && mfa_redirect_ok_ a u.id r
-      && not (Fennec_core.Headers.mem r.H.headers "set-cookie"))
+      && not (Paw.Headers.mem r.H.headers "set-cookie"))
 
 let%test "email magic-link paws issue and consume a login token" =
   let a = test_accounts () in
@@ -7282,7 +7282,7 @@ let%test "email magic-link paws issue and consume a login token" =
     && location_ requested = Some "/sent"
     && consumed.H.status = 302
     && location_ consumed = Some "/"
-    && Fennec_core.Headers.mem consumed.H.headers "set-cookie"
+    && Paw.Headers.mem consumed.H.headers "set-cookie"
 
 let%test "email magic-link paw redirects to MFA without setting a login cookie" =
   let store = memory_store () in
@@ -7307,7 +7307,7 @@ let%test "email magic-link paw redirects to MFA without setting a login cookie" 
              ())
       in
       r.H.status = 302 && mfa_redirect_ok_ a u.id r
-      && not (Fennec_core.Headers.mem r.H.headers "set-cookie"))
+      && not (Paw.Headers.mem r.H.headers "set-cookie"))
 
 let%test "email otp paws issue and consume one-time codes" =
   let a = test_accounts () in
@@ -7328,7 +7328,7 @@ let%test "email otp paws issue and consume one-time codes" =
     && location_ requested = Some "/sent"
     && consumed.H.status = 302
     && location_ consumed = Some "/"
-    && Fennec_core.Headers.mem consumed.H.headers "set-cookie"
+    && Paw.Headers.mem consumed.H.headers "set-cookie"
 
 let%test "email otp paw redirects to MFA without setting a login cookie" =
   let store = memory_store () in
@@ -7352,7 +7352,7 @@ let%test "email otp paw redirects to MFA without setting a login cookie" =
       in
 	      let r = Paw.run consume (post_form_ "/otp/login" body) in
 	      r.H.status = 302 && mfa_redirect_ok_ a u.id r
-	      && not (Fennec_core.Headers.mem r.H.headers "set-cookie"))
+	      && not (Paw.Headers.mem r.H.headers "set-cookie"))
 
 let%test "mfa_totp_paw completes step-up and sets a login cookie" =
   let store = Store.minimongo () in
@@ -7382,7 +7382,7 @@ let%test "mfa_totp_paw completes step-up and sets a login cookie" =
           r.H.status = 302
           && location_ r = Some "/"
           &&
-          (match Fennec_core.Headers.get_all r.H.headers "set-cookie" with
+          (match Paw.Headers.get_all r.H.headers "set-cookie" with
           | set_cookie :: _ ->
             let c = paw a () (Conn.make (req_ ~headers:[ ("Cookie", cookie_kv_ set_cookie) ] "/")) in
             user_id c = Some user.id
@@ -7410,7 +7410,7 @@ let%test "mfa_backup_code_paw completes step-up and consumes one backup code" =
         in
         r.H.status = 302
         && location_ r = Some "/"
-        && Fennec_core.Headers.mem r.H.headers "set-cookie"
+        && Paw.Headers.mem r.H.headers "set-cookie"
         && consume_backup_code a user.id ~code = Error (Login_rejected "Incorrect MFA code")
       | _ -> false))
 
@@ -7433,7 +7433,7 @@ let%test "passkey registration option paw emits browser JSON for the current use
           (req_ ~headers:[ ("Cookie", a.cookie ^ "=" ^ token) ] "/passkeys/register/options")
       in
       r.H.status = 200
-      && Fennec_core.Headers.get r.H.headers "cache-control" = Some "no-store"
+      && Paw.Headers.get r.H.headers "cache-control" = Some "no-store"
       &&
       match Json.parse_opt r.H.body with
       | Some json -> Option.is_some (json_member_string "token" json) && Option.is_some (Json.member "publicKey" json)
@@ -7492,7 +7492,7 @@ let%test "oauth route helpers redirect to provider then resolve callback" =
         (H.make_request ~meth:H.GET ~path:"/oauth/callback"
            ~query_string:("code=ok&state=" ^ H.percent_encode state) ())
     in
-    r.H.status = 302 && location_ r = Some "/" && Fennec_core.Headers.mem r.H.headers "set-cookie"
+    r.H.status = 302 && location_ r = Some "/" && Paw.Headers.mem r.H.headers "set-cookie"
 
 let%test "oauth credential handshake: issue then consume binds the user, single-use, secret-checked" =
   let a = test_accounts () in
@@ -7558,7 +7558,7 @@ let%test "oidc route helpers redirect to provider then resolve callback" =
         (H.make_request ~meth:H.GET ~path:"/oidc/callback"
            ~query_string:("code=ok&state=" ^ H.percent_encode state) ())
     in
-    r.H.status = 302 && location_ r = Some "/" && Fennec_core.Headers.mem r.H.headers "set-cookie"
+    r.H.status = 302 && location_ r = Some "/" && Paw.Headers.mem r.H.headers "set-cookie"
 
 let%test "saml route helper rejects malformed ACS callback by redirecting to error" =
   let a = test_accounts () in

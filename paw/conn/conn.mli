@@ -37,26 +37,26 @@ type stream =
 (** {1 Construction & server-facing consumption} *)
 
 (** A fresh conn for a request (the server calls this; tests may too). *)
-val make : Fennec_core.Http.request -> t
+val make : Http.request -> t
 
 (** The request. *)
-val req : t -> Fennec_core.Http.request
+val req : t -> Http.request
 
 (** The buffered response the conn answered with, if any (the server reads this). *)
-val resp : t -> Fennec_core.Http.response option
+val resp : t -> Http.response option
 
 (** The status + headers with an empty body — for running before_send over a streamed or
     headers-only response. *)
-val resp_skeleton : t -> Fennec_core.Http.response
+val resp_skeleton : t -> Http.response
 
 (** The pending websocket-upgrade setup, if a paw requested one. *)
-val upgrade_handler : t -> (Fennec_core.Ws_channel.t -> unit) option
+val upgrade_handler : t -> (Ws_channel.t -> unit) option
 
 (** The pending streamed response, if any. *)
 val stream : t -> stream option
 
 (** Apply all registered before_send hooks to a response (the server calls this once). *)
-val apply_before_send : t -> Fennec_core.Http.response -> Fennec_core.Http.response
+val apply_before_send : t -> Http.response -> Http.response
 
 (** Has the conn answered? (a response, a halt, an upgrade, or a stream). The runner stops
     feeding paws once answered. *)
@@ -68,7 +68,7 @@ val answered : t -> bool
 val path : t -> string
 
 (** The effective method (a method-override paw may have replaced it). *)
-val meth : t -> Fennec_core.Http.meth
+val meth : t -> Http.meth
 
 (** The [Host] header value (without port). Used for host-based routing. *)
 val host : t -> string
@@ -113,10 +113,10 @@ val body_param : t -> string -> string option
 (** Uploaded file parts from a [multipart/form-data] request body. Use this for incoming file
     upload handlers; HTTP tests can send matching bodies with {!Fennec_hunt.Http.file} and
     [~multipart]. *)
-val files : t -> Fennec_core.Multipart.part list
+val files : t -> Multipart.part list
 
 (** An uploaded file part by form field name. *)
-val file : t -> string -> Fennec_core.Multipart.part option
+val file : t -> string -> Multipart.part option
 
 (** Path params captured by a [:name]/[*splat] route. *)
 val path_params : t -> (string * string) list
@@ -159,7 +159,7 @@ val set_cookie :
   ?expires:float ->
   ?secure:bool ->
   ?http_only:bool ->
-  ?same_site:Fennec_core.Cookie.same_site ->
+  ?same_site:Cookie.same_site ->
   string ->
   string ->
   t
@@ -169,20 +169,20 @@ val set_cookie :
 val delete_cookie : t -> ?path:string -> ?domain:string -> string -> t
 
 (** Set the effective method (used by a method-override paw). *)
-val override_method : t -> Fennec_core.Http.meth -> t
+val override_method : t -> Http.meth -> t
 
 (** Set the captured path params (used by a :param/route). *)
 val set_path_params : t -> (string * string) list -> t
 
 (** Register a hook run on the final response just before sending (FIFO). The way a paw
     touches the RESPONSE (compression, security headers, logging) without answering. *)
-val before_send : t -> (Fennec_core.Http.response -> Fennec_core.Http.response) -> t
+val before_send : t -> (Http.response -> Http.response) -> t
 
 (** {1 Answerers} — set a response and short-circuit the rest of the pipeline. *)
 
-(** Answer with a full {!Fennec_core.Http.response} (pre-set headers are preserved; the
+(** Answer with a full {!Http.response} (pre-set headers are preserved; the
     answer's content-type wins). *)
-val respond : t -> Fennec_core.Http.response -> t
+val respond : t -> Http.response -> t
 
 (** Answer with a [text/plain] body. [status] defaults to 200. *)
 val text : ?status:int -> ?headers:(string * string) list -> t -> string -> t
@@ -204,7 +204,7 @@ val send_file : t -> ?content_type:string -> path:string -> unit -> t
 val send_chunked : t -> ?content_type:string -> ((string -> unit) -> unit) -> t
 
 (** Answer by upgrading to a websocket; [setup] receives the live channel. *)
-val upgrade : t -> (Fennec_core.Ws_channel.t -> unit) -> t
+val upgrade : t -> (Ws_channel.t -> unit) -> t
 
 (** Explicitly halt with no response (rare; the server turns this into a 404). *)
 val halt : t -> t

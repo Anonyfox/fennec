@@ -9,8 +9,7 @@
  (flags
   (:standard -w -67))
  (libraries
-  fennec.core
-  fennec.paw
+  fennec-paw
   fennec.server
   fennec.pulse
   fennec.ddp

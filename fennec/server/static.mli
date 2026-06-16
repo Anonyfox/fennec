@@ -13,8 +13,8 @@
       let prod = Static.make (Static.Embedded ("webroot", Assets.lookup))
     ]} *)
 
-(** Re-exports {!Fennec_core.Http} for use in the static handler's type signatures. *)
-module H = Fennec_core.Http
+(** Re-exports {!Paw.Http} for use in the static handler's type signatures. *)
+module H = Paw.Http
 
 (** A web root.
     - [Dir path]: read from disk; results cached by mtime+size; symlinks that
@@ -38,4 +38,4 @@ val handler : ?cache_control:string -> source -> H.request -> H.response option
 
 (** The static paw for a web root: answers when the path matches an asset, else declines
     (so pages / 404 follow). Drop it into an endpoint pipeline. *)
-val make : ?cache_control:string -> source -> Fennec_paw.Paw.t
+val make : ?cache_control:string -> source -> Paw.t

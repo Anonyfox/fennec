@@ -2,7 +2,7 @@
    client (JSON) off the same handler. JSON is encoded straight from the Codec model (its total
    [enc]), so the wire shape matches the DB + form shape — no separate serializer. *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 
 (* Does the client prefer JSON? Walks the Accept header in order (ignoring q-weights — the common
@@ -70,7 +70,7 @@ let api (conn : Conn.t) (c : 'a Codec.t) (o : 'a outcome) : Conn.t =
 
 (* ──────────────────────────── tests ──────────────────────────── *)
 
-module H = Fennec_core.Http
+module H = Paw.Http
 
 let conn_with_accept a = Conn.make (H.make_request ~meth:H.GET ~path:"/x" ~headers:[ ("accept", a) ] ())
 

@@ -7,7 +7,7 @@
            ~html:(fun c -> View.document c (Posts_view.show post))
            ~json:(fun c -> Respond.model c Post.codec post) ]} *)
 
-module Conn = Fennec_paw.Conn
+module Conn = Paw.Conn
 
 (** Whether the client prefers JSON (walks the Accept header in order; HTML is the default). A
     JSON-API handler can branch on this; HTML and JSON are otherwise kept as separate code paths. *)

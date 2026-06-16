@@ -1,7 +1,7 @@
 module Challenge = Accounts_challenge
 module Identity = Accounts_identity
 module OAuth = Accounts_oauth
-module H = Fennec_core.Http
+module H = Paw.Http
 module Bson = Bson
 module Json = Fennec_mongo_json.Json
 

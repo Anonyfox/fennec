@@ -8,9 +8,9 @@
    and timing. Pass [?sink] to redirect the line elsewhere (a file, JSON, syslog) — a custom
    sink is written verbatim (never colourised). *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 (* colour only when the default stderr sink is a real terminal and NO_COLOR is unset —
    the same restraint the e2e reporter uses, so piped/redirected logs stay clean *)

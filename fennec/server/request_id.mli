@@ -11,7 +11,7 @@
 
 (** Build the request-id paw. [header] (default ["x-request-id"]) is both the inbound header
     consulted for an existing id and the response header the id is echoed in. *)
-val make : ?header:string -> unit -> Fennec_paw.Paw.t
+val make : ?header:string -> unit -> Paw.t
 
 (** The request id assigned by {!make} on this conn, if any. *)
-val current : Fennec_paw.Conn.t -> string option
+val current : Paw.Conn.t -> string option

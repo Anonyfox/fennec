@@ -9,7 +9,7 @@
   fennec.pulse
   fennec.pulse.method
   fennec.ddp
-  fennec.core
+  fennec-paw
   fennec-mongo.bson
   fennec-mongo.minimongo
   fennec-mongo.query

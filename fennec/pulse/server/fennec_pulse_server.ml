@@ -7,7 +7,7 @@ module Rx = Fennec_pulse.Reactive
 module Msg = Fennec_ddp.Message
 module Session = Fennec_ddp.Session
 module Sockjs = Fennec_ddp.Sockjs
-module Ws = Fennec_core.Ws_channel
+module Ws = Paw.Ws_channel
 module Accounts = Fennec_server.Accounts
 module B = Bson
 
@@ -156,6 +156,6 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
       let uid = match user_id with Some f -> f c | None -> accounts_user_id c in
       (* the socket peer IP rides the whole connection into every method_ctx, so the Accounts auth
          methods can rate-limit by client IP (the WS upgrade is the only place we still hold the Conn) *)
-      let remote_ip = Fennec_paw.Conn.remote_ip c in
+      let remote_ip = Paw.Conn.remote_ip c in
       Fennec_server.Websocket.make path (fun ch -> serve ?user_id:uid ?remote_ip ch) c
 end

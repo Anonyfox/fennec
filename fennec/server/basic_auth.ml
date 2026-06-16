@@ -1,8 +1,8 @@
 (* HTTP Basic auth — answer 401 with a challenge unless the credentials match. Credentials
    are compared in constant time (no early exit on a length/byte mismatch). *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
+module Conn = Paw.Conn
+module Paw = Paw
 
 let lower = String.lowercase_ascii
 
@@ -44,8 +44,8 @@ let make ~username ~password ?(realm = "Restricted") () : Paw.t =
 
 (* ──── basic_auth tests ──── *)
 
-module H_ = Fennec_core.Http
-module Headers_ = Fennec_core.Headers
+module H_ = Paw.Http
+module Headers_ = Paw.Headers
 let req_ ?(headers = []) path = H_.make_request ~meth:H_.GET ~path ~headers ()
 let resp_of_ c = Option.value (Conn.resp c) ~default:(H_.text ~status:404 "")
 

@@ -8,4 +8,4 @@
 
 (** Build the logger paw. [sink] defaults to stderr (colourised when stderr is a TTY and
     [NO_COLOR] is unset); a custom [sink] receives the plain line, never colour codes. *)
-val make : ?sink:(string -> unit) -> unit -> Fennec_paw.Paw.t
+val make : ?sink:(string -> unit) -> unit -> Paw.t

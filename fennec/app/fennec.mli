@@ -20,14 +20,14 @@
 
 (** {1 Core types} *)
 
-(** The request-scoped connection carrier (see {!Fennec_paw.Conn}). *)
-module Conn = Fennec_paw.Conn
+(** The request-scoped connection carrier (see {!Paw.Conn}). *)
+module Conn = Paw.Conn
 
-(** HTTP types: request, response, status codes, methods (see {!Fennec_core.Http}). *)
-module Http = Fennec_core.Http
+(** HTTP types: request, response, status codes, methods (see {!Paw.Http}). *)
+module Http = Paw.Http
 
-(** Cookie parsing and serialization (see {!Fennec_core.Cookie}). *)
-module Cookie = Fennec_core.Cookie
+(** Cookie parsing and serialization (see {!Paw.Cookie}). *)
+module Cookie = Paw.Cookie
 
 (** Accounts: the framework-native identity/session substrate. Password/email/OAuth/OIDC/SAML/
     passkey/MFA/org/SCIM batteries, passwordless route helpers, passkey JSON ceremonies, OIDC
@@ -148,7 +148,7 @@ module Paw : sig
   end
 
   module Websocket : sig
-    val make : string -> (Fennec_core.Ws_channel.t -> unit) -> t
+    val make : string -> (Paw.Ws_channel.t -> unit) -> t
   end
 
   module Static : sig

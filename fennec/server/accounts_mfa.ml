@@ -311,7 +311,7 @@ let totp ?issuer ?account ?(digits = 6) ?(period = 30) ~secret () =
         }
     | _ -> Error (Invalid_config "TOTP secret must be valid base32 with at least 80 bits")
 
-let percent_encode = Fennec_core.Http.percent_encode
+let percent_encode = Paw.Http.percent_encode
 
 let provisioning_uri cfg =
   let label =

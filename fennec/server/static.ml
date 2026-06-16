@@ -10,10 +10,10 @@
    the whole-body case; Range responses are sent uncompressed (correct: ranges
    are over the identity representation). *)
 
-module H = Fennec_core.Http
-module Sem = Fennec_core.Http_semantics
-module Date = Fennec_core.Http_date
-module Mime = Fennec_core.Mime
+module H = Paw.Http
+module Sem = Paw.Http_semantics
+module Date = Paw.Http_date
+module Mime = Paw.Mime
 
 type entry = { bytes : string; etag : string; mtime : float }
 
@@ -251,8 +251,8 @@ let handler ?cache_control (src : source) : H.request -> H.response option =
 
 (* the static paw: answer when the path matches an asset, else decline (so pages / 404
    follow). This is the form you drop into an endpoint pipeline. *)
-let make ?cache_control (src : source) : Fennec_paw.Paw.t =
-  Fennec_paw.Paw.fallthrough (handler ?cache_control src)
+let make ?cache_control (src : source) : Paw.t =
+  Paw.fallthrough (handler ?cache_control src)
 
 (* ──── static tests ──── *)
 

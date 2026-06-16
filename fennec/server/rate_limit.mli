@@ -11,9 +11,9 @@
     fail-closed); [capacity] is the burst size (default 100); [per_second] the sustained refill rate
     (default 10); [now] overrides the clock (for tests). *)
 val make :
-  ?key:(Fennec_paw.Conn.t -> string) ->
+  ?key:(Paw.Conn.t -> string) ->
   ?capacity:int ->
   ?per_second:float ->
   ?now:(unit -> float) ->
   unit ->
-  Fennec_paw.Paw.t
+  Paw.t

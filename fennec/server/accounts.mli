@@ -32,8 +32,8 @@
     {!Mfa}, {!Org}, {!Scim}, {!Roles}, {!Audit}) compose through canonical user ids, identity links,
     challenges, and the one {!Store.t} instead of one giant configuration record. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
+module Conn = Paw.Conn
+module Paw = Paw
 module Bson = Bson
 
 (** Shared identity-linking concepts for all account mechanisms. *)
@@ -1213,7 +1213,7 @@ val login_with_token : t -> token -> (user * token, error) result
 val set_login_cookie :
   t ->
   Conn.t ->
-  ?same_site:Fennec_core.Cookie.same_site ->
+  ?same_site:Paw.Cookie.same_site ->
   ?http_only:bool ->
   ?secure:bool ->
   token ->

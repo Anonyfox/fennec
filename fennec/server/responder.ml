@@ -12,10 +12,10 @@
    in [Static] because it needs the file length up front; this module handles the
    whole-body path. *)
 
-module H = Fennec_core.Http
-module Sem = Fennec_core.Http_semantics
-module Date = Fennec_core.Http_date
-module Mime = Fennec_core.Mime
+module H = Paw.Http
+module Sem = Paw.Http_semantics
+module Date = Paw.Http_date
+module Mime = Paw.Mime
 
 (* don't bother compressing tiny bodies — the gzip header overhead dominates and
    many proxies skip below ~1KB too *)

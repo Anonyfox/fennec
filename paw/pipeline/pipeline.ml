@@ -15,7 +15,7 @@
    higher-level batteries (logger, auth, …) live in their own modules under the [Paw]
    namespace ([Paw.Logger], [Paw.Session], …), each a [make] returning one of these paws. *)
 
-module H = Fennec_core.Http
+module H = Http
 
 (* ============================ the primitive + its algebra =================== *)
 

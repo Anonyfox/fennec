@@ -1,9 +1,9 @@
 (* Force HTTPS — redirect plain-http requests to https, honouring an upstream
    X-Forwarded-Proto from a TLS-terminating proxy. Already-https requests pass through. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module H = Fennec_core.Http
+module Conn = Paw.Conn
+module Paw = Paw
+module H = Paw.Http
 
 (* the client-side scheme: an upstream X-Forwarded-Proto (from a TLS-terminating proxy) wins
    over [Conn.scheme]. The header may list several ("https, http"); take the first, else a
@@ -39,7 +39,7 @@ let make ?(status = 308) ?hsts () : Paw.t =
 
 (* ──── force_https tests ──── *)
 
-module Headers_ = Fennec_core.Headers
+module Headers_ = Paw.Headers
 let req_ ?(host = "") ?(headers = []) path = H.make_request ~meth:H.GET ~path ~headers ~host ()
 let resp_of_ c = Option.value (Conn.resp c) ~default:(H.text ~status:404 "")
 let finalize_ c = Conn.apply_before_send c (resp_of_ c)

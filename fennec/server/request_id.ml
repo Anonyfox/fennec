@@ -2,9 +2,9 @@
    propagation), exposed in a typed assign and echoed in a response header. Domain-SAFE:
    a one-time CSPRNG prefix + an Atomic counter, so ids stay unique across worker domains. *)
 
-module Conn = Fennec_paw.Conn
-module Paw = Fennec_paw.Paw
-module Assigns = Fennec_paw.Assigns
+module Conn = Paw.Conn
+module Paw = Paw
+module Assigns = Paw.Assigns
 
 (* one CSPRNG prefix per process (hex of 4 random bytes), so ids from different runs/domains
    never collide; the Atomic counter makes them unique within the process *)
@@ -42,7 +42,7 @@ let current (c : Conn.t) : string option = Conn.get c key
 
 (* ──── request_id tests ──── *)
 
-let req_ ?(headers = []) path = Fennec_core.Http.make_request ~meth:Fennec_core.Http.GET ~path ~headers ()
+let req_ ?(headers = []) path = Paw.Http.make_request ~meth:Paw.Http.GET ~path ~headers ()
 
 let%test "sets the assign" =
   let c = make () (Conn.make (req_ "/")) in
@@ -51,7 +51,7 @@ let%test "sets the assign" =
 let%test_unit "sets the response header" =
   let c = make () (Conn.make (req_ "/")) in
   let has = match Conn.resp (Conn.text c "x") with
-    | Some r -> Fennec_core.Headers.mem r.Fennec_core.Http.headers "x-request-id"
+    | Some r -> Paw.Headers.mem r.Paw.Http.headers "x-request-id"
     | None -> false in
   Fennec_hunt_unit.check "response header present" has
 

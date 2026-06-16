@@ -181,3 +181,16 @@
    (>= 1.0))
   dune-configurator
   (conf-pkg-config :build)))
+
+; A standalone HTTP micro-framework carved out of the runtime: the HTTP vocabulary
+; (request/response, headers, cookies, multipart, MIME, dates, semantics), the
+; connection carrier with typed assigns (Conn), the paw pipeline algebra + routing,
+; the websocket channel, and the dev/livereload wire. Depends on no other fennec.*
+; library, so it stands on its own; the framework builds on it.
+(package
+ (name fennec-paw)
+ (synopsis "A standalone HTTP micro-framework for OCaml/Eio — routing, middleware, the Conn pipeline")
+ (depends
+  (ocaml
+   (>= 5.2))
+  dune))
