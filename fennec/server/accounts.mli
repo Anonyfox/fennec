@@ -514,6 +514,7 @@ val make :
   store:store ->
   ?password_hasher:password_hasher ->
   ?password_policy:Password.policy ->
+  ?policy:Roles.policy ->
   ?cookie:string ->
   ?path:string ->
   ?lifetime:float ->
@@ -673,16 +674,15 @@ val revoke_role :
 (** Check a user's current app-wide role grants. *)
 val has_role : t -> user_id -> Roles.Role.t -> (bool, error) result
 
-(** Check a user's current app-wide role grants against a typed policy. Missing users, roles, and
-    permissions deny. *)
-val can : t -> user_id -> policy:Roles.policy -> Roles.Permission.t -> (bool, error) result
+(** Does the user's app-wide roles grant [permission] under the held {!policy} (passed to {!make})?
+    Missing users, roles, and permissions deny. No [~policy] argument — the policy is code-declared once. *)
+val can : t -> user_id -> Roles.Permission.t -> (bool, error) result
 
 (** Guard a route by app-wide role. The check is server-side and reads the current user record. *)
 val require_role : t -> ?redirect:string -> Roles.Role.t -> unit -> Paw.t
 
-(** Guard a route by app-wide permission using a typed role policy. The check is server-side and
-    reads the current user record. *)
-val require_permission : t -> ?redirect:string -> policy:Roles.policy -> Roles.Permission.t -> unit -> Paw.t
+(** Guard a route by app-wide permission under the held {!policy}. Server-side; reads the current user. *)
+val require_permission : t -> ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
 
 (** Current request user, loaded from the store when a valid signed login cookie is present. This is
     a convenience for SSR/handlers that need the record; prefer {!user_id} when the id is enough. *)

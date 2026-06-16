@@ -275,6 +275,10 @@ type t = {
   store : store;
   password_hasher : password_hasher option;
   password_policy : Password.policy option;
+  policy : Roles.policy;
+      (* the app's role→permission map — code-declared, immutable, held once. [can]/[require_permission]
+         read it directly so callers never thread a [~policy] argument. The single RBAC policy: org
+         permission checks (see [can_in]) resolve against it too. *)
   mutable config : config;
   mutable email_templates : Accounts_mailer.templates option;
   cookie : string;
@@ -479,8 +483,8 @@ let token_live t (s : session) token =
   | Ok (Some _) -> Ok ()
   | Ok None -> Error Invalid_token
 
-let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_login") ?(path = "/")
-    ?(lifetime = 86400.) ?(validate_every_request = false) ?(config = default_config) ?rate_limit () =
+let make ~secret ~store ?password_hasher ?password_policy ?(policy = Roles.policy []) ?(cookie = "_fennec_login")
+    ?(path = "/") ?(lifetime = 86400.) ?(validate_every_request = false) ?(config = default_config) ?rate_limit () =
   if String.length secret < 16 then
     invalid_arg
       (Printf.sprintf "Fennec.Accounts.make: ~secret must be at least 16 bytes (got %d)" (String.length secret));
@@ -490,6 +494,7 @@ let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_lo
     store;
     password_hasher;
     password_policy;
+    policy;
     cookie;
     path;
     lifetime;
@@ -978,8 +983,8 @@ let revoke_role t ?actor ?request uid role =
 let has_role t uid role =
   Result.bind (find_required_user t uid) (fun user -> Ok (Roles.mem role user.roles))
 
-let can t uid ~policy permission =
-  Result.bind (find_required_user t uid) (fun user -> Ok (Roles.any_role_allows policy ~roles:user.roles ~permission))
+let can t uid permission =
+  Result.bind (find_required_user t uid) (fun user -> Ok (Roles.any_role_allows t.policy ~roles:user.roles ~permission))
 
 let reject_authz c redirect =
   match redirect with
@@ -995,12 +1000,12 @@ let require_role t ?redirect role () : Paw.t =
     | Ok true -> c
     | Ok false | Error _ -> reject_authz c redirect)
 
-let require_permission t ?redirect ~policy permission () : Paw.t =
+let require_permission t ?redirect permission () : Paw.t =
  fun c ->
   match user_id c with
   | None -> reject_authz c redirect
   | Some uid -> (
-    match can t uid ~policy permission with
+    match can t uid permission with
     | Ok true -> c
     | Ok false | Error _ -> reject_authz c redirect)
 
@@ -7804,9 +7809,10 @@ let%test "app-wide roles are typed, stored on users, and mapped from external st
       | _ -> false)
 
 let%test "role and permission guards deny by default and allow declared grants" =
-  let a = test_accounts () in
   let admin_access = Roles.Permission.v_exn "admin.access" in
+  (* the policy is declared as CODE and handed to make ONCE — guards read it, no per-call threading *)
   let policy = Roles.policy [ Roles.role Roles.Role.admin [ admin_access ] ] in
+  let a = make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:test_hasher ~policy () in
   match create_user a ~username:"ada" ~password:"pw" () with
   | Error _ -> false
   | Ok user -> (
@@ -7814,7 +7820,7 @@ let%test "role and permission guards deny by default and allow declared grants" 
     | Error _ -> false
     | Ok (_, token) ->
       let authenticated = Conn.make (req_ ~headers:[ ("Cookie", a.cookie ^ "=" ^ token) ] "/admin") |> paw a () in
-      let denied = require_permission a ~policy admin_access () authenticated in
+      let denied = require_permission a admin_access () authenticated in
       let anonymous = require_role a Roles.Role.admin () (Conn.make (req_ "/admin")) in
       let allowed =
         match grant_role a user.id Roles.Role.admin with
@@ -7822,7 +7828,7 @@ let%test "role and permission guards deny by default and allow declared grants" 
         | Ok _ ->
           Conn.make (req_ ~headers:[ ("Cookie", a.cookie ^ "=" ^ token) ] "/admin")
           |> paw a ()
-          |> require_permission a ~policy admin_access ()
+          |> require_permission a admin_access ()
       in
       (match (Conn.resp denied, Conn.resp anonymous, Conn.resp allowed) with
       | Some denied, Some anonymous, None -> denied.H.status = 403 && anonymous.H.status = 403
