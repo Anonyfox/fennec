@@ -397,7 +397,7 @@ let%test_unit "sub-fibers cancelled at deadline" =
 (* Handle one connection. [resolve ~host] picks the endpoint for a request: in prod (and on the dev
    gateway) it routes by Host pattern; on a dev convenience port it always returns that one endpoint.
    A paw pipeline may answer with an HTTP response OR a websocket upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : host:string -> Endpoint.t option) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : host:string -> Endpoint.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -423,14 +423,18 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : 
          a force-https paw can rewrite from X-Forwarded-Proto. host is the normalized Host header. *)
       let host = Host_pattern.normalize (match header p.headers "host" with Some h -> h | None -> "") in
       let req = to_request ~host ~scheme:"http" ~remote_ip p in
-      let endpoint = resolve ~host in
-      (* run the endpoint's paw pipeline to a conn. A handler exception becomes a
-         clean 500 (never a dropped connection / partial write). *)
-      let conn =
-        match endpoint with
-        | None -> Conn.respond (Conn.make req) (on_error (No_route req))
-        | Some e -> run_handler ~clock ~timeout:request_timeout ~on_error (Endpoint.handler e) req
+      (* the endpoints matching this Host, most-specific-first (overlap: several may match). Try each
+         on a FRESH conn (run_handler makes one from [req]); the first to ANSWER wins, a declining one
+         (no route matched — its auth/matched middleware never fired, its conn discarded) falls
+         through to the next. None answered / none matched → a clean 404. A handler exception becomes
+         a clean 500, never a dropped connection. *)
+      let rec try_each = function
+        | [] -> Conn.respond (Conn.make req) (on_error (No_route req))
+        | e :: rest ->
+          let c = run_handler ~clock ~timeout:request_timeout ~on_error (Endpoint.handler e) req in
+          if Conn.answered c then c else try_each rest
       in
+      let conn = try_each (resolve ~host) in
       match Conn.upgrade_handler conn with
       | Some setup when is_ws_upgrade p ->
         (* a paw requested a websocket upgrade *)
@@ -523,14 +527,17 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   | Ok plan ->
   let exception Port_in_use of int in
   (try
-  let by_host ~(host : string) : Endpoint.t option = Host_router.route router ~host in
+  (* the Host-routed resolver: every endpoint matching the Host, most-specific-first, with overlap
+     handled by the dispatch (first to answer wins). *)
+  let by_host ~(host : string) : Endpoint.t list = Host_router.route_all router ~host in
   (* (port, resolver) bindings: prod = one routed port; dev = the routed GATEWAY (prod-identical,
      at the base) plus ONE forced port per endpoint at base+1+i — contiguous, in declaration order,
-     so the ports read cleanly: the base routes by Host, base+1.. are the named endpoints, no gaps. *)
+     so the ports read cleanly: the base routes by Host, base+1.. are the named endpoints, no gaps.
+     A forced port serves exactly its one endpoint (overlap is only resolved on the gateway). *)
   let binds =
     if not dev then [ (base, by_host) ]
     else
-      let forced = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> Some e.Host_router.ep)) entries in
+      let forced = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> [ e.Host_router.ep ])) entries in
       (Port_plan.gateway plan, by_host) :: forced
   in
   Eio.Switch.run @@ fun sw ->

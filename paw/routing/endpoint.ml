@@ -168,3 +168,48 @@ let%test "flat (no pipe_matched) still works" =
 let%test "flat unmatched -> 404" =
   let e5 = make ~name:"flat" () |> get "/ok" (fun c -> Conn.text c "ok") in
   (Pipeline.run (handler e5) (req_ "/nope")).H.status = 404
+
+(* ──── overlap: two endpoints on the SAME host, the server's dispatch (try each on a fresh conn,
+   first to ANSWER wins, a decliner falls through). These prove the airtight properties the
+   Host_router ordering relies on. ──── *)
+
+(* mirror the server's [handle_conn] loop: a fresh conn per attempt, first answered wins *)
+let first_answer req endpoints =
+  let rec go = function
+    | [] -> None
+    | e :: rest ->
+      let c = Pipeline.run_conn (handler e) req in
+      if Conn.answered c then Some c else go rest
+  in
+  go endpoints
+
+let%test_unit "overlap: request for B's route falls through A; A's matched auth never fires" =
+  let auth_ran = ref false in
+  let a = make ~name:"auth" ~hosts:[ "app.com" ] ()
+          |> get "/admin" (fun c -> Conn.text c "admin")
+          |> use_matched (fun c -> auth_ran := true; Conn.text ~status:401 c "no") in
+  let b = make ~name:"public" ~hosts:[ "app.com" ] () |> get "/public" (fun c -> Conn.text c "public") in
+  let body = match first_answer (req_ "/public") [ a; b ] with Some c -> (Option.get (Conn.resp c)).H.body | None -> "none" in
+  Fennec_hunt_unit.check "B answered /public" (body = "public");
+  Fennec_hunt_unit.check "A's matched auth did NOT fire on the fall-through" (not !auth_ran)
+
+let%test "overlap: request for A's own route is answered by A (auth fires)" =
+  let a = make ~name:"auth" ~hosts:[ "app.com" ] ()
+          |> get "/admin" (fun c -> Conn.text c "admin")
+          |> use_matched (fun c -> Conn.text ~status:401 c "no") in
+  let b = make ~name:"public" ~hosts:[ "app.com" ] () |> get "/public" (fun c -> Conn.text c "public") in
+  (match first_answer (req_ "/admin") [ a; b ] with Some c -> (Option.get (Conn.resp c)).H.status | None -> 0) = 401
+
+let%test "overlap: a declining endpoint's before_send leaves no trace on the next" =
+  let a = make ~name:"a" ~hosts:[ "app.com" ] ()
+          |> use (fun c -> Conn.before_send c (fun r -> { r with H.headers = ("X-From-A", "1") :: r.H.headers }))
+          |> get "/a" (fun c -> Conn.text c "a") in
+  let b = make ~name:"b" ~hosts:[ "app.com" ] () |> get "/b" (fun c -> Conn.text c "b") in
+  match first_answer (req_ "/b") [ a; b ] with
+  | Some c -> List.assoc_opt "X-From-A" (Conn.apply_before_send c (Option.get (Conn.resp c))).H.headers = None
+  | None -> false
+
+let%test "overlap: all decline -> no answer (the server then 404s)" =
+  let a = make ~name:"a" ~hosts:[ "app.com" ] () |> get "/a" (fun c -> Conn.text c "a") in
+  let b = make ~name:"b" ~hosts:[ "app.com" ] () |> get "/b" (fun c -> Conn.text c "b") in
+  first_answer (req_ "/neither") [ a; b ] = None

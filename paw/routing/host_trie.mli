@@ -11,11 +11,16 @@
 (** An immutable reversed-label trie mapping host patterns to endpoint payloads. *)
 type 'ep t
 
-(** Build a trie from [(pattern, payload)] pairs. [Any] patterns are silently skipped (the caller
-    holds the default separately). The list must be pre-validated (no conflicting patterns). *)
+(** Build a trie from [(pattern, payload)] pairs, in declaration order. [Any] patterns are silently
+    skipped (the caller holds the default separately). Overlap is allowed — a node may carry several
+    payloads (exact and/or wildcard), kept in declaration order. *)
 val build : (Host_pattern.t * 'ep) list -> 'ep t
 
-(** [lookup t ~host] normalizes [host] (strips port, lowercases) and walks the trie. Returns the
-    most specific match: an exact match beats any wildcard; among wildcards the deepest (most
-    labels) wins. [None] if nothing matches (the caller falls to the default). *)
+(** [lookup_all t ~host] normalizes [host] (strips port, lowercases) and returns EVERY matching
+    payload, most-specific-first: the exact matches at the host's node, then the wildcard matches
+    from the deepest node up to the shallowest, each level in declaration order. [\[\]] if nothing
+    matches. *)
+val lookup_all : 'ep t -> host:string -> 'ep list
+
+(** [lookup t ~host] is the single most-specific match — the head of {!lookup_all} (or [None]). *)
 val lookup : 'ep t -> host:string -> 'ep option

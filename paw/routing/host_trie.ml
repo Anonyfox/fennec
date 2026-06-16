@@ -3,31 +3,33 @@
    Hosts are split on '.', reversed, and walked from the TLD down. Each node uses a Hashtbl for
    O(1) child lookup. Two kinds of match terminate at a node:
 
-     - EXACT: all labels consumed and the node carries a payload. "admin.acme.com" = the path
+     - EXACT: all labels consumed and the node carries payload(s). "admin.acme.com" = the path
        com → acme → admin, payload on the "admin" node.
-     - WILDCARD (suffix): the node carries a wildcard marker AND there are remaining labels to
+     - WILDCARD (suffix): the node carries wildcard payload(s) AND there are remaining labels to
        consume. "*.acme.com" = the path com → acme, wildcard on the "acme" node. Matches
        "x.acme.com" (1 remaining label) and "a.b.acme.com" (2 remaining) but NOT "acme.com"
        (0 remaining — the "one or more leading labels" requirement).
 
-   When multiple wildcards could match (e.g. "*.acme.com" and "*.api.acme.com" for
-   "x.api.acme.com"), the DEEPEST one wins — naturally, because the walk goes as deep as it can
-   before falling back. An exact match always beats any wildcard.
+   {!lookup_all} returns EVERY matching endpoint, most-specific-first: the node's exact payloads,
+   then wildcards from the DEEPEST node up (a deeper "*.api.acme.com" before a shallower
+   "*.acme.com"), each level in declaration (insertion) order. {!lookup} keeps the old single-best
+   shape (the head of {!lookup_all}). Overlap is first-class — a node may carry several endpoints
+   (the router validated names, not pattern uniqueness), so each marker is a list.
 
-   Built once at startup from a pre-validated pattern list (Host_router.build already rejected
-   conflicts), so construction is imperative and lookup is pure. *)
+   Built once at startup from a pattern list (in declaration order), so construction is imperative
+   and lookup is pure and allocation-light. *)
 
 type 'ep node = {
   children : (string, 'ep node) Hashtbl.t;
-  mutable payload : 'ep option;
-  mutable wildcard : 'ep option;
+  mutable payload : 'ep list; (* exact matchers terminating here, in declaration order *)
+  mutable wildcard : 'ep list; (* "*."-suffix matchers anchored here, in declaration order *)
 }
 
 type 'ep t = { root : 'ep node }
 
 (* ──── make_node ──── *)
 
-let make_node () = { children = Hashtbl.create 4; payload = None; wildcard = None }
+let make_node () = { children = Hashtbl.create 4; payload = []; wildcard = [] }
 
 (* ──── split_labels ──── *)
 
@@ -55,7 +57,7 @@ let build (patterns : (Host_pattern.t * 'ep) list) : 'ep t =
                 child)
             root labels
         in
-        node.payload <- Some ep
+        node.payload <- node.payload @ [ ep ]
       | Host_pattern.Suffix suf ->
         (* suf is ".acme.com" (leading dot); strip it to get the label path *)
         let host = if String.length suf > 0 && suf.[0] = '.' then String.sub suf 1 (String.length suf - 1) else suf in
@@ -71,29 +73,36 @@ let build (patterns : (Host_pattern.t * 'ep) list) : 'ep t =
                 child)
             root labels
         in
-        node.wildcard <- Some ep)
+        node.wildcard <- node.wildcard @ [ ep ])
     patterns;
   { root }
 
-(* ──── lookup ──── *)
+(* ──── lookup_all ──── *)
 
-let lookup (t : 'ep t) ~(host : string) : 'ep option =
+(* Every endpoint matching [host], most-specific-first: the exact payloads at the fully-consumed
+   node, then the wildcard payloads from the deepest matching node up to the shallowest. We prepend
+   each node's wildcards as we descend, so the deepest (visited last) ends up at the FRONT — i.e.
+   "*.api.acme.com" before "*.acme.com". Each list is already in declaration order. *)
+let lookup_all (t : 'ep t) ~(host : string) : 'ep list =
   let host = Host_pattern.normalize host in
   let labels = List.rev (split_labels host) in
-  let rec walk node labels best_wildcard =
-    (* if this node has a wildcard AND there are remaining labels to consume, it's a candidate
-       (the "one or more leading labels" requirement for *.suffix patterns) *)
-    let best = if labels <> [] then (match node.wildcard with Some _ as w -> w | None -> best_wildcard) else best_wildcard in
+  let rec walk node labels wilds =
+    (* a wildcard here matches only with ≥1 remaining label (the "*." requires a leading label) *)
+    let wilds = if labels <> [] then node.wildcard @ wilds else wilds in
     match labels with
-    | [] ->
-      (* consumed all labels: an exact match (payload) wins over any remembered wildcard *)
-      (match node.payload with Some _ as p -> p | None -> best)
+    | [] -> node.payload @ wilds (* exact (most specific) first, then suffixes deepest-first *)
     | label :: rest -> (
       match Hashtbl.find_opt node.children label with
-      | Some child -> walk child rest best
-      | None -> best (* can't descend further; return the deepest wildcard we saw *))
+      | Some child -> walk child rest wilds
+      | None -> wilds (* dead end: the suffixes collected so far, deepest-first *))
   in
-  walk t.root labels None
+  walk t.root labels []
+
+(* ──── lookup ──── *)
+
+(* the single most-specific match (the head of {!lookup_all}); kept for callers that want one *)
+let lookup (t : 'ep t) ~(host : string) : 'ep option =
+  match lookup_all t ~host with x :: _ -> Some x | [] -> None
 
 let pat s = Result.get_ok (Host_pattern.of_string s)
 
@@ -178,3 +187,29 @@ let%test "single-label TLD mismatch" =
   let ts = build [ (pat "a.com", "a") ] in lookup ts ~host:"b.com" = None
 let%test "trailing dot in host" =
   let ts = build [ (pat "a.com", "a") ] in lookup ts ~host:"a.com." = Some "a"
+
+(* lookup_all — overlap + ordering *)
+let%test "all: two exacts at same host, declaration order" =
+  let t = build [ (pat "app.com", "auth"); (pat "app.com", "public") ] in
+  lookup_all t ~host:"app.com" = [ "auth"; "public" ]
+let%test "all: exact before wildcard" =
+  let t = build [ (pat "*.acme.com", "wild"); (pat "api.acme.com", "exact") ] in
+  lookup_all t ~host:"api.acme.com" = [ "exact"; "wild" ]
+let%test "all: deeper wildcard before shallower" =
+  let t = build [ (pat "*.acme.com", "shallow"); (pat "*.api.acme.com", "deep") ] in
+  lookup_all t ~host:"x.api.acme.com" = [ "deep"; "shallow" ]
+let%test "all: shallow only at its level" =
+  let t = build [ (pat "*.acme.com", "shallow"); (pat "*.api.acme.com", "deep") ] in
+  lookup_all t ~host:"x.acme.com" = [ "shallow" ]
+let%test "all: two wildcards at the same node, declaration order" =
+  let t = build [ (pat "*.acme.com", "a"); (pat "*.acme.com", "b") ] in
+  lookup_all t ~host:"x.acme.com" = [ "a"; "b" ]
+let%test "all: exact + same-level wildcards, exact first then decl order" =
+  let t = build [ (pat "*.acme.com", "w1"); (pat "api.acme.com", "e"); (pat "*.acme.com", "w2") ] in
+  lookup_all t ~host:"api.acme.com" = [ "e"; "w1"; "w2" ]
+let%test "all: no match is empty" =
+  let t = build [ (pat "acme.com", "a") ] in
+  lookup_all t ~host:"other.org" = []
+let%test "all: full chain exact→deep→shallow" =
+  let t = build [ (pat "*.acme.com", "shallow"); (pat "*.api.acme.com", "deep"); (pat "x.api.acme.com", "exact") ] in
+  lookup_all t ~host:"x.api.acme.com" = [ "exact"; "deep"; "shallow" ]
