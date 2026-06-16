@@ -82,7 +82,7 @@ val transport_of_env : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> transport
 val boot : sw:Eio.Switch.t -> net:_ Eio.Net.t -> unit -> unit
 
 (** Override the ambient transport at runtime — Meteor's [Email.customTransport] (e.g. POST to a provider
-    HTTP API via {!Fennec_server.Https_client}). *)
+    HTTP API via {!Paw.Https_client}). *)
 val set_transport : transport -> unit
 
 (** Register a hook run before each send; returning [false] silently drops the message — Meteor's

@@ -10,7 +10,7 @@
 module R = Fennec_pulse.Reactive.Mini
 module D = Fennec_pulse_server.Make (R)
 module Msg = Fennec_ddp.Message
-module Ws = Fennec_server.Ws
+module Ws = Paw.Ws
 module Wsc = Paw.Ws_channel
 module B = Bson
 

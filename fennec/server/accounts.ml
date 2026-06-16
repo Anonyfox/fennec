@@ -3,6 +3,7 @@ module Paw = Paw
 module Assigns = Paw.Assigns
 module H = Paw.Http
 module Cookie = Paw.Cookie
+module Session = Paw.Session (* signed-cookie session middleware (moved into fennec-paw) *)
 module Bson = Bson
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 module Json = Fennec_mongo_json.Json

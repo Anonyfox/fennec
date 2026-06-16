@@ -476,7 +476,7 @@ let replace_prefix ~prefix ~with_ text =
 
 let facade_aliases =
   [
-    ("Fennec_server.Endpoint", "Fennec.Endpoint");
+    ("Paw.Endpoint", "Fennec.Endpoint");
     ("Paw.Conn", "Fennec.Conn");
     ("Paw.Http", "Fennec.Http");
     ("Paw.Cookie", "Fennec.Cookie");

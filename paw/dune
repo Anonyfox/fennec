@@ -1,11 +1,33 @@
-; fennec-paw — a standalone HTTP micro-framework for Eio. This layer: the HTTP
-; vocabulary (http/), the connection + typed state (conn/), the paw pipeline
-; algebra + routing (pipeline/), websocket channel (ws/), dev wire (dev/).
+; fennec-paw — a standalone HTTP micro-framework for Eio. The HTTP vocabulary
+; (http/), the connection + typed state (conn/), the paw pipeline algebra +
+; routing (pipeline/, routing/), the Eio I/O shell (server/), the middleware
+; battery (middleware/), websockets (ws/), TLS + automatic HTTPS / ACME (tls/),
+; and the dev wire + livereload (dev/). No cohttp, no Lwt.
 (library
  (name paw)
  (public_name fennec-paw)
  (modes byte native)
- (libraries unix fennec-hunt.unit fennec-hunt.prop)
+ (libraries
+  unix
+  eio
+  eio.unix
+  eio_main
+  digestif
+  base64
+  zlib
+  bigstringaf
+  tls
+  tls-eio
+  x509
+  ca-certs
+  domain-name
+  zarith
+  ptime
+  mirage-crypto-rng.unix
+  ; fennec-mongo.json: acme_client JSON parsing; PAW-C will inline this away
+  fennec-mongo.json
+  fennec-hunt.unit
+  fennec-hunt.prop)
  (inline_tests (backend fennec-hunt.runner))
  (preprocess (pps fennec-hunt.ppx)))
 (include_subdirs unqualified)

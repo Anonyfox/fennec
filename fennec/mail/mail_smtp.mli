@@ -1,5 +1,5 @@
 (** A minimal, correct SMTP submission client over Eio + tls-eio — the same outbound TLS stack the rest
-    of the server uses ({!Fennec_server.Https_client}), no Lwt and no new C deps.
+    of the server uses ({!Paw.Https_client}), no Lwt and no new C deps.
 
     It does exactly what transactional submission needs: greeting, [EHLO], opportunistic or implicit TLS,
     ESMTP [AUTH PLAIN]/[AUTH LOGIN], multi-recipient envelope, and a dot-stuffed [DATA] body. It is the one

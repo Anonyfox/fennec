@@ -157,5 +157,5 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
       (* the socket peer IP rides the whole connection into every method_ctx, so the Accounts auth
          methods can rate-limit by client IP (the WS upgrade is the only place we still hold the Conn) *)
       let remote_ip = Paw.Conn.remote_ip c in
-      Fennec_server.Websocket.make path (fun ch -> serve ?user_id:uid ?remote_ip ch) c
+      Paw.Websocket.make path (fun ch -> serve ?user_id:uid ?remote_ip ch) c
 end

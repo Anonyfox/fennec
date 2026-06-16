@@ -1,9 +1,10 @@
 ; End-to-end ACME proof against a local pebble server — a standalone exe, gated on
 ; FENNEC_ACME_TEST_DIR (skips otherwise), run manually / in CI with pebble up. Not an inline test.
+; Drives Paw.Acme_client (the ACME wire client now lives in fennec-paw).
 
 (executable
  (name acme_pebble_test)
- (libraries fennec.server eio eio_main eio.unix x509 mirage-crypto-rng.unix))
+ (libraries fennec-paw eio eio_main eio.unix x509 mirage-crypto-rng.unix))
 
 ; Accounts backend parity over the embedded Burrow engine — self-contained (a temp dir, no mongod),
 ; so it runs under `dune runtest` and fails the build if accounts ever breaks on burrow://.

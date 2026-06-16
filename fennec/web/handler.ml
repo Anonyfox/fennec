@@ -6,8 +6,8 @@
    Pulse/Accounts logic, and answers with one of these. *)
 
 module Conn = Paw.Conn
-module Session = Fennec_server.Session
-module Csrf = Fennec_server.Csrf
+module Session = Paw.Session
+module Csrf = Paw.Csrf
 
 (* a minimal STATIC document shell — head + scoped styles + body, NO seed, NO client bundle (so the
    page is server-rendered HTML with zero JS). A handler that wants the app's look passes its own
