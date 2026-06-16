@@ -257,6 +257,7 @@ type t = {
   password_hasher : password_hasher option;
   password_policy : Password.policy option;
   mutable config : config;
+  mutable email_templates : Accounts_mailer.templates option;
   cookie : string;
   path : string;
   lifetime : float;
@@ -474,6 +475,7 @@ let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_lo
     lifetime;
     validate_every_request;
     config;
+    email_templates = None;
     validate_login_hooks = [];
     create_user_hooks = [];
     login_hooks = [];
@@ -489,6 +491,13 @@ let native : t option Atomic.t = Atomic.make None
 (* Set the authentication policy after construction — the mutable twin of Meteor's [Accounts.config]; an
    app configures the framework-native instance ([current ()]) once in its startup. *)
 let configure t cfg = t.config <- cfg
+
+(* The account-email templates (Meteor's Accounts.emailTemplates), used by the [send_*_email] verbs. None
+   until {!set_email_templates}; the verbs then need only a [from] + [site_name] to deliver via the ambient
+   {!Fennec_mail} transport. *)
+module Mailer = Accounts_mailer
+
+let set_email_templates t tpls = t.email_templates <- Some tpls
 
 let validate_login_attempt t f = t.validate_login_hooks <- f :: t.validate_login_hooks
 let on_create_user t f = t.create_user_hooks <- f :: t.create_user_hooks
@@ -1733,6 +1742,62 @@ let consume_enrollment t token =
     match (record.Challenge.metadata.user_id, List.assoc_opt "kind" record.Challenge.metadata.data) with
     | Some uid, Some (Bson.String "enrollment") -> Ok uid
     | _ -> Error (Login_rejected "Enrollment token did not bind a user"))
+
+(* ---- delivering the account emails — Meteor's Accounts.sendVerificationEmail / sendResetPasswordEmail /
+   sendEnrollmentEmail. Each issues the challenge, builds the action URL (base = FENNEC_URL, default a
+   localhost dev URL; pass [~link] for a custom route), renders the configured template, and submits via
+   the ambient {!Fennec_mail} transport. Errors come back as a human string. ---- *)
+
+let mail_base_url () =
+  match Sys.getenv_opt "FENNEC_URL" with Some u when String.trim u <> "" -> String.trim u | _ -> "http://localhost"
+
+(* RFC 3986 percent-encoding of the token for a query value (challenge tokens are opaque strings) *)
+let pct_encode s =
+  let b = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+      match c with
+      | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '.' | '_' | '~' -> Buffer.add_char b c
+      | c -> Buffer.add_string b (Printf.sprintf "%%%02X" (Char.code c)))
+    s;
+  Buffer.contents b
+
+let default_link path ~token = mail_base_url () ^ path ^ "?token=" ^ pct_encode token
+
+let deliver t (select : Mailer.templates -> Mailer.template) ~email ~url =
+  match t.email_templates with
+  | None -> Error "Accounts: email templates not configured (call set_email_templates first)"
+  | Some tpls -> (
+    let msg = Mailer.message ~from:tpls.Mailer.from ~site_name:tpls.Mailer.site_name (select tpls) ~email ~url in
+    match Fennec_mail.send msg with Ok () -> Ok () | Error e -> Error (Fennec_mail.string_of_error e))
+
+let send_verification_email t ?(link = default_link "/verify-email") uid =
+  match find_required_user t uid with
+  | Error e -> Error (string_of_error e)
+  | Ok user -> (
+    match primary_email user with
+    | None -> Error "Accounts: user has no email address to verify"
+    | Some email -> (
+      match issue_email_verification t uid email with
+      | Error e -> Error (string_of_error e)
+      | Ok issued ->
+        deliver t (fun tp -> tp.Mailer.verify_email) ~email ~url:(link ~token:(Challenge.token_to_string issued.Email.token))))
+
+let send_reset_password_email t ?(link = default_link "/reset-password") email =
+  match issue_password_reset t email with
+  | Error e -> Error (string_of_error e)
+  | Ok None -> Ok () (* non-enumerating: never reveal whether the address has an account *)
+  | Ok (Some pr) ->
+    deliver t (fun tp -> tp.Mailer.reset_password) ~email ~url:(link ~token:(Challenge.token_to_string pr.token))
+
+let send_enrollment_email t ?(link = default_link "/enroll-account") uid =
+  match issue_enrollment t uid with
+  | Error e -> Error (string_of_error e)
+  | Ok en -> (
+    match primary_email en.user with
+    | None -> Error "Accounts: user has no email address for enrollment"
+    | Some email ->
+      deliver t (fun tp -> tp.Mailer.enroll_account) ~email ~url:(link ~token:(Challenge.token_to_string en.token)))
 
 let enroll_account_user t token ~password =
   match t.password_hasher with
@@ -6528,6 +6593,31 @@ let%test "config.ambiguous_error_messages makes unknown-account indistinguishabl
   (* both the missing account and the wrong password return the SAME error — no enumeration via the value *)
   login_with_password a (By_email "nobody@example.com") ~password:"x" = Error Invalid_password
   && login_with_password a (By_email "ada@example.com") ~password:"wrong" = Error Invalid_password
+
+let%test "send_verification_email renders the template and delivers via the ambient transport" =
+  let has hay sub =
+    let hl = String.length hay and sl = String.length sub in
+    let rec go i = i + sl <= hl && (String.sub hay i sl = sub || go (i + 1)) in
+    sl = 0 || go 0
+  in
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = make ~secret:"accounts-test-secret-mail" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  set_email_templates a (Mailer.default ~site_name:"Acme" ~from:(Fennec_mail.Address.v ~name:"Acme" "no-reply@acme.test") ());
+  match create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () with
+  | Error _ -> false
+  | Ok user -> (
+    match send_verification_email a ~link:(fun ~token -> "https://acme.test/v/" ^ token) user.id with
+    | Error _ -> false
+    | Ok () -> (
+      match sent () with
+      | [ m ] ->
+        List.exists (fun (ad : Fennec_mail.Address.t) -> ad.email = "ada@example.com") m.Fennec_mail.to_
+        && m.Fennec_mail.from.email = "no-reply@acme.test"
+        && has m.Fennec_mail.subject "Acme"
+        && has (Option.value m.Fennec_mail.text ~default:"") "https://acme.test/v/"
+        && (match m.Fennec_mail.html with Some h -> has h "https://acme.test/v/" | None -> false)
+      | _ -> false))
 
 let%test "Store.minimongo persists identity links for external login" =
   let store = Store.minimongo () in

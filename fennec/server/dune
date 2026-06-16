@@ -17,6 +17,8 @@
   fennec-mongo.driver
   fennec-mongo.backend
   fennec-mongo.dynamic
+  fennec.mail
+  fennec.fur
   eio
   eio.unix
   eio_main

@@ -18,6 +18,7 @@ module Http = Fennec_core.Http
 module Cookie = Fennec_core.Cookie
 module Dev_proto = Fennec_core.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
 module Accounts = Fennec_server.Accounts
+module Mail = Fennec_mail (* outbound email: one MAIL_URL knob (unset ⇒ logged to stdout in dev) *)
 
 (* The presentation layer — Fur. ONE namespace ([open Fennec.Fur]) for everything that turns data
    into what a client sees: components & signals (live SPA, isomorphic core), standalone [Page]s
@@ -161,6 +162,9 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
      burrow:// URL with an authority, front the embedded engine over the MongoDB wire protocol so `mongosh`
      connects (zero-config in dev). MONGO_URL alone decides the backend; there is no app-level "start". *)
   Fennec_mongo_dynamic.boot ~sw ~net:(Eio.Stdenv.net env) ();
+  (* outbound email transport from MAIL_URL (smtp:// / smtps:// / unset ⇒ dev log), booted with the
+     switch's net so SMTP submission runs on the server's Eio loop *)
+  Fennec_mail.boot ~sw ~net:(Eio.Stdenv.net env) ();
   (* eager accounts: build the (memoized) store now — inside the switch, after the ambient switch is
      installed — so the engine opens + indexes are ensured at boot, not on the first authenticated
      request. Opt-in is preserved: no MONGO_URL ⇒ the no-op store, and a request with no session cookie

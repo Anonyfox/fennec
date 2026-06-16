@@ -11,6 +11,7 @@
   fennec.paw
   fennec.server
   fennec.fur
+  fennec.mail
   fennec.web
   fennec.pulse.codec
   fennec-mongo.driver

@@ -519,6 +519,29 @@ val make :
     [Accounts.configure (Accounts.current ()) { Accounts.default_config with require_verified_email = true }]. *)
 val configure : t -> config -> unit
 
+(** {1 Transactional account emails} — Meteor's [Accounts.sendVerificationEmail] family, delivered through
+    {!Fennec_mail} (the [MAIL_URL] transport; with it unset, mail is logged to stdout). *)
+
+(** The email templates — defaults + overrides, rendered with Fur (see {!Accounts_mailer}). *)
+module Mailer = Accounts_mailer
+
+(** Install the email templates ([from] + site name + per-flow Fur templates). Required before any
+    [send_*_email] verb; build one with [Mailer.default ~from ()]. *)
+val set_email_templates : t -> Mailer.templates -> unit
+
+(** Issue an email-verification challenge for the user's primary address and send the rendered email.
+    [?link] builds the click URL from the token (default [FENNEC_URL ^ "/verify-email?token=…"]). Returns
+    [Error msg] on no-email-on-file / unset templates / transport failure. *)
+val send_verification_email : t -> ?link:(token:string -> string) -> user_id -> (unit, string) result
+
+(** Issue a password-reset challenge for [email] and send it. Non-enumerating: returns [Ok ()] even when
+    no account has that address. [?link] defaults to [FENNEC_URL ^ "/reset-password?token=…"]. *)
+val send_reset_password_email : t -> ?link:(token:string -> string) -> string -> (unit, string) result
+
+(** Issue an enrollment (initial-password-setup) challenge for a user and send it. [?link] defaults to
+    [FENNEC_URL ^ "/enroll-account?token=…"]. *)
+val send_enrollment_email : t -> ?link:(token:string -> string) -> user_id -> (unit, string) result
+
 (** The process-native Accounts service.
 
     Fennec treats Accounts as its one identity/session substrate, not as a pluggable auth adapter.
