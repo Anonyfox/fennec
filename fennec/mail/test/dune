@@ -1,0 +1,5 @@
+; End-to-end SMTP client proof: a scripted SMTP server on a loopback socket + the real MAIL_URL → boot →
+; send path through Fennec_mail. Self-contained (no external SMTP daemon), runs under `dune runtest`.
+(test
+ (name smtp_test)
+ (libraries fennec.mail eio eio_main eio.unix mirage-crypto-rng.unix unix))

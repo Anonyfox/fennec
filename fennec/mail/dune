@@ -1,0 +1,14 @@
+; Fennec's outbound email (Tier 1 — sending). A hand-rolled, Eio-native SMTP client + MIME composer
+; over the SAME tls-eio / ca-certs / base64 stack the server already links — no Lwt, no colombe, no new
+; C deps. This matches how Fennec owns its other wire protocols (the mongosh wire server, HTTP/1.1, DDP,
+; SCRAM): the protocol is small and well-specified, so owning it end-to-end is leaner and more airtight
+; than bridging a foreign scheduler. One MAIL_URL knob picks the transport; dev logs to stdout.
+(library
+ (name fennec_mail)
+ (public_name fennec.mail)
+ (libraries eio eio.unix tls tls-eio ca-certs domain-name base64 mirage-crypto-rng.unix unix
+   fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))
