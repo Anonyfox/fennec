@@ -486,6 +486,20 @@ type t
     enforcement. [rate_limit] throttles the [login] and [createUser] DDP methods against brute force
     (default: {!Accounts_rate_limit.make} — 5 attempts / 10 s per client IP and per account, à la
     Meteor); pass a custom limiter to retune or a disabled one to turn it off. *)
+(** Central authentication policy — the typed twin of Meteor's [Accounts.config({...})]. *)
+type config = {
+  require_verified_email : bool;
+      (** require at least one verified email before any session is issued (every strategy) *)
+  forbid_client_account_creation : bool;
+      (** reject the client [createUser] DDP method; server-side {!create_user} still works *)
+  ambiguous_error_messages : bool;
+      (** password login returns one indistinguishable error for unknown-account vs wrong-password (the
+          {!on_login_failure} hooks and the audit log still see the real reason) *)
+}
+
+(** All policy off — the historical default. *)
+val default_config : config
+
 val make :
   secret:string ->
   store:store ->
@@ -495,9 +509,15 @@ val make :
   ?path:string ->
   ?lifetime:float ->
   ?validate_every_request:bool ->
+  ?config:config ->
   ?rate_limit:Accounts_rate_limit.t ->
   unit ->
   t
+
+(** Set the authentication policy after construction — the mutable twin of Meteor's [Accounts.config]. An
+    app configures the framework-native instance ([current ()]) once in startup, e.g.
+    [Accounts.configure (Accounts.current ()) { Accounts.default_config with require_verified_email = true }]. *)
+val configure : t -> config -> unit
 
 (** The process-native Accounts service.
 
@@ -535,6 +555,12 @@ val on_login : t -> (user -> unit) -> unit
 (** Register an observer called after logout. The user id is [None] when the caller was already
     anonymous. *)
 val on_logout : t -> (user_id option -> unit) -> unit
+
+(** Register an observer called when a login attempt FAILS — unknown account, wrong password, an inactive
+    account, or a {!validate_login_attempt} rejection. The {!login_attempt} carries [allowed = false] and a
+    [reason] tag ([user_not_found] / [invalid_password] / [account_inactive] / the rejection reason); use it
+    for lockout, alerting, or metrics — the reactable twin of the audit log's [Login_failure] record. *)
+val on_login_failure : t -> (login_attempt -> unit) -> unit
 
 (** Register or replace a login strategy. *)
 val register_strategy : t -> strategy -> unit

@@ -234,11 +234,29 @@ type session = {
   factors : Mfa.factor list;
 }
 
+(* Central authentication policy — the typed twin of Meteor's [Accounts.config({...})]. The all-false
+   [default_config] preserves the historical behavior; an app opts in to stricter policy via [make ~config]
+   or {!configure}. *)
+type config = {
+  require_verified_email : bool;
+      (* a user must have at least one verified email before any session is issued (every strategy) *)
+  forbid_client_account_creation : bool;
+      (* the client [createUser] DDP method is rejected; server-side [create_user] still works (server-only signup) *)
+  ambiguous_error_messages : bool;
+      (* password login returns ONE indistinguishable error for unknown-account vs wrong-password (the
+         on_login_failure hooks + the audit log still see the real reason) — pairs with the enumeration
+         timing defense to close the account-enumeration oracle completely *)
+}
+
+let default_config =
+  { require_verified_email = false; forbid_client_account_creation = false; ambiguous_error_messages = false }
+
 type t = {
   secret : string;
   store : store;
   password_hasher : password_hasher option;
   password_policy : Password.policy option;
+  mutable config : config;
   cookie : string;
   path : string;
   lifetime : float;
@@ -247,6 +265,7 @@ type t = {
   mutable create_user_hooks : (user -> (user, string) result) list;
   mutable login_hooks : (user -> unit) list;
   mutable logout_hooks : (user_id option -> unit) list;
+  mutable login_failure_hooks : (login_attempt -> unit) list;
   strategies : (string, strategy) Hashtbl.t;
   rate_limit : Throttle.t; (* throttles the [login]/[createUser] DDP methods by client IP + selector *)
 }
@@ -440,7 +459,7 @@ let token_live t (s : session) token =
   | Ok None -> Error Invalid_token
 
 let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_login") ?(path = "/")
-    ?(lifetime = 86400.) ?(validate_every_request = false) ?rate_limit () =
+    ?(lifetime = 86400.) ?(validate_every_request = false) ?(config = default_config) ?rate_limit () =
   if String.length secret < 16 then
     invalid_arg
       (Printf.sprintf "Fennec.Accounts.make: ~secret must be at least 16 bytes (got %d)" (String.length secret));
@@ -454,10 +473,12 @@ let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_lo
     path;
     lifetime;
     validate_every_request;
+    config;
     validate_login_hooks = [];
     create_user_hooks = [];
     login_hooks = [];
     logout_hooks = [];
+    login_failure_hooks = [];
     strategies = Hashtbl.create 8;
     (* default: Meteor's 5 attempts / 10 s, keyed by IP and account for login and by IP for createUser *)
     rate_limit = (match rate_limit with Some r -> r | None -> Throttle.make ());
@@ -465,10 +486,15 @@ let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_lo
 
 let native : t option Atomic.t = Atomic.make None
 
+(* Set the authentication policy after construction — the mutable twin of Meteor's [Accounts.config]; an
+   app configures the framework-native instance ([current ()]) once in its startup. *)
+let configure t cfg = t.config <- cfg
+
 let validate_login_attempt t f = t.validate_login_hooks <- f :: t.validate_login_hooks
 let on_create_user t f = t.create_user_hooks <- f :: t.create_user_hooks
 let on_login t f = t.login_hooks <- f :: t.login_hooks
 let on_logout t f = t.logout_hooks <- f :: t.logout_hooks
+let on_login_failure t f = t.login_failure_hooks <- f :: t.login_failure_hooks
 let register_strategy t s =
   if String.trim s.name = "" then invalid_arg "Fennec.Accounts.register_strategy: strategy name cannot be blank";
   Hashtbl.replace t.strategies s.name s
@@ -491,6 +517,10 @@ let run_login_hooks t attempt =
 
 let observe_login t u = List.iter (fun f -> f u) (List.rev t.login_hooks)
 let observe_logout t uid = List.iter (fun f -> f uid) (List.rev t.logout_hooks)
+
+(* fire the on_login_failure hooks with the rejected attempt (allowed = false) — the reactable twin of the
+   audit Login_failure record, so an app can lock out / alert without scraping the audit log *)
+let observe_login_failure t attempt = List.iter (fun f -> f attempt) (List.rev t.login_failure_hooks)
 
 let user_id c = match Conn.get c user_id_key with Some u -> u | None -> None
 
@@ -652,11 +682,17 @@ let session_info_of_session (s : session) : session_info =
 let record_session t (s : session) token = t.store.tokens.record (session_info_of_session s) ~hashed:(sha256_hex token)
 
 let finish_login t ?factors ~strategy (u : user) =
-  if not (user_can_login u.status) then Error (Login_rejected "Account is not active")
+  if not (user_can_login u.status) then (
+    observe_login_failure t { strategy; user = Some u; allowed = false; reason = Some "account_inactive" };
+    Error (Login_rejected "Account is not active"))
+  else if t.config.require_verified_email && not (List.exists (fun e -> e.verified) u.emails) then (
+    observe_login_failure t { strategy; user = Some u; allowed = false; reason = Some "email_not_verified" };
+    Error (Login_rejected "Email not verified"))
   else
   let attempt = { strategy; user = Some u; allowed = true; reason = None } in
   match run_login_hooks t attempt with
   | Error (Login_rejected reason as e) ->
+    observe_login_failure t { attempt with allowed = false; reason = Some reason };
     record_audit ?mechanism:(mechanism_of_strategy strategy) t Audit.Login_failure Audit.Anonymous
       (Audit.Failure reason);
     Error e
@@ -1204,15 +1240,17 @@ let login_with_password_completion t selector ~password =
     | Error _ as e -> e
     | Ok None ->
       enumeration_guard hasher ~password;
+      observe_login_failure t { strategy = "password"; user = None; allowed = false; reason = Some "user_not_found" };
       record_audit ~mechanism:Audit.Password t Audit.Login_failure Audit.Anonymous
         (Audit.Failure "user_not_found");
-      Error User_not_found
+      Error (if t.config.ambiguous_error_messages then Invalid_password else User_not_found)
     | Ok (Some u) -> (
       match t.store.users.password_hash u.id with
       | Error _ as e -> e
       | Ok None -> Error Password_not_configured
       | Ok (Some hash) ->
         if not (hasher.verify ~password ~hash) then (
+          observe_login_failure t { strategy = "password"; user = Some u; allowed = false; reason = Some "invalid_password" };
           record_audit ~target_user_id:u.id ~mechanism:Audit.Password t Audit.Login_failure
             Audit.Anonymous (Audit.Failure "invalid_password");
           Error Invalid_password)
@@ -4722,6 +4760,8 @@ struct
       | _ -> bad_request "currentUser expects no arguments"
     in
     let create_user_method inv = function
+      | [ Bson.Document _ ] when t.config.forbid_client_account_creation ->
+        forbidden "client account creation is disabled"
       | [ Bson.Document _ as d ] ->
         throttle_create_user inv;
         let username = doc_get_string d "username" in
@@ -6458,6 +6498,37 @@ let%test "login on an unknown account still runs a password verify (enumeration 
   let r = login_with_password a (By_email "ghost@example.com") ~password:"pw" in
   r = Error User_not_found && !verifies >= 1
 
+let%test "on_login_failure fires (allowed=false, tagged reason) on unknown account + wrong password, not on success" =
+  let seen = ref [] in
+  let a = make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  on_login_failure a (fun attempt -> if not attempt.allowed then seen := Option.value attempt.reason ~default:"?" :: !seen);
+  let _ = create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () in
+  let _ = login_with_password a (By_email "nobody@example.com") ~password:"x" in (* user_not_found *)
+  let _ = login_with_password a (By_email "ada@example.com") ~password:"wrong" in (* invalid_password *)
+  let _ = login_with_password a (By_email "ada@example.com") ~password:"pw" in (* success ⇒ must NOT fire *)
+  !seen = [ "invalid_password"; "user_not_found" ]
+
+let%test "configure require_verified_email blocks login until an email is verified (mutable policy)" =
+  let a = make ~secret:"accounts-test-secret-cfg" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  let _ = create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () in
+  let ok_default = Result.is_ok (login_with_password a (By_username "ada") ~password:"pw") in
+  configure a { default_config with require_verified_email = true };
+  (* the email is still unverified, so the stricter policy now rejects the same credentials *)
+  let blocked_strict =
+    match login_with_password a (By_username "ada") ~password:"pw" with Error (Login_rejected _) -> true | _ -> false
+  in
+  ok_default && blocked_strict
+
+let%test "config.ambiguous_error_messages makes unknown-account indistinguishable from wrong-password" =
+  let a =
+    make ~secret:"accounts-test-secret-amb" ~store:(memory_store ()) ~password_hasher:test_hasher
+      ~config:{ default_config with ambiguous_error_messages = true } ()
+  in
+  let _ = create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () in
+  (* both the missing account and the wrong password return the SAME error — no enumeration via the value *)
+  login_with_password a (By_email "nobody@example.com") ~password:"x" = Error Invalid_password
+  && login_with_password a (By_email "ada@example.com") ~password:"wrong" = Error Invalid_password
+
 let%test "Store.minimongo persists identity links for external login" =
   let store = Store.minimongo () in
   let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
@@ -7713,6 +7784,20 @@ let%test "methods: createUser requires a password" =
   match find_registered_ "createUser" inv [ Bson.doc [ ("username", Bson.str "ada") ] ] with
   | _ -> false
   | exception Test_methods_runtime.Error { code = "400"; reason = "createUser expects a password" } -> true
+  | exception Test_methods_runtime.Error _ -> false
+
+let%test "methods: createUser is rejected (403) when config.forbid_client_account_creation is set" =
+  Test_methods_runtime.registered := [];
+  let a = test_accounts () in
+  configure a { default_config with forbid_client_account_creation = true };
+  Test_methods.register a;
+  let inv =
+    { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) }
+  in
+  (* the client signup method is refused; server-side [create_user] is unaffected *)
+  match find_registered_ "createUser" inv [ Bson.doc [ ("username", Bson.str "ada"); ("password", Bson.str "pw") ] ] with
+  | _ -> false
+  | exception Test_methods_runtime.Error { code = "403"; _ } -> Result.is_ok (create_user a ~username:"ada" ~password:"pw" ())
   | exception Test_methods_runtime.Error _ -> false
 
 (* a brute-force throttle wired with a frozen clock: the default 5/10 s limit refills 0 tokens, so
