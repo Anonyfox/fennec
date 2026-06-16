@@ -61,6 +61,34 @@ module Conn = Conn
     {!Request_id}, the signed-in user). *)
 module Assigns = Assigns
 
+(** {1 Handler shortcuts}
+
+    The verbs reached for in nearly every paw, lifted to [Paw.] from {!Conn} — point-free, so they
+    {e are} the same functions: go-to-definition, hover docs, and stack traces all land on {!Conn}.
+    Reach for {!Conn} directly for the long tail (headers, files, streaming, status, …).
+
+    - response: {!html} {!json} {!text} {!redirect} {!respond} {!send_file}
+    - request: {!param} (a path or query value) {!query} {!cookie} {!header} {!body_param} *)
+include module type of struct
+  let html = Conn.html
+  let json = Conn.json
+  let text = Conn.text
+  let redirect = Conn.redirect
+  let respond = Conn.respond
+  let send_file = Conn.send_file
+  let param = Conn.param
+  let query = Conn.query
+  let cookie = Conn.cookie
+  let header = Conn.req_header
+  let body_param = Conn.body_param
+end
+
+(** [endpoint paws] builds an {!Endpoint} from a flat list of paws (middleware and routes, in
+    declaration order) — the quick path for one app on one host ([?hosts] defaults to the catch-all
+    ["*"]). For the two-phase builder, with middleware that runs {e only} on a matched route (auth,
+    rate limiting), use the {!Endpoint} combinators directly. *)
+val endpoint : ?name:string -> ?hosts:string list -> t list -> Endpoint.t
+
 (** {1 HTTP vocabulary}
 
     Pure types and codecs — no I/O — so they are equally usable off the server. *)

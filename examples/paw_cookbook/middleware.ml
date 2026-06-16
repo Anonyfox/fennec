@@ -1,8 +1,9 @@
-(* The middleware battery and the two pipeline phases.
+(* The middleware battery and the two pipeline phases — the one place to reach past [Paw.endpoint]
+   (which puts everything in one always-run phase) for the {!Endpoint} builder.
 
    The ALWAYS phase ([use]) wraps every request — including 404s: logging, a correlation id,
-   security headers, CORS. The MATCHED phase ([use_matched]) runs only when a route matches, so
-   an unknown URL still 404s instead of being throttled or measured: rate limiting and metrics. *)
+   security headers, CORS. The MATCHED phase ([use_matched]) runs only when a route matches, so an
+   unknown URL still 404s instead of being throttled or measured: rate limiting and metrics. *)
 
 let app =
   Paw.Endpoint.make ~name:"app" ~hosts:[ "*" ] ()
@@ -15,7 +16,7 @@ let app =
   |> Paw.Endpoint.use_matched
        (Paw.Metrics.make (fun ~meth ~path ~status ~duration_ms ->
             Printf.printf "%s %s -> %d (%.1fms)\n%!" meth path status duration_ms))
-  |> Paw.Endpoint.get "/" (fun c -> Paw.Conn.html c "<h1>home</h1>")
-  |> Paw.Endpoint.get "/items/:id" (fun c -> Paw.Conn.json c {|{"ok":true}|})
+  |> Paw.Endpoint.get "/" (fun c -> Paw.html c "<h1>home</h1>")
+  |> Paw.Endpoint.get "/items/:id" (fun c -> Paw.json c {|{"ok":true}|})
 
 let () = Paw.serve [ app ]

@@ -61,6 +61,27 @@ module Conn = Conn
 
 module Assigns = Assigns
 
+(** {1 Handler shortcuts} *)
+
+(* The verbs used in nearly every paw, lifted to the top level from {!Conn}. Point-free, so e.g.
+   [html] IS [Conn.html] — one closure, so go-to-definition, hover docs, and stack traces all land on
+   the real function. Reach for [Conn] directly for the long tail (headers, files, streaming, …). *)
+let html = Conn.html
+let json = Conn.json
+let text = Conn.text
+let redirect = Conn.redirect
+let respond = Conn.respond
+let send_file = Conn.send_file
+let param = Conn.param
+let query = Conn.query
+let cookie = Conn.cookie
+let header = Conn.req_header
+let body_param = Conn.body_param
+
+(* Build an endpoint from a flat list of paws (middleware + routes, in declaration order) — the quick
+   path for one app on one host. Drop to Endpoint.make for the two-phase (matched-only) builder. *)
+let endpoint ?(name = "app") ?(hosts = [ "*" ]) paws = Endpoint.pipe paws (Endpoint.make ~name ~hosts ())
+
 (** {1 HTTP vocabulary} *)
 module Http = Http
 

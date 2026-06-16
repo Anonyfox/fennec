@@ -3,14 +3,11 @@
    challenge, and runs an HTTP->HTTPS front on :80. Certificates persist in a pluggable store. *)
 
 let app =
-  Paw.Endpoint.make ~name:"app" ~hosts:[ "example.com"; "www.example.com" ] ()
-  |> Paw.Endpoint.use (Paw.Logger.make ())
-  |> Paw.Endpoint.get "/" (fun c -> Paw.Conn.html c "<h1>https, automatically</h1>")
+  Paw.endpoint ~hosts:[ "example.com"; "www.example.com" ]
+    [ Paw.Logger.make ();
+      Paw.get "/" (fun c -> Paw.html c "<h1>https, automatically</h1>") ]
 
 let acme =
-  Paw.Acme.auto
-    ~email:"ops@example.com"
-    ~store:(Paw.Cert_store.file ~dir:"/var/lib/myapp/acme")
-    ()
+  Paw.Acme.auto ~email:"ops@example.com" ~store:(Paw.Cert_store.file ~dir:"/var/lib/myapp/acme") ()
 
 let () = Paw.serve ~acme [ app ]

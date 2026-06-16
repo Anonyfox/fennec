@@ -7,21 +7,18 @@ A small, complete **HTTP toolkit for OCaml on [Eio](https://github.com/ocaml-mul
 A **paw** is a `Conn.t -> Conn.t`: given a connection it either *answers* the request or *declines* (passes it through). Routes, middleware, static serving, the WebSocket upgrade — every piece is a paw. Compose them with `Paw.seq`; the first to answer wins.
 
 ```ocaml
-let routes =
-  Paw.Endpoint.make ~name:"hello" ~hosts:[ "*" ] ()
-  |> Paw.Endpoint.use (Paw.Logger.make ())
-  |> Paw.Endpoint.use (Paw.Security_headers.make ())
-  |> Paw.Endpoint.get "/" (fun c -> Paw.Conn.html c "<h1>hello</h1>")
-  |> Paw.Endpoint.get "/users/:id" (fun c ->
-         Paw.Conn.text c (Option.value (Paw.Conn.path_param c "id") ~default:"?"))
-
 let () =
-  match Paw.Host_router.build [ (Paw.Endpoint.name routes, Paw.Endpoint.hosts routes, routes) ] with
-  | Error _ -> prerr_endline "bad routing"
-  | Ok router -> Eio_main.run @@ fun env -> ignore (Paw.Server.run ~env router)
+  Paw.serve
+    [ Paw.endpoint
+        [ Paw.Logger.make ();
+          Paw.get "/" (fun c -> Paw.html c "<h1>hello</h1>");
+          Paw.get "/users/:id" (fun c ->
+              Paw.text c (Option.value (Paw.param c "id") ~default:"?")) ] ]
 ```
 
-A complete runnable version is in [`examples/paw_hello/`](../examples/paw_hello/hello.ml), which links `fennec-paw` and nothing else. For pure unit tests you don't even need a socket — `Paw.run app request` drives a pipeline to a response in memory.
+The happy path is one `Paw.` away: `serve` builds the host router and owns the Eio loop; `endpoint` bundles middleware + routes; the verbs (`get`, `html`, `param`, `json`, `query`, …) are lifted to the top level (point-free, so they *are* `Conn`/`Pipeline` — go-to-definition and stack traces land on the real functions). A complete runnable version is in [`examples/paw_hello/`](../examples/paw_hello/hello.ml), and a simplest→enterprise tour is in [`examples/paw_cookbook/`](../examples/paw_cookbook/). For pure unit tests you don't even need a socket — `Paw.run app request` drives a pipeline to a response in memory.
+
+Need more control — virtual hosts, the two-phase pipeline (middleware that runs only on matched routes), your own Eio env? Drop from `serve`/`endpoint` to the `Endpoint` builder + `Host_router.build` + `Server.run`. Nothing is hidden; the shortcuts are just the common case.
 
 ## Find your way around
 
