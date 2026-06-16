@@ -286,6 +286,7 @@ type t = {
   mutable login_hooks : (user -> unit) list;
   mutable logout_hooks : (user_id option -> unit) list;
   mutable login_failure_hooks : (login_attempt -> unit) list;
+  mutable before_external_login_hooks : (strategy:string -> identity:external_identity -> user:user -> bool) list;
   strategies : (string, strategy) Hashtbl.t;
   rate_limit : Throttle.t; (* throttles the [login]/[createUser] DDP methods by client IP + selector *)
 }
@@ -500,6 +501,7 @@ let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_lo
     login_hooks = [];
     logout_hooks = [];
     login_failure_hooks = [];
+    before_external_login_hooks = [];
     strategies = Hashtbl.create 8;
     (* default: Meteor's 5 attempts / 10 s, keyed by IP and account for login and by IP for createUser *)
     rate_limit = (match rate_limit with Some r -> r | None -> Throttle.make ());
@@ -523,6 +525,7 @@ let on_create_user t f = t.create_user_hooks <- f :: t.create_user_hooks
 let on_login t f = t.login_hooks <- f :: t.login_hooks
 let on_logout t f = t.logout_hooks <- f :: t.logout_hooks
 let on_login_failure t f = t.login_failure_hooks <- f :: t.login_failure_hooks
+let before_external_login t f = t.before_external_login_hooks <- f :: t.before_external_login_hooks
 let register_strategy t s =
   if String.trim s.name = "" then invalid_arg "Fennec.Accounts.register_strategy: strategy name cannot be blank";
   Hashtbl.replace t.strategies s.name s
@@ -1911,8 +1914,15 @@ let resolve_identity_login t ?identity_store ?current_user_id ?(allow_signup = f
 
 let login_with_identity_completion t ?identity_store ?current_user_id ?allow_signup ?link_verified_email ?now
     ~strategy facts =
+  (* beforeExternalLogin veto (Meteor parity): fired once at the mint chokepoint with the resolved user;
+     any hook returning false aborts the external login before a session is issued *)
+  let finish ~created ?linked user =
+    if List.for_all (fun h -> h ~strategy ~identity:facts ~user) t.before_external_login_hooks then
+      finish_identity_login_completion t ~strategy ~created ?linked user
+    else Error (Login_rejected "external login rejected by before_external_login hook")
+  in
   resolve_identity_login t ?identity_store ?current_user_id ?allow_signup ?link_verified_email ?now ~strategy
-    facts ~finish:(finish_identity_login_completion t ~strategy)
+    facts ~finish
 
 let require_complete_identity_login = function
   | Ok (Complete_identity_login login) -> Ok login
@@ -6688,6 +6698,16 @@ let%test "create_user_verifying_email creates the user AND sends one verificatio
     && ( match sent () with
        | [ m ] -> List.exists (fun (ad : Fennec_mail.Address.t) -> ad.email = "ada@example.com") m.Fennec_mail.to_
        | _ -> false ) )
+
+let%test "before_external_login vetoes an external login before a session is minted" =
+  let a = make ~secret:"accounts-test-secret" ~store:(Store.minimongo ()) ~password_hasher:test_hasher () in
+  before_external_login a (fun ~strategy:_ ~identity ~user:_ -> identity.email <> Some "blocked@x.test");
+  let login email =
+    let key = identity_ok (Identity.oauth ~provider:"github" ~subject:email) in
+    login_with_identity a ~allow_signup:true ~strategy:"github" (external_identity key ~email ~email_verified:true)
+  in
+  (match login "blocked@x.test" with Error (Login_rejected _) -> true | _ -> false)
+  && (match login "ok@x.test" with Ok _ -> true | _ -> false)
 
 let%test "Store.minimongo persists identity links for external login" =
   let store = Store.minimongo () in

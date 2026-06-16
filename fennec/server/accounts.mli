@@ -594,6 +594,12 @@ val on_logout : t -> (user_id option -> unit) -> unit
     for lockout, alerting, or metrics — the reactable twin of the audit log's [Login_failure] record. *)
 val on_login_failure : t -> (login_attempt -> unit) -> unit
 
+(** Register a veto fired just before an EXTERNAL login (OAuth/OIDC/SAML/identity) mints a session, with
+    the [strategy], the resolved {!external_identity}, and the resolved {!user} — Meteor's
+    [Accounts.beforeExternalLogin]. Any hook returning [false] aborts the login. Use it to gate SSO by
+    email domain, org membership, or an allow-list. (Password/passwordless logins use {!validate_login_attempt}.) *)
+val before_external_login : t -> (strategy:string -> identity:external_identity -> user:user -> bool) -> unit
+
 (** Register or replace a login strategy. *)
 val register_strategy : t -> strategy -> unit
 
