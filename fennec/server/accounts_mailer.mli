@@ -22,6 +22,9 @@ type templates = {
   verify_email : template;
   reset_password : template;
   enroll_account : template;
+  login_code : template;
+      (** passwordless sign-in: here [url] carries the one-time CODE (not a link); the default renders
+          it as a large monospaced code rather than a button *)
 }
 
 (** [default ?site_name ~from ()] is the built-in Fur template set ([site_name] defaults to ["Fennec"]).

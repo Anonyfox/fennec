@@ -551,6 +551,12 @@ val send_reset_password_email : t -> ?link:(token:string -> string) -> string ->
     [FENNEC_URL ^ "/enroll-account?token=…"]. *)
 val send_enrollment_email : t -> ?link:(token:string -> string) -> user_id -> (unit, string) result
 
+(** Passwordless: issue a one-time sign-in CODE for [email], deliver it via the [login_code] template, and
+    return the challenge token to pair with the code at login (Meteor's [requestLoginToken]). Always issues
+    (passwordless permits signup) — naturally non-enumerating. [ttl] defaults to 10 minutes. The DDP
+    [requestLoginToken] method wraps this. *)
+val send_login_token_email : t -> ?ttl:float -> string -> (string, string) result
+
 (** The process-native Accounts service.
 
     Fennec treats Accounts as its one identity/session substrate, not as a pluggable auth adapter.

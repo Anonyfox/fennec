@@ -13,6 +13,8 @@ type templates = {
   verify_email : template;
   reset_password : template;
   enroll_account : template;
+  login_code : template;
+      (* passwordless sign-in: [url] carries the one-time CODE (not a link) for this flow *)
 }
 
 (* ---- the default Fur templates: one clean, email-safe layout (inline styles, no external CSS) ---- *)
@@ -81,8 +83,41 @@ let default_enroll : template =
            ~cta_label:"Set your password" ~url ~footer:"This invitation link will expire after a while.")
   }
 
+(* a code-centric layout (no CTA link): the one-time code shown large + monospace *)
+let code_layout ~site_name ~heading ~intro ~code ~footer =
+  Fur.h "div"
+    [ Fur.attr "style" "font-family:system-ui,-apple-system,Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#1a1a1a" ]
+    [ Fur.h "h1" [ Fur.attr "style" "font-size:20px;font-weight:600;margin:0 0 16px" ] [ Fur.text heading ];
+      Fur.h "p" [ Fur.attr "style" "font-size:15px;line-height:1.5;margin:0 0 16px" ] [ Fur.text intro ];
+      Fur.h "p"
+        [ Fur.attr "style" "font-size:30px;font-weight:700;letter-spacing:6px;font-family:monospace;margin:0 0 24px" ]
+        [ Fur.text code ];
+      Fur.h "p" [ Fur.attr "style" "font-size:13px;color:#888;line-height:1.5;margin:0 0 4px" ] [ Fur.text footer ];
+      Fur.h "p" [ Fur.attr "style" "font-size:12px;color:#aaa;margin:0" ] [ Fur.text ("— " ^ site_name) ]
+    ]
+
+let default_login_code : template =
+ fun ~site_name ~email:_ ~url ->
+  { subject = Printf.sprintf "Your %s sign-in code" site_name;
+    text =
+      Printf.sprintf "Your sign-in code for %s is:\n\n%s\n\nIt expires shortly. If you did not request it, ignore this email.\n"
+        site_name url;
+    html =
+      Some
+        (code_layout ~site_name ~heading:"Your sign-in code"
+           ~intro:(Printf.sprintf "Use this code to finish signing in to %s:" site_name) ~code:url
+           ~footer:"This code expires shortly. If you did not request it, you can ignore this email.")
+  }
+
 let default ?(site_name = "Fennec") ~from () =
-  { site_name; from; verify_email = default_verify; reset_password = default_reset; enroll_account = default_enroll }
+  {
+    site_name;
+    from;
+    verify_email = default_verify;
+    reset_password = default_reset;
+    enroll_account = default_enroll;
+    login_code = default_login_code;
+  }
 
 (* render a chosen template into a ready-to-send message (html via Fur.to_html, text as-is) *)
 let message ~from ~site_name (tpl : template) ~email ~url =

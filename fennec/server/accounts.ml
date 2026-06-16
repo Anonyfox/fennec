@@ -1822,6 +1822,22 @@ let create_user_verifying_email t ?id ?username ~email ?password ?profile ?link 
       user)
     (create_user t ?id ?username ~email ?password ?profile ())
 
+(* Passwordless: issue a one-time CODE bound to [email], deliver it via the [login_code] template, and
+   return the challenge token to pair with the code at login. Always issues (any email — passwordless
+   permits signup), so it is naturally non-enumerating. TTL defaults to 10 min — the right window for a
+   login code (unlike reset/enrollment links). *)
+let send_login_token_email t ?(ttl = 600.) email =
+  match Email.normalize email with
+  | Error e -> Error (string_of_error (email_error e))
+  | Ok address -> (
+    let svc = email_service t () in
+    match Email.issue_otp svc ~ttl (Email.binding address) with
+    | Error e -> Error (string_of_error (email_error e))
+    | Ok issued ->
+      Result.map
+        (fun () -> Challenge.token_to_string issued.Email.token)
+        (deliver t (fun tp -> tp.Mailer.login_code) ~email:(Email.address_to_string address) ~url:issued.Email.code))
+
 let send_enrollment_email t ?(link = default_link "/enroll-account") uid =
   match issue_enrollment t ~ttl:t.config.enroll_token_lifetime uid with
   | Error e -> Error (string_of_error e)
@@ -4927,7 +4943,25 @@ struct
               | Ok selector ->
                 throttle_login inv selector;
                 login_completion_doc inv (login_with_password_completion t selector ~password))
-            | _ -> bad_request "login expects {user, password}, {strategy, credentials}, or {resume}")
+            | _ -> (
+              match (doc_get_string d "token", doc_get_string d "code") with
+              | Some token, Some code ->
+                (* passwordless sign-in: consume the OTP token+code → session. Throttled by IP + the OTP
+                   token id like the OTP paw (S2). Step-up via passwordless isn't carried over DDP here
+                   (errors); such users complete via the HTTP paw. *)
+                let id = match String.index_opt token '.' with Some i -> String.sub token 0 i | None -> token in
+                ( match Throttle.login_allowed t.rate_limit ~ip:inv.R.remote_ip ~account:("otp:" ^ id) with
+                | Error retry -> too_many retry
+                | Ok () -> (
+                  match
+                    login_with_email_otp t (email_service t ()) ~allow_signup:true
+                      ~token:(Challenge.token_of_string token) ~code ()
+                  with
+                  | Error e -> forbidden (string_of_error e)
+                  | Ok login ->
+                    inv.R.set_user_id (Some login.user.id);
+                    Bson.doc [ ("id", Bson.str login.user.id); ("token", Bson.str login.token) ] ) )
+              | _ -> bad_request "login expects {user, password}, {strategy, credentials}, {token, code}, or {resume}" ))
         end
       end
       | _ -> bad_request "login expects selector/password"
@@ -5012,6 +5046,19 @@ struct
           Bson.doc [ ("ok", Bson.Bool true) ])
       | _ -> bad_request "forgotPassword expects one document argument"
     in
+    let request_login_token_method inv = function
+      | [ Bson.Document _ as d ] -> (
+        match doc_get_string d "email" with
+        | None -> bad_request "requestLoginToken expects an email"
+        | Some email ->
+          (* throttle (IP + email) against mailbox spam; emails a one-time code and returns the token to
+             pair with it. Naturally non-enumerating (passwordless permits signup). *)
+          throttle_login inv (By_email email);
+          ( match send_login_token_email t email with
+          | Ok token -> Bson.doc [ ("token", Bson.str token) ]
+          | Error e -> forbidden e ))
+      | _ -> bad_request "requestLoginToken expects one document argument"
+    in
     R.methods
       [
         ("createUser", create_user_method);
@@ -5025,6 +5072,7 @@ struct
         ("enrollAccount", enroll_account_method);
         ("completeLoginStepUp", complete_login_step_up_method);
         ("forgotPassword", forgot_password_method);
+        ("requestLoginToken", request_login_token_method);
       ]
 end
 
@@ -8253,6 +8301,42 @@ let%test "methods: forgotPassword sends a reset email and is non-enumerating (al
   && (match sent () with
      | [ m ] -> List.exists (fun (ad : Fennec_mail.Address.t) -> ad.email = "ada@example.com") m.Fennec_mail.to_
      | _ -> false)
+
+let%test "methods: requestLoginToken emails a code; passwordless login over DDP completes the round-trip" =
+  Test_methods_runtime.registered := [];
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = make ~secret:"accounts-test-secret-pwl" ~store:(Store.minimongo ()) ~password_hasher:test_hasher () in
+  set_email_templates a (Mailer.default ~site_name:"Acme" ~from:(Fennec_mail.Address.v "no-reply@acme.test") ());
+  Test_methods.register a;
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = Some "203.0.113.40"; is_simulation = false; set_user_id = (fun _ -> ()) } in
+  let first_code s =
+    let n = String.length s and is_d c = c >= '0' && c <= '9' in
+    let rec go i =
+      if i + 6 > n then None
+      else if is_d s.[i] && is_d s.[i + 1] && is_d s.[i + 2] && is_d s.[i + 3] && is_d s.[i + 4] && is_d s.[i + 5] then
+        Some (String.sub s i 6)
+      else go (i + 1)
+    in
+    go 0
+  in
+  ( match find_registered_ "requestLoginToken" inv [ Bson.doc [ ("email", Bson.str "ada@example.com") ] ] with
+  | Bson.Document kvs -> (
+    match (List.assoc_opt "token" kvs, sent ()) with
+    | Some (Bson.String token), [ m ] -> (
+      match first_code (Option.value m.Fennec_mail.text ~default:"") with
+      | None -> false
+      | Some code -> (
+        match find_registered_ "login" inv [ Bson.doc [ ("token", Bson.str token); ("code", Bson.str code) ] ] with
+        | Bson.Document session -> (
+          match List.assoc_opt "token" session with
+          | Some (Bson.String t2) -> Result.is_ok (login_with_token a t2)
+          | _ -> false)
+        | _ -> false
+        | exception Test_methods_runtime.Error _ -> false))
+    | _ -> false)
+  | _ -> false
+  | exception Test_methods_runtime.Error _ -> false )
 
 let%test "methods: logout clears the invocation user_id" =
   Test_methods_runtime.registered := [];
