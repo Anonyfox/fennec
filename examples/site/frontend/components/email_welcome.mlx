@@ -1,0 +1,20 @@
+(* A transactional email authored as an ORDINARY [%%style] component — no signals, no handlers (email has
+   no JS). It styles by class exactly like a web component; rendered through Fur_email.to_email those
+   classes are flattened into [style=] attributes (and var(--brand) resolved) for email clients. Same
+   single-file styling machinery as the rest of the site — proof that components, minus JS, are emails. *)
+[%%style {scss|
+.mailw { font-family: system-ui, -apple-system, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #1a1a1a }
+.mailw-h1 { font-size: 20px; font-weight: 600; margin: 0 0 16px }
+.mailw-p { font-size: 15px; line-height: 1.5; margin: 0 0 20px }
+.mailw-cta { display: inline-block; background: var(--brand); color: #ffffff; text-decoration: none; padding: 10px 18px; border-radius: 6px; font-size: 15px }
+.mailw-foot { font-size: 12px; color: #aaa; margin: 24px 0 0 }
+|scss}]
+
+let make ~name ~url () =
+ fun () ->
+  <div className="mailw">
+    <h1 className="mailw-h1">(node ("Welcome, " ^ name ^ "!"))</h1>
+    <p className="mailw-p">"Thanks for signing up — confirm your email address to get started:"</p>
+    <p><a className="mailw-cta" href=(url)>"Confirm email"</a></p>
+    <p className="mailw-foot">"— The Fennec team"</p>
+  </div>

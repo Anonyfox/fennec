@@ -155,17 +155,38 @@ let escape s =
     | c -> Buffer.add_char b c) s;
   Buffer.contents b
 let is_void = function "input"|"br"|"img"|"hr"|"meta"|"link" -> true | _ -> false
-let rec to_html = function
-  | Text s -> escape s
-  | Raw s -> s
-  | Fragment l -> String.concat "" (List.map to_html l)
-  | Comp c -> to_html ((c.setup ()) ())   (* SSR: run setup + render once, no reactivity *)
-  | Elem { tag; attrs; children; _ } ->
-    let a = List.filter_map (function
-      | Attr (k,v) -> Some (Printf.sprintf " %s=\"%s\"" k (escape v)) | Handler _ -> None) attrs
-      |> String.concat "" in
-    if is_void tag then Printf.sprintf "<%s%s/>" tag a
-    else Printf.sprintf "<%s%s>%s</%s>" tag a (String.concat "" (List.map to_html (flatten children))) tag
+
+(* ONE serializer. [style] is a per-element hook returning extra inline-style declarations to merge into
+   the element — the seam the email inliner uses to flatten a stylesheet into [style=] attributes. The
+   stylesheet decls go FIRST, so an explicit inline [style] (appended after) still wins per the cascade.
+   Plain [to_html] passes a constant-[None] hook, so it serializes exactly as before. *)
+let merge_style attrs extra =
+  match extra with
+  | None | Some "" -> attrs
+  | Some s ->
+    if List.exists (function Attr ("style", _) -> true | _ -> false) attrs then
+      List.map (function Attr ("style", e) -> Attr ("style", s ^ ";" ^ e) | a -> a) attrs
+    else Attr ("style", s) :: attrs
+
+let html_with (style : tag:string -> attrs:(string * string) list -> string option) v =
+  let rec go = function
+    | Text s -> escape s
+    | Raw s -> s
+    | Fragment l -> String.concat "" (List.map go l)
+    | Comp c -> go ((c.setup ()) ())   (* SSR: run setup + render once, no reactivity *)
+    | Elem { tag; attrs; children; _ } ->
+      let plain = List.filter_map (function Attr (k, v) -> Some (k, v) | Handler _ -> None) attrs in
+      let attrs = merge_style attrs (style ~tag ~attrs:plain) in
+      let a = List.filter_map (function
+        | Attr (k,v) -> Some (Printf.sprintf " %s=\"%s\"" k (escape v)) | Handler _ -> None) attrs
+        |> String.concat "" in
+      if is_void tag then Printf.sprintf "<%s%s/>" tag a
+      else Printf.sprintf "<%s%s>%s</%s>" tag a (String.concat "" (List.map go (flatten children))) tag
+  in
+  go v
+
+let to_html v = html_with (fun ~tag:_ ~attrs:_ -> None) v
+let to_html_styled ~style v = html_with style v
 
 (* A full HTML document: the only thing to_html can't express is the doctype. A
    server-only template is just a vnode rooted at <html>; this renders it. *)

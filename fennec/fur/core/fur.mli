@@ -167,6 +167,12 @@ val with_key : string -> vnode -> vnode
 (** Serialize a vnode tree to HTML markup (SSR). Does NOT prepend a doctype. *)
 val to_html : vnode -> string
 
+(** Like {!to_html}, but for each element it merges the declarations returned by [style] into that
+    element's inline [style] attribute (the stylesheet decls go first, so an explicit inline [style=]
+    still wins). [style] sees the element's tag and its plain string attributes. This is the generic
+    seam the email CSS inliner builds on — it has no email knowledge of its own. *)
+val to_html_styled : style:(tag:string -> attrs:(string * string) list -> string option) -> vnode -> string
+
 (** [document root] — serialize the full page: [<!doctype html>] followed by {!to_html root}. *)
 val document : vnode -> string
 

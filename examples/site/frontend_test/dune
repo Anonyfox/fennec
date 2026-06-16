@@ -6,4 +6,4 @@
 (test
  (name test_components)
  (modules test_components)
- (libraries fennec.fur site_components))
+ (libraries fennec.fur fennec.fur.server site_components site_styles))

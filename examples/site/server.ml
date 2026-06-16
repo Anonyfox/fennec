@@ -73,6 +73,10 @@ let outbox_doc (m : Fennec.Mail.t) : Outbox.t =
     html = Option.value m.html ~default:"";
     received = stamp }
 
+(* the app's email stylesheet, built ONCE from the precompiled [%%style] artifact (Site_styles.inline);
+   Fur_email.to_email flattens it into style= attributes — the SAME component styles as the web, minus JS *)
+let email_css = Fur_email.of_rules Site_styles.inline
+
 let setup_realtime () =
   Pulse.seed Task.collection
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
@@ -132,14 +136,18 @@ let web =
          e
          |> Endpoint.get "/dev/mailbox" Site_handlers.Dev_mailbox.serve
          |> Endpoint.get "/dev/send-test-mail" (fun c ->
+                (* the body is a [%%style] component (Email_welcome), inlined for email by Fur_email with
+                   var(--brand) resolved — authored exactly like a web component, minus the JS *)
+                let html =
+                  Fur_email.to_email email_css ~tokens:[ ("--brand", "#e8590c") ]
+                    (Email_welcome.make ~name:"Ada" ~url:"https://fennec.dev/confirm" () ())
+                in
                 let open Fennec.Mail in
                 ignore
                   (send
                      (make ~from:(Address.v ~name:"Fennec" "no-reply@fennec.dev")
                         ~to_:[ Address.v ~name:"You" "you@example.com" ] ~subject:"Welcome to Fennec"
-                        ~text:"Plain-text fallback: welcome aboard."
-                        ~html:"<h1>Welcome aboard</h1><p>This is a <b>test</b> email rendered in the dev mailbox.</p>"
-                        ()));
+                        ~text:"Welcome aboard — confirm your email to get started." ~html ()));
                 Conn.text c "sent — open /dev/mailbox"))
   |> Endpoint.app
        (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
