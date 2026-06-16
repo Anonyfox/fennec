@@ -63,19 +63,21 @@ module Assigns = Assigns
 
 (** {1 Handler shortcuts}
 
-    The verbs reached for in nearly every paw, lifted to [Paw.] from {!Conn} — point-free, so they
-    {e are} the same functions: go-to-definition, hover docs, and stack traces all land on {!Conn}.
-    Reach for {!Conn} directly for the long tail (headers, files, streaming, status, …).
+    The verbs reached for in nearly every paw, lifted to [Paw.] from {!Conn}. {b Reads} pull a value
+    out (conn-first); {b writes} thread the connection through (conn-{e last}), so a handler reads
+    once, then pipes the response — Elixir/Plug style:
 
-    - response: {!html} {!json} {!text} {!redirect} {!respond} {!send_file}
-    - request: {!param} (a path or query value) {!query} {!cookie} {!header} {!body_param} *)
+    {[
+      let create c =
+        let title = Option.value (Paw.param c "title") ~default:"" in
+        c |> Paw.set_status 201 |> Paw.set_cookie "sid" sid |> Paw.json (encode title)
+    ]}
+
+    Reach for {!Conn} directly for the long tail (files, streaming, raw header lists, …). *)
+
+(** Reads — point-free aliases of {!Conn}; go-to-definition and stack traces land there. [param]
+    checks path, then query, then form body. *)
 include module type of struct
-  let html = Conn.html
-  let json = Conn.json
-  let text = Conn.text
-  let redirect = Conn.redirect
-  let respond = Conn.respond
-  let send_file = Conn.send_file
   let param = Conn.param
   let query = Conn.query
   let cookie = Conn.cookie
@@ -83,10 +85,52 @@ include module type of struct
   let body_param = Conn.body_param
 end
 
+(** Set the response status. *)
+val set_status : int -> Conn.t -> Conn.t
+
+(** Add a response header. *)
+val set_header : string -> string -> Conn.t -> Conn.t
+
+(** Set a response cookie ([http_only] + [SameSite=Lax] by default); see {!Conn.set_cookie}. *)
+val set_cookie :
+  ?path:string ->
+  ?domain:string ->
+  ?max_age:int ->
+  ?expires:float ->
+  ?secure:bool ->
+  ?http_only:bool ->
+  ?same_site:Cookie.same_site ->
+  string ->
+  string ->
+  Conn.t ->
+  Conn.t
+
+(** Expire a response cookie. *)
+val delete_cookie : ?path:string -> ?domain:string -> string -> Conn.t -> Conn.t
+
+(** Answer with a ready-made {!Http.response}. *)
+val respond : Http.response -> Conn.t -> Conn.t
+
+(** Answer with an HTML body. *)
+val html : ?status:int -> ?headers:(string * string) list -> string -> Conn.t -> Conn.t
+
+(** Answer with a JSON body (you supply the already-encoded string). *)
+val json : ?status:int -> ?headers:(string * string) list -> string -> Conn.t -> Conn.t
+
+(** Answer with a plain-text body. *)
+val text : ?status:int -> ?headers:(string * string) list -> string -> Conn.t -> Conn.t
+
+(** Answer with a redirect to a URL (302 by default). *)
+val redirect : ?status:int -> string -> Conn.t -> Conn.t
+
+(** Stream a file from disk as the response. *)
+val send_file : ?content_type:string -> path:string -> Conn.t -> Conn.t
+
 (** [endpoint paws] builds an {!Endpoint} from a flat list of paws (middleware and routes, in
     declaration order) — the quick path for one app on one host ([?hosts] defaults to the catch-all
-    ["*"]). For the two-phase builder, with middleware that runs {e only} on a matched route (auth,
-    rate limiting), use the {!Endpoint} combinators directly. *)
+    ["*"]). Routes are a collection (first-match), so they read as a list rather than a [|>] chain;
+    for the two-phase builder — middleware that runs {e only} on a matched route (auth, rate
+    limiting) — use the {!Endpoint} combinators, which {e do} pipe ([Endpoint.make () |> use … |> get …]). *)
 val endpoint : ?name:string -> ?hosts:string list -> t list -> Endpoint.t
 
 (** {1 HTTP vocabulary}

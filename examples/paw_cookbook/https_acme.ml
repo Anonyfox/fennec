@@ -5,7 +5,7 @@
 let app =
   Paw.endpoint ~hosts:[ "example.com"; "www.example.com" ]
     [ Paw.Logger.make ();
-      Paw.get "/" (fun c -> Paw.html c "<h1>https, automatically</h1>") ]
+      Paw.get "/" (fun c -> c |> Paw.html "<h1>https, automatically</h1>") ]
 
 let acme =
   Paw.Acme.auto ~email:"ops@example.com" ~store:(Paw.Cert_store.file ~dir:"/var/lib/myapp/acme") ()

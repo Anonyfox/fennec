@@ -7,18 +7,27 @@ A small, complete **HTTP toolkit for OCaml on [Eio](https://github.com/ocaml-mul
 A **paw** is a `Conn.t -> Conn.t`: given a connection it either *answers* the request or *declines* (passes it through). Routes, middleware, static serving, the WebSocket upgrade — every piece is a paw. Compose them with `Paw.seq`; the first to answer wins.
 
 ```ocaml
-let () =
-  Paw.serve
-    [ Paw.endpoint
-        [ Paw.Logger.make ();
-          Paw.get "/" (fun c -> Paw.html c "<h1>hello</h1>");
-          Paw.get "/users/:id" (fun c ->
-              Paw.text c (Option.value (Paw.param c "id") ~default:"?")) ] ]
+let app =
+  Paw.endpoint
+    [ Paw.Logger.make ();
+      Paw.get "/" (fun c -> c |> Paw.html "<h1>hello</h1>");
+      Paw.get "/users/:id" (fun c ->
+          c |> Paw.text (Option.value (Paw.param c "id") ~default:"?")) ]
+
+let () = Paw.serve [ app ]
 ```
 
-The happy path is one `Paw.` away: `serve` builds the host router and owns the Eio loop; `endpoint` bundles middleware + routes; the verbs (`get`, `html`, `param`, `json`, `query`, …) are lifted to the top level (point-free, so they *are* `Conn`/`Pipeline` — go-to-definition and stack traces land on the real functions). A complete runnable version is in [`examples/paw_hello/`](../examples/paw_hello/hello.ml), and a simplest→enterprise tour is in [`examples/paw_cookbook/`](../examples/paw_cookbook/). For pure unit tests you don't even need a socket — `Paw.run app request` drives a pipeline to a response in memory.
+The happy path is one `Paw.` away. `serve` builds the host router and owns the Eio loop; `endpoint` bundles middleware + routes. **Reads** pull a value out (`Paw.param c "id"` — checks path, then query, then body); **writes** thread the connection through, conn-last, so a handler reads once then *pipes* the response, Elixir/Plug style:
 
-Need more control — virtual hosts, the two-phase pipeline (middleware that runs only on matched routes), your own Eio env? Drop from `serve`/`endpoint` to the `Endpoint` builder + `Host_router.build` + `Server.run`. Nothing is hidden; the shortcuts are just the common case.
+```ocaml
+let create c =
+  let title = Option.value (Paw.body_param c "title") ~default:"" in
+  c |> Paw.set_status 201 |> Paw.set_cookie "sid" sid |> Paw.json (encode title)
+```
+
+A complete runnable hello is in [`examples/paw_hello/`](../examples/paw_hello/hello.ml), and a simplest→enterprise tour is in [`examples/paw_cookbook/`](../examples/paw_cookbook/). For pure unit tests you don't even need a socket — `Paw.run app request` drives a pipeline to a response in memory.
+
+Need more control — virtual hosts, the two-phase pipeline (middleware that runs only on matched routes), your own Eio env? Drop from `serve`/`endpoint` to the `Endpoint` builder (`Endpoint.make () |> use … |> get …`) + `Host_router.build` + `Server.run`. Nothing is hidden; the shortcuts are just the common case.
 
 ## Find your way around
 

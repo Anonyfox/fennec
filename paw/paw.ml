@@ -63,20 +63,37 @@ module Assigns = Assigns
 
 (** {1 Handler shortcuts} *)
 
-(* The verbs used in nearly every paw, lifted to the top level from {!Conn}. Point-free, so e.g.
-   [html] IS [Conn.html] — one closure, so go-to-definition, hover docs, and stack traces all land on
-   the real function. Reach for [Conn] directly for the long tail (headers, files, streaming, …). *)
-let html = Conn.html
-let json = Conn.json
-let text = Conn.text
-let redirect = Conn.redirect
-let respond = Conn.respond
-let send_file = Conn.send_file
+(* The verbs reached for in nearly every paw, lifted to [Paw.] from {!Conn}. Reads pull a value OUT
+   (conn-first); writes thread the connection THROUGH (conn-LAST), so a handler reads, then pipes the
+   response — Elixir/Plug style:
+
+     let create c =
+       let title = Option.value (Paw.param c "title") ~default:"" in
+       c |> Paw.set_status 201 |> Paw.set_cookie "sid" sid |> Paw.json (encode title)
+
+   Reach for {!Conn} directly for the long tail (files, streaming, raw header lists, …). *)
+
+(* reads — point-free aliases of {!Conn}, so go-to-definition + stack traces land there *)
 let param = Conn.param
 let query = Conn.query
 let cookie = Conn.cookie
 let header = Conn.req_header
 let body_param = Conn.body_param
+
+(* writes — conn-LAST, so they compose with [|>] *)
+let set_status = Conn.set_status
+let set_header k v c = Conn.set_header c k v
+
+let set_cookie ?path ?domain ?max_age ?expires ?secure ?http_only ?same_site name value c =
+  Conn.set_cookie c ?path ?domain ?max_age ?expires ?secure ?http_only ?same_site name value
+
+let delete_cookie ?path ?domain name c = Conn.delete_cookie c ?path ?domain name
+let respond resp c = Conn.respond c resp
+let html ?status ?headers body c = Conn.html ?status ?headers c body
+let json ?status ?headers body c = Conn.json ?status ?headers c body
+let text ?status ?headers body c = Conn.text ?status ?headers c body
+let redirect ?status url c = Conn.redirect ?status c url
+let send_file ?content_type ~path c = Conn.send_file c ?content_type ~path ()
 
 (* Build an endpoint from a flat list of paws (middleware + routes, in declaration order) — the quick
    path for one app on one host. Drop to Endpoint.make for the two-phase (matched-only) builder. *)
