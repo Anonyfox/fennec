@@ -73,10 +73,6 @@ let outbox_doc (m : Fennec.Mail.t) : Outbox.t =
     html = Option.value m.html ~default:"";
     received = stamp }
 
-(* the app's email stylesheet, built ONCE from the precompiled [%%style] artifact (Site_styles.inline);
-   Fur_email.to_email flattens it into style= attributes — the SAME component styles as the web, minus JS *)
-let email_css = Fur_email.of_rules Site_styles.inline
-
 let setup_realtime () =
   Pulse.seed Task.collection
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
@@ -108,6 +104,12 @@ let common =
 
 let hello_secret = "hello-handler-demo-secret-key-1234"
 
+(* The app's component styles, declared for BOTH surfaces in one place: the web endpoints below pass
+   [~styles:Site_styles.css] (the document <style>), and this installs the SAME rules — var(--brand)
+   already resolved at build — for email, so [Fur_email.to_email component] inlines them with nothing
+   per render. Two halves of one styling story; the [%%style] blocks are the single source for both. *)
+let () = Fur_email.install Site_styles.inline
+
 let web =
   Endpoint.make ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
   |> Endpoint.pipe
@@ -136,12 +138,10 @@ let web =
          e
          |> Endpoint.get "/dev/mailbox" Site_handlers.Dev_mailbox.serve
          |> Endpoint.get "/dev/send-test-mail" (fun c ->
-                (* the body is a [%%style] component (Email_welcome), inlined for email by Fur_email with
-                   var(--brand) resolved — authored exactly like a web component, minus the JS *)
-                let html =
-                  Fur_email.to_email email_css ~tokens:[ ("--brand", "#e8590c") ]
-                    (Email_welcome.make ~name:"Ada" ~url:"https://fennec.dev/confirm" () ())
-                in
+                (* the body is a [%%style] component, rendered for email by Fur_email — authored exactly
+                   like a web component, minus the JS. No stylesheet, no tokens: the ambient styles are
+                   auto-installed by Site_styles and var(--brand) was resolved at build time. *)
+                let html = Fur_email.to_email (Email_welcome.make ~name:"Ada" ~url:"https://fennec.dev/confirm" () ()) in
                 let open Fennec.Mail in
                 ignore
                   (send

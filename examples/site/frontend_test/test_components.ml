@@ -48,23 +48,20 @@ let () =
   check "todo_list: add button" (has todos "id=\"add\"");
 
   (* email: the SAME [%%style] component machinery, inlined for email via Fur_email (server-side, pure).
-     The engine in isolation — a hand-made stylesheet inlines by (scope, class): *)
+     The engine in isolation — an explicit stylesheet inlines by (scope, class): *)
   let ss = Fur_email.of_rules [ ("s1", "box", "color:red"); ("s1", "p", "margin:0") ] in
-  let boxed = Fur_email.to_email ss (Fur.h "div" [ Fur.attr "data-fur" "s1"; Fur.class_ "box" ] [ Fur.text "hi" ]) in
+  let boxed = Fur_email.to_email ~stylesheet:ss (Fur.h "div" [ Fur.attr "data-fur" "s1"; Fur.class_ "box" ] [ Fur.text "hi" ]) in
   check "inline: matched class decls land in style=" (has boxed "style=\"color:red\"");
   check "inline: unscoped element gets no style"
-    (not (has (Fur_email.to_email ss (Fur.h "div" [] [ Fur.text "x" ])) "style="));
+    (not (has (Fur_email.to_email ~stylesheet:ss (Fur.h "div" [] [ Fur.text "x" ])) "style="));
 
-  (* the real welcome email: a [%%style] component rendered through the precompiled Site_styles.inline,
-     with var(--brand) resolved to a literal (Outlook-safe) — the full build->inline loop *)
-  let mail =
-    Fur_email.to_email
-      (Fur_email.of_rules Site_styles.inline)
-      ~tokens:[ ("--brand", "#e8590c") ]
-      (Email_welcome.make ~name:"Ada" ~url:"https://x.test/confirm" () ())
-  in
+  (* the real welcome email through the AMBIENT stylesheet. The app installs the precompiled styles ONCE
+     (exactly this line, in server.ml); thereafter render with NOTHING passed — no stylesheet, no tokens
+     (var(--brand) was resolved to a literal at build time). *)
+  Fur_email.install Site_styles.inline;
+  let mail = Fur_email.to_email (Email_welcome.make ~name:"Ada" ~url:"https://x.test/confirm" () ()) in
   check "email: wrapper styles inlined from [%%style]" (has mail "max-width: 480px");
-  check "email: var(--brand) resolved to a literal" (has mail "background: #e8590c");
+  check "email: var(--brand) resolved to a literal (build-time)" (has mail "background: #e8590c");
   check "email: no var() left in the output" (not (has mail "var("));
   check "email: dynamic content rendered" (has mail "Welcome, Ada!");
   check "email: href preserved" (has mail "https://x.test/confirm");

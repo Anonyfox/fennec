@@ -1,6 +1,6 @@
-(* Email CSS inlining — the pure-OCaml RUNTIME apply (see fur_email.mli). The CSS was parsed/scoped at
-   build time by [style_extract]; here we only look declarations up by (scope, key) and merge them into
-   each element's style attr via [Fur.to_html_styled]. No CSS parser, no Rust. *)
+(* Email CSS inlining — the pure-OCaml RUNTIME apply (see fur_email.mli). The CSS was parsed, scoped AND
+   var()-resolved at BUILD time by [style_extract]; here we only look declarations up by (scope, key) and
+   merge them into each element's style attr via [Fur.to_html_styled]. No CSS parser, no Rust, no tokens. *)
 
 type t = (string * string, string) Hashtbl.t (* (scope, selector-key) -> declarations *)
 
@@ -14,38 +14,14 @@ let of_rules rules =
     rules;
   h
 
-(* replace [var(<name>)] and [var(<name>, fallback)] with [value] — [name] carries its leading [--], so
-   email clients (which can't resolve custom properties) get a literal *)
-let subst_var name value s =
-  let needle = "var(" ^ name in
-  let nlen = String.length needle and n = String.length s in
-  let buf = Buffer.create n in
-  let i = ref 0 in
-  while !i < n do
-    if
-      !i + nlen <= n
-      && String.sub s !i nlen = needle
-      && (!i + nlen = n || match s.[!i + nlen] with ')' | ',' | ' ' -> true | _ -> false)
-    then
-      match String.index_from_opt s (!i + nlen) ')' with
-      | Some close ->
-        Buffer.add_string buf value;
-        i := close + 1
-      | None ->
-        Buffer.add_char buf s.[!i];
-        incr i
-    else begin
-      Buffer.add_char buf s.[!i];
-      incr i
-    end
-  done;
-  Buffer.contents buf
+(* The ambient stylesheet. The generated [Site_styles] calls [install] at link time, so [to_email] works
+   with no userland wiring — exactly as a page renders without the app touching its [%%style]. *)
+let _ambient : t option ref = ref None
+let install rules = _ambient := Some (of_rules rules)
 
-let resolve tokens s = List.fold_left (fun s (name, value) -> subst_var name value s) s tokens
-
-(* the per-element hook handed to [Fur.to_html_styled]: an element styled by the stylesheet is one whose
-   [data-fur] scope + class/tag has a rule. Tag first then classes, so class specificity wins downstream. *)
-let style_of (t : t) tokens ~tag ~attrs =
+(* the per-element hook handed to [Fur.to_html_styled]: an element is styled by the stylesheet when its
+   [data-fur] scope + a class/tag has a rule. Tag first then classes, so class specificity wins. *)
+let style_of (t : t) ~tag ~attrs =
   match List.assoc_opt "data-fur" attrs with
   | None -> None (* unscoped: nothing in a scoped stylesheet can target it *)
   | Some scope ->
@@ -54,9 +30,11 @@ let style_of (t : t) tokens ~tag ~attrs =
       | Some c -> String.split_on_char ' ' c |> List.filter (fun s -> s <> "")
       | None -> []
     in
-    let decls = List.filter_map (fun key -> Hashtbl.find_opt t (scope, key)) (tag :: classes) in
-    ( match decls with
+    ( match List.filter_map (fun key -> Hashtbl.find_opt t (scope, key)) (tag :: classes) with
     | [] -> None
-    | ds -> Some (resolve tokens (String.concat ";" ds)) )
+    | ds -> Some (String.concat ";" ds) )
 
-let to_email t ?(tokens = []) v = Fur.to_html_styled ~style:(style_of t tokens) v
+let to_email ?stylesheet v =
+  match (match stylesheet with Some _ as s -> s | None -> !_ambient) with
+  | None -> Fur.to_html v (* no stylesheet installed → plain HTML, no inlining *)
+  | Some t -> Fur.to_html_styled ~style:(style_of t) v
