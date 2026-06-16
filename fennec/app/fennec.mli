@@ -37,6 +37,12 @@ module Cookie = Fennec_core.Cookie
     With no login cookie, identity is simply [None]. *)
 module Accounts = Fennec_server.Accounts
 
+(** Outbound email — one [MAIL_URL] knob picks the transport ([smtp://] STARTTLS, [smtps://] implicit TLS,
+    or — unset — logged to stdout in dev). Compose a {!Mail.t} and {!Mail.send} it; {!Fennec.serve} boots
+    the ambient transport. {!Mail.set_dev_capture} tees every send into a live collection — the seam the
+    dev mailbox (a userland realtime SPA over that collection) is built on. *)
+module Mail = Fennec_mail
+
 (** {1 Endpoints — host routing, apps, and route-local middleware} *)
 
 (** Named apps routed by the request's Host header (see {!Fennec_server.Endpoint}).
@@ -196,6 +202,11 @@ end
 
 (** [true] when [FENNEC_ENV] is absent or not ["production"]. *)
 val is_dev : bool
+
+(** [dev_only f e] applies the endpoint transform [f] only when {!is_dev}; in production [e] is returned
+    untouched, so any routes [f] would add simply do not exist (no bundle served, no handler reachable).
+    The clean dev-only mount for tooling, e.g. [... |> dev_only (Endpoint.get "/dev/mailbox" Mailbox.serve)]. *)
+val dev_only : (Endpoint.t -> Endpoint.t) -> Endpoint.t -> Endpoint.t
 
 (** A web root source: dev reads the assembled webroot dir next to the exe; prod serves the
     embedded asset map. *)

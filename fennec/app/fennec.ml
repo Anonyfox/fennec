@@ -68,6 +68,10 @@ type request_error = Fennec_server.Server.request_error =
 
 let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true
 
+(* Apply an endpoint transform only in dev (see [is_dev]); in production the endpoint passes through
+   untouched, so any routes the transform would add simply do not exist. The clean dev-only mount. *)
+let dev_only f e = if is_dev then f e else e
+
 (* Structured-concurrency helpers for handlers. A handler runs inside an Eio fiber, so it
    can fan out concurrent work (parallel DB queries / HTTP calls): the sub-fibers overlap
    their waits, and if the request's deadline fires or the client goes away, the whole tree

@@ -159,13 +159,20 @@ let transport_of_env ~sw ~net () : transport =
 
 let _transport : transport option ref = ref None
 let _hooks : (t -> bool) list ref = ref []
+let _dev_capture : (t -> unit) option ref = ref None
 let set_transport tr = _transport := Some tr
 let on_before_send f = _hooks := f :: !_hooks
+let set_dev_capture f = _dev_capture := Some f
+let clear_dev_capture () = _dev_capture := None
 let boot ~sw ~net () = set_transport (transport_of_env ~sw ~net ())
 
 let send m =
   if not (List.for_all (fun h -> h m) !_hooks) then Ok () (* a before-send hook dropped it *)
-  else (match !_transport with Some tr -> tr m | None -> log_transport () m)
+  else (
+    (* the dev outbox tees a copy of every accepted message here BEFORE the real transport runs, so the
+       mailbox shows what was sent regardless of the transport (log/smtp). Never raises into [send]. *)
+    (match !_dev_capture with Some f -> ( try f m with _ -> ()) | None -> ());
+    match !_transport with Some tr -> tr m | None -> log_transport () m)
 
 (* ---- inline tests (the socket-level SMTP test lives in test/ — it needs a real Eio loop) ---- *)
 
@@ -188,6 +195,18 @@ let%test "capture transport records sent messages; validate rejects no-recipient
   && (match tr no_rcpt with Error (Invalid_message _) -> true | _ -> false)
   && (match tr no_body with Error (Invalid_message _) -> true | _ -> false)
   && List.length (sent ()) = 1
+
+let%test "set_dev_capture tees a copy to the observer AND still runs the ambient transport" =
+  let seen = ref [] in
+  let delivered, sent = capture () in
+  set_transport delivered;
+  set_dev_capture (fun m -> seen := m :: !seen);
+  let m = make ~from:(Address.v "a@x.com") ~to_:[ Address.v "b@x.com" ] ~subject:"s" ~text:"hi" () in
+  let r = send m in
+  clear_dev_capture ();
+  set_transport delivered;
+  (* the tee saw it AND the transport delivered it — both, not either *)
+  r = Ok () && List.length !seen = 1 && List.length (sent ()) = 1
 
 let%test "on_before_send returning false drops the message via the ambient send" =
   let tr, sent = capture () in

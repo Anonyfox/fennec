@@ -57,6 +57,22 @@ let realtime_ddp = Pulse.serve_ddp ~path:"/ddp" ()
    already booted by Fennec.serve (ambient switch + any mongosh endpoint, all from MONGO_URL), so there
    is no app config branch here. Writes validate against Task.collection (an invalid value cannot reach
    the database); [Pulse.publish] is ONE call that wires both the live DDP publication AND the SSR seed. *)
+(* dev mailbox: the pure shape conversion from a sent message to an _fennec_outbox document — what was
+   sent (Mail.t) → what the inbox renders (Outbox.t), stamped with a fixed-width UTC time so it sorts. *)
+let outbox_doc (m : Fennec.Mail.t) : Outbox.t =
+  let stamp =
+    let tm = Unix.gmtime (Unix.gettimeofday ()) in
+    Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+      tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+  in
+  { Outbox.id = "";
+    sender = Fennec.Mail.Address.to_header m.from;
+    recipients = Fennec.Mail.Address.header_list (m.to_ @ m.cc);
+    subject = m.subject;
+    text = Option.value m.text ~default:"";
+    html = Option.value m.html ~default:"";
+    received = stamp }
+
 let setup_realtime () =
   Pulse.seed Task.collection
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
@@ -64,7 +80,15 @@ let setup_realtime () =
   (* the TYPED method over the TYPED collection: handler and stub share the declarations, so a
      renamed field/method is a compile error in every file; a malformed call is a 400 before this
      handler runs, and an invalid document raises before it writes *)
-  Pulse.method_ Site_methods.add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title; body = "" })
+  Pulse.method_ Site_methods.add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title; body = "" });
+  (* --- dev mailbox (dev only): publish the captured-mail collection the inbox SPA subscribes to, and tee
+     every send into it. In production this block is skipped — nothing is captured, published, or retained.
+     This is the whole server-side assembly: the framework ships the capture seam ([Mail.set_dev_capture])
+     and the reactive collection; the app picks the document shape and the route. --- *)
+  if Fennec.is_dev then begin
+    Pulse.publish Outbox.collection;
+    Fennec.Mail.set_dev_capture (fun m -> ignore (Pulse.insert Outbox.collection (outbox_doc m)))
+  end
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)
@@ -102,6 +126,21 @@ let web =
      reuse: a query-string route and a path-param route. Adding a handler = drop a .mlx + one line here. *)
   |> Endpoint.get "/greet" Site_handlers.Greet.serve
   |> Endpoint.get "/hi/:name" Site_handlers.Greet.serve
+  (* the dev mailbox — mounted ONLY in dev (Fennec.dev_only); in production these routes do not exist.
+     "/dev/send-test-mail" is a demo trigger: hit it and the email shows up at /dev/mailbox live. *)
+  |> Fennec.dev_only (fun e ->
+         e
+         |> Endpoint.get "/dev/mailbox" Site_handlers.Dev_mailbox.serve
+         |> Endpoint.get "/dev/send-test-mail" (fun c ->
+                let open Fennec.Mail in
+                ignore
+                  (send
+                     (make ~from:(Address.v ~name:"Fennec" "no-reply@fennec.dev")
+                        ~to_:[ Address.v ~name:"You" "you@example.com" ] ~subject:"Welcome to Fennec"
+                        ~text:"Plain-text fallback: welcome aboard."
+                        ~html:"<h1>Welcome aboard</h1><p>This is a <b>test</b> email rendered in the dev mailbox.</p>"
+                        ()));
+                Conn.text c "sent — open /dev/mailbox"))
   |> Endpoint.app
        (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
           ~source:api_source ~mounts:[ Web_app.Routes.mount ])

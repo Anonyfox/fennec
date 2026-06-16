@@ -89,6 +89,14 @@ val set_transport : transport -> unit
     [Email.hookSend] (filtering, allow-lists, a global send freeze in tests). *)
 val on_before_send : (t -> bool) -> unit
 
+(** Tee a copy of every accepted message to [f] (in addition to — not instead of — the real transport):
+    the seam the dev outbox uses to mirror sends into a live collection. One observer; unset by default
+    (production keeps it off, so nothing is retained). [f] is run inside a [try] and never breaks a send. *)
+val set_dev_capture : (t -> unit) -> unit
+
+(** Remove the {!set_dev_capture} observer. *)
+val clear_dev_capture : unit -> unit
+
 (** Send through the ambient transport (or {!log_transport} if {!boot} has not run). Runs the
     {!on_before_send} hooks first. *)
 val send : t -> (unit, error) result

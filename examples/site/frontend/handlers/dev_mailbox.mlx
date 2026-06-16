@@ -1,0 +1,13 @@
+(* The dev mailbox SPA — a standalone handler, mounted (dev only) at /dev/mailbox in server.ml. There is no
+   server payload: the inbox streams entirely over DDP, so [load] just renders the shell and [view] mounts
+   the live [Outbox_view]. The handler's own bundle hydrates and opens the /ddp socket. This whole file plus
+   Outbox / Outbox_view IS the copy-paste template — the framework only ships the building blocks underneath. *)
+type t = { mounted : bool }
+[@@deriving model]
+
+let load _conn = render { mounted = true }
+
+let view (_ : t) =
+  <main className="devmail-page">
+    <Outbox_view />
+  </main>
