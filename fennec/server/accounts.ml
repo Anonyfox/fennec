@@ -247,6 +247,10 @@ type config = {
          on_login_failure hooks + the audit log still see the real reason) — pairs with the enumeration
          timing defense to close the login enumeration oracle. ON by default (secure); set [false] for
          Meteor-style specific errors. (Signup still reports a taken username/email — a UX necessity.) *)
+  auto_send_verification_email : bool;
+      (* auto-send a verification email when the client [createUser] DDP method creates a user with an
+         email — Meteor's [sendVerificationEmail] config. Off by default (Meteor parity). Best-effort:
+         a delivery failure never blocks signup. *)
   reset_token_lifetime : float;
       (* password-reset token TTL in seconds; default 3 days (Meteor's passwordResetTokenExpirationInDays) *)
   enroll_token_lifetime : float;
@@ -260,6 +264,7 @@ let default_config =
     require_verified_email = false;
     forbid_client_account_creation = false;
     ambiguous_error_messages = true;
+    auto_send_verification_email = false;
     reset_token_lifetime = 3. *. 86_400.;
     enroll_token_lifetime = 30. *. 86_400.;
     verify_token_lifetime = 3. *. 86_400.;
@@ -1803,6 +1808,16 @@ let send_reset_password_email t ?(link = default_link "/reset-password") email =
   | Ok None -> Ok () (* non-enumerating: never reveal whether the address has an account *)
   | Ok (Some pr) ->
     deliver t (fun tp -> tp.Mailer.reset_password) ~email ~url:(link ~token:(Challenge.token_to_string pr.token))
+
+(* Meteor's Accounts.createUserVerifyingEmail: create the user, then send a verification email to that
+   address in one step. The user IS created on success; delivery is best-effort (a failure does not undo
+   the user — they can re-request verification), so the caller sees the [create_user] error type. *)
+let create_user_verifying_email t ?id ?username ~email ?password ?profile ?link () =
+  Result.map
+    (fun user ->
+      ignore (send_verification_email t ?link user.id);
+      user)
+    (create_user t ?id ?username ~email ?password ?profile ())
 
 let send_enrollment_email t ?(link = default_link "/enroll-account") uid =
   match issue_enrollment t ~ttl:t.config.enroll_token_lifetime uid with
@@ -4875,6 +4890,8 @@ struct
             | Error e -> forbidden (string_of_error e)
             | Ok (_, token) ->
               inv.R.set_user_id (Some u.id);
+              (* Meteor's Accounts.config({sendVerificationEmail}) — best-effort, never blocks signup *)
+              if t.config.auto_send_verification_email then ignore (send_verification_email t u.id);
               Bson.doc [ ("id", Bson.str u.id); ("token", Bson.str token); ("user", user_doc u) ])))
       | _ -> bad_request "createUser expects one document argument"
     in
@@ -6658,6 +6675,19 @@ let%test "send_verification_email renders the template and delivers via the ambi
         && has (Option.value m.Fennec_mail.text ~default:"") "https://acme.test/v/"
         && (match m.Fennec_mail.html with Some h -> has h "https://acme.test/v/" | None -> false)
       | _ -> false))
+
+let%test "create_user_verifying_email creates the user AND sends one verification email" =
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = make ~secret:"accounts-test-secret-cuve" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  set_email_templates a (Mailer.default ~site_name:"Acme" ~from:(Fennec_mail.Address.v ~name:"Acme" "no-reply@acme.test") ());
+  ( match create_user_verifying_email a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () with
+  | Error _ -> false
+  | Ok user ->
+    user.username = Some "ada"
+    && ( match sent () with
+       | [ m ] -> List.exists (fun (ad : Fennec_mail.Address.t) -> ad.email = "ada@example.com") m.Fennec_mail.to_
+       | _ -> false ) )
 
 let%test "Store.minimongo persists identity links for external login" =
   let store = Store.minimongo () in

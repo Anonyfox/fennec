@@ -496,6 +496,9 @@ type config = {
       (** password login returns one indistinguishable error for unknown-account vs wrong-password (the
           {!on_login_failure} hooks and the audit log still see the real reason). On by default (secure);
           set [false] for Meteor-style specific errors. *)
+  auto_send_verification_email : bool;
+      (** auto-send a verification email when the client [createUser] DDP method creates a user with an
+          email — Meteor's [sendVerificationEmail]. Best-effort (never blocks signup); off by default. *)
   reset_token_lifetime : float;
       (** password-reset token TTL in seconds; default 3 days (Meteor's [passwordResetTokenExpirationInDays]) *)
   enroll_token_lifetime : float;
@@ -703,6 +706,20 @@ val create_user :
   ?email:string ->
   ?password:string ->
   ?profile:Bson.t ->
+  unit ->
+  (user, error) result
+
+(** Create a user (see {!create_user}) and send a verification email to [email] in one step — Meteor's
+    [Accounts.createUserVerifyingEmail]. The user is created on success; delivery is best-effort (they can
+    re-request verification), so the result carries the {!create_user} error. Needs {!set_email_templates}. *)
+val create_user_verifying_email :
+  t ->
+  ?id:user_id ->
+  ?username:string ->
+  email:string ->
+  ?password:string ->
+  ?profile:Bson.t ->
+  ?link:(token:string -> string) ->
   unit ->
   (user, error) result
 
