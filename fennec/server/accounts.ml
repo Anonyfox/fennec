@@ -234,9 +234,9 @@ type session = {
   factors : Mfa.factor list;
 }
 
-(* Central authentication policy — the typed twin of Meteor's [Accounts.config({...})]. The all-false
-   [default_config] preserves the historical behavior; an app opts in to stricter policy via [make ~config]
-   or {!configure}. *)
+(* Central authentication policy — the typed twin of Meteor's [Accounts.config({...})]. [default_config]
+   is SECURE-by-default (enumeration resistance on, sane token lifetimes); an app tunes it via [make
+   ~config] or {!configure}. *)
 type config = {
   require_verified_email : bool;
       (* a user must have at least one verified email before any session is issued (every strategy) *)
@@ -245,11 +245,25 @@ type config = {
   ambiguous_error_messages : bool;
       (* password login returns ONE indistinguishable error for unknown-account vs wrong-password (the
          on_login_failure hooks + the audit log still see the real reason) — pairs with the enumeration
-         timing defense to close the account-enumeration oracle completely *)
+         timing defense to close the login enumeration oracle. ON by default (secure); set [false] for
+         Meteor-style specific errors. (Signup still reports a taken username/email — a UX necessity.) *)
+  reset_token_lifetime : float;
+      (* password-reset token TTL in seconds; default 3 days (Meteor's passwordResetTokenExpirationInDays) *)
+  enroll_token_lifetime : float;
+      (* enrollment-invite token TTL in seconds; default 30 days (Meteor's passwordEnrollTokenExpiration) *)
+  verify_token_lifetime : float;
+      (* email-verification token TTL in seconds; default 3 days *)
 }
 
 let default_config =
-  { require_verified_email = false; forbid_client_account_creation = false; ambiguous_error_messages = false }
+  {
+    require_verified_email = false;
+    forbid_client_account_creation = false;
+    ambiguous_error_messages = true;
+    reset_token_lifetime = 3. *. 86_400.;
+    enroll_token_lifetime = 30. *. 86_400.;
+    verify_token_lifetime = 3. *. 86_400.;
+  }
 
 type t = {
   secret : string;
@@ -1778,20 +1792,20 @@ let send_verification_email t ?(link = default_link "/verify-email") uid =
     match primary_email user with
     | None -> Error "Accounts: user has no email address to verify"
     | Some email -> (
-      match issue_email_verification t uid email with
+      match issue_email_verification t ~ttl:t.config.verify_token_lifetime uid email with
       | Error e -> Error (string_of_error e)
       | Ok issued ->
         deliver t (fun tp -> tp.Mailer.verify_email) ~email ~url:(link ~token:(Challenge.token_to_string issued.Email.token))))
 
 let send_reset_password_email t ?(link = default_link "/reset-password") email =
-  match issue_password_reset t email with
+  match issue_password_reset t ~ttl:t.config.reset_token_lifetime email with
   | Error e -> Error (string_of_error e)
   | Ok None -> Ok () (* non-enumerating: never reveal whether the address has an account *)
   | Ok (Some pr) ->
     deliver t (fun tp -> tp.Mailer.reset_password) ~email ~url:(link ~token:(Challenge.token_to_string pr.token))
 
 let send_enrollment_email t ?(link = default_link "/enroll-account") uid =
-  match issue_enrollment t uid with
+  match issue_enrollment t ~ttl:t.config.enroll_token_lifetime uid with
   | Error e -> Error (string_of_error e)
   | Ok en -> (
     match primary_email en.user with
@@ -6571,16 +6585,17 @@ let%test "Store.unavailable lets the framework boot but fails account writes cle
   | Error (Store_error msg) -> msg = "no mongo configured"
   | _ -> false
 
-let%test "login on an unknown account still runs a password verify (enumeration timing defense)" =
+let%test "login on an unknown account is indistinguishable from a wrong password (enumeration defense)" =
   let verifies = ref 0 in
   let hasher =
     Password.{ hash = (fun ~password -> "h$" ^ password); verify = (fun ~password:_ ~hash:_ -> incr verifies; false) }
   in
   let a = make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:hasher () in
-  (* a login for a user that does NOT exist must still invoke [verify] (the constant-work dummy), so the
-     not-found path costs the same as a wrong password — no account-enumeration timing oracle *)
+  (* a login for a user that does NOT exist must (a) still invoke [verify] (the constant-work dummy) so the
+     not-found path costs the same as a wrong password (no timing oracle), AND (b) under the secure default
+     return the SAME ambiguous [Invalid_password] error as a wrong password (no message oracle) *)
   let r = login_with_password a (By_email "ghost@example.com") ~password:"pw" in
-  r = Error User_not_found && !verifies >= 1
+  r = Error Invalid_password && !verifies >= 1
 
 let%test "on_login_failure fires (allowed=false, tagged reason) on unknown account + wrong password, not on success" =
   let seen = ref [] in
@@ -6591,6 +6606,12 @@ let%test "on_login_failure fires (allowed=false, tagged reason) on unknown accou
   let _ = login_with_password a (By_email "ada@example.com") ~password:"wrong" in (* invalid_password *)
   let _ = login_with_password a (By_email "ada@example.com") ~password:"pw" in (* success ⇒ must NOT fire *)
   !seen = [ "invalid_password"; "user_not_found" ]
+
+let%test "default token lifetimes are safe windows, not the 10-minute challenge default" =
+  (* guards the footgun: enrollment invites / reset / verify links must not expire in 10 minutes *)
+  default_config.reset_token_lifetime >= 86_400.
+  && default_config.enroll_token_lifetime >= 7. *. 86_400.
+  && default_config.verify_token_lifetime >= 86_400.
 
 let%test "configure require_verified_email blocks login until an email is verified (mutable policy)" =
   let a = make ~secret:"accounts-test-secret-cfg" ~store:(memory_store ()) ~password_hasher:test_hasher () in

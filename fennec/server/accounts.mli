@@ -494,10 +494,16 @@ type config = {
       (** reject the client [createUser] DDP method; server-side {!create_user} still works *)
   ambiguous_error_messages : bool;
       (** password login returns one indistinguishable error for unknown-account vs wrong-password (the
-          {!on_login_failure} hooks and the audit log still see the real reason) *)
+          {!on_login_failure} hooks and the audit log still see the real reason). On by default (secure);
+          set [false] for Meteor-style specific errors. *)
+  reset_token_lifetime : float;
+      (** password-reset token TTL in seconds; default 3 days (Meteor's [passwordResetTokenExpirationInDays]) *)
+  enroll_token_lifetime : float;
+      (** enrollment-invite token TTL in seconds; default 30 days (Meteor's [passwordEnrollTokenExpiration]) *)
+  verify_token_lifetime : float;  (** email-verification token TTL in seconds; default 3 days *)
 }
 
-(** All policy off — the historical default. *)
+(** Secure defaults: enumeration resistance on, reset 3 d / enroll 30 d / verify 3 d token lifetimes. *)
 val default_config : config
 
 val make :
