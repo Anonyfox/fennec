@@ -1476,6 +1476,23 @@ val oauth_callback_paw :
   unit ->
   Paw.t
 
+(** GET route helper for OAuth callbacks that finish {b over DDP} (Meteor's popup handshake).
+
+    Same provider exchange as {!oauth_callback_paw}, but instead of setting a cookie and redirecting
+    it resolves the account (create/link/find + [before_external_login] veto) without minting a
+    session, then returns a tiny bounce page that posts a single-use [{credentialToken,
+    credentialSecret}] pair to the opener window (same-origin only) and closes. The SPA replays the
+    pair through the ["login"] method's [{oauth}] form, which mints the session at that point and may
+    still require MFA step-up. Mount this for popup-based OAuth inside a single-page app. *)
+val oauth_callback_popup_paw :
+  t ->
+  ?link_verified_email:bool ->
+  path:string ->
+  OAuth.provider ->
+  exchange:(OAuth.state -> code:string -> (external_identity, error) result) ->
+  unit ->
+  Paw.t
+
 (** GET route helper that redirects to an OIDC provider. *)
 val oidc_authorize_paw :
   t -> ?redirect_param:string -> path:string -> error:string -> Oidc.connection -> unit -> Paw.t

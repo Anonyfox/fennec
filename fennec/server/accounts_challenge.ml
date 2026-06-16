@@ -7,6 +7,7 @@ type purpose =
   | Passkey_registration
   | Passkey_assertion
   | OAuth_state
+  | OAuth_credential
   | Oidc_state
   | Saml_request
   | Mfa_step_up
@@ -19,6 +20,7 @@ let string_of_purpose = function
   | Passkey_registration -> "passkey_registration"
   | Passkey_assertion -> "passkey_assertion"
   | OAuth_state -> "oauth_state"
+  | OAuth_credential -> "oauth_credential"
   | Oidc_state -> "oidc_state"
   | Saml_request -> "saml_request"
   | Mfa_step_up -> "mfa_step_up"
@@ -31,6 +33,7 @@ let purpose_of_string = function
   | "passkey_registration" -> Some Passkey_registration
   | "passkey_assertion" -> Some Passkey_assertion
   | "oauth_state" -> Some OAuth_state
+  | "oauth_credential" -> Some OAuth_credential
   | "oidc_state" -> Some Oidc_state
   | "saml_request" -> Some Saml_request
   | "mfa_step_up" -> Some Mfa_step_up
@@ -301,7 +304,7 @@ let raises_invalid_arg f = match f () with exception Invalid_argument _ -> true 
 let%test "purpose names round-trip" =
   List.for_all
     (fun p -> purpose_of_string (string_of_purpose p) = Some p)
-    [ Email_login; Email_verification; Password_reset; Passkey_registration; Passkey_assertion; OAuth_state; Oidc_state; Saml_request; Mfa_step_up; Recovery ]
+    [ Email_login; Email_verification; Password_reset; Passkey_registration; Passkey_assertion; OAuth_state; OAuth_credential; Oidc_state; Saml_request; Mfa_step_up; Recovery ]
 
 let%test "make rejects weak configuration" =
   let store = memory_store () in

@@ -28,6 +28,7 @@ type purpose =
   | Passkey_registration
   | Passkey_assertion
   | OAuth_state
+  | OAuth_credential
   | Oidc_state
   | Saml_request
   | Mfa_step_up

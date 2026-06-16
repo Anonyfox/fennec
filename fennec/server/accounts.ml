@@ -1956,12 +1956,18 @@ let resolve_identity_login t ?identity_store ?current_user_id ?(allow_signup = f
       | _ -> Error User_not_found)
     | Error _ as e -> e
 
+(* beforeExternalLogin veto (Meteor parity): every hook must return true for an external (OAuth/OIDC/
+   SAML) login to proceed. Shared by the redirect mint chokepoint below and the OAuth-over-DDP resolve
+   step so both honour the same veto with identical arguments. *)
+let before_external_login_allowed t ~strategy ~identity ~user =
+  List.for_all (fun h -> h ~strategy ~identity ~user) t.before_external_login_hooks
+
 let login_with_identity_completion t ?identity_store ?current_user_id ?allow_signup ?link_verified_email ?now
     ~strategy facts =
-  (* beforeExternalLogin veto (Meteor parity): fired once at the mint chokepoint with the resolved user;
-     any hook returning false aborts the external login before a session is issued *)
+  (* the veto fires once at the mint chokepoint with the resolved user; a false vote aborts before a
+     session is issued *)
   let finish ~created ?linked user =
-    if List.for_all (fun h -> h ~strategy ~identity:facts ~user) t.before_external_login_hooks then
+    if before_external_login_allowed t ~strategy ~identity:facts ~user then
       finish_identity_login_completion t ~strategy ~created ?linked user
     else Error (Login_rejected "external login rejected by before_external_login hook")
   in
@@ -1978,6 +1984,63 @@ let login_with_identity t ?identity_store ?current_user_id ?allow_signup ?link_v
   require_complete_identity_login
     (login_with_identity_completion t ?identity_store ?current_user_id ?allow_signup ?link_verified_email ?now
        ~strategy facts)
+
+(* OAuth-over-DDP popup handshake (Meteor parity). A provider redirect lands on a popup callback that
+   resolves the external identity to a user — running create/link/find and the beforeExternalLogin
+   veto — but does NOT mint a session. The callback hands the opener SPA a single-use
+   {credentialToken, credentialSecret} pair (backed by an [OAuth_credential] challenge); the SPA
+   replays the pair through the [login {oauth}] DDP method, which mints the session at that point (and
+   may still demand MFA step-up). Mirrors Meteor's pendingCredential: resolve at the callback, mint at
+   the method — so no orphan login token is ever issued, and no secret is stored in the challenge. *)
+let resolve_external_user t ?current_user_id ?(allow_signup = false) ?(link_verified_email = false) ~strategy
+    facts =
+  let finish ~created:_ ?linked:_ user =
+    if before_external_login_allowed t ~strategy ~identity:facts ~user then Ok user
+    else Error (Login_rejected "external login rejected by before_external_login hook")
+  in
+  resolve_identity_login t ?current_user_id ~allow_signup ~link_verified_email ~strategy facts ~finish
+
+(* Issue the handoff. The challenge token's wire shape is "<id>.<secret>"; we surface the id as the
+   public credentialToken and the secret as the credentialSecret, so an opener that only learns the
+   token still cannot complete the login. Short TTL (the popup bounces in milliseconds) and a small
+   attempt cap on top of the 32-byte secret. *)
+let issue_oauth_credential t ~user_id ?provider () =
+  let metadata =
+    {
+      Challenge.empty_metadata with
+      user_id = Some user_id;
+      data = (match provider with Some p -> [ ("provider", Bson.str p) ] | None -> []);
+    }
+  in
+  match
+    Challenge.create (challenge_service t ()) ~purpose:Challenge.OAuth_credential ~metadata ~ttl:300.
+      ~max_attempts:5 ()
+  with
+  | Error e -> Error (Login_rejected (Challenge.string_of_error e))
+  | Ok issued ->
+    let full = Challenge.token_to_string issued.Challenge.token in
+    let secret =
+      match String.index_opt full '.' with
+      | Some i -> String.sub full (i + 1) (String.length full - i - 1)
+      | None -> full
+    in
+    Ok (issued.Challenge.record.Challenge.id, secret)
+
+(* Consume the handoff: reassemble the challenge token, verify+expire it single-use, and return the
+   bound user (plus the originating provider for the audit strategy label). *)
+let consume_oauth_credential t ~credential_token ~credential_secret =
+  let token = Challenge.token_of_string (credential_token ^ "." ^ credential_secret) in
+  match Challenge.consume (challenge_service t ()) ~purpose:Challenge.OAuth_credential token with
+  | Error e -> Error (Login_rejected (Challenge.string_of_error e))
+  | Ok record -> (
+    let md = record.Challenge.metadata in
+    match md.Challenge.user_id with
+    | None -> Error (Login_rejected "OAuth credential is missing its user binding")
+    | Some user_id ->
+      let provider =
+        match List.assoc_opt "provider" md.Challenge.data with Some (Bson.String p) -> Some p | _ -> None
+      in
+      Ok (user_id, provider))
 
 let email_identity_of_record record =
   match record.Challenge.metadata.email with
@@ -2846,6 +2909,54 @@ let oauth_callback_paw t ?(link_verified_email = true) ~path ~success ~error pro
             | Error _ -> Conn.redirect c error
             | Ok login ->
               route_redirect (set_login_cookie t c login.token) success state.redirect))))
+
+(* Bounce page for the OAuth-over-DDP popup: post the JSON result to the opener (same-origin only,
+   via window.location.origin) and close. credentialToken/secret are URI-safe base64, so the JSON
+   embeds safely in the inline script; '<' is still escaped defensively against a future charset
+   change. The opener listens for a {fennecOAuth: ...} message and calls [login {oauth}]. *)
+let oauth_popup_response c (payload : Json.t) =
+  let data = Json.to_string payload |> String.split_on_char '<' |> String.concat "\\u003c" in
+  Conn.html c
+    (Printf.sprintf
+       {html|<!doctype html><html><head><meta charset="utf-8"><title>Signing in…</title></head><body>
+<script>(function(){var d=%s;try{if(window.opener)window.opener.postMessage(JSON.stringify({fennecOAuth:d}),window.location.origin);}catch(e){}window.close();})();</script>
+<p>You can close this window.</p></body></html>|html}
+       data)
+
+(* Like [oauth_callback_paw] but completes over DDP: resolves the user and hands a single-use
+   {credentialToken, credentialSecret} pair back to the opener instead of setting a cookie and
+   redirecting. Mount this when the OAuth popup should finish inside an SPA without a full-page
+   reload; the SPA replays the pair through the [login {oauth}] method. *)
+let oauth_callback_popup_paw t ?(link_verified_email = true) ~path provider ~exchange () =
+  Paw.get path (fun c ->
+      let oauth = OAuth.make ~challenge:(challenge_service t ()) in
+      let fail reason = oauth_popup_response c (Json.Obj [ ("error", Json.String reason) ]) in
+      match OAuth.parse_callback (Conn.req c).H.query_string with
+      | Error _ -> fail "invalid_callback"
+      | Ok (OAuth.Callback_error _) -> fail "provider_error"
+      | Ok (OAuth.Code { code; state }) -> (
+        match OAuth.consume_state oauth ~expected_provider:provider.OAuth.name state with
+        | Error _ -> fail "invalid_state"
+        | Ok state -> (
+          match exchange state ~code with
+          | Error _ -> fail "exchange_failed"
+          | Ok facts -> (
+            let current_user_id = current_or_state_user c state.OAuth.user_id in
+            match
+              resolve_external_user t ?current_user_id ~allow_signup:true ~link_verified_email
+                ~strategy:("oauth:" ^ provider.name) facts
+            with
+            | Error _ -> fail "login_rejected"
+            | Ok user -> (
+              match issue_oauth_credential t ~user_id:user.id ~provider:provider.name () with
+              | Error _ -> fail "credential_failed"
+              | Ok (credential_token, credential_secret) ->
+                oauth_popup_response c
+                  (Json.Obj
+                     [
+                       ("credentialToken", Json.String credential_token);
+                       ("credentialSecret", Json.String credential_secret);
+                     ]))))))
 
 let oidc_authorize_paw t ?(redirect_param = "redirect") ~path ~error (connection : Oidc.connection) () =
   Paw.get path (fun c ->
@@ -4689,7 +4800,25 @@ struct
                   | Ok login ->
                     inv.R.set_user_id (Some login.user.id);
                     Bson.doc [ ("id", Bson.str login.user.id); ("token", Bson.str login.token) ] ) )
-              | _ -> bad_request "login expects {user, password}, {strategy, credentials}, {token, code}, or {resume}" ))
+              | _ -> (
+                match Bson.get d "oauth" with
+                | Some (Bson.Document _ as o) -> (
+                  match (doc_get_string o "credentialToken", doc_get_string o "credentialSecret") with
+                  | Some credential_token, Some credential_secret -> (
+                    (* OAuth-over-DDP popup handshake: replay the single-use credential issued by the
+                       popup callback, then mint the session here (MFA step-up still applies). *)
+                    match consume_oauth_credential t ~credential_token ~credential_secret with
+                    | Error e -> forbidden (string_of_error e)
+                    | Ok (user_id, provider) -> (
+                      match find_required_user t user_id with
+                      | Error e -> forbidden (string_of_error e)
+                      | Ok user ->
+                        let strategy = match provider with Some p -> "oauth:" ^ p | None -> "oauth" in
+                        login_completion_doc inv (complete_login_unless_mfa t ~strategy user)))
+                  | _ -> bad_request "login {oauth} expects {credentialToken, credentialSecret}")
+                | _ ->
+                  bad_request
+                    "login expects {user, password}, {strategy, credentials}, {token, code}, {oauth}, or {resume}" ) ))
         end
       end
       | _ -> bad_request "login expects selector/password"
@@ -7365,6 +7494,24 @@ let%test "oauth route helpers redirect to provider then resolve callback" =
     in
     r.H.status = 302 && location_ r = Some "/" && Fennec_core.Headers.mem r.H.headers "set-cookie"
 
+let%test "oauth credential handshake: issue then consume binds the user, single-use, secret-checked" =
+  let a = test_accounts () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u -> (
+    match issue_oauth_credential a ~user_id:u.id ~provider:"github" () with
+    | Error _ -> false
+    | Ok (ct, cs) ->
+      let first = consume_oauth_credential a ~credential_token:ct ~credential_secret:cs in
+      let replay = consume_oauth_credential a ~credential_token:ct ~credential_secret:cs in
+      let wrong_secret =
+        match issue_oauth_credential a ~user_id:u.id () with
+        | Ok (ct2, _) -> consume_oauth_credential a ~credential_token:ct2 ~credential_secret:"not-the-secret"
+        | Error _ -> Ok ("unexpected", None)
+      in
+      (* the consumed token returns the bound user + provider; a replay and a wrong secret both fail *)
+      first = Ok (u.id, Some "github") && Result.is_error replay && Result.is_error wrong_secret)
+
 let oidc_connection_ () =
   match
     Oidc.connection ~id:"main" ~issuer:"https://idp.test" ~authorize_url:"https://idp.test/auth"
@@ -7649,6 +7796,134 @@ let find_registered_ name =
   match List.assoc_opt name !(Test_methods_runtime.registered) with
   | Some f -> f
   | None -> failwith ("missing registered method: " ^ name)
+
+let%test "methods: login {oauth} consumes a popup credential and mints a session" =
+  Test_methods_runtime.registered := [];
+  let a = test_accounts () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u -> (
+    Test_methods.register a;
+    let rebound = ref None in
+    let inv =
+      { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
+    in
+    match issue_oauth_credential a ~user_id:u.id ~provider:"github" () with
+    | Error _ -> false
+    | Ok (ct, cs) -> (
+      let arg = Bson.doc [ ("oauth", Bson.doc [ ("credentialToken", Bson.str ct); ("credentialSecret", Bson.str cs) ]) ] in
+      match find_registered_ "login" inv [ arg ] with
+      | Bson.Document kvs ->
+        let id_ok =
+          match (List.assoc_opt "id" kvs, !rebound) with
+          | Some (Bson.String id), Some uid -> id = uid && uid = u.id
+          | _ -> false
+        in
+        let token_ok =
+          match List.assoc_opt "token" kvs with
+          | Some (Bson.String tok) -> verify_token a (token_of_string tok) = Ok u.id
+          | _ -> false
+        in
+        id_ok && token_ok
+      | _ -> false))
+
+let%test "methods: login {oauth} rejects an unknown or replayed credential" =
+  Test_methods_runtime.registered := [];
+  let a = test_accounts () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u ->
+    Test_methods.register a;
+    let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) } in
+    let rejected ct cs =
+      let arg = Bson.doc [ ("oauth", Bson.doc [ ("credentialToken", Bson.str ct); ("credentialSecret", Bson.str cs) ]) ] in
+      match find_registered_ "login" inv [ arg ] with
+      | _ -> false
+      | exception Test_methods_runtime.Error { code = "403"; _ } -> true
+      | exception _ -> false
+    in
+    let unknown = rejected "no-such-token" "no-such-secret" in
+    let replayed =
+      match issue_oauth_credential a ~user_id:u.id () with
+      | Ok (ct, cs) ->
+        ignore (consume_oauth_credential a ~credential_token:ct ~credential_secret:cs);
+        rejected ct cs
+      | Error _ -> false
+    in
+    unknown && replayed
+
+let%test "methods: login {oauth} still demands MFA step-up for an mfa-enabled user" =
+  Test_methods_runtime.registered := [];
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-oauth-mfa" ~store ~password_hasher:test_hasher () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u ->
+    ignore (store.mfa.Mfa.upsert (test_active_totp u.id));
+    Test_methods.register a;
+    let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) } in
+    ( match issue_oauth_credential a ~user_id:u.id ~provider:"github" () with
+    | Error _ -> false
+    | Ok (ct, cs) -> (
+      let arg = Bson.doc [ ("oauth", Bson.doc [ ("credentialToken", Bson.str ct); ("credentialSecret", Bson.str cs) ]) ] in
+      match find_registered_ "login" inv [ arg ] with
+      | Bson.Document kvs -> List.assoc_opt "mfaRequired" kvs = Some (Bson.Bool true)
+      | _ -> false ))
+
+let%test "oauth popup callback hands the opener a credential that completes login over DDP" =
+  Test_methods_runtime.registered := [];
+  let a = test_accounts () in
+  Test_methods.register a;
+  let provider = oauth_provider_ () in
+  let authorize = oauth_authorize_paw a provider ~path:"/oauth/start" ~error:"/oauth/error" () in
+  let start = Paw.run authorize (req_ "/oauth/start") in
+  match Option.bind (location_ start) (fun url -> query_param_ url "state") with
+  | None -> false
+  | Some state -> (
+    let key = match Identity.oauth ~provider:"github" ~subject:"ada" with Ok key -> key | Error _ -> assert false in
+    let callback =
+      oauth_callback_popup_paw a provider ~path:"/oauth/popup"
+        ~exchange:(fun (_state : OAuth.state) ~code ->
+          if code = "ok" then Ok (external_identity key ~email:"ada@example.com" ~email_verified:true)
+          else Error (Login_rejected "bad_code"))
+        ()
+    in
+    let r =
+      Paw.run callback
+        (H.make_request ~meth:H.GET ~path:"/oauth/popup"
+           ~query_string:("code=ok&state=" ^ H.percent_encode state) ())
+    in
+    (* the bounce page embeds [var d={...}] and posts it to the opener; pull the flat payload out *)
+    let payload =
+      let body = r.H.body in
+      let find sub =
+        let n = String.length body and m = String.length sub in
+        let rec go i = if i + m > n then None else if String.sub body i m = sub then Some i else go (i + 1) in
+        go 0
+      in
+      match find "var d=" with
+      | None -> None
+      | Some k -> (
+        let i = k + String.length "var d=" in
+        match String.index_from_opt body i '}' with
+        | Some j -> Json.parse_opt (String.sub body i (j - i + 1))
+        | None -> None)
+    in
+    match (r.H.status, payload) with
+    | 200, Some (Json.Obj kvs) -> (
+      let field key = match List.assoc_opt key kvs with Some (Json.String v) -> Some v | _ -> None in
+      match (field "credentialToken", field "credentialSecret") with
+      | Some ct, Some cs -> (
+        let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) } in
+        let arg = Bson.doc [ ("oauth", Bson.doc [ ("credentialToken", Bson.str ct); ("credentialSecret", Bson.str cs) ]) ] in
+        match find_registered_ "login" inv [ arg ] with
+        | Bson.Document login_kvs -> (
+          match List.assoc_opt "token" login_kvs with
+          | Some (Bson.String tok) -> Result.is_ok (verify_token a (token_of_string tok))
+          | _ -> false)
+        | _ -> false)
+      | _ -> false)
+    | _ -> false)
 
 let%test "methods: login rebinds the invocation user_id and returns a token" =
   Test_methods_runtime.registered := [];
