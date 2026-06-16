@@ -5000,6 +5000,18 @@ struct
           | _ -> bad_request "completeLoginStepUp expects {mfaToken, totpId, code} or {mfaToken, userId, backupCode}" ))
       | _ -> bad_request "completeLoginStepUp expects one document argument"
     in
+    let forgot_password_method inv = function
+      | [ Bson.Document _ as d ] -> (
+        match doc_get_string d "email" with
+        | None -> bad_request "forgotPassword expects an email"
+        | Some email ->
+          (* throttle reset requests (IP + email) so the method can't be used to spam a mailbox;
+             non-enumerating + best-effort — always returns ok, whether or not the address has an account *)
+          throttle_login inv (By_email email);
+          ignore (send_reset_password_email t email);
+          Bson.doc [ ("ok", Bson.Bool true) ])
+      | _ -> bad_request "forgotPassword expects one document argument"
+    in
     R.methods
       [
         ("createUser", create_user_method);
@@ -5012,6 +5024,7 @@ struct
         ("verifyEmail", verify_email_method);
         ("enrollAccount", enroll_account_method);
         ("completeLoginStepUp", complete_login_step_up_method);
+        ("forgotPassword", forgot_password_method);
       ]
 end
 
@@ -8219,6 +8232,27 @@ let%test "methods: enrollAccount sets the first password and rebinds user_id" =
         let id_ok = match (List.assoc_opt "id" kvs, !rebound) with Some (Bson.String id), Some uid -> id = uid && uid = u.id | _ -> false in
         id_ok && Result.is_ok (login_with_password a (By_username "ada") ~password:"pw")
       | _ -> false)
+
+let%test "methods: forgotPassword sends a reset email and is non-enumerating (always ok)" =
+  Test_methods_runtime.registered := [];
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = make ~secret:"accounts-test-secret-fp" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  set_email_templates a (Mailer.default ~site_name:"Acme" ~from:(Fennec_mail.Address.v "no-reply@acme.test") ());
+  let _ = create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () in
+  Test_methods.register a;
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = Some "203.0.113.30"; is_simulation = false; set_user_id = (fun _ -> ()) } in
+  let ok email =
+    match find_registered_ "forgotPassword" inv [ Bson.doc [ ("email", Bson.str email) ] ] with
+    | Bson.Document kvs -> List.assoc_opt "ok" kvs = Some (Bson.Bool true)
+    | _ -> false
+  in
+  (* a known and an unknown address BOTH return ok (no enumeration); only the known one delivers mail *)
+  ok "ada@example.com"
+  && ok "nobody@example.com"
+  && (match sent () with
+     | [ m ] -> List.exists (fun (ad : Fennec_mail.Address.t) -> ad.email = "ada@example.com") m.Fennec_mail.to_
+     | _ -> false)
 
 let%test "methods: logout clears the invocation user_id" =
   Test_methods_runtime.registered := [];
