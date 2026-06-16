@@ -32,6 +32,12 @@ let of_files ~cert ~key : t =
   let read p = In_channel.with_open_bin p In_channel.input_all in
   of_pem ~cert:(read cert) ~key:(read key)
 
+(* several PEM cert+key file pairs -> one SNI-selecting config: mirage-tls picks the cert by the SNI
+   host against each cert's SANs (the first is the fallback). Per-domain BYO certs in one [serve ~tls]. *)
+let of_file_pairs (pairs : (string * string) list) : t =
+  let read p = In_channel.with_open_bin p In_channel.input_all in
+  server_of_chains (List.map (fun (cert, key) -> chain_of_pem ~cert:(read cert) ~key:(read key)) pairs)
+
 (* ──── tls_termination test ──── *)
 
 (* a real, end-to-end load: generate a self-signed cert with openssl, then prove [of_files] decodes

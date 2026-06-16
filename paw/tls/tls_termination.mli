@@ -32,3 +32,10 @@ val of_files : cert:string -> key:string -> t
 
 (** [of_pem ~cert ~key] is {!of_files} from in-memory PEM strings. *)
 val of_pem : cert:string -> key:string -> t
+
+(** [of_file_pairs [(cert, key); …]] loads several PEM cert+key file pairs into one SNI-selecting
+    config — per-domain BYO certificates in a single {!Server.run} / {!Fennec.serve} [~tls]. mirage-tls
+    picks the cert by the SNI host against each cert's SANs (the first pair is the fallback for an
+    unknown SNI).
+    @raise Failure on a malformed certificate, key, or configuration. *)
+val of_file_pairs : (string * string) list -> t

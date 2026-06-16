@@ -78,12 +78,18 @@ end
 (** {1 Serve — the one-call entry point}
 
     [serve endpoints] builds a {!Host_router} from [endpoints] and runs it over Eio, owning the event
-    loop (the [app.listen] of Paw). [?tls] terminates TLS in-process from an already-loaded
-    certificate ({!Tls_termination}); [?acme] obtains and renews certificates automatically via
-    Let's Encrypt — serving the HTTP-01 challenge and an HTTP→HTTPS front on :80 — for the domains the
-    router answers. The listen port comes from [$FENNEC_PORT] (else 4000 in dev, [$PORT], or 443/80
-    when terminating TLS). A clashing route table or a busy port prints a message and exits. For finer
-    control — your own Eio env, a prebuilt router — use {!Host_router.build} + {!Server.run}. *)
+    loop (the [app.listen] of Paw).
+
+    HTTPS is per-domain and mostly transparent: [?tls] terminates TLS in-process from a loaded
+    certificate ({!Tls_termination} — one SAN cert, or several certs SNI-selected per domain via
+    {!Tls_termination.of_file_pairs}); [?acme] obtains and renews Let's Encrypt certificates
+    automatically for the domains the router answers (on-demand for new tenants). With {e either}, in
+    production the app serves HTTPS on :443 and a :80 front 301-redirects HTTP→HTTPS (and answers the
+    ACME HTTP-01 challenge) — so a BYO cert gets the same auto-upgrade as ACME. The listen port comes
+    from [$FENNEC_PORT] (else 4000 in dev, [$PORT], or 443/80 when terminating TLS).
+
+    A clashing route table or a busy port prints a message and exits. For finer control — your own Eio
+    env, a prebuilt router — use {!Host_router.build} + {!Server.run}. *)
 val serve :
   ?tls:Tls_termination.t ->
   ?acme:Acme.config ->

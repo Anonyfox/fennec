@@ -31,9 +31,12 @@ end
 (** {1 Serve — the one-call entry point} *)
 
 (* [serve endpoints] = build the host router + run the Eio acceptor, owning the event loop — the
-   [app.listen] of Paw. ?tls terminates TLS from a loaded cert; ?acme manages Let's Encrypt certs
-   automatically (HTTP-01 challenge + an HTTP->HTTPS front on :80). A clashing route table or a busy
-   port fails loudly. Drop to Host_router.build + Server.run for your own Eio env / prebuilt router. *)
+   [app.listen] of Paw. ?tls terminates TLS in-process from a loaded cert (SNI-selected per domain
+   among the cert's SANs / several certs); ?acme manages Let's Encrypt certs automatically (per
+   router domain, on-demand, renewed). With EITHER, production serves HTTPS on :443 and a :80 front
+   redirects HTTP->HTTPS (and answers the ACME HTTP-01 challenge), so in-process HTTPS is transparent.
+   A clashing route table or a busy port fails loudly. Drop to Host_router.build + Server.run for your
+   own Eio env / prebuilt router. *)
 let serve ?tls ?acme ?on_error ?on_listen endpoints =
   let run ~env ~tls ~on_demand router =
     match Server.run ?tls ?on_demand ?on_error ?on_listen ~env router with
@@ -51,33 +54,41 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
     exit 1
   | Ok router -> (
     Eio_main.run @@ fun env ->
-    match acme with
-    | Some cfg ->
-      Eio.Switch.run @@ fun sw ->
-      let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
-      (* certify the concrete hosts the router answers; wildcards too once a DNS provider is set *)
-      let derived =
-        List.concat_map
-          (fun e ->
-            List.filter_map
-              (fun h ->
-                match Host_pattern.of_string h with
-                | Ok (Host_pattern.Exact d) -> Some d
-                | Ok (Host_pattern.Suffix s) when Acme.dns_enabled cfg -> Some ("*" ^ s)
-                | _ -> None)
-              (Endpoint.hosts e))
-          endpoints
-        |> List.sort_uniq compare
-      in
-      let domains = match Acme.domains_override cfg with Some d -> d | None -> derived in
-      let ({ source; on_demand } : Acme.running) =
-        Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg
-      in
-      Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
-      run ~env ~tls:(Some source) ~on_demand router
-    | None ->
-      let tls = Option.map (fun t () -> Some t) tls in
-      run ~env ~tls ~on_demand:None router)
+    Eio.Switch.run @@ fun sw ->
+    let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true in
+    let net = Eio.Stdenv.net env in
+    (* the ACME HTTP-01 token table; shared with the issuer when ~acme is set, empty for a BYO cert
+       (then the :80 front is redirect-only). *)
+    let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
+    let tls_source, on_demand =
+      match acme with
+      | Some cfg ->
+        (* certify the concrete hosts the router answers; wildcards too once a DNS provider is set *)
+        let derived =
+          List.concat_map
+            (fun e ->
+              List.filter_map
+                (fun h ->
+                  match Host_pattern.of_string h with
+                  | Ok (Host_pattern.Exact d) -> Some d
+                  | Ok (Host_pattern.Suffix s) when Acme.dns_enabled cfg -> Some ("*" ^ s)
+                  | _ -> None)
+                (Endpoint.hosts e))
+            endpoints
+          |> List.sort_uniq compare
+        in
+        let domains = match Acme.domains_override cfg with Some d -> d | None -> derived in
+        let ({ source; on_demand } : Acme.running) =
+          Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net ~domains ~challenges cfg
+        in
+        (Some source, on_demand)
+      | None -> (Option.map (fun t () -> Some t) tls, None)
+    in
+    (* in TLS-mode production the app is on :443; a :80 front 301-redirects HTTP→HTTPS (and serves the
+       ACME HTTP-01 challenge from the shared table — empty, so redirect-only, for a BYO cert), so
+       in-process HTTPS is transparent for both ACME and BYO. Dev keeps a single plain/forced port. *)
+    if Option.is_some tls_source && not is_dev then Acme.serve_http_front ~sw ~net ~challenges;
+    run ~env ~tls:tls_source ~on_demand router)
 
 (** {1 The connection} *)
 module Conn = Conn
