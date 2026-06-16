@@ -24,8 +24,7 @@
   zarith
   ptime
   mirage-crypto-rng.unix
-  ; fennec-mongo.json: acme_client JSON parsing; PAW-C will inline this away
-  fennec-mongo.json
+  yojson
   fennec-hunt.unit
   fennec-hunt.prop)
  (inline_tests (backend fennec-hunt.runner))

@@ -190,7 +190,24 @@
 (package
  (name fennec-paw)
  (synopsis "A standalone HTTP micro-framework for OCaml/Eio — routing, middleware, the Conn pipeline")
+ (description
+  "fennec-paw is a compact HTTP/1.1 + WebSocket server and toolkit for OCaml on Eio\n(no cohttp, no Lwt): a routing + middleware pipeline around one primitive (a paw,\n[Conn.t -> Conn.t]), a prebuilt middleware battery (CORS, CSRF, sessions, static,\nrate limiting, logging, security headers, …), in-process TLS termination with\nautomatic HTTPS via ACME/Let's Encrypt, and virtual-host routing. One curated\n[Paw.*] namespace; no dependency on any other fennec library.")
  (depends
   (ocaml
    (>= 5.2))
-  dune))
+  dune
+  eio
+  eio_main
+  tls
+  tls-eio
+  x509
+  ca-certs
+  digestif
+  base64
+  zarith
+  ptime
+  mirage-crypto-rng
+  domain-name
+  bigstringaf
+  zlib
+  yojson))

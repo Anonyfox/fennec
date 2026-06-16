@@ -1,0 +1,5 @@
+; A standalone HTTP server on fennec-paw alone — proves the package needs no other
+; fennec library (only the Eio entry point). `dune exec examples/paw_hello/hello.exe`.
+(executable
+ (name hello)
+ (libraries fennec-paw eio_main))

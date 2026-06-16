@@ -4,7 +4,16 @@
    is driven over {!Https_client}. The JWK + thumbprint encoding (the one fiddly bit) is pinned to
    known vectors in the tests, so it is provably spec-correct without a live server. *)
 
-module Json = Fennec_mongo_json.Json
+(* Minimal JSON reads for ACME responses, backed by yojson — keeps fennec-paw free of any database
+   or framework dependency (the protocol only ever reads a handful of string/list fields). *)
+module Json = struct
+  type t = Yojson.Safe.t
+
+  let parse = Yojson.Safe.from_string
+  let member k = function `Assoc l -> List.assoc_opt k l | _ -> None
+  let to_string_opt = function `String s -> Some s | _ -> None
+  let to_list_opt = function `List l -> Some l | _ -> None
+end
 
 (* opt-in wire tracing (FENNEC_ACME_DEBUG=1) — invaluable when an ACME server misbehaves *)
 let dbg fmt = if Sys.getenv_opt "FENNEC_ACME_DEBUG" <> None then Printf.eprintf ("[acme] " ^^ fmt ^^ "\n%!") else Printf.ifprintf stderr fmt

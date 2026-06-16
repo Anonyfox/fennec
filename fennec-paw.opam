@@ -2,6 +2,13 @@
 opam-version: "2.0"
 synopsis:
   "A standalone HTTP micro-framework for OCaml/Eio — routing, middleware, the Conn pipeline"
+description: """
+fennec-paw is a compact HTTP/1.1 + WebSocket server and toolkit for OCaml on Eio
+(no cohttp, no Lwt): a routing + middleware pipeline around one primitive (a paw,
+[Conn.t -> Conn.t]), a prebuilt middleware battery (CORS, CSRF, sessions, static,
+rate limiting, logging, security headers, …), in-process TLS termination with
+automatic HTTPS via ACME/Let's Encrypt, and virtual-host routing. One curated
+[Paw.*] namespace; no dependency on any other fennec library."""
 maintainer: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 authors: ["Anonyfox <maximilian.stroh@gastrorocket.com>"]
 license: "MIT"
@@ -10,6 +17,21 @@ bug-reports: "https://github.com/Anonyfox/fennec/issues"
 depends: [
   "ocaml" {>= "5.2"}
   "dune" {>= "3.16"}
+  "eio"
+  "eio_main"
+  "tls"
+  "tls-eio"
+  "x509"
+  "ca-certs"
+  "digestif"
+  "base64"
+  "zarith"
+  "ptime"
+  "mirage-crypto-rng"
+  "domain-name"
+  "bigstringaf"
+  "zlib"
+  "yojson"
   "odoc" {with-doc}
 ]
 build: [
