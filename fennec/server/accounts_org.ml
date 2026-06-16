@@ -315,17 +315,6 @@ let decide_strategy org strategy =
       | false, _ when allow_password_fallback -> Allowed
       | false, _ -> Requires_sso connection_ids)
 
-type role_allows = role:string -> permission:string -> bool
-
-let default_role_allows ~role ~permission =
-  match role with
-  | "owner" | "admin" -> true
-  | "member" -> permission = "read" || String.starts_with ~prefix:"read:" permission
-  | _ -> false
-
-let allows ?(role_allows = default_role_allows) membership ~permission =
-  is_active_membership membership && role_allows ~role:membership.role ~permission
-
 type store = {
   find_org : string -> org option;
   list_orgs : unit -> org list;
@@ -516,15 +505,6 @@ let%test "require_membership checks org and membership activity" =
   && require_membership org wrong_org = Error (Inactive_membership "u1")
   && require_membership { org with status = Suspended } ok_member = Error (Inactive_org "acme")
 
-let%test "default rbac hook is small and overrideable" =
-  let owner = ok (membership ~role:"owner" ~org_id:"acme" ~user_id:"u1" ()) in
-  let member = ok (membership ~role:"member" ~org_id:"acme" ~user_id:"u2" ()) in
-  let disabled = ok (membership ~status:Disabled ~role:"owner" ~org_id:"acme" ~user_id:"u3" ()) in
-  allows owner ~permission:"billing:write"
-  && allows member ~permission:"read:project"
-  && not (allows member ~permission:"billing:write")
-  && not (allows disabled ~permission:"billing:write")
-  && allows ~role_allows:(fun ~role:_ ~permission -> permission = "custom") member ~permission:"custom"
 
 let%test "memory_store persists org memberships and invites deterministically" =
   let store = memory_store () in

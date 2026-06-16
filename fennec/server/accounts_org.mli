@@ -224,15 +224,8 @@ val connection_ids_for_route : route -> string list
     already-routed tenant policy permits the strategy. *)
 val decide_strategy : org -> strategy -> decision
 
-(** A small RBAC hook. Applications can pass their own role-to-permission predicate. *)
-type role_allows = role:string -> permission:string -> bool
-
-(** Default role rules: owner/admin allow every permission, member allows read, invited/disabled
-    memberships allow nothing through {!allows}. *)
-val default_role_allows : role_allows
-
-(** Check a permission for an active membership. *)
-val allows : ?role_allows:role_allows -> membership -> permission:string -> bool
+(* Org RBAC is decided by the app's single code-declared policy (see [Accounts.require_org]/[can_in]),
+   not by a second hardcoded mechanism here. *)
 
 (** Organization persistence.
 

@@ -633,7 +633,7 @@ let reject_org c redirect =
   | Some location -> Conn.text ~status:302 (Conn.set_header c "location" location) ""
   | None -> Conn.text ~status:403 c "Forbidden"
 
-let require_org ?redirect ?permission ?role_allows () : Paw.t =
+let require_org t ?redirect ?permission () : Paw.t =
  fun c ->
   match org_context c with
   | None -> reject_org c redirect
@@ -645,8 +645,12 @@ let require_org ?redirect ?permission ?role_allows () : Paw.t =
     | Ok () -> (
       match permission with
       | None -> c
-      | Some permission when Org.allows ?role_allows membership ~permission -> c
-      | Some _ -> reject_org c redirect))
+      (* the org permission is decided by the SAME code-declared policy — the membership's role must
+         grant it. No separate hardcoded org RBAC. *)
+      | Some permission -> (
+        match (Roles.Role.v membership.Org.role, Roles.Permission.v permission) with
+        | Ok r, Ok p when Roles.role_allows t.policy ~role:r ~permission:p -> c
+        | _ -> reject_org c redirect)))
 
 let current_user t c =
   match user_id c with None -> Ok None | Some uid -> t.store.users.find_user_by_id uid
@@ -983,8 +987,27 @@ let revoke_role t ?actor ?request uid role =
 let has_role t uid role =
   Result.bind (find_required_user t uid) (fun user -> Ok (Roles.mem role user.roles))
 
-let can t uid permission =
-  Result.bind (find_required_user t uid) (fun user -> Ok (Roles.any_role_allows t.policy ~roles:user.roles ~permission))
+(* The scope a permission is evaluated in: app-wide, or within an organization (where the user's active
+   membership role counts on top of their global roles). The SAME code-declared {!policy} decides both —
+   there is no second RBAC model. *)
+type scope = Global | Org of string
+
+let roles_in_scope t uid scope =
+  Result.map
+    (fun (user : user) ->
+      match scope with
+      | Global -> user.roles
+      | Org org_id -> (
+        match t.store.orgs.Org.find_membership ~org_id ~user_id:uid with
+        | Some m when Org.is_active_membership m -> (
+          match Roles.Role.v m.Org.role with Ok r -> user.roles @ [ r ] | Error _ -> user.roles)
+        | _ -> user.roles))
+    (find_required_user t uid)
+
+let can_in t uid ~scope permission =
+  Result.map (fun roles -> Roles.any_role_allows t.policy ~roles ~permission) (roles_in_scope t uid scope)
+
+let can t uid permission = can_in t uid ~scope:Global permission
 
 let reject_authz c redirect =
   match redirect with
@@ -7765,9 +7788,39 @@ let%test "require_org checks active membership and permissions" =
     | Ok membership -> membership
     | Error _ -> failwith "membership"
   in
-  let allowed = require_org ~permission:"write" () (set_org_context (Conn.make (req_ "/admin")) ~membership:admin org) in
-  let blocked = require_org ~permission:"write" () (set_org_context (Conn.make (req_ "/admin")) ~membership:member org) in
+  (* org permissions resolve against the app's ONE code-declared policy: admin grants write, member does not *)
+  let policy =
+    Roles.policy
+      [ Roles.role (Roles.Role.v_exn "admin") [ Roles.Permission.v_exn "write" ];
+        Roles.role (Roles.Role.v_exn "member") [ Roles.Permission.v_exn "read" ] ]
+  in
+  let a = make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:test_hasher ~policy () in
+  let allowed = require_org a ~permission:"write" () (set_org_context (Conn.make (req_ "/admin")) ~membership:admin org) in
+  let blocked = require_org a ~permission:"write" () (set_org_context (Conn.make (req_ "/admin")) ~membership:member org) in
   Conn.resp allowed = None && match Conn.resp blocked with Some r -> r.H.status = 403 | None -> false
+
+let%test "can_in resolves global and org-scoped roles against the one policy" =
+  let policy =
+    Roles.policy
+      [ Roles.role (Roles.Role.v_exn "support") [ Roles.Permission.v_exn "ticket.read" ];
+        Roles.role (Roles.Role.v_exn "admin") [ Roles.Permission.v_exn "billing.write" ] ]
+  in
+  let a = make ~secret:"accounts-test-secret" ~store:(Store.minimongo ()) ~password_hasher:test_hasher ~policy () in
+  match create_user a ~username:"ada" () with
+  | Error _ -> false
+  | Ok user ->
+    ignore (set_roles a user.id [ Roles.Role.v_exn "support" ]);
+    ignore (a.store.orgs.Org.upsert_org (Result.get_ok (Org.org ~id:"acme" ~name:"Acme" ())));
+    ignore (a.store.orgs.Org.upsert_membership (Result.get_ok (Org.membership ~org_id:"acme" ~user_id:user.id ~role:"admin" ())));
+    let p s = Roles.Permission.v_exn s in
+    (* global: the support role grants ticket.read everywhere, but not billing.write *)
+    can a user.id (p "ticket.read") = Ok true
+    && can a user.id (p "billing.write") = Ok false
+    (* in acme: the admin membership grants billing.write AND the global support role still applies *)
+    && can_in a user.id ~scope:(Org "acme") (p "billing.write") = Ok true
+    && can_in a user.id ~scope:(Org "acme") (p "ticket.read") = Ok true
+    (* in another org where they're not a member: only the global role applies *)
+    && can_in a user.id ~scope:(Org "other") (p "billing.write") = Ok false
 
 let%test "require_org_strategy maps tenant SSO policy into Accounts errors" =
   let policy =

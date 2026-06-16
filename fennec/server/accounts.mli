@@ -647,9 +647,10 @@ val membership : Conn.t -> Org.membership option
     {!validate_login_attempt} hooks or provider callback code after routing the user's tenant. *)
 val require_org_strategy : Org.org -> Org.strategy -> (unit, error) result
 
-(** Guard a tenant route. An assigned active org is enough when [permission] is absent; permission
-    checks require an active membership and use {!Org.allows}. *)
-val require_org : ?redirect:string -> ?permission:string -> ?role_allows:Org.role_allows -> unit -> Paw.t
+(** Guard a tenant route. An assigned active org is enough when [permission] is absent; a permission
+    check requires an active membership whose role grants it under the held {!policy} — the SAME
+    code-declared policy as {!can}/{!require_permission} (no separate org RBAC). *)
+val require_org : t -> ?redirect:string -> ?permission:string -> unit -> Paw.t
 
 (** Replace a user's app-wide roles. Incoming roles may come from userland declarations, SSO claim
     mapping, SCIM mapping, or admin forms; storage uses canonical role names on the user document.
@@ -677,6 +678,14 @@ val has_role : t -> user_id -> Roles.Role.t -> (bool, error) result
 (** Does the user's app-wide roles grant [permission] under the held {!policy} (passed to {!make})?
     Missing users, roles, and permissions deny. No [~policy] argument — the policy is code-declared once. *)
 val can : t -> user_id -> Roles.Permission.t -> (bool, error) result
+
+(** The scope a permission is evaluated in: [Global] (app-wide roles) or [Org org_id] (the user's active
+    membership role in that org, on top of their global roles). One {!policy} decides both. *)
+type scope = Global | Org of string
+
+(** Like {!can} but in a [scope] — [can t uid permission] is [can_in t uid ~scope:Global permission]. The
+    same code-declared {!policy} resolves org-scoped permissions, so there is no second RBAC model. *)
+val can_in : t -> user_id -> scope:scope -> Roles.Permission.t -> (bool, error) result
 
 (** Guard a route by app-wide role. The check is server-side and reads the current user record. *)
 val require_role : t -> ?redirect:string -> Roles.Role.t -> unit -> Paw.t
