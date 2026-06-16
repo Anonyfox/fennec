@@ -184,6 +184,39 @@ type membership_delta = {
 (** Compute deterministic group membership delta by external id. *)
 val membership_delta : before:group -> after:group -> membership_delta
 
+(** {1 SCIM JSON (de)serialization}
+
+    Pure mapping between SCIM JSON resources/PATCH bodies and the domain types above. Parsers report
+    shape errors with this module's {!error} type; the HTTP layer maps them to its own error type at
+    the call boundary. *)
+
+(** Serialize a user resource to SCIM JSON. *)
+val scim_user_json : user -> Fennec_mongo_json.Json.t
+
+(** Serialize a group resource to SCIM JSON. *)
+val scim_group_json : group -> Fennec_mongo_json.Json.t
+
+(** Parse a SCIM user resource. Requires [externalId] and [userName]. *)
+val scim_user_of_json : Fennec_mongo_json.Json.t -> (user, error) result
+
+(** Parse a SCIM group resource. Requires [externalId] and [displayName]. *)
+val scim_group_of_json : Fennec_mongo_json.Json.t -> (group, error) result
+
+(** Parse a SCIM user PATCH request body into normalized operations. *)
+val scim_user_patch_of_json : Fennec_mongo_json.Json.t -> (patch_op list, error) result
+
+(** Parse a SCIM group PATCH request body into normalized operations. *)
+val scim_group_patch_of_json : Fennec_mongo_json.Json.t -> (group_patch_op list, error) result
+
+(** Static SCIM /ServiceProviderConfig discovery document. *)
+val scim_service_provider_config_json : Fennec_mongo_json.Json.t
+
+(** Static SCIM /ResourceTypes discovery document. *)
+val scim_resource_types_json : Fennec_mongo_json.Json.t
+
+(** Static SCIM /Schemas discovery document. *)
+val scim_schemas_json : Fennec_mongo_json.Json.t
+
 (** SCIM directory persistence.
 
     Connections, users, and groups are kept together because a provisioning request normally needs

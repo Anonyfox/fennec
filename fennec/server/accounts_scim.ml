@@ -446,6 +446,330 @@ let memory_store () =
     delete_group;
   }
 
+(* ---- SCIM JSON (de)serialization ----
+
+   Pure Json <-> SCIM domain mapping. These parsers report shape errors using this module's own
+   [error] type (no dependency on [Accounts]); the HTTP layer in [Accounts] maps them back to its
+   own error type at the call boundary. *)
+
+module Json = Fennec_mongo_json.Json
+
+let json_string key value = (key, Json.String value)
+let json_bool key value = (key, Json.Bool value)
+let json_list key values = (key, Json.List (List.map (fun s -> Json.String s) values))
+let json_opt_string key = function Some value -> [ json_string key value ] | None -> []
+let json_member_string key json = Option.bind (Json.member key json) Json.to_string_opt
+
+let json_member_bool key json =
+  match Json.member key json with
+  | Some (Json.Bool b) -> Some b
+  | _ -> None
+
+let json_member_list_strings key json =
+  match Option.bind (Json.member key json) Json.to_list_opt with
+  | None -> []
+  | Some xs -> List.filter_map Json.to_string_opt xs
+
+let scim_user_json (user : user) =
+  Json.Obj
+    ([
+       json_string "externalId" user.external_id;
+       json_string "userName" user.user_name;
+       json_bool "active" user.active;
+       json_list "emails" user.emails;
+       json_list "groups" user.groups;
+     ]
+    @ json_opt_string "id" user.id
+    @ json_opt_string "displayName" user.display_name)
+
+let scim_group_json (group : group) =
+  Json.Obj
+    ([
+       json_string "externalId" group.external_id;
+       json_string "displayName" group.display_name;
+       json_list "members" group.members;
+     ]
+    @ json_opt_string "id" group.id)
+
+let json_emails json =
+  match Option.bind (Json.member "emails" json) Json.to_list_opt with
+  | None -> []
+  | Some values ->
+    List.filter_map
+      (function
+        | Json.String s -> Some s
+        | Json.Obj _ as obj -> json_member_string "value" obj
+        | _ -> None)
+      values
+
+let scim_user_of_json json =
+  match (json_member_string "externalId" json, json_member_string "userName" json) with
+  | Some external_id, Some user_name ->
+    user ?id:(json_member_string "id" json)
+      ?active:(json_member_bool "active" json)
+      ~emails:(json_emails json)
+      ?display_name:(json_member_string "displayName" json)
+      ~groups:(json_member_list_strings "groups" json)
+      ~external_id ~user_name ()
+  | _ -> Error (Invalid_user "SCIM user requires externalId and userName")
+
+let scim_group_of_json json =
+  match (json_member_string "externalId" json, json_member_string "displayName" json) with
+  | Some external_id, Some display_name ->
+    group ?id:(json_member_string "id" json)
+      ~members:(json_member_list_strings "members" json)
+      ~external_id ~display_name ()
+  | _ -> Error (Invalid_group "SCIM group requires externalId and displayName")
+
+let json_member_any names json =
+  List.find_map (fun key -> Json.member key json) names
+
+let scim_patch_op_name json =
+  Option.bind (json_member_any [ "op"; "Op" ] json) Json.to_string_opt
+  |> Option.map (fun op -> String.lowercase_ascii (String.trim op))
+
+let scim_patch_path json =
+  Option.bind (json_member_any [ "path"; "Path" ] json) Json.to_string_opt
+
+let scim_patch_ops json = Option.bind (json_member_any [ "Operations"; "operations" ] json) Json.to_list_opt
+
+let scim_values_of_json field value =
+  let obj_value obj =
+    match json_member_string "value" obj with
+    | Some value -> Ok value
+    | None -> (
+      match field with
+      | "displayName" -> (
+        match json_member_string "display" obj with
+        | Some value -> Ok value
+        | None -> Error (Invalid_patch "SCIM PATCH object value is missing value"))
+      | _ -> Error (Invalid_patch "SCIM PATCH object value is missing value"))
+  in
+  let one = function
+    | Json.String s -> Ok s
+    | Json.Bool b -> Ok (string_of_bool b)
+    | Json.Number n when Float.is_integer n -> Ok (string_of_int (int_of_float n))
+    | Json.Obj _ as obj -> obj_value obj
+    | _ -> Error (Invalid_patch "SCIM PATCH value must be scalar, object, or list")
+  in
+  match value with
+  | Json.Null -> Ok []
+  | Json.List values ->
+    List.fold_left
+      (fun acc value ->
+        Result.bind acc (fun values ->
+            Result.map (fun value -> value :: values) (one value)))
+      (Ok []) values
+    |> Result.map List.rev
+  | value -> Result.map (fun value -> [ value ]) (one value)
+
+let scim_user_path_of_string raw =
+  let path = String.lowercase_ascii (String.trim raw) in
+  if path = "username" then Some (User_name, "userName")
+  else if path = "active" then Some (Active, "active")
+  else if path = "displayname" || path = "name.formatted" then Some (Display_name, "displayName")
+  else if path = "externalid" then Some (External_id, "externalId")
+  else if String.starts_with ~prefix:"emails" path then Some (Emails, "emails")
+  else if String.starts_with ~prefix:"groups" path then Some (Groups, "groups")
+  else None
+
+let scim_group_path_of_string raw =
+  let path = String.lowercase_ascii (String.trim raw) in
+  if path = "displayname" then Some (Group_display_name, "displayName")
+  else if path = "externalid" then Some (Group_external_id, "externalId")
+  else if String.starts_with ~prefix:"members" path then Some (Group_members, "members")
+  else None
+
+let scim_user_patch_op op path values =
+  match op with
+  | "add" -> Ok (Add (path, values))
+  | "replace" -> Ok (Replace (path, values))
+  | "remove" -> Ok (Remove (path, values))
+  | _ -> Error (Invalid_patch "Unsupported SCIM PATCH op")
+
+let scim_group_patch_op op path values =
+  match op with
+  | "add" -> Ok (Group_add (path, values))
+  | "replace" -> Ok (Group_replace (path, values))
+  | "remove" -> Ok (Group_remove (path, values))
+  | _ -> Error (Invalid_patch "Unsupported SCIM PATCH op")
+
+let scim_patch_field_ops path_of_string make_op op raw_path value =
+  match path_of_string raw_path with
+  | None -> Ok []
+  | Some (path, field) ->
+    Result.bind (scim_values_of_json field value) (fun values ->
+        Result.map (fun op -> [ op ]) (make_op op path values))
+
+let scim_patch_op_list parse_one json =
+  match scim_patch_ops json with
+  | None -> Error (Invalid_patch "SCIM PATCH requires Operations")
+  | Some ops ->
+    List.fold_left
+      (fun acc op_json ->
+        Result.bind acc (fun ops ->
+            Result.map (fun parsed -> List.rev_append parsed ops) (parse_one op_json)))
+      (Ok []) ops
+    |> Result.map List.rev
+
+let scim_user_patch_of_json json =
+  let parse_one op_json =
+    match op_json with
+    | Json.Obj _ -> (
+      match (scim_patch_op_name op_json, scim_patch_path op_json) with
+      | None, _ -> Error (Invalid_patch "SCIM PATCH operation is missing op")
+      | Some op, Some raw_path -> (
+        match scim_user_path_of_string raw_path with
+        | None -> Error (Invalid_patch "Unsupported SCIM PATCH path")
+        | Some (path, field) ->
+          let value = Option.value (Json.member "value" op_json) ~default:Json.Null in
+          Result.bind (scim_values_of_json field value) (fun values ->
+              Result.map (fun op -> [ op ]) (scim_user_patch_op op path values)))
+      | Some op, None -> (
+        match Json.member "value" op_json with
+        | Some (Json.Obj obj_fields) ->
+          List.fold_left
+            (fun acc (path, value) ->
+              Result.bind acc (fun ops ->
+                  Result.map (fun parsed -> List.rev_append parsed ops)
+                    (scim_patch_field_ops scim_user_path_of_string scim_user_patch_op op path value)))
+            (Ok []) obj_fields
+          |> Result.map List.rev
+        | _ -> Error (Invalid_patch "SCIM PATCH operation is missing path")))
+    | _ -> Error (Invalid_patch "Malformed SCIM PATCH operation")
+  in
+  scim_patch_op_list parse_one json
+
+let scim_group_patch_of_json json =
+  let parse_one op_json =
+    match op_json with
+    | Json.Obj _ -> (
+      match (scim_patch_op_name op_json, scim_patch_path op_json) with
+      | None, _ -> Error (Invalid_patch "SCIM PATCH operation is missing op")
+      | Some op, Some raw_path -> (
+        match scim_group_path_of_string raw_path with
+        | None -> Error (Invalid_patch "Unsupported SCIM PATCH path")
+        | Some (path, field) ->
+          let value = Option.value (Json.member "value" op_json) ~default:Json.Null in
+          Result.bind (scim_values_of_json field value) (fun values ->
+              Result.map (fun op -> [ op ]) (scim_group_patch_op op path values)))
+      | Some op, None -> (
+        match Json.member "value" op_json with
+        | Some (Json.Obj obj_fields) ->
+          List.fold_left
+            (fun acc (path, value) ->
+              Result.bind acc (fun ops ->
+                  Result.map (fun parsed -> List.rev_append parsed ops)
+                    (scim_patch_field_ops scim_group_path_of_string scim_group_patch_op op path value)))
+            (Ok []) obj_fields
+          |> Result.map List.rev
+        | _ -> Error (Invalid_patch "SCIM PATCH operation is missing path")))
+    | _ -> Error (Invalid_patch "Malformed SCIM PATCH operation")
+  in
+  scim_patch_op_list parse_one json
+
+let scim_list_response resources =
+  Json.Obj
+    [
+      json_list "schemas" [ "urn:ietf:params:scim:api:messages:2.0:ListResponse" ];
+      ("totalResults", Json.Number (float_of_int (List.length resources)));
+      ("Resources", Json.List resources);
+      ("startIndex", Json.Number 1.);
+      ("itemsPerPage", Json.Number (float_of_int (List.length resources)));
+    ]
+
+let scim_supported enabled = Json.Obj [ ("supported", Json.Bool enabled) ]
+
+let scim_service_provider_config_json =
+  Json.Obj
+    [
+      json_list "schemas" [ "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig" ];
+      json_string "documentationUri" "https://github.com/Anonyfox/fennec";
+      ("patch", scim_supported true);
+      ("bulk", scim_supported false);
+      ("filter", scim_supported false);
+      ("changePassword", scim_supported false);
+      ("sort", scim_supported false);
+      ("etag", scim_supported false);
+      ( "authenticationSchemes",
+        Json.List
+          [
+            Json.Obj
+              [
+                json_string "type" "oauthbearertoken";
+                json_string "name" "Bearer";
+                json_string "description" "Bearer token issued for this SCIM connection";
+                json_string "specUri" "https://www.rfc-editor.org/rfc/rfc6750";
+              ];
+          ] );
+    ]
+
+let scim_resource_types_json =
+  scim_list_response
+    [
+      Json.Obj
+        [
+          json_list "schemas" [ "urn:ietf:params:scim:schemas:core:2.0:ResourceType" ];
+          json_string "id" "User";
+          json_string "name" "User";
+          json_string "endpoint" "/Users";
+          json_string "schema" "urn:ietf:params:scim:schemas:core:2.0:User";
+        ];
+      Json.Obj
+        [
+          json_list "schemas" [ "urn:ietf:params:scim:schemas:core:2.0:ResourceType" ];
+          json_string "id" "Group";
+          json_string "name" "Group";
+          json_string "endpoint" "/Groups";
+          json_string "schema" "urn:ietf:params:scim:schemas:core:2.0:Group";
+        ];
+    ]
+
+let scim_attribute ?(multi_valued = false) name typ =
+  Json.Obj
+    [
+      json_string "name" name;
+      json_string "type" typ;
+      json_bool "multiValued" multi_valued;
+      json_bool "required" false;
+      json_bool "caseExact" false;
+      json_string "mutability" "readWrite";
+      json_string "returned" "default";
+      json_string "uniqueness" "none";
+    ]
+
+let scim_schemas_json =
+  scim_list_response
+    [
+      Json.Obj
+        [
+          json_string "id" "urn:ietf:params:scim:schemas:core:2.0:User";
+          json_string "name" "User";
+          ( "attributes",
+            Json.List
+              [
+                scim_attribute "externalId" "string";
+                scim_attribute "userName" "string";
+                scim_attribute "active" "boolean";
+                scim_attribute "displayName" "string";
+                scim_attribute ~multi_valued:true "emails" "complex";
+                scim_attribute ~multi_valued:true "groups" "complex";
+              ] );
+        ];
+      Json.Obj
+        [
+          json_string "id" "urn:ietf:params:scim:schemas:core:2.0:Group";
+          json_string "name" "Group";
+          ( "attributes",
+            Json.List
+              [
+                scim_attribute "externalId" "string";
+                scim_attribute "displayName" "string";
+                scim_attribute ~multi_valued:true "members" "complex";
+              ] );
+        ];
+    ]
+
 (* ---- inline tests ---- *)
 
 let ok = function Ok x -> x | Error e -> failwith (string_of_error e)

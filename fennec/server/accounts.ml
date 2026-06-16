@@ -2370,15 +2370,9 @@ let json_ok c fields =
 
 let json_string key value = (key, Json.String value)
 let json_bool key value = (key, Json.Bool value)
-let json_list key values = (key, Json.List (List.map (fun s -> Json.String s) values))
 let json_opt_string key = function Some value -> [ json_string key value ] | None -> []
 let req_body_json c = Json.parse_opt (Conn.req c).H.body
 let json_member_string key json = Option.bind (Json.member key json) Json.to_string_opt
-
-let json_member_bool key json =
-  match Json.member key json with
-  | Some (Json.Bool b) -> Some b
-  | _ -> None
 
 let json_member_list_strings key json =
   match Option.bind (Json.member key json) Json.to_list_opt with
@@ -2649,206 +2643,6 @@ let mfa_passkey_assertion_finish_paw t relying_party ~path () =
             let c = set_login_cookie t c session in
             json_ok c [ json_string "id" user.id; json_string "token" session ])))
 
-let scim_user_json (user : Scim.user) =
-  Json.Obj
-    ([
-       json_string "externalId" user.external_id;
-       json_string "userName" user.user_name;
-       json_bool "active" user.active;
-       json_list "emails" user.emails;
-       json_list "groups" user.groups;
-     ]
-    @ json_opt_string "id" user.id
-    @ json_opt_string "displayName" user.display_name)
-
-let scim_group_json (group : Scim.group) =
-  Json.Obj
-    ([
-       json_string "externalId" group.external_id;
-       json_string "displayName" group.display_name;
-       json_list "members" group.members;
-     ]
-    @ json_opt_string "id" group.id)
-
-let json_emails json =
-  match Option.bind (Json.member "emails" json) Json.to_list_opt with
-  | None -> []
-  | Some values ->
-    List.filter_map
-      (function
-        | Json.String s -> Some s
-        | Json.Obj _ as obj -> json_member_string "value" obj
-        | _ -> None)
-      values
-
-let scim_user_of_json json =
-  match (json_member_string "externalId" json, json_member_string "userName" json) with
-  | Some external_id, Some user_name ->
-    Scim.user ?id:(json_member_string "id" json)
-      ?active:(json_member_bool "active" json)
-      ~emails:(json_emails json)
-      ?display_name:(json_member_string "displayName" json)
-      ~groups:(json_member_list_strings "groups" json)
-      ~external_id ~user_name ()
-    |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e))
-  | _ -> Error (Login_rejected "SCIM user requires externalId and userName")
-
-let scim_group_of_json json =
-  match (json_member_string "externalId" json, json_member_string "displayName" json) with
-  | Some external_id, Some display_name ->
-    Scim.group ?id:(json_member_string "id" json)
-      ~members:(json_member_list_strings "members" json)
-      ~external_id ~display_name ()
-    |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e))
-  | _ -> Error (Login_rejected "SCIM group requires externalId and displayName")
-
-let json_member_any names json =
-  List.find_map (fun key -> Json.member key json) names
-
-let scim_patch_op_name json =
-  Option.bind (json_member_any [ "op"; "Op" ] json) Json.to_string_opt
-  |> Option.map (fun op -> String.lowercase_ascii (String.trim op))
-
-let scim_patch_path json =
-  Option.bind (json_member_any [ "path"; "Path" ] json) Json.to_string_opt
-
-let scim_patch_ops json = Option.bind (json_member_any [ "Operations"; "operations" ] json) Json.to_list_opt
-
-let scim_values_of_json field value =
-  let obj_value obj =
-    match json_member_string "value" obj with
-    | Some value -> Ok value
-    | None -> (
-      match field with
-      | "displayName" -> (
-        match json_member_string "display" obj with
-        | Some value -> Ok value
-        | None -> Error (Login_rejected "SCIM PATCH object value is missing value"))
-      | _ -> Error (Login_rejected "SCIM PATCH object value is missing value"))
-  in
-  let one = function
-    | Json.String s -> Ok s
-    | Json.Bool b -> Ok (string_of_bool b)
-    | Json.Number n when Float.is_integer n -> Ok (string_of_int (int_of_float n))
-    | Json.Obj _ as obj -> obj_value obj
-    | _ -> Error (Login_rejected "SCIM PATCH value must be scalar, object, or list")
-  in
-  match value with
-  | Json.Null -> Ok []
-  | Json.List values ->
-    List.fold_left
-      (fun acc value ->
-        Result.bind acc (fun values ->
-            Result.map (fun value -> value :: values) (one value)))
-      (Ok []) values
-    |> Result.map List.rev
-  | value -> Result.map (fun value -> [ value ]) (one value)
-
-let scim_user_path_of_string raw =
-  let path = String.lowercase_ascii (String.trim raw) in
-  if path = "username" then Some (Scim.User_name, "userName")
-  else if path = "active" then Some (Scim.Active, "active")
-  else if path = "displayname" || path = "name.formatted" then Some (Scim.Display_name, "displayName")
-  else if path = "externalid" then Some (Scim.External_id, "externalId")
-  else if String.starts_with ~prefix:"emails" path then Some (Scim.Emails, "emails")
-  else if String.starts_with ~prefix:"groups" path then Some (Scim.Groups, "groups")
-  else None
-
-let scim_group_path_of_string raw =
-  let path = String.lowercase_ascii (String.trim raw) in
-  if path = "displayname" then Some (Scim.Group_display_name, "displayName")
-  else if path = "externalid" then Some (Scim.Group_external_id, "externalId")
-  else if String.starts_with ~prefix:"members" path then Some (Scim.Group_members, "members")
-  else None
-
-let scim_user_patch_op op path values =
-  match op with
-  | "add" -> Ok (Scim.Add (path, values))
-  | "replace" -> Ok (Scim.Replace (path, values))
-  | "remove" -> Ok (Scim.Remove (path, values))
-  | _ -> Error (Login_rejected "Unsupported SCIM PATCH op")
-
-let scim_group_patch_op op path values =
-  match op with
-  | "add" -> Ok (Scim.Group_add (path, values))
-  | "replace" -> Ok (Scim.Group_replace (path, values))
-  | "remove" -> Ok (Scim.Group_remove (path, values))
-  | _ -> Error (Login_rejected "Unsupported SCIM PATCH op")
-
-let scim_patch_field_ops path_of_string make_op op raw_path value =
-  match path_of_string raw_path with
-  | None -> Ok []
-  | Some (path, field) ->
-    Result.bind (scim_values_of_json field value) (fun values ->
-        Result.map (fun op -> [ op ]) (make_op op path values))
-
-let scim_patch_op_list parse_one json =
-  match scim_patch_ops json with
-  | None -> Error (Login_rejected "SCIM PATCH requires Operations")
-  | Some ops ->
-    List.fold_left
-      (fun acc op_json ->
-        Result.bind acc (fun ops ->
-            Result.map (fun parsed -> List.rev_append parsed ops) (parse_one op_json)))
-      (Ok []) ops
-    |> Result.map List.rev
-
-let scim_user_patch_of_json json =
-  let parse_one op_json =
-    match op_json with
-    | Json.Obj _ -> (
-      match (scim_patch_op_name op_json, scim_patch_path op_json) with
-      | None, _ -> Error (Login_rejected "SCIM PATCH operation is missing op")
-      | Some op, Some raw_path -> (
-        match scim_user_path_of_string raw_path with
-        | None -> Error (Login_rejected "Unsupported SCIM PATCH path")
-        | Some (path, field) ->
-          let value = Option.value (Json.member "value" op_json) ~default:Json.Null in
-          Result.bind (scim_values_of_json field value) (fun values ->
-              Result.map (fun op -> [ op ]) (scim_user_patch_op op path values)))
-      | Some op, None -> (
-        match Json.member "value" op_json with
-        | Some (Json.Obj obj_fields) ->
-          List.fold_left
-            (fun acc (path, value) ->
-              Result.bind acc (fun ops ->
-                  Result.map (fun parsed -> List.rev_append parsed ops)
-                    (scim_patch_field_ops scim_user_path_of_string scim_user_patch_op op path value)))
-            (Ok []) obj_fields
-          |> Result.map List.rev
-        | _ -> Error (Login_rejected "SCIM PATCH operation is missing path")))
-    | _ -> Error (Login_rejected "Malformed SCIM PATCH operation")
-  in
-  scim_patch_op_list parse_one json
-
-let scim_group_patch_of_json json =
-  let parse_one op_json =
-    match op_json with
-    | Json.Obj _ -> (
-      match (scim_patch_op_name op_json, scim_patch_path op_json) with
-      | None, _ -> Error (Login_rejected "SCIM PATCH operation is missing op")
-      | Some op, Some raw_path -> (
-        match scim_group_path_of_string raw_path with
-        | None -> Error (Login_rejected "Unsupported SCIM PATCH path")
-        | Some (path, field) ->
-          let value = Option.value (Json.member "value" op_json) ~default:Json.Null in
-          Result.bind (scim_values_of_json field value) (fun values ->
-              Result.map (fun op -> [ op ]) (scim_group_patch_op op path values)))
-      | Some op, None -> (
-        match Json.member "value" op_json with
-        | Some (Json.Obj obj_fields) ->
-          List.fold_left
-            (fun acc (path, value) ->
-              Result.bind acc (fun ops ->
-                  Result.map (fun parsed -> List.rev_append parsed ops)
-                    (scim_patch_field_ops scim_group_path_of_string scim_group_patch_op op path value)))
-            (Ok []) obj_fields
-          |> Result.map List.rev
-        | _ -> Error (Login_rejected "SCIM PATCH operation is missing path")))
-    | _ -> Error (Login_rejected "Malformed SCIM PATCH operation")
-  in
-  scim_patch_op_list parse_one json
-
 let scim_bearer c =
   match Conn.req_header c "authorization" with
   | Some value ->
@@ -2914,108 +2708,6 @@ let apply_scim_user t (connection : Scim.connection) (incoming : Scim.user) =
       | Scim.Create_user user | Scim.Update_user { after = user; _ } | Scim.Deprovision_user { after = user; _ } ->
         persist user)
 
-let scim_list_response resources =
-  Json.Obj
-    [
-      json_list "schemas" [ "urn:ietf:params:scim:api:messages:2.0:ListResponse" ];
-      ("totalResults", Json.Number (float_of_int (List.length resources)));
-      ("Resources", Json.List resources);
-      ("startIndex", Json.Number 1.);
-      ("itemsPerPage", Json.Number (float_of_int (List.length resources)));
-    ]
-
-let scim_supported enabled = Json.Obj [ ("supported", Json.Bool enabled) ]
-
-let scim_service_provider_config_json =
-  Json.Obj
-    [
-      json_list "schemas" [ "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig" ];
-      json_string "documentationUri" "https://github.com/Anonyfox/fennec";
-      ("patch", scim_supported true);
-      ("bulk", scim_supported false);
-      ("filter", scim_supported false);
-      ("changePassword", scim_supported false);
-      ("sort", scim_supported false);
-      ("etag", scim_supported false);
-      ( "authenticationSchemes",
-        Json.List
-          [
-            Json.Obj
-              [
-                json_string "type" "oauthbearertoken";
-                json_string "name" "Bearer";
-                json_string "description" "Bearer token issued for this SCIM connection";
-                json_string "specUri" "https://www.rfc-editor.org/rfc/rfc6750";
-              ];
-          ] );
-    ]
-
-let scim_resource_types_json =
-  scim_list_response
-    [
-      Json.Obj
-        [
-          json_list "schemas" [ "urn:ietf:params:scim:schemas:core:2.0:ResourceType" ];
-          json_string "id" "User";
-          json_string "name" "User";
-          json_string "endpoint" "/Users";
-          json_string "schema" "urn:ietf:params:scim:schemas:core:2.0:User";
-        ];
-      Json.Obj
-        [
-          json_list "schemas" [ "urn:ietf:params:scim:schemas:core:2.0:ResourceType" ];
-          json_string "id" "Group";
-          json_string "name" "Group";
-          json_string "endpoint" "/Groups";
-          json_string "schema" "urn:ietf:params:scim:schemas:core:2.0:Group";
-        ];
-    ]
-
-let scim_attribute ?(multi_valued = false) name typ =
-  Json.Obj
-    [
-      json_string "name" name;
-      json_string "type" typ;
-      json_bool "multiValued" multi_valued;
-      json_bool "required" false;
-      json_bool "caseExact" false;
-      json_string "mutability" "readWrite";
-      json_string "returned" "default";
-      json_string "uniqueness" "none";
-    ]
-
-let scim_schemas_json =
-  scim_list_response
-    [
-      Json.Obj
-        [
-          json_string "id" "urn:ietf:params:scim:schemas:core:2.0:User";
-          json_string "name" "User";
-          ( "attributes",
-            Json.List
-              [
-                scim_attribute "externalId" "string";
-                scim_attribute "userName" "string";
-                scim_attribute "active" "boolean";
-                scim_attribute "displayName" "string";
-                scim_attribute ~multi_valued:true "emails" "complex";
-                scim_attribute ~multi_valued:true "groups" "complex";
-              ] );
-        ];
-      Json.Obj
-        [
-          json_string "id" "urn:ietf:params:scim:schemas:core:2.0:Group";
-          json_string "name" "Group";
-          ( "attributes",
-            Json.List
-              [
-                scim_attribute "externalId" "string";
-                scim_attribute "displayName" "string";
-                scim_attribute ~multi_valued:true "members" "complex";
-              ] );
-        ];
-    ]
-
 let scim_resource_path ~prefix path =
   let prefix = if String.ends_with ~suffix:"/" prefix then String.sub prefix 0 (String.length prefix - 1) else prefix in
   if path = prefix ^ "/ServiceProviderConfig" then Some `ServiceProviderConfig
@@ -3033,9 +2725,9 @@ let scim_paw t ~prefix () : Paw.t =
  fun c ->
   match scim_resource_path ~prefix (Conn.path c) with
   | None -> c
-  | Some `ServiceProviderConfig -> Conn.json c (Json.to_string scim_service_provider_config_json)
-  | Some `ResourceTypes -> Conn.json c (Json.to_string scim_resource_types_json)
-  | Some `Schemas -> Conn.json c (Json.to_string scim_schemas_json)
+  | Some `ServiceProviderConfig -> Conn.json c (Json.to_string Scim.scim_service_provider_config_json)
+  | Some `ResourceTypes -> Conn.json c (Json.to_string Scim.scim_resource_types_json)
+  | Some `Schemas -> Conn.json c (Json.to_string Scim.scim_schemas_json)
   | Some resource -> (
     match scim_connection_for_request t c with
     | Error e -> json_error ~status:401 c (string_of_error e)
@@ -3046,23 +2738,29 @@ let scim_paw t ~prefix () : Paw.t =
           [
             ( "Resources",
               Json.List
-                (List.map scim_user_json
+                (List.map Scim.scim_user_json
                    (t.store.scim.Scim.list_users ~connection_id:connection.id ())) );
           ]
       | H.GET, `Users (Some external_id), _ -> (
         match t.store.scim.Scim.find_user ~connection_id:connection.id ~external_id with
         | None -> json_error ~status:404 c "SCIM user not found"
-        | Some user -> Conn.json c (Json.to_string (scim_user_json user)))
+        | Some user -> Conn.json c (Json.to_string (Scim.scim_user_json user)))
       | H.POST, `Users None, Some json | H.PUT, `Users (Some _), Some json -> (
-        match Result.bind (scim_user_of_json json) (apply_scim_user t connection) with
+        match
+          Result.bind
+            (Scim.scim_user_of_json json |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
+            (apply_scim_user t connection)
+        with
         | Error e -> json_error c (string_of_error e)
-        | Ok user -> Conn.json ~status:201 c (Json.to_string (scim_user_json user)))
+        | Ok user -> Conn.json ~status:201 c (Json.to_string (Scim.scim_user_json user)))
       | H.PATCH, `Users (Some external_id), Some json -> (
         match t.store.scim.Scim.find_user ~connection_id:connection.id ~external_id with
         | None -> json_error ~status:404 c "SCIM user not found"
         | Some user -> (
           match
-            Result.bind (scim_user_patch_of_json json) (fun ops ->
+            Result.bind
+              (Scim.scim_user_patch_of_json json |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
+              (fun ops ->
                 Scim.apply_user_patch user ops
                 |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
           with
@@ -3072,7 +2770,7 @@ let scim_paw t ~prefix () : Paw.t =
           | Ok patched -> (
             match apply_scim_user t connection patched with
             | Error e -> json_error c (string_of_error e)
-            | Ok user -> Conn.json c (Json.to_string (scim_user_json user)))))
+            | Ok user -> Conn.json c (Json.to_string (Scim.scim_user_json user)))))
       | H.DELETE, `Users (Some external_id), _ ->
         ignore (t.store.scim.Scim.delete_user ~connection_id:connection.id ~external_id);
         Conn.text ~status:204 c ""
@@ -3081,26 +2779,28 @@ let scim_paw t ~prefix () : Paw.t =
           [
             ( "Resources",
               Json.List
-                (List.map scim_group_json
+                (List.map Scim.scim_group_json
                    (t.store.scim.Scim.list_groups ~connection_id:connection.id ())) );
           ]
       | H.GET, `Groups (Some external_id), _ -> (
         match t.store.scim.Scim.find_group ~connection_id:connection.id ~external_id with
         | None -> json_error ~status:404 c "SCIM group not found"
-        | Some group -> Conn.json c (Json.to_string (scim_group_json group)))
+        | Some group -> Conn.json c (Json.to_string (Scim.scim_group_json group)))
       | H.POST, `Groups None, Some json | H.PUT, `Groups (Some _), Some json -> (
-        match scim_group_of_json json with
-        | Error e -> json_error c (string_of_error e)
+        match Scim.scim_group_of_json json with
+        | Error e -> json_error c (Scim.string_of_error e)
         | Ok group -> (
           match t.store.scim.Scim.upsert_group ~connection_id:connection.id group with
           | Error e -> json_error c e
-          | Ok () -> Conn.json ~status:201 c (Json.to_string (scim_group_json group))))
+          | Ok () -> Conn.json ~status:201 c (Json.to_string (Scim.scim_group_json group))))
       | H.PATCH, `Groups (Some external_id), Some json -> (
         match t.store.scim.Scim.find_group ~connection_id:connection.id ~external_id with
         | None -> json_error ~status:404 c "SCIM group not found"
         | Some group -> (
           match
-            Result.bind (scim_group_patch_of_json json) (fun ops ->
+            Result.bind
+              (Scim.scim_group_patch_of_json json |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
+              (fun ops ->
                 Scim.apply_group_patch group ops
                 |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
           with
@@ -3110,7 +2810,7 @@ let scim_paw t ~prefix () : Paw.t =
           | Ok patched -> (
             match t.store.scim.Scim.upsert_group ~connection_id:connection.id patched with
             | Error e -> json_error c e
-            | Ok () -> Conn.json c (Json.to_string (scim_group_json patched)))))
+            | Ok () -> Conn.json c (Json.to_string (Scim.scim_group_json patched)))))
       | H.DELETE, `Groups (Some external_id), _ ->
         ignore (t.store.scim.Scim.delete_group ~connection_id:connection.id ~external_id);
         Conn.text ~status:204 c ""
