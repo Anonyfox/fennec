@@ -39,7 +39,7 @@ let pbkdf2_sha256 ~password ~salt ~iterations =
   done;
   Bytes.unsafe_to_string acc
 
-let password_hasher ?(iterations = 210_000) () =
+let password_hasher ?(iterations = 600_000) () =
   if iterations <= 0 then invalid_arg "Fennec.Accounts.Password.password_hasher: iterations must be positive";
   let hash ~password =
     let salt = secure_random 16 in
@@ -219,6 +219,12 @@ let%test "password_hasher rejects invalid hashes and iterations" =
   (not (h.verify ~password:"pw" ~hash:"not-a-hash"))
   && (not (h.verify ~password:"pw" ~hash:"pbkdf2-sha256$0$salt$derived"))
   && raises_invalid_arg (fun () -> password_hasher ~iterations:0 ())
+
+let%test "default hasher uses the OWASP-2023 iteration floor (600k)" =
+  let h = password_hasher () in
+  let hash = h.hash ~password:"pw" in
+  (match String.split_on_char '$' hash with [ "pbkdf2-sha256"; iters; _; _ ] -> iters = "600000" | _ -> false)
+  && h.verify ~password:"pw" ~hash
 
 let%test "policy constructor validates bounds" =
   raises_invalid_arg (fun () -> policy ~min_length:0 ())

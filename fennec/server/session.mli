@@ -26,6 +26,11 @@ val sign : secret:string -> string -> string
 (** Verify a signed token (constant-time), returning the payload if the signature holds. *)
 val verify : secret:string -> string -> string option
 
+(** The request scheme as the client sees it, honouring an upstream [X-Forwarded-Proto] (behind a
+    TLS-terminating proxy {!Fennec_paw.Conn.scheme} is the inner ["http"]). This is what the [Secure]
+    cookie default keys on; exposed so other cookie-issuing code (e.g. the login cookie) matches it. *)
+val forwarded_scheme : Fennec_paw.Conn.t -> string
+
 (** A server-side session store (keyed by session id). Provide your own (Redis, SQL, …) or
     use {!memory_store}. *)
 type store = {

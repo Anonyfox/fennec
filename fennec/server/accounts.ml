@@ -2034,8 +2034,11 @@ let login_with_token t token =
       | Error _ as e -> e))
 
 let set_login_cookie t c ?(same_site = Cookie.Lax) ?(http_only = true) ?secure token =
-  Conn.set_cookie c t.cookie token ~path:t.path ~max_age:(int_of_float t.lifetime) ?secure
-    ~http_only ~same_site
+  (* Secure-by-default on HTTPS (honouring X-Forwarded-Proto), exactly as the Session middleware — so the
+     login cookie can't leak over plaintext http. Caller can still force it with ~secure. *)
+  let secure = match secure with Some b -> b | None -> Session.forwarded_scheme c = "https" in
+  Conn.set_cookie c t.cookie token ~path:t.path ~max_age:(int_of_float t.lifetime) ~secure ~http_only
+    ~same_site
 
 let logout t c =
   let uid = user_id c in
@@ -2226,9 +2229,15 @@ let email_otp_paw t ?(token_param = "token") ?(code_param = "code") ?allow_signu
       let email = email_service t () in
       match (Conn.param c token_param, Conn.param c code_param) with
       | Some token, Some code -> (
-        redirect_identity_completion t c ?mfa_required ~success ~error
-          (login_with_email_otp_completion t email ?current_user_id:(user_id c) ?allow_signup
-             ?link_verified_email ~token:(Challenge.token_of_string token) ~code ()))
+        (* throttle OTP-code guesses (IP + the OTP token id) so the low-entropy 6-digit code can't be
+           brute-forced over the token's lifetime; a throttled attempt looks like a bad code (no oracle) *)
+        let id = match String.index_opt token '.' with Some i -> String.sub token 0 i | None -> token in
+        match Throttle.login_allowed t.rate_limit ~ip:(Conn.remote_ip c) ~account:("otp:" ^ id) with
+        | Error _ -> Conn.redirect c error
+        | Ok () ->
+          redirect_identity_completion t c ?mfa_required ~success ~error
+            (login_with_email_otp_completion t email ?current_user_id:(user_id c) ?allow_signup
+               ?link_verified_email ~token:(Challenge.token_of_string token) ~code ()))
       | _ -> Conn.redirect c error)
 
 let redirect_mfa_completion t c ~success ~error mfa_token verification =
@@ -4789,6 +4798,15 @@ struct
       | Ok () -> ()
       | Error retry -> too_many retry
     in
+    let throttle_step_up inv token =
+      (* charged BEFORE verifying the second factor — keyed on the step-up token id (+ the per-IP login
+         bucket) so a fixed mfaToken can't be used to online-guess the 6-digit TOTP / backup code. The
+         token TTL already bounds the window; this bounds the rate. *)
+      let id = match String.index_opt token '.' with Some i -> String.sub token 0 i | None -> token in
+      match Throttle.login_allowed t.rate_limit ~ip:inv.R.remote_ip ~account:("step-up:" ^ id) with
+      | Ok () -> ()
+      | Error retry -> too_many retry
+    in
     let mfa_doc (step_up : login_step_up) =
       Bson.doc
         [
@@ -4931,13 +4949,14 @@ struct
       | [ Bson.Document _ as d ] -> (
         match doc_get_string d "mfaToken" with
         | None -> bad_request "completeLoginStepUp expects mfaToken"
-        | Some mfa_token -> (
-          match (doc_get_string d "totpId", doc_get_string d "code", doc_get_string d "userId", doc_get_string d "backupCode") with
+        | Some mfa_token ->
+          throttle_step_up inv mfa_token;
+          ( match (doc_get_string d "totpId", doc_get_string d "code", doc_get_string d "userId", doc_get_string d "backupCode") with
           | Some totp_id, Some code, _, _ ->
             complete_step_up_doc inv mfa_token (verify_totp_factor t totp_id ~code)
           | _, _, Some user_id, Some code ->
             complete_step_up_doc inv mfa_token (consume_backup_code t user_id ~code)
-          | _ -> bad_request "completeLoginStepUp expects {mfaToken, totpId, code} or {mfaToken, userId, backupCode}"))
+          | _ -> bad_request "completeLoginStepUp expects {mfaToken, totpId, code} or {mfaToken, userId, backupCode}" ))
       | _ -> bad_request "completeLoginStepUp expects one document argument"
     in
     R.methods
@@ -7841,6 +7860,42 @@ let%test "methods: completeLoginStepUp completes TOTP and rebinds the invocation
               | _ -> false)
             | _ -> false
             | exception Test_methods_runtime.Error _ -> false)
+          | _ -> false)
+        | _ -> false
+        | exception Test_methods_runtime.Error _ -> false)))
+
+let%test "methods: completeLoginStepUp throttles brute-forced second-factor codes with a 429" =
+  Test_methods_runtime.registered := [];
+  let store = Store.minimongo () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok user -> (
+    match enroll_totp a user.id with
+    | Error _ -> false
+    | Ok setup -> (
+      let code0 = Mfa.totp_code ~time:1_000. setup.totp in
+      match confirm_totp_enrollment a setup.enrollment.id ~time:1_000. ~code:code0 with
+      | Error _ -> false
+      | Ok active ->
+        Test_methods.register a;
+        let inv = { Test_methods_runtime.user_id = None; remote_ip = Some "203.0.113.20"; is_simulation = false; set_user_id = (fun _ -> ()) } in
+        (match find_registered_ "login" inv [ Bson.str "ada"; Bson.str "pw" ] with
+        | Bson.Document kvs -> (
+          match List.assoc_opt "mfaToken" kvs with
+          | Some (Bson.String mfa_token) ->
+            (* hammer a FIXED mfaToken with a wrong code; the throttle must cut in with a 429 before the
+               6-digit space can be exhausted within the token's TTL — and must not block the first try *)
+            let attempt () =
+              try
+                ignore
+                  (find_registered_ "completeLoginStepUp" inv
+                     [ Bson.doc [ ("mfaToken", Bson.str mfa_token); ("totpId", Bson.str active.id); ("code", Bson.str "000000") ] ]);
+                "ok"
+              with Test_methods_runtime.Error { code; _ } -> code
+            in
+            let codes = List.map (fun _ -> attempt ()) [ 1; 2; 3; 4; 5 ] in
+            (match codes with first :: _ -> first <> "429" | [] -> false) && List.mem "429" codes
           | _ -> false)
         | _ -> false
         | exception Test_methods_runtime.Error _ -> false)))

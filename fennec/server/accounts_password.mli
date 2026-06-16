@@ -24,8 +24,9 @@ type hasher = {
 
 (** Built-in PBKDF2-HMAC-SHA256 hasher.
 
-    [iterations] defaults to [210_000]. Hashes are encoded as
-    [pbkdf2-sha256$iterations$salt$derived]. *)
+    [iterations] defaults to [600_000] (the OWASP-2023 floor for PBKDF2-HMAC-SHA256). The count is
+    encoded in each hash ([pbkdf2-sha256$iterations$salt$derived]), so raising it leaves old hashes
+    verifiable and lets you re-hash on next login. *)
 val password_hasher : ?iterations:int -> unit -> hasher
 
 (** Alias for callers that prefer the shorter noun. *)
