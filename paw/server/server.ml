@@ -530,14 +530,34 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   (* the Host-routed resolver: every endpoint matching the Host, most-specific-first, with overlap
      handled by the dispatch (first to answer wins). *)
   let by_host ~(host : string) : Endpoint.t list = Host_router.route_all router ~host in
+  (* a concrete host that matches an endpoint's first pattern, so its forced port can resolve EXACTLY
+     as the gateway would for that host — including any same-domain overlap peers and the catch-all. *)
+  let repr_host (e : Endpoint.t Host_router.entry) =
+    let pick = function
+      | Host_pattern.Exact h :: _ -> h
+      | Host_pattern.Suffix s :: _ -> "app" ^ s (* ".acme.com" -> "app.acme.com", matches "*.acme.com" *)
+      | Host_pattern.Any :: _ -> "localhost"
+      | [] -> "localhost"
+    in
+    pick e.Host_router.patterns
+  in
   (* (port, resolver) bindings: prod = one routed port; dev = the routed GATEWAY (prod-identical,
      at the base) plus ONE forced port per endpoint at base+1+i — contiguous, in declaration order,
      so the ports read cleanly: the base routes by Host, base+1.. are the named endpoints, no gaps.
-     A forced port serves exactly its one endpoint (overlap is only resolved on the gateway). *)
+     A forced port resolves AS THE GATEWAY WOULD for that endpoint's own host (route_all of a
+     representative host), so same-domain overlap peers and catch-all fall-through behave exactly like
+     prod — no /etc/hosts and no Host header needed. Several same-domain endpoints each get a port,
+     and each shows the same full stack. *)
   let binds =
     if not dev then [ (base, by_host) ]
     else
-      let forced = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> [ e.Host_router.ep ])) entries in
+      let forced =
+        List.mapi
+          (fun i (e : Endpoint.t Host_router.entry) ->
+            let host = repr_host e in
+            (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> Host_router.route_all router ~host))
+          entries
+      in
       (Port_plan.gateway plan, by_host) :: forced
   in
   Eio.Switch.run @@ fun sw ->
