@@ -5,6 +5,20 @@
 
 include Pipeline
 
+(** {1 Route-as-paw primitives} *)
+
+(* Build a single self-contained route — a paw answering one method+path, declining otherwise — for
+   mounting (via {!use}) or composing. The {!Endpoint} verbs ({!get}/{!post}/…) are what an app
+   reaches for; these are for reusable, mountable routes (what the accounts paws emit). *)
+module Route = struct
+  let on = Pipeline.on
+  let get = Pipeline.get
+  let post = Pipeline.post
+  let put = Pipeline.put
+  let delete = Pipeline.delete
+  let patch = Pipeline.patch
+end
+
 (** {1 Serve — the one-call entry point} *)
 
 (* [serve endpoints] = build the host router + run the Eio acceptor, owning the event loop — the

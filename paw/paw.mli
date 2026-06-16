@@ -34,6 +34,31 @@
     ({!get}/{!post}/…, with [:name] / [*rest] path captures). *)
 include module type of Pipeline
 
+(** {1 Route-as-paw primitives}
+
+    Build a single self-contained route — a paw that answers one method+path and declines otherwise —
+    for mounting (via {!use}) or composing. An app reaches for the {!Endpoint} verbs ({!get}/{!post}/…);
+    these are for reusable, mountable routes (what the accounts paws emit). *)
+module Route : sig
+  (** A route on an explicit method. The pattern may contain [:name] / trailing [*rest] captures. *)
+  val on : Http.meth -> string -> t -> t
+
+  (** A GET route. *)
+  val get : string -> t -> t
+
+  (** A POST route. *)
+  val post : string -> t -> t
+
+  (** A PUT route. *)
+  val put : string -> t -> t
+
+  (** A DELETE route. *)
+  val delete : string -> t -> t
+
+  (** A PATCH route. *)
+  val patch : string -> t -> t
+end
+
 (** {1 Serve — the one-call entry point}
 
     [serve endpoints] builds a {!Host_router} from [endpoints] and runs it over Eio, owning the event

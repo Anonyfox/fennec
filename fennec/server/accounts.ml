@@ -2247,7 +2247,7 @@ let revoke_other_sessions t ~user_id ~keep = t.store.tokens.revoke_user user_id 
 let send_failed c exn = Conn.text ~status:500 c ("Accounts delivery failed: " ^ Printexc.to_string exn)
 
 let password_reset_request_paw t ?(email_param = "email") ~path ~success ~error ~send () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match Conn.param c email_param with
       | None -> Conn.redirect c error
       | Some email -> (
@@ -2291,7 +2291,7 @@ let redirect_identity_completion t c ?mfa_required ~success ~error = function
 
 let password_reset_paw t ?(token_param = "token") ?(password_param = "password") ?mfa_required ~path
     ~success ~error () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match (Conn.param c token_param, Conn.param c password_param) with
       | Some token, Some password -> (
         match reset_password_completion t (Challenge.token_of_string token) ~password with
@@ -2300,7 +2300,7 @@ let password_reset_paw t ?(token_param = "token") ?(password_param = "password")
 
 let enrollment_paw t ?(token_param = "token") ?(password_param = "password") ?mfa_required ~path ~success
     ~error () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match (Conn.param c token_param, Conn.param c password_param) with
       | Some token, Some password ->
         redirect_login_completion t c ?mfa_required ~success ~error
@@ -2308,7 +2308,7 @@ let enrollment_paw t ?(token_param = "token") ?(password_param = "password") ?mf
       | _ -> Conn.redirect c error)
 
 let email_verification_request_paw t ?(email_param = "email") ~path ~success ~error ~send () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match (user_id c, Conn.param c email_param) with
       | Some uid, Some email -> (
         match issue_email_verification t uid email with
@@ -2320,7 +2320,7 @@ let email_verification_request_paw t ?(email_param = "email") ~path ~success ~er
       | _ -> Conn.redirect c error)
 
 let email_verification_paw t ?(token_param = "token") ?mfa_required ~path ~success ~error () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       match Conn.param c token_param with
       | None -> Conn.redirect c error
       | Some token -> (
@@ -2328,7 +2328,7 @@ let email_verification_paw t ?(token_param = "token") ?mfa_required ~path ~succe
         | result -> redirect_login_completion t c ?mfa_required ~success ~error result))
 
 let email_login_link_request_paw t ?(email_param = "email") ~path ~success ~error ~send () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match Conn.param c email_param with
       | None -> Conn.redirect c error
       | Some raw_email -> (
@@ -2345,7 +2345,7 @@ let email_login_link_request_paw t ?(email_param = "email") ~path ~success ~erro
 
 let email_login_link_paw t ?(token_param = "token") ?allow_signup ?link_verified_email ?mfa_required ~path
     ~success ~error () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let email = email_service t () in
       match Conn.param c token_param with
       | None -> Conn.redirect c error
@@ -2355,7 +2355,7 @@ let email_login_link_paw t ?(token_param = "token") ?allow_signup ?link_verified
              ?link_verified_email (Challenge.token_of_string token))))
 
 let email_otp_request_paw t ?(email_param = "email") ~path ~success ~error ~send () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match Conn.param c email_param with
       | None -> Conn.redirect c error
       | Some raw_email -> (
@@ -2372,7 +2372,7 @@ let email_otp_request_paw t ?(email_param = "email") ~path ~success ~error ~send
 
 let email_otp_paw t ?(token_param = "token") ?(code_param = "code") ?allow_signup ?link_verified_email
     ?mfa_required ~path ~success ~error () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       let email = email_service t () in
       match (Conn.param c token_param, Conn.param c code_param) with
       | Some token, Some code -> (
@@ -2397,7 +2397,7 @@ let redirect_mfa_completion t c ~success ~error mfa_token verification =
 
 let mfa_totp_paw t ?(mfa_token_param = "mfaToken") ?(factor_param = "factor") ?(code_param = "code") ~path
     ~success ~error () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match (Conn.param c mfa_token_param, Conn.param c factor_param, Conn.param c code_param) with
       | Some mfa_token, Some factor, Some code ->
         redirect_mfa_completion t c ~success ~error mfa_token (verify_totp_factor t factor ~code)
@@ -2405,7 +2405,7 @@ let mfa_totp_paw t ?(mfa_token_param = "mfaToken") ?(factor_param = "factor") ?(
 
 let mfa_backup_code_paw t ?(mfa_token_param = "mfaToken") ?(user_param = "userId")
     ?(code_param = "code") ~path ~success ~error () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       match (Conn.param c mfa_token_param, Conn.param c user_param, Conn.param c code_param) with
       | Some mfa_token, Some uid, Some code ->
         redirect_mfa_completion t c ~success ~error mfa_token (consume_backup_code t uid ~code)
@@ -2602,7 +2602,7 @@ let passkey_user_of_account (u : user) =
   Passkey.user ~id:u.id ~handle:u.id ~name ()
 
 let passkey_registration_options_paw t relying_party ~path () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let c = paw t () c in
       match user_id c with
       | None -> json_error ~status:401 c "Unauthorized"
@@ -2620,7 +2620,7 @@ let passkey_registration_options_paw t relying_party ~path () =
           | Ok options -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c options.json)))
 
 let passkey_registration_finish_paw t relying_party ~path () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       let c = paw t () c in
       match (user_id c, req_body_json c) with
       | None, _ -> json_error ~status:401 c "Unauthorized"
@@ -2639,7 +2639,7 @@ let passkey_registration_finish_paw t relying_party ~path () =
               ])))
 
 let passkey_assertion_options_paw t relying_party ~path () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let c = paw t () c in
       let user_id = user_id c in
       let allowed_credentials =
@@ -2653,7 +2653,7 @@ let passkey_assertion_options_paw t relying_party ~path () =
       | Ok options -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c options.json)
 
 let passkey_assertion_finish_paw t relying_party ~path () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       let c = paw t () c in
       match req_body_json c with
       | None -> json_error c "Malformed JSON"
@@ -2674,7 +2674,7 @@ let passkey_assertion_finish_paw t relying_party ~path () =
               ])))
 
 let mfa_passkey_assertion_options_paw t relying_party ~path () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let c = paw t () c in
       let user_id = user_id c in
       let allowed_credentials =
@@ -2689,7 +2689,7 @@ let mfa_passkey_assertion_options_paw t relying_party ~path () =
       | Ok options -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c options.json)
 
 let mfa_passkey_assertion_finish_paw t relying_party ~path () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       let c = paw t () c in
       match req_body_json c with
       | None -> json_error c "Malformed JSON"
@@ -2882,7 +2882,7 @@ let scim_paw t ~prefix () : Paw.t =
       | _ -> json_error ~status:405 c "Unsupported SCIM operation"))
 
 let oauth_authorize_paw t ?(redirect_param = "redirect") ~path ~error provider () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let oauth = OAuth.make ~challenge:(challenge_service t ()) in
       let redirect = Conn.param c redirect_param in
       match OAuth.authorize oauth ?user_id:(user_id c) ?redirect provider with
@@ -2890,7 +2890,7 @@ let oauth_authorize_paw t ?(redirect_param = "redirect") ~path ~error provider (
       | Ok issued -> Conn.redirect c issued.OAuth.url)
 
 let oauth_callback_paw t ?(link_verified_email = true) ~path ~success ~error provider ~exchange () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let oauth = OAuth.make ~challenge:(challenge_service t ()) in
       match OAuth.parse_callback (Conn.req c).H.query_string with
       | Error _ -> Conn.redirect c error
@@ -2929,7 +2929,7 @@ let oauth_popup_response c (payload : Json.t) =
    redirecting. Mount this when the OAuth popup should finish inside an SPA without a full-page
    reload; the SPA replays the pair through the [login {oauth}] method. *)
 let oauth_callback_popup_paw t ?(link_verified_email = true) ~path provider ~exchange () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let oauth = OAuth.make ~challenge:(challenge_service t ()) in
       let fail reason = oauth_popup_response c (Json.Obj [ ("error", Json.String reason) ]) in
       match OAuth.parse_callback (Conn.req c).H.query_string with
@@ -2960,7 +2960,7 @@ let oauth_callback_popup_paw t ?(link_verified_email = true) ~path provider ~exc
                      ]))))))
 
 let oidc_authorize_paw t ?(redirect_param = "redirect") ~path ~error (connection : Oidc.connection) () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let oidc = Oidc.make ~challenge:(challenge_service t ()) in
       let redirect = Conn.param c redirect_param in
       match Oidc.authorize oidc ?user_id:(user_id c) ?redirect connection with
@@ -2968,7 +2968,7 @@ let oidc_authorize_paw t ?(redirect_param = "redirect") ~path ~error (connection
       | Ok issued -> Conn.redirect c issued.Oidc.url)
 
 let oidc_callback_paw t ?(link_verified_email = true) ~path ~success ~error (connection : Oidc.connection) ~exchange () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let oidc = Oidc.make ~challenge:(challenge_service t ()) in
       match Oidc.parse_callback (Conn.req c).H.query_string with
       | Error _ -> Conn.redirect c error
@@ -2990,7 +2990,7 @@ let oidc_callback_paw t ?(link_verified_email = true) ~path ~success ~error (con
               route_redirect (set_login_cookie t c login.token) success state.redirect))))
 
 let saml_authorize_paw t ?(redirect_param = "redirect") ?signing_key ~path ~error connection () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let saml = Saml.make ~challenge:(challenge_service t ()) in
       let redirect = Conn.param c redirect_param in
       match Saml.issue_request saml ?user_id:(user_id c) ?redirect connection with
@@ -3004,7 +3004,7 @@ let saml_authorize_paw t ?(redirect_param = "redirect") ?signing_key ~path ~erro
           | Error _ -> Conn.redirect c error)))
 
 let saml_callback_paw t ~path ~success ~error connection ~trusted_keys () =
-  Paw.post path (fun c ->
+  Paw.Route.post path (fun c ->
       let saml = Saml.make ~challenge:(challenge_service t ()) in
       match (Conn.param c "RelayState", Conn.param c "SAMLResponse") with
       | Some relay_state, Some saml_response -> (
@@ -3952,7 +3952,7 @@ let session_doc t c =
     (current_user t c)
 
 let session_paw t ~path () =
-  Paw.get path (fun c ->
+  Paw.Route.get path (fun c ->
       let c = paw t () c in
       match session_doc t c with
       | Ok doc -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c (Bson_json.to_string doc)
