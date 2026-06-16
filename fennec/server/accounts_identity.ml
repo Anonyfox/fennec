@@ -136,10 +136,15 @@ let saml ~connection ~name_id ?external_id () =
           | None -> Ok (key ~kind:Saml ~scope:Global ~namespace:connection name_id)))
 
 let passkey ~credential_id ?user_handle () =
-  bind (blank "credential_id" credential_id) (fun credential_id ->
-      match user_handle with
-      | Some user_handle when not (nonblank user_handle) -> Error (Blank "user_handle")
-      | _ -> Ok (key ~kind:Passkey ~scope:Global credential_id))
+  (* credential_id is RAW BINARY (a WebAuthn credential id), so it must NOT be whitespace-trimmed: a boundary
+     byte that happens to be an ASCII whitespace value (0x09/0a/0b/0c/0d/20) would be silently dropped,
+     corrupting the identity subject (and letting two distinct ids collide). Reject only a genuinely empty id;
+     keep every byte otherwise. *)
+  if credential_id = "" then Error (Blank "credential_id")
+  else
+    match user_handle with
+    | Some user_handle when not (nonblank user_handle) -> Error (Blank "user_handle")
+    | _ -> Ok (key ~kind:Passkey ~scope:Global credential_id)
 
 let scim ~org_id ~external_id =
   bind (blank_lower "org_id" org_id) (fun org_id ->
@@ -398,9 +403,24 @@ let%test "saml prefers external_id when present" =
   kind k = Saml && namespace k = Some "corp" && subject k = "stable-id"
 
 let%test "passkey credential is global and ignores user handle for uniqueness" =
-  let k = ok (passkey ~credential_id:" credential-id " ~user_handle:" handle " ()) in
-  let same = ok (passkey ~credential_id:" credential-id " ~user_handle:" other-handle " ()) in
+  let k = ok (passkey ~credential_id:"credential-id" ~user_handle:" handle " ()) in
+  let same = ok (passkey ~credential_id:"credential-id" ~user_handle:" other-handle " ()) in
   kind k = Passkey && scope k = Global && namespace k = None && subject k = "credential-id" && equal k same
+
+let%test "passkey credential id is binary-safe: whitespace boundary bytes survive verbatim (not trimmed)" =
+  (* A WebAuthn credential id is RAW BYTES; ~4% of random ids have an ASCII-whitespace boundary byte
+     (0x09/0a/0b/0c/0d/20). Trimming it (the old [blank]/[String.trim] path) silently dropped that byte —
+     corrupting the identity subject and letting two distinct ids collide. Regression for that bug. *)
+  let cid = "\t\x20raw-cred\x0a" in
+  match (passkey ~credential_id:cid (), passkey ~credential_id:"raw-cred" ()) with
+  | Ok k, Ok k2 ->
+    subject k = cid (* every byte preserved, including the leading tab/space and trailing LF *)
+    && String.length (subject k) = String.length cid
+    && not (equal k k2) (* a whitespace-differing id is a DIFFERENT credential, not a collision *)
+  | _ -> false
+
+let%test "passkey rejects only a genuinely empty credential id" =
+  Result.is_error (passkey ~credential_id:"" ()) && Result.is_ok (passkey ~credential_id:" " ())
 
 let%test "scim org id scopes external ids" =
   let a = ok (scim ~org_id:" OrgA " ~external_id:"123") in

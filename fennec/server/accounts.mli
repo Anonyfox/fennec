@@ -198,13 +198,46 @@ type user_store = {
   bump_auth_epoch : user_id -> (int, error) result;
 }
 
-(** One Accounts persistence handle: users, identity links, challenges, audit, and index setup.
+(** Public metadata for one live session in the server-side login-token store ("active sessions").
+
+    [session_id] is the [sid] carried in the signed session token — a non-secret random id, safe to
+    show in a UI and to pass to {!revoke_session}. The hashed token is never exposed. *)
+type session_info = {
+  session_id : string;
+  user_id : user_id;
+  created_at : float;
+  expires_at : float;
+  last_active_at : float;
+  strategy : string;
+}
+
+(** The server-side login-token store. Only HASHED tokens are persisted (the [session_id]/[sid] is
+    the non-secret row key). It is the source of truth for per-session revocation on the token-
+    presentation paths (resume, {!verify_token}, and per-request when [validate_every_request] is on).
+
+    Application code uses {!list_sessions} / {!revoke_session} / {!revoke_other_sessions} rather than
+    this record directly; it remains visible for tests and advanced inspection like {!user_store}.
+    Time-sensitive operations take [~now] so callers control the clock; rows past [expires_at] read
+    as absent. *)
+type token_store = {
+  record : session_info -> hashed:string -> (unit, error) result;
+  find_live : sid:string -> hashed:string -> now:float -> (session_info option, error) result;
+  list_for_user : user_id -> now:float -> (session_info list, error) result;
+  touch : sid:string -> now:float -> (unit, error) result;
+  revoke : sid:string -> (bool, error) result;
+  revoke_user : user_id -> ?keep:string -> unit -> (int, error) result;
+  gc_expired : now:float -> (int, error) result;
+}
+
+(** One Accounts persistence handle: users, login tokens, identity links, challenges, audit, and
+    index setup.
 
     A normal app should create exactly one value and pass it to {!make}. Provider flows then use the
     built-in identity/challenge stores by default, so login/link/create behavior is one coherent
     Mongo transaction boundary instead of several userland knobs. *)
 type store = {
   users : user_store;
+  tokens : token_store;
   identities : Identity.store;
   challenges : Challenge.store;
   passkeys : Passkey.store;
@@ -230,6 +263,9 @@ module Store : sig
 
   (** The user collection facet. *)
   val users : t -> user
+
+  (** The login-token ("active sessions") collection facet. *)
+  val tokens : t -> token_store
 
   (** The canonical identity-link collection facet. *)
   val identities : t -> Identity.store
@@ -434,9 +470,22 @@ type t
     [secret] signs browser session cookies/tokens and must be a long random string. [store] is the
     only persistence dependency. [password_hasher] enables the password strategy. [password_policy]
     validates create/change/set/reset password flows before hashing. [cookie] defaults to
-    ["_fennec_login"]. [lifetime] defaults to one day. [validate_every_request] verifies the signed
-    cookie's [auth_epoch] against the store on each request; leave it [false] for the zero-read
-    stateless path, enable it for immediate account revocation. *)
+    ["_fennec_login"]. [lifetime] defaults to one day and is the login-token expiration (Meteor's
+    [loginExpirationInDays] equivalent): every issued session is recorded in [store.tokens] with
+    [expires_at = issued_at + lifetime].
+
+    {b Session source of truth.} The signed cookie stays a zero-read fast-path integrity proof (HMAC +
+    expiry + [auth_epoch]). The token store is an {e additional} gate consulted on the token-
+    presentation paths — {!verify_token} and {!login_with_token} {b always}, and {!paw} per request
+    {e only} when [validate_every_request=true]. So {!revoke_session}/{!logout} take effect immediately
+    on resume/API/opt-in-per-request, while a [validate_every_request=false] browser cookie keeps
+    authenticating until it expires (the same boundary the [auth_epoch] already had). Recording a
+    session is {e fail-closed}: if the token row cannot be persisted the login fails atomically.
+    [validate_every_request] additionally re-checks [auth_epoch] against the store on each request;
+    leave it [false] for the zero-read path, enable it for immediate per-request revocation/epoch
+    enforcement. [rate_limit] throttles the [login] and [createUser] DDP methods against brute force
+    (default: {!Accounts_rate_limit.make} — 5 attempts / 10 s per client IP and per account, à la
+    Meteor); pass a custom limiter to retune or a disabled one to turn it off. *)
 val make :
   secret:string ->
   store:store ->
@@ -446,6 +495,7 @@ val make :
   ?path:string ->
   ?lifetime:float ->
   ?validate_every_request:bool ->
+  ?rate_limit:Accounts_rate_limit.t ->
   unit ->
   t
 
@@ -1060,7 +1110,10 @@ val finish_passkey_assertion_completion :
 
 (** Resume from a signed session token and return the user plus a freshly issued replacement token.
     Unlike {!verify_token}, this loads the user and checks the current [auth_epoch], because explicit
-    websocket/mobile resume already requires a store read. *)
+    websocket/mobile resume already requires a store read. The presented token's session row must
+    still be live (so a revoked/early-expired session cannot resume), and the token is {b rotated}:
+    the replacement is recorded and the presented session's row is dropped, so the old resume token
+    cannot be used again and the active-sessions list stays one row per resume chain. *)
 val login_with_token : t -> token -> (user * token, error) result
 
 (** Attach a freshly issued login cookie to the response. *)
@@ -1073,22 +1126,44 @@ val set_login_cookie :
   token ->
   Conn.t
 
-(** Expire the login cookie and run logout observers. *)
+(** Expire the login cookie, run logout observers, and revoke the current request's session row in
+    the token store (best-effort; available when {!paw} accepted the cookie upstream) so this
+    device's resume token cannot be reused. *)
 val logout : t -> Conn.t -> Conn.t
 
-(** Bump the user's revocation epoch. Existing signed sessions become invalid for configurations
-    that validate epochs and for any future session issue/check. *)
+(** Bump the user's revocation epoch and remove all of the user's token-store rows. Existing signed
+    sessions become invalid for configurations that validate epochs/rows and for any future session
+    issue/check. *)
 val logout_other_clients : t -> user_id -> (unit, error) result
 
-(** Bump the user's revocation epoch and issue a fresh token for the current client. Use this for
-    Meteor-style ["logoutOtherClients"] semantics. *)
+(** Bump the user's revocation epoch and issue a fresh token for the current client, pruning every
+    other session row (keeping the freshly issued one). Use this for Meteor-style
+    ["logoutOtherClients"] semantics. *)
 val logout_other_clients_and_refresh : t -> user_id -> (user * token, error) result
 
-(** Verify a signed session token and return its user id. With [validate_every_request=false], this
-    is the zero-read check and does not observe later [auth_epoch] bumps until token expiry. Use
-    {!login_with_token} for explicit resume flows that should refresh a token and observe
-    revocation immediately. *)
+(** Verify a signed session token and return its user id. The signed token is checked statelessly
+    (HMAC + expiry), and its session row in the token store is {b always} consulted — so
+    {!revoke_session}, {!logout}, {!logout_other_clients}, and early expiry take effect here
+    immediately, independent of [validate_every_request]. The [auth_epoch] is still only re-checked
+    when [validate_every_request=true]. A successful verify refreshes the session's last-active time. *)
 val verify_token : t -> token -> (user_id, error) result
+
+(** List a user's live sessions (non-revoked, non-expired) for an "active sessions" UI. Each entry
+    carries the [session_id] to pass to {!revoke_session} plus created/expiry/last-active metadata.
+    The hashed token is never exposed. *)
+val list_sessions : t -> user_id -> (session_info list, error) result
+
+(** Revoke one session by its [session_id], scoped to [user_id] (a user cannot revoke another user's
+    session by guessing an id). Returns [true] when a live session was found and removed. Unlike
+    {!logout_other_clients} this is per-device and performs no epoch bump. Takes effect immediately on
+    resume / {!verify_token} (and per request when [validate_every_request] is on); a
+    [validate_every_request=false] browser cookie keeps authenticating via the zero-read path until it
+    expires. *)
+val revoke_session : t -> user_id:user_id -> session_id:string -> (bool, error) result
+
+(** Revoke all of a user's sessions except [keep] (e.g. "log out my other devices", keeping the
+    current session's id). Returns the number removed. *)
+val revoke_other_sessions : t -> user_id:user_id -> keep:string -> (int, error) result
 
 (** POST route helper for requesting a password-reset email.
 
@@ -1370,6 +1445,7 @@ module Methods (R : sig
 
   type invocation = {
     user_id : string option;
+    remote_ip : string option;
     is_simulation : bool;
     set_user_id : string option -> unit;
   }

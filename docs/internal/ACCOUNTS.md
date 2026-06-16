@@ -256,6 +256,52 @@ resume because the client is already asking the server to re-establish identity.
 There is no way to have both zero persistent reads and immediate global revocation. The API makes
 that tradeoff explicit instead of hiding it.
 
+### Login-token store (active sessions)
+
+Every issued session is also recorded server-side in the `accounts_tokens` collection — keyed by the
+`sid` already carried in the signed cookie, storing only the **SHA-256 of the token** (never the raw
+token) plus `userId`, `createdAt`, `expiresAt`, `lastActiveAt`, and `strategy`. It is indexed on
+`userId` and `hashedToken` and works identically on minimongo, Burrow, and mongod.
+
+The signed cookie stays the zero-read fast-path integrity proof. The token store is an *additional*
+gate, and the decision on where to consult it is deliberate:
+
+- `verify_token` and `login_with_token` (resume) **always** consult it. A row that has been revoked
+  or has passed its `expiresAt` makes the token invalid immediately — even on the zero-read cookie
+  path (`validate_every_request=false`). `login_with_token` additionally **rotates**: it records the
+  replacement and deletes the presented session's row, so the old resume token cannot be reused and
+  the active-sessions list stays one row per resume chain.
+- `paw` (per-request HTTP cookie) consults it **only when `validate_every_request=true`**, so the
+  default per-request path stays zero-read.
+
+This closes the three gaps the stateless-only model had:
+
+- **Per-device revocation** — `revoke_session ~user_id ~session_id` deletes one row and performs *no*
+  `auth_epoch` bump, so one device logs out while the others keep working (the epoch bump could only
+  ever log out everyone at once). `revoke_other_sessions ~user_id ~keep` is the "log out my other
+  devices" primitive.
+- **Active-sessions UI** — `list_sessions` returns the live (non-revoked, non-expired) rows with
+  `created_at` / `expires_at` / `last_active_at` / `strategy`; `verify_token` refreshes
+  `last_active_at`.
+- **Early server-side expiry** — `lifetime` (default one day; Meteor's `loginExpirationInDays`
+  equivalent) sets each row's `expiresAt`; `revoke_session` expires a token early on demand.
+
+Two decisions worth stating plainly:
+
+- **Recording is fail-closed.** If the token row cannot be persisted, the login fails atomically — a
+  login that cannot record its session is not a durable login. (Audit logging, by contrast, is
+  best-effort.)
+- **`list_sessions` is store-truth, not cookie-truth.** A `validate_every_request=false` browser
+  cookie keeps authenticating via the signature until it expires, even after its row was revoked or
+  rotated away — the same enforcement boundary `auth_epoch` always had. Apps that want immediate
+  per-request revocation for cookie sessions set `validate_every_request=true`. The HTTP `logout`
+  revokes the current request's row (when `paw` accepted the cookie upstream); the DDP `logout`
+  method clears only the connection binding (the resume token is not available to it) and relies on
+  `revoke_session`/expiry.
+
+`logout_other_clients` keeps its `auth_epoch` bump (cheap global invalidation) and now also prunes the
+user's token rows; `logout_other_clients_and_refresh` prunes all but the freshly issued session.
+
 Completed MFA sessions remain stateless too. The final `complete_login_step_up` exchange stores only
 verified factor names in the signed cookie, never factor secrets or challenge tokens. Later requests
 derive route-guard assurance from the original login strategy plus those signed factor names.
@@ -751,14 +797,14 @@ Accounts persistence is deliberately Mongo-shaped:
 
 - `Store.minimongo ()`: instant in-memory backend for tests/examples using real BSON documents.
 - `Store.mongo ?prefix db`: native MongoDB backend over `fennec-mongo.driver`; collections default
-  to `accounts_users`, `accounts_identities`, `accounts_challenges`, `accounts_passkeys`,
-  `accounts_orgs`, `accounts_org_memberships`, `accounts_org_invites`,
+  to `accounts_users`, `accounts_tokens`, `accounts_identities`, `accounts_challenges`,
+  `accounts_passkeys`, `accounts_orgs`, `accounts_org_memberships`, `accounts_org_invites`,
   `accounts_mfa_enrollments`, `accounts_scim_connections`, `accounts_scim_users`,
   `accounts_scim_groups`, and `accounts_audit`.
-- `Store.ensure_indexes store`: idempotently creates unique/sparse user indexes, identity lookup
-  indexes, challenge expiry/user/email indexes, passkey credential indexes, org/domain indexes, MFA
-  user indexes, SCIM tenant indexes, and audit query indexes for Mongo. It is a no-op for
-  Minimongo.
+- `Store.ensure_indexes store`: idempotently creates unique/sparse user indexes, login-token
+  `userId`/`hashedToken` indexes, identity lookup indexes, challenge expiry/user/email indexes,
+  passkey credential indexes, org/domain indexes, MFA user indexes, SCIM tenant indexes, and audit
+  query indexes for Mongo. It is a no-op for Minimongo.
 - Invariants stay in store operations: create user with initial password hash, password hash plus
   auth epoch bump, challenge consume, identity attach/detach/merge, MFA enrollment compare-and-swap
   for replay counters/backup-code removal, and identity login/link/create.

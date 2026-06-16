@@ -34,8 +34,11 @@ let () =
   if not (Result.is_ok (A.login_with_password a (A.By_username "ada") ~password:"pw")) then
     failf "username login failed on burrow";
 
-  (* 2. unique email is enforced on burrow (the DB safety-net + the app check agree) *)
+  (* 2. unique email/username is enforced on burrow, case-INsensitively, via the indexed lookups on the
+        lowercased shadow fields (the DB safety-net + the app check agree). A case variant of either is a dup. *)
   expect_error "duplicate email" (A.create_user a ~email:"ada@example.com" ());
+  expect_error "duplicate email (case variant)" (A.create_user a ~email:"ADA@EXAMPLE.com" ());
+  expect_error "duplicate username (case variant)" (A.create_user a ~username:"ADA" ~email:"someone@example.com" ());
 
   (* 3. SPARSE username/email indexes: several users with NO username coexist — a non-sparse unique index
         would reject the 2nd and 3rd as a shared "missing username" collision *)
@@ -43,5 +46,32 @@ let () =
   let _ = ok "create_user(email-only #2)" (A.create_user a ~email:"u2@example.com" ()) in
   let _ = ok "create_user(email-only #3)" (A.create_user a ~email:"u3@example.com" ()) in
 
+  (* 4. PER-SESSION revocation on burrow (gap (a) — the thing the old all-or-nothing epoch bump could not
+        do). A fresh user logs in twice → two live rows in the accounts_tokens collection → revoke ONE by
+        its session_id → that token's verify_token fails while the other still verifies, and the active-
+        sessions list drops to one. validate_every_request is the default (false), so this exercises
+        verify_token's UNCONDITIONAL token-store gate on the embedded engine, not the epoch path. *)
+  let carol = ok "create_user(carol)" (A.create_user a ~username:"carol" ~password:"pw" ()) in
+  let _, c1 = ok "carol login #1" (A.login_with_password a (A.By_username "carol") ~password:"pw") in
+  let _, c2 = ok "carol login #2" (A.login_with_password a (A.By_username "carol") ~password:"pw") in
+  let target =
+    match ok "list_sessions(carol)" (A.list_sessions a carol.A.id) with
+    | [ (s : A.session_info); _ ] -> s.session_id
+    | other -> failf "expected exactly 2 live sessions for carol, got %d" (List.length other)
+  in
+  (match A.revoke_session a ~user_id:carol.A.id ~session_id:target with
+  | Ok true -> ()
+  | Ok false -> failf "revoke_session reported nothing revoked"
+  | Error _ -> failf "revoke_session returned Error");
+  let v1 = Result.is_ok (A.verify_token a c1) in
+  let v2 = Result.is_ok (A.verify_token a c2) in
+  if v1 = v2 then failf "expected exactly one of carol's two tokens to be revoked (v1=%b v2=%b)" v1 v2;
+  (match A.list_sessions a carol.A.id with
+  | Ok [ _ ] -> ()
+  | Ok other -> failf "expected one live session after per-session revoke, got %d" (List.length other)
+  | Error _ -> failf "list_sessions failed after revoke");
+
   Unix.putenv "MONGO_URL" "";
-  print_endline "accounts/burrow parity: OK (password login + token + username login + unique email + sparse usernames)"
+  print_endline
+    "accounts/burrow parity: OK (password login + token + username login + unique email + sparse usernames + \
+     per-session revocation)"

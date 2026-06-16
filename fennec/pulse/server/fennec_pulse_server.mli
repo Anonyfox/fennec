@@ -14,20 +14,22 @@
 
 (** [Make (R)] wires the reactive instance [R] to a DDP transport. *)
 module Make (R : Fennec_pulse.Reactive.REACTIVE) : sig
-  (** [serve ?user_id ?session_id ch] runs a DDP session on a raw [/websocket] channel: one DDP JSON
-      message per text frame, decoded into the session and emitted back. Tears the session down on
-      close. [session_id] defaults to a fresh ObjectId. [user_id] seeds the connection identity for
-      tests/custom transports; the normal framework websocket paw derives it from native Accounts. *)
-  val serve : ?user_id:string -> ?session_id:string -> Fennec_core.Ws_channel.t -> unit
+  (** [serve ?user_id ?remote_ip ?session_id ch] runs a DDP session on a raw [/websocket] channel:
+      one DDP JSON message per text frame, decoded into the session and emitted back. Tears the
+      session down on close. [session_id] defaults to a fresh ObjectId. [user_id] seeds the
+      connection identity for tests/custom transports; the normal framework websocket paw derives it
+      from native Accounts. [remote_ip] is the client's peer IP, used by the Accounts auth methods
+      for rate limiting (the framework paw fills it from the [Conn]). *)
+  val serve : ?user_id:string -> ?remote_ip:string -> ?session_id:string -> Fennec_core.Ws_channel.t -> unit
 
-  (** [serve_sockjs ?user_id ?session_id ch] is {!serve} for a SockJS channel: it sends the open
-      frame, then unwraps/wraps DDP messages in SockJS array frames (for the unmodified Meteor
-      browser client). *)
-  val serve_sockjs : ?user_id:string -> ?session_id:string -> Fennec_core.Ws_channel.t -> unit
+  (** [serve_sockjs ?user_id ?remote_ip ?session_id ch] is {!serve} for a SockJS channel: it sends
+      the open frame, then unwraps/wraps DDP messages in SockJS array frames (for the unmodified
+      Meteor browser client). *)
+  val serve_sockjs : ?user_id:string -> ?remote_ip:string -> ?session_id:string -> Fennec_core.Ws_channel.t -> unit
 
   (** [paw ?path ()] is the websocket paw serving DDP at [path] (default [/websocket]). It
-      automatically seeds the DDP session user id from native Accounts and installs the built-in
-      Accounts methods ([login], [logout], [currentUser], ...). [?user_id] is only for custom/test
-      transports that intentionally override native Accounts. *)
+      automatically seeds the DDP session user id (and the client IP for auth rate limiting) from the
+      [Conn], and installs the built-in Accounts methods ([login], [logout], [currentUser], ...).
+      [?user_id] is only for custom/test transports that intentionally override native Accounts. *)
   val paw : ?path:string -> ?user_id:(Fennec_paw.Conn.t -> string option) -> unit -> Fennec_paw.Paw.t
 end

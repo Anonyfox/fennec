@@ -11,6 +11,7 @@ module Backend_dyn = Fennec_mongo_dynamic.Dynamic (* the runtime-selected storag
 module Backend_seam = Fennec_mongo_backend (* the pure seam — for its shared [query] constructor *)
 module Identity = Accounts_identity
 module Challenge = Accounts_challenge
+module Throttle = Accounts_rate_limit (* brute-force rate limiting for the [login]/[createUser] methods *)
 module Password = Accounts_password
 module Email = Accounts_email
 module OAuth = Accounts_oauth
@@ -104,8 +105,35 @@ type user_store = {
   bump_auth_epoch : user_id -> (int, error) result;
 }
 
+(* Public metadata for one live row in the login-token store. The hashed token itself is never
+   exposed here — only the non-secret [session_id] (the [sid] already carried in every signed
+   session) and timestamps. *)
+type session_info = {
+  session_id : string;
+  user_id : user_id;
+  created_at : float;
+  expires_at : float;
+  last_active_at : float;
+  strategy : string;
+}
+
+(* Server-side login-token store ("active sessions"). Only HASHED tokens are persisted; the [sid] is
+   the row key ([_id]). This is the source of truth for per-session revocation on the gated paths
+   (resume / [verify_token] / opt-in per request). Time-sensitive ops take [~now] so callers (and
+   tests) control the clock; expired rows read as absent. *)
+type token_store = {
+  record : session_info -> hashed:string -> (unit, error) result;
+  find_live : sid:string -> hashed:string -> now:float -> (session_info option, error) result;
+  list_for_user : user_id -> now:float -> (session_info list, error) result;
+  touch : sid:string -> now:float -> (unit, error) result;
+  revoke : sid:string -> (bool, error) result;
+  revoke_user : user_id -> ?keep:string -> unit -> (int, error) result;
+  gc_expired : now:float -> (int, error) result;
+}
+
 type store = {
   users : user_store;
+  tokens : token_store;
   identities : Identity.store;
   challenges : Challenge.store;
   passkeys : Passkey.store;
@@ -220,6 +248,7 @@ type t = {
   mutable login_hooks : (user -> unit) list;
   mutable logout_hooks : (user_id option -> unit) list;
   strategies : (string, strategy) Hashtbl.t;
+  rate_limit : Throttle.t; (* throttles the [login]/[createUser] DDP methods by client IP + selector *)
 }
 
 let user_id_key : user_id option Assigns.key = Assigns.key "fennec.accounts.user_id"
@@ -399,8 +428,19 @@ let verify_session t token =
   | Some s when now () > s.exp -> Error Invalid_token
   | Some s -> Ok s
 
+(* The server-side revocation gate: a verified session is only honored if its [sid] still has a live,
+   non-expired row whose stored hash matches the presented token. This is what makes per-session
+   revocation and early server-side expiry possible (consequences a/c). Consulted on the token-
+   presentation paths ([verify_token], resume) always, and in [paw] only when
+   [validate_every_request] — the stateless cookie fast path stays zero-read by default. *)
+let token_live t (s : session) token =
+  match t.store.tokens.find_live ~sid:s.sid ~hashed:(sha256_hex token) ~now:(now ()) with
+  | Error _ as e -> e
+  | Ok (Some _) -> Ok ()
+  | Ok None -> Error Invalid_token
+
 let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_login") ?(path = "/")
-    ?(lifetime = 86400.) ?(validate_every_request = false) () =
+    ?(lifetime = 86400.) ?(validate_every_request = false) ?rate_limit () =
   if String.length secret < 16 then
     invalid_arg
       (Printf.sprintf "Fennec.Accounts.make: ~secret must be at least 16 bytes (got %d)" (String.length secret));
@@ -419,6 +459,8 @@ let make ~secret ~store ?password_hasher ?password_policy ?(cookie = "_fennec_lo
     login_hooks = [];
     logout_hooks = [];
     strategies = Hashtbl.create 8;
+    (* default: Meteor's 5 attempts / 10 s, keyed by IP and account for login and by IP for createUser *)
+    rate_limit = (match rate_limit with Some r -> r | None -> Throttle.make ());
   }
 
 let native : t option Atomic.t = Atomic.make None
@@ -598,12 +640,16 @@ let record_audit ?target_user_id ?org_id ?mechanism ?connection_id ?request ?(me
     ~at kind actor outcome
   |> append_audit t
 
-let issue t ?(factors = []) ~strategy (u : user) =
+let issue_session t ?(factors = []) ~strategy (u : user) =
   let iat = now () in
-  let s =
-    { uid = u.id; sid = random_id (); iat; exp = iat +. t.lifetime; auth_epoch = u.auth_epoch; strategy; factors }
-  in
-  sign t s
+  { uid = u.id; sid = random_id (); iat; exp = iat +. t.lifetime; auth_epoch = u.auth_epoch; strategy; factors }
+
+let session_info_of_session (s : session) : session_info =
+  { session_id = s.sid; user_id = s.uid; created_at = s.iat; expires_at = s.exp; last_active_at = s.iat; strategy = s.strategy }
+
+(* Persist the token row for a freshly minted session (only the SHA-256 of the token is stored). The
+   [sid] becomes the row key, so a later [token_live] / [list_sessions] / [revoke_session] can find it. *)
+let record_session t (s : session) token = t.store.tokens.record (session_info_of_session s) ~hashed:(sha256_hex token)
 
 let finish_login t ?factors ~strategy (u : user) =
   if not (user_can_login u.status) then Error (Login_rejected "Account is not active")
@@ -616,11 +662,17 @@ let finish_login t ?factors ~strategy (u : user) =
     Error e
   | Error _ as e -> e
   | Ok () ->
-    let token = issue t ?factors ~strategy u in
-    observe_login t u;
-    record_audit ~target_user_id:u.id ?mechanism:(mechanism_of_strategy strategy) t
-      (login_audit_kind strategy) (Audit.User u.id) Audit.Success;
-    Ok (u, token)
+    let s = issue_session t ?factors ~strategy u in
+    let token = sign t s in
+    (* Fail-closed: a login that cannot persist its session record is not a durable login. Stricter
+       than [append_audit]'s best-effort, because the token row is the security source of truth. *)
+    (match record_session t s token with
+    | Error _ as e -> e
+    | Ok () ->
+      observe_login t u;
+      record_audit ~target_user_id:u.id ?mechanism:(mechanism_of_strategy strategy) t
+        (login_audit_kind strategy) (Audit.User u.id) Audit.Success;
+      Ok (u, token))
 
 let checked_session t s =
   if not t.validate_every_request then Ok s
@@ -638,6 +690,9 @@ let paw t () : Paw.t =
   | Some token -> (
     match Result.bind (verify_session t token) (checked_session t) with
     | Error _ -> c
+    (* Per-request revocation check: only when the app already opted into store-backed validation, so
+       the default cookie path stays zero-read. A revoked/expired row makes the request anonymous. *)
+    | Ok s when t.validate_every_request && Result.is_error (token_live t s token) -> c
     | Ok s ->
       let c = Conn.assign (Conn.assign c user_id_key (Some s.uid)) session_key (Some s) in
       let ctx = auth_context_of_session s in
@@ -1860,11 +1915,20 @@ let login_with_token t token =
   match verify_session t token with
   | Error _ as e -> e
   | Ok s -> (
-    match t.store.users.find_user_by_id s.uid with
+    (* The presented resume token must still have a live row (gate revocation/early-expiry), then we
+       mint + record the replacement and ROTATE: drop the old [sid] row so the active-sessions list
+       stays one-per-chain and the old resume token cannot be reused. Record-before-revoke = fail-open
+       on a crash (the user stays logged in via the new token rather than losing both). *)
+    match Result.bind (token_live t s token) (fun () -> t.store.users.find_user_by_id s.uid) with
     | Error _ as e -> e
     | Ok None -> Error User_not_found
     | Ok (Some u) when u.auth_epoch <> s.auth_epoch -> Error Invalid_token
-    | Ok (Some u) -> finish_login t ~strategy:"resume" u)
+    | Ok (Some u) -> (
+      match finish_login t ~strategy:"resume" u with
+      | Ok _ as ok ->
+        ignore (t.store.tokens.revoke ~sid:s.sid);
+        ok
+      | Error _ as e -> e))
 
 let set_login_cookie t c ?(same_site = Cookie.Lax) ?(http_only = true) ?secure token =
   Conn.set_cookie c t.cookie token ~path:t.path ~max_age:(int_of_float t.lifetime) ?secure
@@ -1876,16 +1940,56 @@ let logout t c =
   Option.iter
     (fun uid -> record_audit ~target_user_id:uid ~mechanism:Audit.Token t Audit.Logout (Audit.User uid) Audit.Success)
     uid;
+  (* Revoke THIS session's row server-side (best-effort; the [sid] is present only when [paw] ran
+     upstream and accepted the cookie). The cookie is always cleared regardless. *)
+  (match Conn.get c session_key with Some (Some s) -> ignore (t.store.tokens.revoke ~sid:s.sid) | _ -> ());
   Conn.assign (Conn.assign (Conn.delete_cookie c ~path:t.path t.cookie) user_id_key None) session_key None
 
-let logout_other_clients t uid = Result.map (fun _ -> ()) (t.store.users.bump_auth_epoch uid)
+(* Bump the epoch (invalidates every signed session, current included, on the gated paths) AND prune
+   all of the user's now-dead token rows so the active-sessions list reflects reality. *)
+let logout_other_clients t uid =
+  Result.bind (t.store.users.bump_auth_epoch uid) (fun _ ->
+      Result.map (fun _ -> ()) (t.store.tokens.revoke_user uid ()))
 
 let logout_other_clients_and_refresh t uid =
   Result.bind (t.store.users.bump_auth_epoch uid) (fun _ ->
-      Result.bind (find_required_user t uid) (finish_login t ~strategy:"resume"))
+      Result.bind (find_required_user t uid) (fun user ->
+          Result.bind (finish_login t ~strategy:"resume" user) (fun (user, token) ->
+              (* finish_login recorded the replacement row; prune every OTHER row for this user, keeping
+                 the just-issued session so the refreshed client stays in the active-sessions list. *)
+              let keep = match verify_session t token with Ok s -> Some s.sid | Error _ -> None in
+              ignore (t.store.tokens.revoke_user uid ?keep ());
+              Ok (user, token))))
 
 let verify_token t token =
-  match Result.bind (verify_session t token) (checked_session t) with Ok s -> Ok s.uid | Error _ as e -> e
+  match Result.bind (verify_session t token) (checked_session t) with
+  | Error _ as e -> e
+  | Ok s -> (
+    (* [verify_token] is a token-presentation path (DDP resume validation, API bearer), so the
+       revocation gate is UNCONDITIONAL here — independent of [validate_every_request]. *)
+    match token_live t s token with
+    | Error _ as e -> e
+    | Ok () ->
+      ignore (t.store.tokens.touch ~sid:s.sid ~now:(now ()));
+      Ok s.uid)
+
+(* List a user's live (non-revoked, non-expired) sessions for an "active sessions" UI. *)
+let list_sessions t uid = t.store.tokens.list_for_user uid ~now:(now ())
+
+(* Revoke one specific session by its [session_id], scoped to its owner (a user cannot revoke another
+   user's session by guessing an id). Returns [true] when a live session was found and removed. No
+   epoch bump — this is the per-device revocation the epoch could never do. *)
+let revoke_session t ~user_id ~session_id =
+  match t.store.tokens.list_for_user user_id ~now:(now ()) with
+  | Error _ as e -> e
+  | Ok sessions ->
+    if List.exists (fun (s : session_info) -> s.session_id = session_id) sessions then
+      t.store.tokens.revoke ~sid:session_id
+    else Ok false
+
+(* Revoke all of a user's sessions except [keep] (e.g. "log out my other devices" from the current
+   session). Returns the number of sessions removed. *)
+let revoke_other_sessions t ~user_id ~keep = t.store.tokens.revoke_user user_id ~keep ()
 
 let send_failed c exn = Conn.text ~status:500 c ("Accounts delivery failed: " ^ Printexc.to_string exn)
 
@@ -2950,8 +3054,23 @@ module Codec = struct
         ("status", Bson.str (string_of_user_status u.status));
       ]
     in
+    (* [usernameLower] / [emailsLower] are derived, normalized shadow fields that the unique indexes and the
+       login lookups key on: [username] stays case-preserving for display while its lowercased twin makes
+       lookup + uniqueness case-insensitive. They are write-only (never decoded back into {!user}). Both are
+       TOP-LEVEL (emailsLower an array of scalars) so they index AND match on every backend — a dotted
+       [emails.address] resolves to nothing on minimongo/burrow, so it could neither be queried nor indexed
+       there. [emailsLower] is omitted when there are no emails so the SPARSE unique index skips email-less
+       users (an empty array would otherwise collide them on a shared key). *)
     let fields =
-      match u.username with Some username -> ("username", Bson.str username) :: fields | None -> fields
+      match u.username with
+      | Some username ->
+        ("username", Bson.str username) :: ("usernameLower", Bson.str (normalize_username username)) :: fields
+      | None -> fields
+    in
+    let fields =
+      match u.emails with
+      | [] -> fields
+      | emails -> ("emailsLower", Bson.array (List.map (fun e -> Bson.str (normalize_email e.address)) emails)) :: fields
     in
     let fields = match u.profile with Some profile -> ("profile", profile) :: fields | None -> fields in
     let fields =
@@ -2961,6 +3080,40 @@ module Codec = struct
 
   let set_fields doc =
     Bson.fields doc |> List.filter (fun (k, _) -> k <> "_id") |> Bson.doc
+
+  (* Login-token row. [_id] is the session [sid]; [hashedToken] is the only secret-bearing field
+     (the raw token is never stored). [session_info_of_doc] drops [hashedToken] — listings never
+     surface it. *)
+  let token_to_doc (s : session_info) ~hashed =
+    Bson.doc
+      [
+        ("_id", Bson.str s.session_id);
+        ("userId", Bson.str s.user_id);
+        ("hashedToken", Bson.str hashed);
+        ("createdAt", Bson.float s.created_at);
+        ("expiresAt", Bson.float s.expires_at);
+        ("lastActiveAt", Bson.float s.last_active_at);
+        ("strategy", Bson.str s.strategy);
+      ]
+
+  let session_info_of_doc = function
+    | Bson.Document _ as d -> (
+      match
+        (doc_get_string d "_id", doc_get_string d "userId", opt_float (Bson.get d "createdAt"),
+         opt_float (Bson.get d "expiresAt"))
+      with
+      | Some session_id, Some user_id, Some created_at, Some expires_at ->
+        Some
+          {
+            session_id;
+            user_id;
+            created_at;
+            expires_at;
+            last_active_at = Option.value ~default:created_at (opt_float (Bson.get d "lastActiveAt"));
+            strategy = Option.value ~default:"" (doc_get_string d "strategy");
+          }
+      | _ -> None)
+    | _ -> None
 
   let user_of_doc = function
     | Bson.Document _ as d ->
@@ -3811,6 +3964,7 @@ module Collection_store = struct
 
   type collections = {
     users : collection;
+    tokens : collection;
     identities : collection;
     challenges : collection;
     passkeys : collection;
@@ -3832,50 +3986,35 @@ module Collection_store = struct
   let map_challenge_error = function Ok x -> Ok x | Error e -> Error (Challenge.Store_error e)
 
   let user_store mutex c =
+    (* Pure single-read lookups run WITHOUT [mutex]: one [find_one] is atomic on every backend on its own
+       (minimongo's per-op lock / burrow's MVCC snapshot / the thread-safe mongoc pool). [mutex] exists only
+       to make the multi-step read-modify-write paths below (create / update / epoch bumps) atomic; holding
+       it across the login READ path is what serialized every concurrent login behind every write. *)
     let find_user filter =
-      with_lock mutex (fun () ->
-          match c.users.find_one filter with
-          | None -> Ok None
-          | Some doc -> Result.map Option.some (Codec.user_of_doc doc))
+      match c.users.find_one filter with
+      | None -> Ok None
+      | Some doc -> Result.map Option.some (Codec.user_of_doc doc)
     in
     let find_user_by_id id = find_user (id_selector id) in
+    (* Indexed + case-insensitive: query the lowercased shadow fields, not a full-collection scan filtered in
+       OCaml. [emailsLower] is a top-level array of normalized addresses, so a scalar selector matches any
+       element on minimongo/burrow/mongod (Mongo array-element semantics). *)
     let find_user_by_email email =
-      let email = normalize_email email in
-      with_lock mutex (fun () ->
-          c.users.find (Bson.doc [])
-          |> List.find_map (fun doc ->
-                 match Codec.user_of_doc doc with
-                 | Ok user when List.exists (fun e -> normalize_email e.address = email) user.emails ->
-                   Some (Ok (Some user))
-                 | Ok _ -> None
-                 | Error e -> Some (Error e))
-          |> Option.value ~default:(Ok None))
+      find_user (Bson.doc [ ("emailsLower", Bson.str (normalize_email email)) ])
     in
     let find_user_by_username username =
-      let username = normalize_username username in
-      with_lock mutex (fun () ->
-          c.users.find (Bson.doc [])
-          |> List.find_map (fun doc ->
-                 match Codec.user_of_doc doc with
-                 | Ok user when option_exists (fun name -> normalize_username name = username) user.username ->
-                   Some (Ok (Some user))
-                 | Ok _ -> None
-                 | Error e -> Some (Error e))
-          |> Option.value ~default:(Ok None))
+      find_user (Bson.doc [ ("usernameLower", Bson.str (normalize_username username)) ])
     in
     let find_user_by_service ~strategy ~service_id =
       find_user (Bson.doc [ ("services." ^ strategy ^ ".id", Bson.str service_id) ])
     in
     let exists_other_email id email =
-      let email = normalize_email email in
-      c.users.find (Bson.doc [])
-      |> List.exists (fun doc ->
-             match Codec.user_of_doc doc with
-             | Ok user -> user.id <> id && List.exists (fun e -> normalize_email e.address = email) user.emails
-             | Error _ -> false)
+      match c.users.find_one (Bson.doc [ ("emailsLower", Bson.str (normalize_email email)) ]) with
+      | None -> false
+      | Some doc -> doc_get_string doc "_id" <> Some id
     in
     let exists_other_username id username =
-      match c.users.find_one (Bson.doc [ ("username", Bson.str (normalize_username username)) ]) with
+      match c.users.find_one (Bson.doc [ ("usernameLower", Bson.str (normalize_username username)) ]) with
       | None -> false
       | Some doc -> doc_get_string doc "_id" <> Some id
     in
@@ -3927,17 +4066,22 @@ module Collection_store = struct
                   Error (Duplicate_username (normalize_username username))
                 | _ ->
                   let updated = { u with updated_at = now () } in
+                  (* [emails] is always rewritten (as [] when empty), but [emailsLower] is OMITTED when empty
+                     so the sparse index can skip email-less users — so when a user's last email is removed we
+                     must $unset the stale shadow, or a lookup / uniqueness check would still match it. *)
+                  let set = ("$set", Codec.set_fields (Codec.user_to_doc ?password_hash updated)) in
+                  let update =
+                    if updated.emails = [] then Bson.doc [ set; ("$unset", Bson.doc [ ("emailsLower", Bson.int 1) ]) ]
+                    else Bson.doc [ set ]
+                  in
                   Result.bind
-                    (map_store_error
-                       (c.users.update_one ~filter:(id_selector u.id)
-                          ~update:(Bson.doc [ ("$set", Codec.set_fields (Codec.user_to_doc ?password_hash updated)) ])))
+                    (map_store_error (c.users.update_one ~filter:(id_selector u.id) ~update))
                     (fun n -> if n = 0 then Error User_not_found else Ok updated))))
     in
     let password_hash id =
-      with_lock mutex (fun () ->
-          match c.users.find_one (id_selector id) with
-          | None -> Ok None
-          | Some doc -> Ok (doc_get_string doc "passwordHash"))
+      match c.users.find_one (id_selector id) with
+      | None -> Ok None
+      | Some doc -> Ok (doc_get_string doc "passwordHash")
     in
     let set_password_hash id hash =
       with_lock mutex (fun () ->
@@ -4349,6 +4493,65 @@ module Collection_store = struct
     in
     ({ find_connection; list_connections; upsert_connection; delete_connection; find_user; list_users; upsert_user; delete_user; find_group; list_groups; upsert_group; delete_group } : Scim.store)
 
+  (* The login-token facet over any backend collection. Rows are keyed by [sid] ([_id]); only the
+     SHA-256 of the token is stored. All deletes/finds use plain [_id]/[userId] equality selectors so
+     the behavior is identical on minimongo / Burrow / mongod (no operator-coverage assumptions). *)
+  let token_store mutex c =
+    let record (s : session_info) ~hashed =
+      with_lock mutex (fun () -> map_store_error (c.tokens.insert_one (Codec.token_to_doc s ~hashed)))
+    in
+    let find_live ~sid ~hashed ~now =
+      with_lock mutex (fun () ->
+          match c.tokens.find_one (id_selector sid) with
+          | None -> Ok None
+          | Some doc -> (
+            match Codec.session_info_of_doc doc with
+            | Some info when info.expires_at > now && doc_get_string doc "hashedToken" = Some hashed -> Ok (Some info)
+            | _ -> Ok None))
+    in
+    let list_for_user user_id ~now =
+      with_lock mutex (fun () ->
+          Ok
+            (c.tokens.find (Bson.doc [ ("userId", Bson.str user_id) ])
+            |> List.filter_map Codec.session_info_of_doc
+            |> List.filter (fun (i : session_info) -> i.expires_at > now)
+            |> List.sort (fun (a : session_info) (b : session_info) -> compare b.created_at a.created_at)))
+    in
+    let touch ~sid ~now =
+      with_lock mutex (fun () ->
+          match c.tokens.update_one ~filter:(id_selector sid) ~update:(set_doc [ ("lastActiveAt", Bson.float now) ]) with
+          | Ok _ -> Ok ()
+          | Error e -> Error (Store_error e))
+    in
+    let revoke ~sid =
+      with_lock mutex (fun () -> map_store_error (Result.map (fun n -> n > 0) (c.tokens.delete_many (id_selector sid))))
+    in
+    let delete_sid sid acc =
+      match acc with
+      | Error _ as e -> e
+      | Ok n -> ( match c.tokens.delete_many (id_selector sid) with Ok d -> Ok (n + d) | Error e -> Error (Store_error e))
+    in
+    let revoke_user user_id ?keep () =
+      with_lock mutex (fun () ->
+          match keep with
+          | None -> map_store_error (c.tokens.delete_many (Bson.doc [ ("userId", Bson.str user_id) ]))
+          | Some keep ->
+            c.tokens.find (Bson.doc [ ("userId", Bson.str user_id) ])
+            |> List.filter_map (fun doc -> doc_get_string doc "_id")
+            |> List.filter (fun sid -> sid <> keep)
+            |> List.fold_left (fun acc sid -> delete_sid sid acc) (Ok 0))
+    in
+    let gc_expired ~now =
+      with_lock mutex (fun () ->
+          c.tokens.find (Bson.doc [])
+          |> List.filter_map (fun doc ->
+                 match Codec.session_info_of_doc doc with
+                 | Some info when info.expires_at <= now -> Some info.session_id
+                 | _ -> None)
+          |> List.fold_left (fun acc sid -> delete_sid sid acc) (Ok 0))
+    in
+    ({ record; find_live; list_for_user; touch; revoke; revoke_user; gc_expired } : token_store)
+
   let make ?(ensure_indexes = fun () -> ()) collections =
     let mutex = Mutex.create () in
     let audit =
@@ -4383,6 +4586,7 @@ module Collection_store = struct
     in
     {
       users = user_store mutex collections;
+      tokens = token_store mutex collections;
       identities = identity_store mutex collections;
       challenges = challenge_store mutex collections;
       passkeys = passkey_store mutex collections;
@@ -4404,6 +4608,15 @@ let selector_of_bson = function
     | _, _, Some username when String.trim username <> "" -> Ok (By_username username)
     | _ -> Error "login selector expects id, email, or username")
   | _ -> Error "login selector expects a string or document"
+
+(* a stable per-account rate-limit key from a login selector. Normalized so the same account hashes
+   identically whether addressed by raw or mixed-case email/username, and namespaced so an id, an
+   email and a username can never collide. Derived WITHOUT touching the store, so the throttle keys
+   on what the client asked for — not on whether that account exists (no enumeration oracle). *)
+let selector_rate_key = function
+  | By_id id -> "id:" ^ id
+  | By_email e -> "email:" ^ normalize_email e
+  | By_username u -> "username:" ^ normalize_username u
 
 let user_doc (u : user) =
   Bson.doc
@@ -4437,7 +4650,7 @@ let ddp_session_doc t user_id =
 
 module Methods (R : sig
   type doc = Bson.t
-  type invocation = { user_id : string option; is_simulation : bool; set_user_id : string option -> unit }
+  type invocation = { user_id : string option; remote_ip : string option; is_simulation : bool; set_user_id : string option -> unit }
   exception Error of { code : string; reason : string }
   val methods : (string * (invocation -> doc list -> doc)) list -> unit
 end) =
@@ -4447,7 +4660,32 @@ struct
   let bad_request reason = raise (R.Error { code = "400"; reason })
   let forbidden reason = raise (R.Error { code = "403"; reason })
 
+  (* a brute-force throttle hit: DDP error code ["429"] (Meteor's 'too-many-requests'), with the
+     retry window in the reason so a client can back off intelligently. Deliberately uniform whether
+     or not the account exists — it pairs with the enumeration timing defense, not against it. *)
+  let too_many retry =
+    raise
+      (R.Error
+         {
+           code = "429";
+           reason =
+             Printf.sprintf "Too many attempts. Please try again in %d second%s." retry
+               (if retry = 1 then "" else "s");
+         })
+
   let register t =
+    (* charge one attempt before doing any store work, so a throttled caller costs nothing past the
+       bucket check; keys on the client IP (from the invocation) and the normalized selector *)
+    let throttle_login inv selector =
+      match Throttle.login_allowed t.rate_limit ~ip:inv.R.remote_ip ~account:(selector_rate_key selector) with
+      | Ok () -> ()
+      | Error retry -> too_many retry
+    in
+    let throttle_create_user inv =
+      match Throttle.create_user_allowed t.rate_limit ~ip:inv.R.remote_ip with
+      | Ok () -> ()
+      | Error retry -> too_many retry
+    in
     let mfa_doc (step_up : login_step_up) =
       Bson.doc
         [
@@ -4485,6 +4723,7 @@ struct
     in
     let create_user_method inv = function
       | [ Bson.Document _ as d ] ->
+        throttle_create_user inv;
         let username = doc_get_string d "username" in
         let email = doc_get_string d "email" in
         let password = doc_get_string d "password" in
@@ -4506,7 +4745,9 @@ struct
       | [ selector; Bson.String password ] -> (
         match selector_of_bson selector with
         | Error reason -> bad_request reason
-        | Ok selector -> login_completion_doc inv (login_with_password_completion t selector ~password))
+        | Ok selector ->
+          throttle_login inv selector;
+          login_completion_doc inv (login_with_password_completion t selector ~password))
       | [ Bson.Document _ as d ] -> begin
         match doc_get_string d "resume" with
         | Some token -> login_doc inv (login_with_token t (token_of_string token))
@@ -4519,7 +4760,9 @@ struct
             | Some selector, Some password ->
               (match selector_of_bson selector with
               | Error reason -> bad_request reason
-              | Ok selector -> login_completion_doc inv (login_with_password_completion t selector ~password))
+              | Ok selector ->
+                throttle_login inv selector;
+                login_completion_doc inv (login_with_password_completion t selector ~password))
             | _ -> bad_request "login expects {user, password}, {strategy, credentials}, or {resume}")
         end
       end
@@ -4724,9 +4967,66 @@ let memory_user_store () =
   in
   { find_user_by_id; find_user_by_email; find_user_by_username; find_user_by_service; create_user; update_user; password_hash; set_password_hash; set_password_hash_and_bump; bump_auth_epoch }
 
+(* In-process login-token store for the memory backend: a [sid]-keyed table of
+   ([session_info] * hashed-token). Mirrors {!memory_user_store}; cannot fail. *)
+let memory_token_store () : token_store =
+  let rows : (string, session_info * string) Hashtbl.t = Hashtbl.create 64 in
+  let m = Mutex.create () in
+  let locked f = Mutex.lock m; Fun.protect ~finally:(fun () -> Mutex.unlock m) f in
+  let record (s : session_info) ~hashed = locked (fun () -> Hashtbl.replace rows s.session_id (s, hashed); Ok ()) in
+  let find_live ~sid ~hashed ~now =
+    locked (fun () ->
+        match Hashtbl.find_opt rows sid with
+        | Some ((info : session_info), h) when info.expires_at > now && h = hashed -> Ok (Some info)
+        | _ -> Ok None)
+  in
+  let list_for_user user_id ~now =
+    locked (fun () ->
+        Ok
+          (Hashtbl.fold
+             (fun _ ((info : session_info), _) acc ->
+               if info.user_id = user_id && info.expires_at > now then info :: acc else acc)
+             rows []
+          |> List.sort (fun (a : session_info) (b : session_info) -> compare b.created_at a.created_at)))
+  in
+  let touch ~sid ~now =
+    locked (fun () ->
+        (match Hashtbl.find_opt rows sid with
+        | Some (info, h) -> Hashtbl.replace rows sid ({ info with last_active_at = now }, h)
+        | None -> ());
+        Ok ())
+  in
+  let revoke ~sid =
+    locked (fun () ->
+        let existed = Hashtbl.mem rows sid in
+        Hashtbl.remove rows sid;
+        Ok existed)
+  in
+  let revoke_user user_id ?keep () =
+    locked (fun () ->
+        let to_remove =
+          Hashtbl.fold
+            (fun sid ((info : session_info), _) acc ->
+              if info.user_id = user_id && Some sid <> keep then sid :: acc else acc)
+            rows []
+        in
+        List.iter (Hashtbl.remove rows) to_remove;
+        Ok (List.length to_remove))
+  in
+  let gc_expired ~now =
+    locked (fun () ->
+        let to_remove =
+          Hashtbl.fold (fun sid ((info : session_info), _) acc -> if info.expires_at <= now then sid :: acc else acc) rows []
+        in
+        List.iter (Hashtbl.remove rows) to_remove;
+        Ok (List.length to_remove))
+  in
+  { record; find_live; list_for_user; touch; revoke; revoke_user; gc_expired }
+
 let memory_store () =
   {
     users = memory_user_store ();
+    tokens = memory_token_store ();
     identities = Identity.memory_store ();
     challenges = Challenge.memory_store ();
     passkeys = Passkey.memory_store ();
@@ -4758,6 +5058,17 @@ module Store = struct
         set_password_hash = (fun _ _ -> error);
         set_password_hash_and_bump = (fun _ _ -> error);
         bump_auth_epoch = (fun _ -> error);
+      }
+    in
+    let tokens =
+      {
+        record = (fun _ ~hashed:_ -> error);
+        find_live = (fun ~sid:_ ~hashed:_ ~now:_ -> error);
+        list_for_user = (fun _ ~now:_ -> error);
+        touch = (fun ~sid:_ ~now:_ -> error);
+        revoke = (fun ~sid:_ -> error);
+        revoke_user = (fun _ ?keep:_ () -> error);
+        gc_expired = (fun ~now:_ -> error);
       }
     in
     let identities =
@@ -4837,7 +5148,7 @@ module Store = struct
       Audit.store ~append:(fun _ -> string_error)
         ~list:(fun ~target_user_id:_ ~org_id:_ ~kind:_ -> [])
     in
-    { users; identities; challenges; passkeys; orgs; mfa; scim; audit; ensure_indexes = (fun () -> ()) }
+    { users; tokens; identities; challenges; passkeys; orgs; mfa; scim; audit; ensure_indexes = (fun () -> ()) }
 
   (* ONE collection adapter over the runtime-selected backend (minimongo / embedded Burrow / native
      mongod — all behind {!Fennec_mongo_dynamic.Dynamic}): the accounts store speaks this 5-op
@@ -4859,13 +5170,14 @@ module Store = struct
 
   (* The unified accounts store over ANY backend. [open_collection] yields a raw {!Backend_dyn} collection
      by name (the ambient [Dynamic.collection] at boot, or a test maker); each is wrapped for CRUD and the
-     raw handle is kept for index DDL. username and emails.address are UNIQUE + SPARSE, so absent usernames
-     / email-less users never collide while present values stay unique — on every backend (minimongo,
-     Burrow, mongod). There is no per-flavor branch: the engine is chosen once, by MONGO_URL, inside
-     {!Fennec_mongo_dynamic.Dynamic}. *)
+     raw handle is kept for index DDL. usernameLower and emailsLower (the lowercased shadow fields) are
+     UNIQUE + SPARSE, so absent usernames / email-less users never collide while present values stay unique
+     — case-insensitively, on every backend (minimongo, Burrow, mongod). There is no per-flavor branch: the
+     engine is chosen once, by MONGO_URL, inside {!Fennec_mongo_dynamic.Dynamic}. *)
   let backend ?(prefix = "accounts") ~open_collection () =
     let name suffix = prefix ^ "_" ^ suffix in
     let users_c = open_collection (name "users") in
+    let tokens_c = open_collection (name "tokens") in
     let identities_c = open_collection (name "identities") in
     let challenges_c = open_collection (name "challenges") in
     let passkeys_c = open_collection (name "passkeys") in
@@ -4882,8 +5194,15 @@ module Store = struct
         Backend_dyn.ensure_index c ~name:iname ~keys ~unique ~sparse
       in
       let k1 f = Bson.doc [ (f, Bson.int 1) ] in
-      idx users_c ~iname:"uniq_username" ~keys:(k1 "username") ~unique:true ~sparse:true ();
-      idx users_c ~iname:"uniq_email" ~keys:(k1 "emails.address") ~unique:true ~sparse:true ();
+      (* Index the LOWERCASED shadow fields, not display [username] / nested [emails.address]: this gives
+         case-insensitive uniqueness, and these top-level keys actually populate the index on minimongo and
+         burrow (a dotted [emails.address] extracts no key there, so the old definition was a silent no-op
+         off mongod and uniqueness rested entirely on the app-level check). Fresh index names so a re-run
+         against a persistent mongod that still has the old indexes can't hit an options conflict. *)
+      idx users_c ~iname:"uniq_username_lower" ~keys:(k1 "usernameLower") ~unique:true ~sparse:true ();
+      idx users_c ~iname:"uniq_email_lower" ~keys:(k1 "emailsLower") ~unique:true ~sparse:true ();
+      idx tokens_c ~iname:"by_user" ~keys:(k1 "userId") ();
+      idx tokens_c ~iname:"by_hash" ~keys:(k1 "hashedToken") ();
       idx identities_c ~iname:"by_user" ~keys:(k1 "userId") ();
       idx identities_c ~iname:"by_stable_key" ~keys:(k1 "stableKey") ();
       idx challenges_c ~iname:"by_expiry" ~keys:(k1 "expiresAt") ();
@@ -4908,6 +5227,7 @@ module Store = struct
     Collection_store.make ~ensure_indexes
       {
         users = backend_collection users_c;
+        tokens = backend_collection tokens_c;
         identities = backend_collection identities_c;
         challenges = backend_collection challenges_c;
         passkeys = backend_collection passkeys_c;
@@ -4927,6 +5247,7 @@ module Store = struct
   let minimongo () = backend ~open_collection:(fun _ -> Backend_dyn.mem (Minimongo.create ())) ()
 
   let users t = t.users
+  let tokens t = t.tokens
   let identities t = t.identities
   let challenges t = t.challenges
   let passkeys t = t.passkeys
@@ -5590,9 +5911,109 @@ let%test "login_with_token observes auth epoch revocation even on the zero-read 
     match login_with_password a (By_username "ada") ~password:"pw" with
     | Error _ -> false
     | Ok (_, token) ->
-      logout_other_clients a u.id = Ok ()
+      (* Bump the epoch WITHOUT revoking the session row (the token-store stays live) to isolate the
+         epoch axis from per-session revocation: the zero-read [verify_token] still accepts the live
+         token (it is epoch-blind by design), while [login_with_token] loads the user and rejects the
+         stale epoch. Going through [logout_other_clients] would now ALSO revoke the row, which is the
+         separate revocation behavior covered by the token-store tests below. *)
+      Result.is_ok ((Store.users store).bump_auth_epoch u.id)
       && verify_token a token = Ok u.id
       && login_with_token a token = Error Invalid_token)
+
+let%test "list_sessions returns one entry per live session with configurable-expiry metadata" =
+  let store = memory_store () in
+  let lifetime = 3600. in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~lifetime () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u -> (
+    match
+      (login_with_password a (By_username "ada") ~password:"pw", login_with_password a (By_username "ada") ~password:"pw")
+    with
+    | Ok _, Ok _ -> (
+      match list_sessions a u.id with
+      | Ok sessions ->
+        List.length sessions = 2
+        && List.for_all (fun (s : session_info) -> s.user_id = u.id && s.strategy = "password") sessions
+        (* [expires_at] tracks the configurable [lifetime] (loginExpirationInDays equivalent). *)
+        && List.for_all (fun (s : session_info) -> Float.abs (s.expires_at -. s.created_at -. lifetime) < 1.) sessions
+      | Error _ -> false)
+    | _ -> false)
+
+let%test "revoke_session removes one session, leaves the others, and bumps no epoch" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u -> (
+    match
+      (login_with_password a (By_username "ada") ~password:"pw", login_with_password a (By_username "ada") ~password:"pw")
+    with
+    | Ok (_, t1), Ok (_, t2) -> (
+      match list_sessions a u.id with
+      | Ok [ (s : session_info); _ ] -> (
+        match revoke_session a ~user_id:u.id ~session_id:s.session_id with
+        | Ok true ->
+          let v1 = Result.is_ok (verify_token a t1) in
+          let v2 = Result.is_ok (verify_token a t2) in
+          (* exactly one token died; the other still authenticates *)
+          v1 <> v2
+          && (match list_sessions a u.id with Ok rest -> List.length rest = 1 | Error _ -> false)
+          (* no epoch bump: the surviving token still RESUMES (resume re-checks auth_epoch) *)
+          && Result.is_ok (login_with_token a (if v1 then t1 else t2))
+        | _ -> false)
+      | _ -> false)
+    | _ -> false)
+
+let%test "revoke_session is scoped to the owner and refuses unknown ids" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
+  match (create_user a ~username:"ada" ~password:"pw" (), create_user a ~username:"bob" ~password:"pw" ()) with
+  | Ok ada, Ok bob -> (
+    match (login_with_password a (By_username "ada") ~password:"pw", login_with_password a (By_username "bob") ~password:"pw") with
+    | Ok (_, ada_token), Ok _ -> (
+      match list_sessions a ada.id with
+      | Ok [ (s : session_info) ] ->
+        (* bob cannot revoke ada's session by id, and an unknown id is a no-op; ada's token survives *)
+        revoke_session a ~user_id:bob.id ~session_id:s.session_id = Ok false
+        && revoke_session a ~user_id:ada.id ~session_id:"no-such-sid" = Ok false
+        && verify_token a ada_token = Ok ada.id
+      | _ -> false)
+    | _ -> false)
+  | _ -> false
+
+let%test "logout_other_clients revokes token rows so verify_token fails even on the zero-read path" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u -> (
+    match login_with_password a (By_username "ada") ~password:"pw" with
+    | Ok (_, token) ->
+      verify_token a token = Ok u.id
+      && logout_other_clients a u.id = Ok ()
+      && verify_token a token = Error Invalid_token
+      && (match list_sessions a u.id with Ok [] -> true | _ -> false)
+    | Error _ -> false)
+
+let%test "token store reads rows past expiry as absent and gc_expired prunes them" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~lifetime:3600. () in
+  match create_user a ~username:"ada" ~password:"pw" () with
+  | Error _ -> false
+  | Ok u -> (
+    match login_with_password a (By_username "ada") ~password:"pw" with
+    | Ok _ -> (
+      let tokens = Store.tokens store in
+      let future = now () +. 7200. (* past the 3600s lifetime *) in
+      match (list_sessions a u.id, tokens.list_for_user u.id ~now:future) with
+      | Ok [ _ ], Ok [] -> (
+        (* a future-dated gc prunes the one expired row; a second pass finds nothing *)
+        match tokens.gc_expired ~now:future with
+        | Ok 1 -> ( match tokens.gc_expired ~now:future with Ok 0 -> true | _ -> false)
+        | _ -> false)
+      | _ -> false)
+    | Error _ -> false)
 
 let%test "non-active users cannot start or keep validated sessions" =
   let store = memory_store () in
@@ -5975,6 +6396,49 @@ let%test "Store.minimongo supports password login and epoch revocation" =
       logout_other_clients a user.id = Ok ()
       && verify_token a token = Error Invalid_token
       && Result.is_ok (login_with_password a (By_username "ada") ~password:"pw"))
+
+(* C1 regression guard: after switching the unified store from full-collection scans to indexed lookups on
+   the lowercased shadow fields, login must still be case-insensitive by BOTH email and username, the display
+   username must stay case-preserving, and case-variant duplicates must still be rejected. Exercises the
+   built indexes (ensure_indexes) on the minimongo-backed Collection_store — the same code path Burrow/mongod
+   take. *)
+let%test "unified store: case-insensitive email + username login via the indexed shadow fields" =
+  let store = Store.minimongo () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
+  Store.ensure_indexes store;
+  match create_user a ~username:"Ada" ~email:"ADA@Example.com" ~password:"pw" () with
+  | Error _ -> false
+  | Ok user ->
+    (* display case preserved; email stored normalized *)
+    user.username = Some "Ada"
+    && List.exists (fun e -> e.address = "ada@example.com") user.emails
+    (* login resolves regardless of the case the caller types, by email AND username *)
+    && Result.is_ok (login_with_password a (By_email "ada@example.com") ~password:"pw")
+    && Result.is_ok (login_with_password a (By_email "ADA@EXAMPLE.COM") ~password:"pw")
+    && Result.is_ok (login_with_password a (By_username "ada") ~password:"pw")
+    && Result.is_ok (login_with_password a (By_username "ADA") ~password:"pw")
+    (* the indexed lookup resolves to the very same user the id lookup does *)
+    && (match find_by_selector a (By_email "aDa@example.COM") with Ok (Some u) -> u.id = user.id | _ -> false)
+    && (match find_by_selector a (By_username "aDa") with Ok (Some u) -> u.id = user.id | _ -> false)
+    (* a case-variant of an existing email / username is rejected — case-insensitive uniqueness *)
+    && (match create_user a ~email:"ada@EXAMPLE.com" () with Error (Duplicate_email _) -> true | _ -> false)
+    && (match create_user a ~username:"ADA" () with Error (Duplicate_username _) -> true | _ -> false)
+
+(* Email-less users carry no [emailsLower] (sparse-index safety), so removing a user's last email must
+   $unset the shadow rather than leave it stale — otherwise the indexed lookup/uniqueness would still match a
+   gone address. Proves the address both stops resolving AND frees up for a new account. *)
+let%test "unified store: removing the last email clears the indexed shadow (no stale match, address frees up)" =
+  let store = Store.minimongo () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
+  Store.ensure_indexes store;
+  match create_user a ~username:"bob" ~email:"bob@example.com" () with
+  | Error _ -> false
+  | Ok user -> (
+    match remove_email a user.id "bob@example.com" with
+    | Error _ -> false
+    | Ok _ ->
+      find_by_selector a (By_email "bob@example.com") = Ok None
+      && Result.is_ok (create_user a ~username:"carol" ~email:"BOB@example.com" ()))
 
 let%test "Store.unavailable lets the framework boot but fails account writes clearly" =
   let store = Store.unavailable ~message:"no mongo configured" () in
@@ -7102,7 +7566,7 @@ let%test "password login emits success and failure audit events" =
 
 module Test_methods_runtime = struct
   type doc = Bson.t
-  type invocation = { user_id : string option; is_simulation : bool; set_user_id : string option -> unit }
+  type invocation = { user_id : string option; remote_ip : string option; is_simulation : bool; set_user_id : string option -> unit }
   exception Error of { code : string; reason : string }
   let registered : (string * (invocation -> doc list -> doc)) list ref = ref []
   let methods xs = registered := xs @ !registered
@@ -7121,7 +7585,7 @@ let%test "methods: login rebinds the invocation user_id and returns a token" =
   let _ = create_user a ~username:"ada" ~password:"pw" () in
   Test_methods.register a;
   let rebound = ref None in
-  let inv = { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
   match find_registered_ "login" inv [ Bson.str "ada"; Bson.str "pw" ] with
   | Bson.Document kvs ->
     let id_ok = match (List.assoc_opt "id" kvs, !rebound) with Some (Bson.String a), Some b -> a = b | _ -> false in
@@ -7139,7 +7603,7 @@ let%test "methods: currentUser returns the canonical safe session payload" =
   | Ok u ->
     Test_methods.register a;
     let inv =
-      { Test_methods_runtime.user_id = Some u.id; is_simulation = false; set_user_id = (fun _ -> ()) }
+      { Test_methods_runtime.user_id = Some u.id; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) }
     in
     (match find_registered_ "currentUser" inv [] with
     | Bson.Document _ as doc -> (
@@ -7160,7 +7624,7 @@ let%test "methods: login returns MFA step-up instead of rebinding when active MF
     ignore (store.mfa.Mfa.upsert (test_active_totp u.id));
     Test_methods.register a;
     let rebound = ref None in
-    let inv = { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) } in
+    let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) } in
     (match find_registered_ "login" inv [ Bson.str "ada"; Bson.str "pw" ] with
     | Bson.Document kvs ->
       !rebound = None
@@ -7191,7 +7655,7 @@ let%test "methods: completeLoginStepUp completes TOTP and rebinds the invocation
       | Ok active ->
         Test_methods.register a;
         let rebound = ref None in
-        let inv = { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) } in
+        let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) } in
         (match find_registered_ "login" inv [ Bson.str "ada"; Bson.str "pw" ] with
         | Bson.Document kvs -> (
           match List.assoc_opt "mfaToken" kvs with
@@ -7225,7 +7689,7 @@ let%test "methods: createUser rebinds the invocation user_id and returns a resum
   let a = test_accounts () in
   Test_methods.register a;
   let rebound = ref None in
-  let inv = { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
   match
     find_registered_ "createUser" inv
       [ Bson.doc [ ("username", Bson.str "ada"); ("password", Bson.str "pw") ] ]
@@ -7244,12 +7708,67 @@ let%test "methods: createUser requires a password" =
   let a = test_accounts () in
   Test_methods.register a;
   let inv =
-    { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun _ -> ()) }
+    { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) }
   in
   match find_registered_ "createUser" inv [ Bson.doc [ ("username", Bson.str "ada") ] ] with
   | _ -> false
   | exception Test_methods_runtime.Error { code = "400"; reason = "createUser expects a password" } -> true
   | exception Test_methods_runtime.Error _ -> false
+
+(* a brute-force throttle wired with a frozen clock: the default 5/10 s limit refills 0 tokens, so
+   exactly five attempts pass before the bucket is empty *)
+let throttled_accounts () =
+  make ~secret:"accounts-test-secret" ~store:(memory_store ()) ~password_hasher:test_hasher
+    ~rate_limit:(Throttle.make ~now:(fun () -> 0.) ()) ()
+
+let%test "methods: login throttles the sixth rapid attempt with a 429 (brute-force defense)" =
+  Test_methods_runtime.registered := [];
+  let a = throttled_accounts () in
+  let _ = create_user a ~username:"ada" ~password:"pw" () in
+  Test_methods.register a;
+  let inv =
+    { Test_methods_runtime.user_id = None; remote_ip = Some "203.0.113.7"; is_simulation = false; set_user_id = (fun _ -> ()) }
+  in
+  (* each wrong-password try is a normal 403 (Invalid_password) AND spends a token; the sixth is
+     refused up front with 429 before the password is ever checked *)
+  let code () =
+    try ignore (find_registered_ "login" inv [ Bson.str "ada"; Bson.str "wrong" ]); "ok"
+    with Test_methods_runtime.Error { code; _ } -> code
+  in
+  List.for_all (fun _ -> code () = "403") [ 1; 2; 3; 4; 5 ] && code () = "429"
+
+let%test "methods: createUser throttles repeated signups from one IP with a 429" =
+  Test_methods_runtime.registered := [];
+  let a = throttled_accounts () in
+  Test_methods.register a;
+  let inv =
+    { Test_methods_runtime.user_id = None; remote_ip = Some "203.0.113.9"; is_simulation = false; set_user_id = (fun _ -> ()) }
+  in
+  let signup n =
+    try
+      ignore
+        (find_registered_ "createUser" inv
+           [ Bson.doc [ ("username", Bson.str (Printf.sprintf "u%d" n)); ("password", Bson.str "pw") ] ]);
+      "ok"
+    with Test_methods_runtime.Error { code; _ } -> code
+  in
+  List.for_all (fun n -> signup n = "ok") [ 1; 2; 3; 4; 5 ] && signup 6 = "429"
+
+let%test "methods: login throttle is keyed by IP and account, not global" =
+  Test_methods_runtime.registered := [];
+  let a = throttled_accounts () in
+  let _ = create_user a ~username:"ada" ~password:"pw" () in
+  let _ = create_user a ~username:"bob" ~password:"pw" () in
+  Test_methods.register a;
+  let code ip selector pw =
+    let inv = { Test_methods_runtime.user_id = None; remote_ip = Some ip; is_simulation = false; set_user_id = (fun _ -> ()) } in
+    try ignore (find_registered_ "login" inv [ Bson.str selector; Bson.str pw ]); "ok"
+    with Test_methods_runtime.Error { code; _ } -> code
+  in
+  (* exhaust ada's budget from one address *)
+  List.iter (fun _ -> ignore (code "198.51.100.1" "ada" "wrong")) [ 1; 2; 3; 4; 5 ];
+  (* ada from that address is now blocked, but bob from another address logs in unimpeded *)
+  code "198.51.100.1" "ada" "pw" = "429" && code "198.51.100.2" "bob" "pw" = "ok"
 
 let%test "methods: login can resume an explicit token and return a replacement" =
   Test_methods_runtime.registered := [];
@@ -7262,7 +7781,7 @@ let%test "methods: login can resume an explicit token and return a replacement" 
   in
   Test_methods.register a;
   let rebound = ref None in
-  let inv = { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
   match find_registered_ "login" inv [ Bson.doc [ ("resume", Bson.str token) ] ] with
   | Bson.Document kvs ->
     let id_ok = match (List.assoc_opt "id" kvs, !rebound) with Some (Bson.String a), Some b -> a = b | _ -> false in
@@ -7277,7 +7796,7 @@ let%test "methods: malformed login selectors are bad requests" =
   let a = test_accounts () in
   Test_methods.register a;
   let inv =
-    { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun _ -> ()) }
+    { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) }
   in
   match find_registered_ "login" inv [ Bson.doc []; Bson.str "pw" ] with
   | _ -> false
@@ -7292,7 +7811,7 @@ let%test "methods: changePassword requires login and changes the password" =
   | Ok u ->
     Test_methods.register a;
     let inv =
-      { Test_methods_runtime.user_id = Some u.id; is_simulation = false; set_user_id = (fun _ -> ()) }
+      { Test_methods_runtime.user_id = Some u.id; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) }
     in
     (match find_registered_ "changePassword" inv [ Bson.str "old"; Bson.str "new" ] with
     | Bson.Bool true -> true
@@ -7312,7 +7831,7 @@ let%test "methods: resetPassword consumes a reset token and rebinds user_id" =
       Test_methods.register a;
       let rebound = ref None in
       let inv =
-        { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
+        { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
       in
       (match
          find_registered_ "resetPassword" inv
@@ -7337,7 +7856,7 @@ let%test "methods: verifyEmail marks verified email and rebinds user_id" =
       Test_methods.register a;
       let rebound = ref None in
       let inv =
-        { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
+        { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
       in
       match find_registered_ "verifyEmail" inv [ Bson.str (Challenge.token_to_string issued.token) ] with
       | Bson.Document kvs ->
@@ -7363,7 +7882,7 @@ let%test "methods: logoutOtherClients returns a replacement token for the curren
       Test_methods.register a;
       let rebound = ref None in
       let inv =
-        { Test_methods_runtime.user_id = Some u.id; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
+        { Test_methods_runtime.user_id = Some u.id; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
       in
       match find_registered_ "logoutOtherClients" inv [] with
       | Bson.Document kvs ->
@@ -7389,7 +7908,7 @@ let%test "methods: enrollAccount sets the first password and rebinds user_id" =
       Test_methods.register a;
       let rebound = ref None in
       let inv =
-        { Test_methods_runtime.user_id = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
+        { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun uid -> rebound := uid) }
       in
       match
         find_registered_ "enrollAccount" inv
@@ -7405,5 +7924,5 @@ let%test "methods: logout clears the invocation user_id" =
   let a = test_accounts () in
   Test_methods.register a;
   let rebound = ref (Some "ada") in
-  let inv = { Test_methods_runtime.user_id = Some "ada"; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
+  let inv = { Test_methods_runtime.user_id = Some "ada"; remote_ip = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
   match find_registered_ "logout" inv [] with Bson.Bool true -> !rebound = None | _ -> false

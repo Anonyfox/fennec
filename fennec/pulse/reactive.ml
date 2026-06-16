@@ -32,6 +32,7 @@ module type REACTIVE = sig
 
   type invocation = {
     user_id : string option;
+    remote_ip : string option;
     is_simulation : bool;
     set_user_id : string option -> unit;
   }
@@ -43,6 +44,7 @@ module type REACTIVE = sig
 
   val apply :
     ?user_id:string option ->
+    ?remote_ip:string option ->
     ?is_simulation:bool ->
     ?set_user_id:(string option -> unit) ->
     string ->
@@ -210,6 +212,9 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   (* ---- methods ---- *)
   type invocation = {
     user_id : string option;
+    remote_ip : string option;
+        (* the client's peer IP when the transport knows it — the Accounts auth methods rate-limit on
+           it; [None] off-connection (direct [call]/[apply]) *)
     is_simulation : bool;
     set_user_id : string option -> unit;
         (* rebinds the CONNECTION's user for subsequent calls (a login method's job — Meteor's
@@ -223,11 +228,11 @@ module Make (B : Backend.S) : REACTIVE with type backend_collection = B.collecti
   let methods defs =
     with_lock _reg_lock (fun () -> List.iter (fun (n, h) -> Hashtbl.replace _methods n h) defs)
 
-  let apply ?(user_id = None) ?(is_simulation = false) ?(set_user_id = fun _ -> ()) name
+  let apply ?(user_id = None) ?(remote_ip = None) ?(is_simulation = false) ?(set_user_id = fun _ -> ()) name
       (args : doc list) : doc =
     match with_lock _reg_lock (fun () -> Hashtbl.find_opt _methods name) with
     | None -> error ~reason:(Printf.sprintf "Method '%s' not found" name) "404"
-    | Some h -> h { user_id; is_simulation; set_user_id } args (* the handler runs outside the lock *)
+    | Some h -> h { user_id; remote_ip; is_simulation; set_user_id } args (* the handler runs outside the lock *)
 
   (* the seeded-id provider — server glue (fennec.pulse.server) installs a per-method-call lookup so
      [Collection]'s id minting draws from the client's randomSeed streams (latency compensation: the

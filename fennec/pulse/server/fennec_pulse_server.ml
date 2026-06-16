@@ -21,6 +21,7 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
           type doc = B.t
           type invocation = R.invocation = {
             user_id : string option;
+            remote_ip : string option;
             is_simulation : bool;
             set_user_id : string option -> unit;
           }
@@ -94,7 +95,9 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
   let method_of name : Session.method_fn =
    fun ctx params ->
     let run () =
-      try R.apply ~user_id:ctx.Session.user_id ~set_user_id:ctx.Session.set_user_id name params
+      try
+        R.apply ~user_id:ctx.Session.user_id ~remote_ip:ctx.Session.remote_ip
+          ~set_user_id:ctx.Session.set_user_id name params
       with R.Error { code; reason } -> raise (Session.Method_error { code; reason })
     in
     match ctx.Session.random_seed with
@@ -113,17 +116,17 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     List.iter (fun n -> Hashtbl.replace methods n (method_of n)) (R.method_names ());
     (pubs, methods)
 
-  let new_session ?user_id ~session_id ~emit () =
+  let new_session ?user_id ?remote_ip ~session_id ~emit () =
     let pubs, methods = registries () in
     (* the write fence: a method's [updated] is emitted only after R.fence reports every committed
        delta delivered — the client may then safely reveal server truth over its simulation *)
-    Session.create ?user_id ~fence:R.fence ~session_id ~emit ~pubs ~methods ()
+    Session.create ?user_id ?remote_ip ~fence:R.fence ~session_id ~emit ~pubs ~methods ()
 
   let gen_session_id = function Some s -> s | None -> R.ObjectID.make ()
 
   (* raw /websocket: exactly one DDP JSON message per text frame *)
-  let serve ?user_id ?session_id (ch : Ws.t) : unit =
-    let session = new_session ?user_id ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Msg.encode m)) () in
+  let serve ?user_id ?remote_ip ?session_id (ch : Ws.t) : unit =
+    let session = new_session ?user_id ?remote_ip ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Msg.encode m)) () in
     (* the DECODE is broadly guarded — a malformed frame is dropped, the connection kept. DISPATCH is
        NOT guarded here: it already handles app-level failures internally (a method exception → a 500
        Result, a failing publication → Nosub), so anything that still escapes it is a genuine
@@ -132,9 +135,9 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
     ch.Ws.on_close <- (fun () -> Session.close session)
 
   (* /sockjs: DDP messages are wrapped in SockJS array frames (for the stock Meteor browser client) *)
-  let serve_sockjs ?user_id ?session_id (ch : Ws.t) : unit =
+  let serve_sockjs ?user_id ?remote_ip ?session_id (ch : Ws.t) : unit =
     let session =
-      new_session ?user_id ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Sockjs.wrap [ Msg.encode m ])) ()
+      new_session ?user_id ?remote_ip ~session_id:(gen_session_id session_id) ~emit:(fun m -> ch.Ws.send (Sockjs.wrap [ Msg.encode m ])) ()
     in
     ch.Ws.send Sockjs.open_frame;
     ch.Ws.on_text <-
@@ -151,5 +154,8 @@ module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct
   let paw ?(path = "/websocket") ?user_id () =
     fun c ->
       let uid = match user_id with Some f -> f c | None -> accounts_user_id c in
-      Fennec_server.Websocket.make path (fun ch -> serve ?user_id:uid ch) c
+      (* the socket peer IP rides the whole connection into every method_ctx, so the Accounts auth
+         methods can rate-limit by client IP (the WS upgrade is the only place we still hold the Conn) *)
+      let remote_ip = Fennec_paw.Conn.remote_ip c in
+      Fennec_server.Websocket.make path (fun ch -> serve ?user_id:uid ?remote_ip ch) c
 end

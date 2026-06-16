@@ -40,11 +40,13 @@ type publication_ctx = {
 type publication = publication_ctx -> sink -> handle
 
 (** The per-call context a method runs in: [user_id] is the connection's current user (None =
-    anonymous), [set_user_id] rebinds it for the rest of the connection (a login method's job — the
-    Meteor [this.setUserId]), and [random_seed] is the client's seed for deterministic id minting
-    (latency compensation). *)
+    anonymous), [remote_ip] is the client's peer IP when the transport knows it (used by the
+    Accounts auth methods for brute-force rate limiting), [set_user_id] rebinds the user for the rest
+    of the connection (a login method's job — the Meteor [this.setUserId]), and [random_seed] is the
+    client's seed for deterministic id minting (latency compensation). *)
 type method_ctx = {
   user_id : string option;
+  remote_ip : string option;
   set_user_id : string option -> unit;
   random_seed : Bson.t option;
 }
@@ -66,15 +68,17 @@ val resync_wrap : have:(string * (string * string) list) list -> sink -> sink
 (** A live session. *)
 type t
 
-(** [create ?user_id ?fence ~session_id ~emit ~pubs ~methods ()] builds a session: [emit] sends a
-    message to the peer; [pubs]/[methods] are the registries the session dispatches [sub]/[method]
-    against. [user_id] seeds the connection's authenticated user from an HTTP/browser handshake
-    cookie before any method runs. [fence k] must run [k] only once the data deltas of
-    already-committed writes have been DELIVERED to this session — the write fence that keeps
-    [updated] from overtaking a method's own writes (default: immediate, for tests and fenceless
-    transports). *)
+(** [create ?user_id ?remote_ip ?fence ~session_id ~emit ~pubs ~methods ()] builds a session: [emit]
+    sends a message to the peer; [pubs]/[methods] are the registries the session dispatches
+    [sub]/[method] against. [user_id] seeds the connection's authenticated user from an HTTP/browser
+    handshake cookie before any method runs. [remote_ip] is the client's peer IP, carried into every
+    [method_ctx] for the auth methods' rate limiting. [fence k] must run [k] only once the data
+    deltas of already-committed writes have been DELIVERED to this session — the write fence that
+    keeps [updated] from overtaking a method's own writes (default: immediate, for tests and
+    fenceless transports). *)
 val create :
   ?user_id:string ->
+  ?remote_ip:string ->
   ?fence:((unit -> unit) -> unit) ->
   session_id:string ->
   emit:(Message.t -> unit) ->

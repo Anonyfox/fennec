@@ -25,9 +25,11 @@ type publication_ctx = {
 type publication = publication_ctx -> sink -> handle
 
 (* the per-call context a method runs in: the connection's current user (set by a prior method via
-   [set_user_id] — e.g. a login method), and the client's randomSeed for deterministic id minting *)
+   [set_user_id] — e.g. a login method), the client's peer IP (for auth-method rate limiting), and
+   the client's randomSeed for deterministic id minting *)
 type method_ctx = {
   user_id : string option;
+  remote_ip : string option;
   set_user_id : string option -> unit;
   random_seed : Bson.t option;
 }
@@ -40,14 +42,15 @@ type t = {
   methods : (string, method_fn) Hashtbl.t;
   subs : (string, handle) Hashtbl.t; (* subId -> running publication *)
   session_id : string;
+  remote_ip : string option; (* the peer's IP, when the transport knows it — constant per connection *)
   mutable user_id : string option; (* the connection's authenticated user (None = anonymous) *)
   (* the write fence: runs [k] once the data deltas already committed have been DELIVERED to this
      session's sink, so [updated] can never overtake the writes it announces (default: immediate) *)
   fence : (unit -> unit) -> unit;
 }
 
-let create ?user_id ?(fence = fun k -> k ()) ~session_id ~emit ~pubs ~methods () =
-  { emit; pubs; methods; subs = Hashtbl.create 16; session_id; user_id; fence }
+let create ?user_id ?remote_ip ?(fence = fun k -> k ()) ~session_id ~emit ~pubs ~methods () =
+  { emit; pubs; methods; subs = Hashtbl.create 16; session_id; remote_ip; user_id; fence }
 
 let user_id t = t.user_id
 
@@ -148,6 +151,7 @@ let dispatch (t : t) (m : Msg.t) : unit =
       | Some f ->
           let ctx =
             { user_id = t.user_id;
+              remote_ip = t.remote_ip;
               set_user_id =
                 (fun u ->
                   if u <> t.user_id then begin

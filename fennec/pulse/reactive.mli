@@ -42,15 +42,18 @@ module type REACTIVE = sig
   (** Raised by methods and by denied client writes: a [code] and a [reason] message. *)
   exception Error of { code : string; reason : string }
 
-  (** The context a method runs in: the calling user (if any), whether this is a client-side
-      latency-compensation simulation, and [set_user_id] — which rebinds the CONNECTION's user for
-      all subsequent calls (the job of a login method; Meteor's [this.setUserId]). Off-connection
-      (direct {!call}/{!apply}, simulations) [set_user_id] is a no-op.
+  (** The context a method runs in: the calling user (if any), the client's peer IP ([remote_ip],
+      when the transport knows it — the Accounts auth methods rate-limit on it), whether this is a
+      client-side latency-compensation simulation, and [set_user_id] — which rebinds the CONNECTION's
+      user for all subsequent calls (the job of a login method; Meteor's [this.setUserId]).
+      Off-connection (direct {!call}/{!apply}, simulations) [remote_ip] is [None] and [set_user_id] is
+      a no-op.
 
       Methods are {b the} client write path — there is no allow/deny rule machinery in fennec, by
       decree: every client-originated data change is a method you wrote on the server. *)
   type invocation = {
     user_id : string option;
+    remote_ip : string option;
     is_simulation : bool;
     set_user_id : string option -> unit;
   }
@@ -65,10 +68,11 @@ module type REACTIVE = sig
       {!Error} if absent). *)
   val call : ?user_id:string option -> string -> doc list -> doc
 
-  (** [apply ?user_id ?is_simulation ?set_user_id name args] is [call] with explicit invocation
-      context. *)
+  (** [apply ?user_id ?remote_ip ?is_simulation ?set_user_id name args] is [call] with explicit
+      invocation context. *)
   val apply :
     ?user_id:string option ->
+    ?remote_ip:string option ->
     ?is_simulation:bool ->
     ?set_user_id:(string option -> unit) ->
     string ->
