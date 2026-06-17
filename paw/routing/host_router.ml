@@ -16,6 +16,7 @@ type 'ep t = {
   trie : 'ep Host_trie.t; (* O(1) exact / O(depth) suffix matching — replaces the linear scan *)
   default : 'ep list; (* the "*" catch-all owners' payloads, in declaration order (tried last) *)
   entries : 'ep entry list; (* as DECLARED (declaration order) — for dev port allocation + banner *)
+  has_specific : bool; (* any non-catch-all pattern? if not, [route_all] skips the Host parse entirely *)
 }
 
 type error =
@@ -66,7 +67,7 @@ let build (inputs : (string * string list * 'ep) list) : ('ep t, error list) res
     let all_patterns = List.concat_map (fun e -> List.filter_map (fun p -> if p = P.Any then None else Some (p, e.ep)) e.patterns) entries in
     let trie = Host_trie.build all_patterns in
     let default = List.filter_map (fun e -> if List.mem P.Any e.patterns then Some e.ep else None) entries in
-    Ok { trie; default; entries }
+    Ok { trie; default; entries; has_specific = all_patterns <> [] }
 
 let build' pairs = build (List.map (fun (n, ps) -> (n, ps, n)) pairs)
 let has_err k = function Error es -> List.exists k es | Ok _ -> false
@@ -96,7 +97,9 @@ let%test_unit "multi-error: both reported" =
 (* Every endpoint that answers [host], most-specific-first, with the catch-all(s) appended last —
    the exact order the server tries them: it runs each on a fresh conn and the first to ANSWER
    wins; a declining endpoint (no route matched) falls through to the next, having left no trace. *)
-let route_all (t : 'ep t) ~(host : string) : 'ep list = Host_trie.lookup_all t.trie ~host @ t.default
+let route_all (t : 'ep t) ~(host : string) : 'ep list =
+  (* no specific patterns ⇒ every host resolves to the catch-all owners; skip parsing the Host header *)
+  if t.has_specific then Host_trie.lookup_all t.trie ~host @ t.default else t.default
 
 (* The single most-specific endpoint — the head of {!route_all}. *)
 let route (t : 'ep t) ~(host : string) : 'ep option =

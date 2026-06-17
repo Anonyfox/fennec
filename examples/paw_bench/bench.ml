@@ -71,6 +71,9 @@ let router =
   | Ok r -> r
   | Error _ -> failwith "bench: router build failed"
 
+(* the most common app shape: a single catch-all endpoint *)
+let router_single = match Paw.Host_router.build [ ("web", [ "*" ], ()) ] with Ok r -> r | Error _ -> failwith "bench: single router"
+
 (* one full logical request: route → handler → materialize response → finalize *)
 let full_request handler req () =
   let c = Paw.run_conn handler req in
@@ -90,6 +93,7 @@ let () =
 
   section "routing";
   bench "host route_all (exact, 3 endpoints)" ~iters:2_000_000 (fun () -> keep (Paw.Host_router.route_all router ~host:"api.example.com"));
+  bench "host route_all (single catch-all)" ~iters:2_000_000 (fun () -> keep (Paw.Host_router.route_all router_single ~host:"anything.example.com"));
   bench "route dispatch (1 route)" ~iters:1_000_000 (fun () -> keep (Paw.run_conn h1 req_root));
   bench "route dispatch (10 routes, hit last)" ~iters:1_000_000 (fun () -> keep (Paw.run_conn h10 req_last10));
   bench "route dispatch (50 routes, hit last)" ~iters:500_000 (fun () -> keep (Paw.run_conn h50 req_last50));
