@@ -362,10 +362,12 @@ let default_on_error : request_error -> CH.response = function
    IO. A thrown exception is caught. Both flow to the error funnel. (It bounds the handler's
    logic; a streamed body — send_chunked/SSE — is produced afterwards, so SSE isn't cut.) *)
 let run_handler ~clock ~timeout ~on_error (handler : Pipeline.t) (req : CH.request) : Conn.t =
-  match
-    Eio.Time.with_timeout clock timeout (fun () ->
-        try Ok (Pipeline.run_conn handler req) with exn -> Error (`Exn exn))
-  with
+  let attempt () = try Ok (Pipeline.run_conn handler req) with exn -> Error (`Exn exn) in
+  (* arming an Eio timer + cancellation scope per request is expensive (it dominated the profile), and
+     a per-request handler deadline only catches a handler stuck on a slow Eio op — so it is OPT-IN
+     ([timeout] <= 0 ⇒ skip it; handlers bound their own slow upstream calls when needed). Slowloris
+     is still defended at the read layer (see [loop]). *)
+  match (if timeout <= 0. then attempt () else Eio.Time.with_timeout clock timeout attempt) with
   | Ok conn -> conn
   | Error `Timeout -> Conn.respond (Conn.make req) (on_error (Handler_timeout req))
   | Error (`Exn exn) -> Conn.respond (Conn.make req) (on_error (Handler_exception (exn, req)))
@@ -418,8 +420,14 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(re
   (* honour Expect: 100-continue: tell the client to go ahead before we read the body *)
   let continue () = Eio.Buf_write.string w "HTTP/1.1 100 Continue\r\n\r\n"; Eio.Buf_write.flush w in
   let rec loop () =
-    (* read the next request under an idle/header timeout (slowloris defense) *)
-    match Eio.Time.Timeout.run timeout (fun () -> Ok (read_request ~continue r)) with
+    (* Read the next request. When bytes are ALREADY buffered (a pipelined burst, or a request that
+       arrived during the previous response) the read won't block, so we skip the timer entirely —
+       arming an Eio timer per buffered read was the bulk of the pipelining cost. Only a read that
+       WILL block (an idle keep-alive wait or a slow/slowloris client) gets the idle/header timeout. *)
+    match
+      (if Eio.Buf_read.buffered_bytes r > 0 then Ok (read_request ~continue r)
+       else Eio.Time.Timeout.run timeout (fun () -> Ok (read_request ~continue r)))
+    with
     | Error `Timeout -> ()
     | Ok Conn_eof -> ()
     | Ok (Bad_request _) -> respond_and_close (CH.text ~status:400 "Bad Request")
@@ -526,7 +534,9 @@ let%test "in-process TLS: real handshake + the handler sees scheme=https" =
    no /etc/hosts. A different base (--port) shifts the whole block, so instances never collide.
    @param dev             dev mode. Default from FENNEC_ENV.
    @param timeout         per-request idle/header read timeout, seconds (default 30).
-   @param request_timeout per-request handler deadline (503 on expiry; default 30).
+   @param request_timeout per-request handler deadline in seconds; <= 0 (the default) disables it —
+          arming an Eio timer per request is costly and only catches a handler stuck on a slow Eio op,
+          so it is opt-in. Slowloris is defended at the read layer regardless. Set > 0 for a 503 cap.
    @param max_conns       concurrent-connection cap (default 10_000).
    @param parallelism     worker domains (per-core); auto by default, or FENNEC_PARALLELISM.
    @param on_listen       called post-bind with the (endpoint name, url) pairs for the banner. *)
@@ -543,7 +553,7 @@ let peek_sni flow =
           match Unix.recv ufd b 0 (Bytes.length b) [ Unix.MSG_PEEK ] with n when n > 0 -> Sni.host_of_client_hello (Bytes.sub_string b 0 n) | _ -> None)
     with _ -> None)
 
-let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
+let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
   let dev = match dev with Some d -> d | None -> ( try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true) in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
