@@ -21,7 +21,7 @@ track the useful Meteor vocabulary (`userId`, `setUserId`, `createUser`, `login`
 
 ## Current Implementation
 
-`fennec/server/accounts.{mli,ml}` owns the core:
+`fennec/accounts/accounts.{mli,ml}` owns the core:
 
 - `user` is the framework-level identity shape: `id`, `username`, `emails`, opaque `profile`,
   opaque provider `services`, timestamps, `auth_epoch`, and lifecycle `status`.

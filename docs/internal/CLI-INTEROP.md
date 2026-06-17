@@ -192,7 +192,7 @@ their paths. The server doesn't know any bundle's name; it serves files.
   target) and bundle↔public (`fennec build` errors). No escape hatch.
 
 Dev serves `webroot/` from disk; prod serves the embedded map — one
-`Fennec_server.Static` path either way. *Verified: the prod binary serves both a
+`Paw.Static` path either way. *Verified: the prod binary serves both a
 bundle (`/app.js`) and a public file (`/robots.txt`) with the `webroot/` dir
 physically deleted.*
 

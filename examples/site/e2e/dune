@@ -27,7 +27,7 @@
  (modules probe_check)
  (libraries fennec-hunt))
 
-; Realtime DDP e2e: a minimal RFC 6455 server (fennec.server's Ws codec) wires a DDP session
+; Realtime DDP e2e: a minimal RFC 6455 server (fennec.accounts's Ws codec) wires a DDP session
 ; (fennec.pulse.server over fennec.pulse + fennec-mongo) and a fennec-hunt Cdp WebSocket client drives a
 ; full connect/subscribe/method round-trip, asserting the live server→client push. UNLIKE the
 ; manual fixtures above, this is self-contained (it runs its own server fiber and exits 0/1), so it
@@ -40,7 +40,7 @@
   eio
   eio_main
   fennec-paw
-  fennec.server
+  fennec.accounts
   fennec.pulse.server
   fennec.pulse
   fennec.ddp

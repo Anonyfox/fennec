@@ -1,5 +1,5 @@
 (* End-to-end proof of the realtime stack over a REAL WebSocket — no browser, fully deterministic.
-   In one Eio process: a minimal RFC 6455 server (fennec.server's Ws codec + accept_key) wires each
+   In one Eio process: a minimal RFC 6455 server (paw's Ws codec + accept_key) wires each
    connection to a DDP session via fennec.pulse.server over a fennec.pulse reactive instance backed by
    fennec-mongo's in-memory engine; the client (fennec-hunt's Cdp WebSocket client) performs a full
    DDP handshake/subscribe/method round-trip and asserts the live server→client push.

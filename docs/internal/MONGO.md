@@ -264,7 +264,7 @@ flow through the facade above. The browser runs the **same Minimongo** as a clie
 deltas via `merge_store` (per-field precedence merge), with optimistic stubs (sim writes) and the
 write fence. So Mongo semantics are identical on both ends of the wire.
 
-### 7b. Accounts — a *separate* Mongo-backed store (`fennec/server/accounts.ml`)
+### 7b. Accounts — a *separate* Mongo-backed store (`fennec/accounts/accounts.ml`)
 Accounts does **not** go through Pulse's typed collection. It has its own three-tier store:
 a `Collection_store` abstraction (minimal `find_one/find/insert_one/update_one/delete_many` over
 `Bson.t`) that wraps **either** `Minimongo` **or** `Fennec_mongo_driver.Collection` directly, with
@@ -372,6 +372,6 @@ Status as of branch `mongo-close-gaps` (off `main` @ `b69d76d`).
 | C driver: safe OCaml | `mongo/driver/{internal,client,collection,database,change_stream,live,runtime,server}.ml`, `mongo/mongod/mongod.ml` |
 | Backend seam + selection | `mongo/backend/seam.ml`, `mongo/dynamic/{adapters,wire_server}.ml` |
 | Typed/Codec/Schema/facade | `fennec/pulse/{typed.ml,collection/*,codec/*,app/fennec_pulse_app.ml}` |
-| Accounts store | `fennec/server/accounts.ml` (`Collection_store`, `Codec`, `Store`) |
+| Accounts store | `fennec/accounts/accounts.ml` (`Collection_store`, `Codec`, `Store`) |
 | DDP wire | `fennec/ddp/{ejson,message,doc_hash}.ml` |
 | Dev/test CLI | `cli/dev/{mongo_rs,stublibs,supervisor}.ml`, `cli/testcmd/{run,instance,boot}.ml` |

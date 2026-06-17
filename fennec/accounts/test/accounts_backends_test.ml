@@ -4,7 +4,7 @@
    API (the same calls userland makes) and assert the same outcomes the minimongo inline tests assert.
    It also exercises the unique+SPARSE username/email indexes on burrow: email-only users (no username)
    coexist, while a duplicate email is rejected. If accounts ever breaks on burrow, this fails the build. *)
-module A = Fennec_server.Accounts
+module A = Fennec_accounts.Accounts
 
 let failf fmt = Printf.ksprintf (fun s -> prerr_endline ("accounts/burrow FAIL: " ^ s); exit 1) fmt
 let ok label = function Ok v -> v | Error _ -> failf "%s returned Error" label

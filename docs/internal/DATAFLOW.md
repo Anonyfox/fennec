@@ -53,7 +53,7 @@ in the `fennec` framework** + a **client data layer on Fur** + **CLI help for mo
                  │                                  │ rides
                  ▼                                  ▼
             Fennec.serve / Endpoint        Paw.Websocket.make "/websocket"  +  "/sockjs" shim
-                                           (fennec/server: Ws RFC6455 + permessage-deflate — REUSED)
+                                           (paw: Ws RFC6455 + permessage-deflate — REUSED)
    ───────────────────────────────────────────────│ DDP frames (added/changed/removed/ready/result/updated)
    client (js_of_ocaml) ────────────────────────────▼──────────────────────────────────────────────────
      ws client → DDP codec → merge box (§5b: per-(coll,id) existsIn + per-field precedence)
@@ -274,7 +274,7 @@ Ports `ocaml-light/meteor/ddp` (codec + session are pure; depend only on `bson`)
   fennec's existing RFC 6455 `Ws` + permessage-deflate. A ~30-line `/sockjs` framing shim
   (`o`/`h`/`a[]`/`c[]`) accepts the *unmodified stock Meteor browser client*; our own client uses raw
   `/websocket`. (`ocaml-light/comet` was the prototype's predecessor to fennec — its server is what
-  `fennec/server` already replaces, better.)
+  `paw` already replaces, better.)
 - **Interop is a hard requirement and a test target**: our frames → real Meteor 3.x, an independent
   DDP client → our server, and real Meteor frames → our codec — all proven in the prototype; re-prove
   under `fennec test`.
@@ -399,7 +399,7 @@ fennec-mongo  (one opam pkg; pure trio links into the jsoo client — no npm)
 fennec  (framework pkg)
    reactive core (Collection/publish/subscribe/methods)  ── depends on fennec-mongo (pure trio + driver)
    ddp (codec + session)                                  ── depends on fennec-mongo.bson
-   server transport: REUSES fennec/server (Ws + deflate)  ── no new transport package
+   server transport: REUSES paw (Ws + deflate)  ── no new transport package
    client: merge box + ddp client + Fur hooks             ── fennec-mongo pure trio (js) + fennec.fur
 fennec-cli
    mongod install/launch helper (dev + opt-in test)       ── fetch prebuilt, supervise; never compiles

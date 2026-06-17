@@ -415,7 +415,7 @@ let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
   let linked = List.exists (fun api -> Hashtbl.mem selected_ids api) e.apis in
   let has x = List.mem x terms in
   let source =
-    if has "session" && contains_sub ~needle:"fennec/server/session" path then 110.0
+    if has "session" && contains_sub ~needle:"paw/middleware/session" path then 110.0
     else if has "cookie" && contains_sub ~needle:"examples/site/test/browser" path then -.80.0
     else if has "cookie" && contains_sub ~needle:"fennec/paw/conn.ml" path then 75.0
     else if has "cookie" && contains_sub ~needle:"fennec/core/cookie.ml" path then 70.0

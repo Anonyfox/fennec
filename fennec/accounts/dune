@@ -5,8 +5,8 @@
 ; the standalone fennec-paw library.
 
 (library
- (name fennec_server)
- (public_name fennec.server)
+ (name fennec_accounts)
+ (public_name fennec.accounts)
  ; fennec-paw: the HTTP toolkit accounts builds its endpoints + session middleware on.
  ; x509 + the crypto stack (mirage-crypto via x509, zarith, digestif, base64): token/cert
  ; handling for passkeys / OIDC / SAML. zlib + bigstringaf: SAML deflate. fennec.mail +

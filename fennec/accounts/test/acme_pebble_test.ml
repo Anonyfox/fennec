@@ -4,7 +4,7 @@
 
    Run pebble first (it validates HTTP-01 on :5002 by default, resolving the domain via system DNS):
      docker run --rm -d -p 14000:14000 -p 15000:15000 -e PEBBLE_VA_NOSLEEP=1 ghcr.io/letsencrypt/pebble
-     FENNEC_ACME_TEST_DIR=https://localhost:14000/dir dune exec fennec/server/test/acme_pebble_test.exe *)
+     FENNEC_ACME_TEST_DIR=https://localhost:14000/dir dune exec fennec/accounts/test/acme_pebble_test.exe *)
 
 module C = Paw.Acme_client
 

@@ -35,7 +35,7 @@ module Cookie = Paw.Cookie
     Fennec installs Accounts everywhere: HTTP/SSR requests get {!Accounts.user_id}, live/DDP
     sessions inherit that user id, and the built-in Accounts methods are registered automatically.
     With no login cookie, identity is simply [None]. *)
-module Accounts = Fennec_server.Accounts
+module Accounts = Fennec_accounts.Accounts
 
 (** Outbound email — one [MAIL_URL] knob picks the transport ([smtp://] STARTTLS, [smtps://] implicit TLS,
     or — unset — logged to stdout in dev). Compose a {!Mail.t} and {!Mail.send} it; {!Fennec.serve} boots

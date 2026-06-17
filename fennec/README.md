@@ -54,11 +54,16 @@ challenges, passkeys, organizations, MFA enrollments, SCIM state, audit, and ind
 handle (`Store.minimongo ()` stays the fast reference backend for tests). Design notes:
 [`docs/internal/ACCOUNTS.md`](../docs/internal/ACCOUNTS.md).
 
-## Server — `fennec.server`
+## Accounts — `fennec.accounts`
 
-A compact Eio HTTP/1.1 + WebSocket server: static serving (strong ETag / 304 / Range / HEAD), gzip +
-deflate, WebSocket permessage-deflate, multi-app routing by Host, graceful shutdown.
-`Fennec.serve [endpoints]` is the single entry point.
+The framework-native identity layer, hardwired into `Fennec.serve`: password / email-verification, MFA,
+passkeys (WebAuthn), OAuth, OIDC, SAML, SCIM, orgs + RBAC, an audit log, and rate limiting — the
+"multiplayer" substrate nearly every app needs, solved once in the framework instead of hand-rolled and
+strung together in userland. Persistence rides the fennec-mongo backends; the HTTP/DDP surface is built
+on `fennec-paw`. Design notes: [`docs/internal/ACCOUNTS.md`](../docs/internal/ACCOUNTS.md).
+
+(The Eio HTTP/1.1 + WebSocket server, static serving, Host routing and in-process TLS now live in the
+standalone [`fennec-paw`](../paw/) library; `Fennec.serve [endpoints]` remains the single entry point.)
 
 ## HTTPS — in-process, opt in incrementally
 

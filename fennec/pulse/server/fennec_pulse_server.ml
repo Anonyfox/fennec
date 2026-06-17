@@ -8,7 +8,7 @@ module Msg = Fennec_ddp.Message
 module Session = Fennec_ddp.Session
 module Sockjs = Fennec_ddp.Sockjs
 module Ws = Paw.Ws_channel
-module Accounts = Fennec_server.Accounts
+module Accounts = Fennec_accounts.Accounts
 module B = Bson
 
 module Make (R : Fennec_pulse.Reactive.REACTIVE) = struct

@@ -17,7 +17,7 @@ module Livereload = Paw.Livereload
 module Http = Paw.Http
 module Cookie = Paw.Cookie
 module Dev_proto = Paw.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
-module Accounts = Fennec_server.Accounts
+module Accounts = Fennec_accounts.Accounts
 module Mail = Fennec_mail (* outbound email: one MAIL_URL knob (unset ⇒ logged to stdout in dev) *)
 
 (* The presentation layer — Fur. ONE namespace ([open Fennec.Fur]) for everything that turns data
