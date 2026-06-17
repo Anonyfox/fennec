@@ -63,6 +63,11 @@ val decode : 'a t -> Bson.t -> ('a, error list) result
     never an exception. The fast path for decoding stored/wire documents. *)
 val decode_bytes : 'a t -> Bigstringaf.t -> ('a, error list) result
 
+(** Stream a buffer of back-to-back BSON documents (each length-prefixed): decode each in turn and fold
+    the per-document result — query-result / cursor iteration without materialising every value at once.
+    A malformed document (position lost) ends the stream with a final [Error]. *)
+val fold_bytes : 'a t -> Bigstringaf.t -> 'b -> ('b -> ('a, error list) result -> 'b) -> 'b
+
 (** Decode ONE top-level field of a BSON document buffer, by key, reading only that field's bytes —
     the rest of the document is skipped by length prefix, never materialized. [None] when the field is
     absent; [Some (Ok v)] / [Some (Error _)] when present (value decoded and its checks run; errors

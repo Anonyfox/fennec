@@ -592,4 +592,11 @@ let%test "axisA: encode_json — relaxed (plain) JSON, round-trips, escapes, no 
   && rt nested_c ("ok", ("Ada", "ada@x.io"))
   && (let j = Sift.encode_json bag_c ("x", 42, 1.0, true, 0L, "abc") in contains j "42" && contains j "\"abc\"" && not (contains j "$number") && not (contains j "$oid"))
 
+let%test "axisA: fold_bytes — streams a sequence of concatenated documents" =
+  let docs = [ ("a", 1, 1.0, true, 1L, "x"); ("bb", 2, 2.5, false, 2L, "507f1f77bcf86cd799439011"); ("ccc", 3, 3.5, true, 3L, "z") ] in
+  let wire = String.concat "" (List.map (fun v -> W.encode (bag_c.Sift.enc v)) docs) in
+  let buf = Bigstringaf.of_string ~off:0 ~len:(String.length wire) wire in
+  let decoded = List.rev (Sift.fold_bytes bag_c buf [] (fun acc r -> r :: acc)) in
+  List.length decoded = 3 && List.for_all2 (fun v r -> match r with Ok v' -> Sift.equal bag_c v v' | _ -> false) docs decoded
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -338,6 +338,26 @@ let decode_value_bytes (shape : 'a shape) (buf : Cursor.buffer) : ('a, error lis
   | Error es -> Error es
   | Ok v -> if not (Engine.needs_checks shape) then Ok v else ( match Engine.run_checks shape v with [] -> Ok v | es -> Error es)
 
+(* ---- streaming: fold over a buffer of back-to-back BSON documents ------------------------------ *)
+
+(* decode each document in [buf] (concatenated, each length-prefixed) in turn, folding the per-document
+   result into [acc] — a cursor/query-result stream without materialising every value at once. read_buf
+   seeks the cursor to a document's end even on a type error, so the next document is found correctly;
+   only a MALFORMED document (uncertain position) ends the stream, reported as a final Error. *)
+let fold_value_bytes (shape : 'a shape) (buf : Cursor.buffer) (init : 'b) (f : 'b -> ('a, error list) result -> 'b) : 'b =
+  let c = Cursor.make buf in
+  let n = Bigstringaf.length buf in
+  let rec loop acc =
+    if Cursor.pos c >= n then acc
+    else
+      match (try Some (read_buf shape ~tag:tag_document c) with Cursor.Truncated _ | Malformed _ | Invalid_argument _ -> None) with
+      | None -> f acc (Error [ mkerr ~code:"malformed" "malformed BSON: truncated or out of bounds" ]) (* position lost → stop *)
+      | Some raw ->
+          let r = match raw with Error es -> Error es | Ok v -> if not (Engine.needs_checks shape) then Ok v else ( match Engine.run_checks shape v with [] -> Ok v | es -> Error es) in
+          loop (f acc r)
+  in
+  loop init
+
 (* ---- projection: decode ONE top-level field, reading only its bytes ---------------------------- *)
 
 (* scan the buffer's top-level document for [key] and decode JUST that field's value with [shape] (its

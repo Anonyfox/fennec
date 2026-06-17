@@ -18,6 +18,10 @@ include Combinators
    {!decode} (over an already-parsed {!Bson.t}) stays the tree entry. *)
 let decode_bytes (c : 'a t) (buf : Bigstringaf.t) : ('a, error list) result = Bson_reader.decode_value_bytes c.shape buf
 
+(* Stream a buffer of back-to-back BSON documents: decode each in turn and fold the per-document result
+   — query-result / cursor iteration without materialising every value at once. *)
+let fold_bytes (c : 'a t) (buf : Bigstringaf.t) (init : 'b) (f : 'b -> ('a, error list) result -> 'b) : 'b = Bson_reader.fold_value_bytes c.shape buf init f
+
 (* Decode ONE top-level field straight from a buffer, reading only its bytes (the rest of the document
    is skipped, never materialized). [None] if absent. The projection primitive — route a raw document
    by its _id or a variant discriminant, or pull a single value, without decoding the whole record. *)
