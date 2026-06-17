@@ -561,4 +561,16 @@ let%test "k6: arbitrary — random values round-trip through encode/decode (and 
      cross-field invariant is the documented best-effort limit, so not exercised here *)
   survives bag_c && survives opt_c && survives list_c && survives figure_c
 
+let%test "k6: patch — the inverse of diff (patch old (diff old new) = new)" =
+  let rt : 'a. 'a Sift.t -> 'a -> 'a -> bool =
+   fun c old new_ -> match Sift.patch c old (Sift.diff c old new_) with Ok v -> Sift.equal c v new_ | Error _ -> false
+  in
+  rt bag_c ("a", 1, 0., true, 0L, "x") ("b", 2, 3., false, 5L, "y")
+  && rt opt_c (Some "x", [ 1; 2 ]) (None, [ 3 ])
+  && rt opt_c (None, []) (Some "z", [ 1 ])
+  && rt opt_c (Some "x", []) (Some "x", []) (* no change → identity *)
+  && rt figure_c (Circle 1.) (Rect (3., 4.)) (* variant case change *)
+  && rt figure_c (Rect (1., 2.)) (Rect (1., 9.)) (* same-case body change *)
+  && rt bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1); ("y", 9); ("z", 3) ]
+
 let () = exit (Fennec_hunt_unit.run ())

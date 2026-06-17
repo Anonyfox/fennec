@@ -121,6 +121,11 @@ type delta = { set : (string * Bson.t) list; unset : string list }
 
 val diff : 'a t -> 'a -> 'a -> delta
 
+(** Apply a {!delta} to a value — the inverse of {!diff}: [set] replaces/adds fields, [unset] removes
+    them, then the result is decoded and validated. [patch c old (diff c old new) = Ok new]. The
+    receiving side of reactive sync (apply a [$set]/[$unset] update to a typed value). *)
+val patch : 'a t -> 'a -> delta -> ('a, error list) result
+
 (** A random value conforming to the shape, for property testing — structural, with refinements met
     best-effort by rejection sampling (simple length/enum/range yes; a hard [pattern] or a record-level
     cross-field invariant may not be). Pure given the {!Random.State.t}, so a seeded state reproduces. *)

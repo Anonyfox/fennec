@@ -106,6 +106,14 @@ type delta = Derived.delta = { set : (string * Bson.t) list; unset : string list
 
 let diff (c : 'a t) (old : 'a) (new_ : 'a) : delta = Derived.diff c.shape old new_
 
+(* apply a {!delta} to a value — the inverse of {!diff}: [$set] replaces/adds fields, [$unset] removes
+   them, then the merged document is decoded (and validated). [patch c old (diff c old new) = Ok new]. *)
+let patch (c : 'a t) (old : 'a) (d : delta) : ('a, error list) result =
+  let kvs = match c.enc old with Bson.Document kvs -> kvs | _ -> [] in
+  let touched = d.unset @ List.map fst d.set in
+  let kept = List.filter (fun (k, _) -> not (List.mem k touched)) kvs in
+  decode c (Bson.Document (kept @ d.set))
+
 (* a random value conforming to the shape (refinements best-effort via rejection) — property testing.
    Pure given the [Random.State.t], so a seeded state reproduces. *)
 let arbitrary (c : 'a t) (st : Random.State.t) : 'a = Derived.arbitrary c.shape st
