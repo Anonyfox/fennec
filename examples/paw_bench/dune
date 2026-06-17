@@ -1,0 +1,6 @@
+; fennec-paw micro-benchmark suite — the per-request hot path, measured apples-to-apples.
+; Not a test: run it on demand with `dune exec examples/paw_bench/bench.exe`.
+; Links fennec-paw + the stdlib timing/GC primitives (unix) and eio (for Buf_read).
+(executable
+ (name bench)
+ (libraries fennec-paw eio unix))
