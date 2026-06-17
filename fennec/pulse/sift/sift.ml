@@ -377,6 +377,20 @@ let encode_checked c v = match check_ty c.ty v with [] -> Ok (c.enc v) | es -> E
 let pp c fmt v = pp_ty c.ty fmt v
 let show c v = Format.asprintf "%a" (pp c) v
 
+(* ---- JSON I/O — one shape drives BOTH BSON and JSON, via the extended-JSON bridge --------------- *)
+(* The shape is described ONCE; [enc]/[dec] speak BSON (the storage form), these speak JSON (the wire
+   form for APIs). No separate serializer: DB shape = wire shape. Encode is total (mirrors [enc]);
+   decode validates with the same path-collected errors as {!decode}. *)
+module Json = Fennec_mongo_json.Json
+module Bson_json = Fennec_mongo_bson_json.Bson_json
+
+let to_json c v = Bson_json.to_json (c.enc v)
+let of_json c j = dec_full c.ty (Bson_json.of_json j)
+let to_json_string c v = Bson_json.to_string (c.enc v)
+
+let of_json_string c s =
+  match Bson_json.of_string_opt s with Some b -> dec_full c.ty b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
+
 (* ---- primitives ------------------------------------------------------------------ *)
 
 let string = of_ty TString

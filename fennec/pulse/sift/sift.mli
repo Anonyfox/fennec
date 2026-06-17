@@ -67,6 +67,31 @@ val pp : 'a t -> Format.formatter -> 'a -> unit
 
 val show : 'a t -> 'a -> string
 
+(** {1 JSON I/O}
+
+    The shape is described once; {!encode_checked}/{!decode} speak BSON (the storage form), these speak
+    JSON (the wire form for APIs) via the extended-JSON bridge — so DB shape = wire shape, no second
+    serializer. Encode is total (mirrors the BSON encode); decode validates with the same
+    path-collected errors as {!decode}.
+
+    {[ let body = Sift.to_json_string Post.codec post   (* a JSON API response *)
+       match Sift.of_json_string Post.codec request_body with Ok p -> … | Error es -> … ]} *)
+
+(** Extended-JSON AST (re-exported), for composing with other JSON code. *)
+module Json = Fennec_mongo_json.Json
+
+(** Encode a value to a JSON AST (total). *)
+val to_json : 'a t -> 'a -> Json.t
+
+(** Decode + validate a value from a JSON AST. *)
+val of_json : 'a t -> Json.t -> ('a, error list) result
+
+(** Encode a value to a JSON string (total). *)
+val to_json_string : 'a t -> 'a -> string
+
+(** Decode + validate a value from a JSON string ([malformed JSON] error on a parse failure). *)
+val of_json_string : 'a t -> string -> ('a, error list) result
+
 (** {1 Primitives} *)
 
 val string : string t

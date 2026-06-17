@@ -3,10 +3,11 @@
 ; (validating decode with path-collected errors), encode-side validation, normalizers, derived
 ; pretty-printing, and a neutral introspection [view] that downstream renderers ($jsonSchema in the
 ; collection lib, OpenAPI later, the admin UI later) consume without this lib knowing them.
-; Deps: bson only — jsoo-safe, shared verbatim by server and browser. Methods and collections are
-; disjoint consumers that WORK ON shapes; neither owns this. Unwrapped: userland says `Sift.string`.
+; Deps: bson + bson_json/json (the extended-JSON bridge, so one shape drives BOTH BSON and JSON) —
+; all pure + jsoo-safe, shared verbatim by server and browser. Methods and collections are disjoint
+; consumers that WORK ON shapes; neither owns this. Unwrapped: userland says `Sift.string`.
 (library
  (name fennec_pulse_sift)
  (public_name fennec.pulse.sift)
  (wrapped false)
- (libraries fennec-mongo.bson))
+ (libraries fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.json))

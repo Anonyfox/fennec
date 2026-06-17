@@ -222,4 +222,15 @@ let%test "map: round-trips through a transform both ways" =
   let c = Sift.(map (fun s -> `Tag s) (function `Tag s -> s) string) in
   (match Sift.decode c (B.str "x") with Ok (`Tag "x") -> true | _ -> false) && (match c.Sift.enc (`Tag "y") with B.String "y" -> true | _ -> false)
 
+(* ── JSON I/O: one shape drives BOTH BSON and JSON ── *)
+let json_c =
+  Sift.(seal (record (fun id n tags -> (id, n, tags)) |> field (req "id" string) (fun (i, _, _) -> i) |> field (req "n" (min_i 1 int)) (fun (_, n, _) -> n) |> field (opt_list "tags" string) (fun (_, _, t) -> t)))
+
+let%test "json: value → JSON string → value round-trips" =
+  let v = ("x", 3, [ "a"; "b" ]) in
+  match Sift.of_json_string json_c (Sift.to_json_string json_c v) with Ok v' -> v' = v | Error _ -> false
+let%test "json decode validates with the same path-collected errors as BSON decode" =
+  err (Sift.of_json_string json_c {|{"id":"x","n":0}|}) (* n=0 fails min_i 1 *)
+  && (match Sift.of_json_string json_c "not json at all" with Error [ e ] -> e.Sift.code = "json" | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())
