@@ -467,6 +467,19 @@ let dec_field (f : 'a field) kvs : ('a, error list) result =
          is attributable to it — what per-field consumers (form feedback) need *)
       | None -> Error [ mkerr ~code:"required" ~path:[ f.fld_name ] "is required" ])
 
+(* a doc's keys indexed for O(1) field lookup, built ONCE per record decode — the record builder used
+   to [List.assoc_opt] per field, i.e. O(fields × keys). First occurrence wins, matching the prior
+   [List.assoc_opt] semantics on (rare) duplicate keys, so behaviour is byte-identical. *)
+let index_of (kvs : (string * Bson.t) list) : (string, Bson.t) Hashtbl.t =
+  let tbl = Hashtbl.create (max 4 (List.length kvs)) in
+  List.iter (fun (k, v) -> if not (Hashtbl.mem tbl k) then Hashtbl.replace tbl k v) kvs;
+  tbl
+
+let dec_field_idx (f : 'a field) (idx : (string, Bson.t) Hashtbl.t) : ('a, error list) result =
+  match Hashtbl.find_opt idx f.fld_name with
+  | Some v -> ( match dec_ty f.fld_ty v with Ok x -> Ok x | Error es -> Error (List.map (at f.fld_name) es))
+  | None -> ( match f.fld_default with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.fld_name ] "is required" ])
+
 (* [None]/default-empty encodes by omitting the key — Mongo-idiomatic absence *)
 let enc_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
   match enc_ty f.fld_ty v with
@@ -475,7 +488,7 @@ let enc_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
   | b -> Some (f.fld_name, b)
 
 type ('r, 'k) builder = {
-  b_dec : (string * Bson.t) list -> ('k, error list) result;
+  b_dec : (string, Bson.t) Hashtbl.t -> ('k, error list) result;
   b_enc : 'r -> (string * Bson.t) list;
   b_fields : 'r packed_field list; (* reverse order *)
   b_checks : (('r -> bool) * string) list;
@@ -487,8 +500,8 @@ let record (make : 'k) : ('r, 'k) builder =
 let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k) builder =
   {
     b_dec =
-      (fun kvs ->
-        match (b.b_dec kvs, dec_field f kvs) with
+      (fun idx ->
+        match (b.b_dec idx, dec_field_idx f idx) with
         | Ok k, Ok a -> Ok (k a)
         | Error e1, Error e2 -> Error (e1 @ e2)
         | Error e, Ok _ | Ok _, Error e -> Error e);
@@ -500,7 +513,7 @@ let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k
 let checking p msg b = { b with b_checks = (p, msg) :: b.b_checks }
 
 let obj_of_builder (b : ('r, 'r) builder) : 'r obj =
-  { o_dec = b.b_dec; o_enc = b.b_enc; o_fields = List.rev b.b_fields; o_checks = List.rev b.b_checks }
+  { o_dec = (fun kvs -> b.b_dec (index_of kvs)); o_enc = b.b_enc; o_fields = List.rev b.b_fields; o_checks = List.rev b.b_checks }
 
 let seal (b : ('r, 'r) builder) : 'r t = of_ty (TObj (obj_of_builder b))
 let doc_id = req "_id" id
