@@ -21,10 +21,14 @@ module H = Http
 
 type t = Conn.t -> Conn.t
 
+(* walk the paws, applying each only while the conn is unanswered. A top-level recursive function (not
+   a [List.fold_left] with an inline closure) so running a compiled pipeline allocates no closure per
+   request — only the [seq] wrapper, built once. *)
+let rec run_seq c = function [] -> c | p :: rest -> if Conn.answered c then c else run_seq (p c) rest
+
 (* compose paws left-to-right into one paw; each runs only while the conn is unanswered, so
    order is precedence and the first to answer wins *)
-let seq (paws : t list) : t =
- fun c -> List.fold_left (fun c p -> if Conn.answered c then c else p c) c paws
+let seq (paws : t list) : t = fun c -> run_seq c paws
 
 (* the identity paw (declines everything) — the unit of {!seq}; handy as a placeholder *)
 let pass : t = fun c -> c
@@ -47,35 +51,33 @@ let meth_matches (want : H.meth) (got : H.meth) =
 (* path -> non-empty segments (a leading/trailing/double slash is ignored) *)
 let segments (s : string) : string list = String.split_on_char '/' s |> List.filter (fun x -> x <> "")
 
-(* match a pattern with [:name] (one segment) and a trailing [*name] (the rest) against a
-   path, returning the captured params, or [None] if it doesn't match *)
-let match_pattern (pattern : string) (path : string) : (string * string) list option =
-  let rec go ps xs acc =
-    match (ps, xs) with
-    | [], [] -> Some (List.rev acc)
-    | [ p ], _ when String.length p > 0 && p.[0] = '*' ->
-      Some (List.rev ((String.sub p 1 (String.length p - 1), String.concat "/" xs) :: acc))
-    | p :: ps', x :: xs' ->
-      if String.length p > 0 && p.[0] = ':' then
-        go ps' xs' ((String.sub p 1 (String.length p - 1), x) :: acc)
-      else if p = x then go ps' xs' acc
-      else None
-    | _ -> None
-  in
-  go (segments pattern) (segments path) []
+(* match pre-split pattern segments against pre-split path segments, capturing [:name] (one segment)
+   and a trailing [*name] (the rest). Split out so a route can pre-split its pattern ONCE (see {!on}). *)
+let rec match_segments ps xs acc =
+  match (ps, xs) with
+  | [], [] -> Some (List.rev acc)
+  | [ p ], _ when String.length p > 0 && p.[0] = '*' ->
+    Some (List.rev ((String.sub p 1 (String.length p - 1), String.concat "/" xs) :: acc))
+  | p :: ps', x :: xs' ->
+    if String.length p > 0 && p.[0] = ':' then match_segments ps' xs' ((String.sub p 1 (String.length p - 1), x) :: acc)
+    else if p = x then match_segments ps' xs' acc
+    else None
+  | _ -> None
 
 let has_params (pattern : string) = String.contains pattern ':' || String.contains pattern '*'
 
-(* a method+path route; [h] is run when it matches. A pattern with [:name]/[*name] captures
-   path params onto the conn (read with {!Conn.path_param}); a plain pattern is an exact
-   string match. *)
+(* a method+path route; [h] is run when it matches. A pattern with [:name]/[*name] captures path
+   params onto the conn (read with {!Conn.path_param}); a plain pattern is an exact string match.
+   The pattern's shape — whether it has params, and (if so) its segments — is computed ONCE here at
+   construction, never per request: dispatch is then a method check plus either one string compare
+   (static) or a segment match (dynamic), with no re-scan of the pattern on the hot path. *)
 let on (m : H.meth) (pattern : string) (h : t) : t =
- fun c ->
-  if not (meth_matches m (Conn.meth c)) then c
-  else if has_params pattern then
-    match match_pattern pattern (Conn.path c) with Some ps -> h (Conn.set_path_params c ps) | None -> c
-  else if Conn.path c = pattern then h c
-  else c
+  if has_params pattern then
+    let pat_segs = segments pattern in
+    fun c ->
+      if not (meth_matches m (Conn.meth c)) then c
+      else match match_segments pat_segs (segments (Conn.path c)) [] with Some ps -> h (Conn.set_path_params c ps) | None -> c
+  else fun c -> if meth_matches m (Conn.meth c) && Conn.path c = pattern then h c else c
 
 let get path h = on H.GET path h
 let post path h = on H.POST path h
