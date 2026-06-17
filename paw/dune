@@ -24,7 +24,6 @@
   zarith
   ptime
   mirage-crypto-rng.unix
-  yojson
   fennec-hunt.unit
   fennec-hunt.prop)
  (inline_tests (backend fennec-hunt.runner))

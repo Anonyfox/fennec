@@ -61,4 +61,4 @@ Each is a `make` returning a `Paw.t`, so it drops into any `seq` or `Endpoint`:
 
 ## Dependencies
 
-Standard OCaml libraries only: `eio` · `tls` / `tls-eio` · `x509` · `digestif` · `base64` · `zarith` · `ptime` · `mirage-crypto-rng` · `zlib` · `yojson`. No database, no framework.
+Standard OCaml libraries only: `eio` · `tls` / `tls-eio` · `x509` · `digestif` · `base64` · `zarith` · `ptime` · `mirage-crypto-rng` · `zlib`. No database, no framework, no JSON library — the ACME client hand-rolls the handful of JSON reads it needs, so a production server stays lean.

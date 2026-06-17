@@ -4,15 +4,126 @@
    is driven over {!Https_client}. The JWK + thumbprint encoding (the one fiddly bit) is pinned to
    known vectors in the tests, so it is provably spec-correct without a live server. *)
 
-(* Minimal JSON reads for ACME responses, backed by yojson — keeps fennec-paw free of any database
-   or framework dependency (the protocol only ever reads a handful of string/list fields). *)
+(* A minimal, self-contained JSON reader (RFC 8259) — fennec-paw stays dependency-free (NO yojson),
+   so a production server linking it never carries JSON-library weight. ACME only ever reads a handful
+   of string / list / object fields, but the reader parses the FULL grammar (escapes incl. \uXXXX +
+   surrogate pairs, numbers, nesting) so it can never misread a well-formed response. The fields we
+   read are ASCII (status keywords, URLs, tokens); errors are surfaced from the raw response body. *)
 module Json = struct
-  type t = Yojson.Safe.t
+  type t = Null | Bool of bool | Num of string | Str of string | List of t list | Assoc of (string * t) list
 
-  let parse = Yojson.Safe.from_string
-  let member k = function `Assoc l -> List.assoc_opt k l | _ -> None
-  let to_string_opt = function `String s -> Some s | _ -> None
-  let to_list_opt = function `List l -> Some l | _ -> None
+  exception Error of string
+
+  (* append code point [cp] as UTF-8 (handles the full range; surrogate pairs are combined by caller) *)
+  let add_utf8 buf cp =
+    if cp < 0x80 then Buffer.add_char buf (Char.chr cp)
+    else if cp < 0x800 then (Buffer.add_char buf (Char.chr (0xC0 lor (cp lsr 6))); Buffer.add_char buf (Char.chr (0x80 lor (cp land 0x3F))))
+    else if cp < 0x10000 then (Buffer.add_char buf (Char.chr (0xE0 lor (cp lsr 12))); Buffer.add_char buf (Char.chr (0x80 lor ((cp lsr 6) land 0x3F))); Buffer.add_char buf (Char.chr (0x80 lor (cp land 0x3F))))
+    else (Buffer.add_char buf (Char.chr (0xF0 lor (cp lsr 18))); Buffer.add_char buf (Char.chr (0x80 lor ((cp lsr 12) land 0x3F))); Buffer.add_char buf (Char.chr (0x80 lor ((cp lsr 6) land 0x3F))); Buffer.add_char buf (Char.chr (0x80 lor (cp land 0x3F))))
+
+  let parse (s : string) : t =
+    let n = String.length s in
+    let pos = ref 0 in
+    let fail msg = raise (Error msg) in
+    let peek () = if !pos < n then s.[!pos] else '\000' (* a raw NUL never appears in valid JSON (control chars are escaped), so it is a safe EOF sentinel *) in
+    let skip_ws () = while !pos < n && (match s.[!pos] with ' ' | '\t' | '\n' | '\r' -> true | _ -> false) do incr pos done in
+    let expect c = if peek () = c then incr pos else fail (Printf.sprintf "expected '%c'" c) in
+    let hex4 () =
+      if !pos + 4 > n then fail "bad \\u escape";
+      let v = try int_of_string ("0x" ^ String.sub s !pos 4) with _ -> fail "bad \\u escape" in
+      pos := !pos + 4;
+      v
+    in
+    let parse_string () =
+      expect '"';
+      let buf = Buffer.create 16 in
+      let rec go () =
+        if !pos >= n then fail "unterminated string";
+        let c = s.[!pos] in
+        incr pos;
+        match c with
+        | '"' -> Buffer.contents buf
+        | '\\' -> (
+          if !pos >= n then fail "bad escape";
+          let e = s.[!pos] in
+          incr pos;
+          (match e with
+          | '"' -> Buffer.add_char buf '"'
+          | '\\' -> Buffer.add_char buf '\\'
+          | '/' -> Buffer.add_char buf '/'
+          | 'b' -> Buffer.add_char buf '\b'
+          | 'f' -> Buffer.add_char buf '\012'
+          | 'n' -> Buffer.add_char buf '\n'
+          | 'r' -> Buffer.add_char buf '\r'
+          | 't' -> Buffer.add_char buf '\t'
+          | 'u' ->
+            let hi = hex4 () in
+            if hi >= 0xD800 && hi <= 0xDBFF && !pos + 1 < n && s.[!pos] = '\\' && s.[!pos + 1] = 'u' then (
+              pos := !pos + 2;
+              let lo = hex4 () in
+              add_utf8 buf (0x10000 + ((hi - 0xD800) lsl 10) + (lo - 0xDC00)))
+            else add_utf8 buf hi
+          | _ -> fail "bad escape");
+          go ())
+        | _ -> Buffer.add_char buf c; go ()
+      in
+      go ()
+    in
+    let expect_lit lit v =
+      let l = String.length lit in
+      if !pos + l <= n && String.sub s !pos l = lit then (pos := !pos + l; v) else fail ("expected " ^ lit)
+    in
+    let parse_number () =
+      let start = !pos in
+      if peek () = '-' then incr pos;
+      while !pos < n && (match s.[!pos] with '0' .. '9' | '.' | 'e' | 'E' | '+' | '-' -> true | _ -> false) do incr pos done;
+      Num (String.sub s start (!pos - start))
+    in
+    let rec parse_value () =
+      skip_ws ();
+      match peek () with
+      | '"' -> Str (parse_string ())
+      | '{' -> parse_object ()
+      | '[' -> parse_array ()
+      | 't' -> expect_lit "true" (Bool true)
+      | 'f' -> expect_lit "false" (Bool false)
+      | 'n' -> expect_lit "null" Null
+      | '-' | '0' .. '9' -> parse_number ()
+      | _ -> fail "unexpected token"
+    and parse_object () =
+      expect '{';
+      skip_ws ();
+      if peek () = '}' then (incr pos; Assoc [])
+      else
+        let rec members acc =
+          skip_ws ();
+          let k = parse_string () in
+          skip_ws ();
+          expect ':';
+          let v = parse_value () in
+          skip_ws ();
+          match peek () with ',' -> incr pos; members ((k, v) :: acc) | '}' -> incr pos; Assoc (List.rev ((k, v) :: acc)) | _ -> fail "expected ',' or '}'"
+        in
+        members []
+    and parse_array () =
+      expect '[';
+      skip_ws ();
+      if peek () = ']' then (incr pos; List [])
+      else
+        let rec elems acc =
+          let v = parse_value () in
+          skip_ws ();
+          match peek () with ',' -> incr pos; elems (v :: acc) | ']' -> incr pos; List (List.rev (v :: acc)) | _ -> fail "expected ',' or ']'"
+        in
+        elems []
+    in
+    let v = parse_value () in
+    skip_ws ();
+    v
+
+  let member k = function Assoc l -> List.assoc_opt k l | _ -> None
+  let to_string_opt = function Str s -> Some s | _ -> None
+  let to_list_opt = function List l -> Some l | _ -> None
 end
 
 (* opt-in wire tracing (FENNEC_ACME_DEBUG=1) — invaluable when an ACME server misbehaves *)
@@ -207,3 +318,46 @@ let%test "dns-01 TXT digest is a 43-char base64url SHA-256 of the key authorizat
   Mirage_crypto_rng_unix.use_default ();
   let k = X509.Private_key.generate ~bits:2048 `RSA in
   String.length (b64url (sha256 ("a-token" ^ "." ^ thumbprint k))) = 43
+
+(* ──── JSON reader (hand-rolled, no yojson) ──── *)
+
+(* a real ACME directory response: read the three top-level URL fields the protocol needs *)
+let%test "Json reads an ACME directory's string fields" =
+  let body = {|{"newNonce":"https://acme/n","newAccount":"https://acme/a","newOrder":"https://acme/o","meta":{"termsOfService":"https://acme/tos"}}|} in
+  let j = Json.parse body in
+  str j "newNonce" = Some "https://acme/n" && str j "newAccount" = Some "https://acme/a" && str j "newOrder" = Some "https://acme/o"
+  && (match Json.member "meta" j with Some m -> str m "termsOfService" = Some "https://acme/tos" | None -> false)
+
+(* an ACME order: a string list (authorizations), a nested challenge array, numbers + booleans skipped *)
+let%test "Json reads ACME order: string list, nested objects, numbers/bools" =
+  let body =
+    {|{"status":"pending","expires":1700000000,"valid":true,"finalize":"https://acme/fin",
+       "authorizations":["https://acme/az/1","https://acme/az/2"],
+       "challenges":[{"type":"http-01","token":"TOK","url":"https://acme/ch/1"},{"type":"dns-01","token":"T2","url":"u2"}]}|}
+  in
+  let j = Json.parse body in
+  str j "status" = Some "pending"
+  && str j "finalize" = Some "https://acme/fin"
+  && List.filter_map Json.to_string_opt (list j "authorizations") = [ "https://acme/az/1"; "https://acme/az/2" ]
+  &&
+  let chs = list j "challenges" in
+  List.length chs = 2
+  && (match List.find_opt (fun c -> str c "type" = Some "http-01") chs with Some c -> str c "token" = Some "TOK" && str c "url" = Some "https://acme/ch/1" | None -> false)
+
+(* escapes: an ACME [detail] error string with quotes, a solidus, and a \u escape decodes correctly *)
+let%test "Json decodes string escapes (quote, solidus, unicode)" =
+  let j = Json.parse {|{"detail":"bad id \"x\": see http:\/\/h\/p Aé"}|} in
+  str j "detail" = Some "bad id \"x\": see http://h/p A\xc3\xa9"
+
+(* surrogate pair (U+1F600 = "😀") round-trips to its 4-byte UTF-8 — proves we never
+   miscount bytes while skipping a unicode field *)
+let%test "Json decodes a surrogate pair to UTF-8" =
+  let j = Json.parse {|{"emoji":"😀","after":"ok"}|} in
+  str j "emoji" = Some "\xf0\x9f\x98\x80" && str j "after" = Some "ok"
+
+(* robustness: a missing field is None (not an error), a malformed body raises (caught by [parse]) *)
+let%test "Json: absent field is None; malformed input raises" =
+  let j = Json.parse {|{"a":"1"}|} in
+  str j "missing" = None
+  && list j "missing" = []
+  && (match Json.parse "{" with exception Json.Error _ -> true | exception _ -> true | _ -> false)
