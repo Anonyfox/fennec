@@ -7,6 +7,9 @@
  (name paw)
  (public_name fennec-paw)
  (modes byte native)
+ (foreign_stubs
+  (language c)
+  (names http_parse_stubs)) ; the hand-crafted zero-copy request-head parser (http/http_parse_stubs.c)
  (libraries
   unix
   eio
