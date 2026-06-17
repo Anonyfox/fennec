@@ -224,6 +224,7 @@ module Set_header = Set_header
 module Status_pages = Status_pages
 module Accepts = Accepts
 module Normalize_path = Normalize_path
+module Trusted_proxy = Trusted_proxy
 
 (** {1 WebSockets} *)
 module Ws = Ws

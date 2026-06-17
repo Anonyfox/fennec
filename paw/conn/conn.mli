@@ -73,10 +73,11 @@ val meth : t -> Http.meth
 (** The [Host] header value (without port). Used for host-based routing. *)
 val host : t -> string
 
-(** ["http"] or ["https"] derived from the transport. *)
+(** ["http"] or ["https"] — from the transport, or the value a trusted-proxy paw forwarded. *)
 val scheme : t -> string
 
-(** The client IP, as reported by the transport layer (may be a proxy address, not the browser). *)
+(** The client IP — from the transport (may be a proxy address), or the real client a trusted-proxy
+    paw extracted from [X-Forwarded-For]. *)
 val remote_ip : t -> string option
 
 (** The HTTP version string (e.g. ["HTTP/1.1"] or ["HTTP/2"]). *)
@@ -170,6 +171,14 @@ val delete_cookie : t -> ?path:string -> ?domain:string -> string -> t
 
 (** Set the effective method (used by a method-override paw). *)
 val override_method : t -> Http.meth -> t
+
+(** Set the effective client IP (used by a trusted-proxy paw, from [X-Forwarded-For]). Thereafter
+    {!remote_ip} returns this value. *)
+val override_remote_ip : t -> string -> t
+
+(** Set the effective scheme (used by a trusted-proxy paw, from [X-Forwarded-Proto]). Thereafter
+    {!scheme} returns this value. *)
+val override_scheme : t -> string -> t
 
 (** Set the captured path params (used by a :param/route). *)
 val set_path_params : t -> (string * string) list -> t

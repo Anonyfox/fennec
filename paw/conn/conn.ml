@@ -55,6 +55,8 @@ type t = {
   mutable body_params : (string * string) list option;   (* form fields *)
   mutable files : Multipart.part list option; (* multipart uploads *)
   mutable meth_override : H.meth option;                   (* set by a method-override paw *)
+  mutable ip_override : string option;                     (* real client IP, set by a trusted-proxy paw *)
+  mutable scheme_override : string option;                 (* forwarded scheme, set by a trusted-proxy paw *)
   mutable path_params : (string * string) list;           (* captured by a :param / *splat route *)
 }
 
@@ -62,7 +64,8 @@ type t = {
 let make (req : H.request) : t =
   { req; status = 200; resp_headers = []; resp_body = ""; state = Unset;
     upgrade = None; stream = None; before_send = []; assigns = Assigns.empty; query_params = None;
-    cookies = None; body_params = None; files = None; meth_override = None; path_params = [] }
+    cookies = None; body_params = None; files = None; meth_override = None; ip_override = None;
+    scheme_override = None; path_params = [] }
 
 (* ============================ server-facing consumption ====================== *)
 (* What the server reads off a finished conn to write the response. Not usually
@@ -99,8 +102,10 @@ let path (c : t) : string = c.req.H.path
 let meth (c : t) : H.meth = match c.meth_override with Some m -> m | None -> c.req.H.meth
 
 let host (c : t) : string = c.req.H.host
-let scheme (c : t) : string = c.req.H.scheme
-let remote_ip (c : t) : string option = c.req.H.remote_ip
+
+(* effective scheme/IP — a trusted-proxy paw may have rewritten them from X-Forwarded-* headers *)
+let scheme (c : t) : string = match c.scheme_override with Some s -> s | None -> c.req.H.scheme
+let remote_ip (c : t) : string option = match c.ip_override with Some _ as ip -> ip | None -> c.req.H.remote_ip
 let version (c : t) : string = c.req.H.version
 
 (* a request header, case-insensitive (the first value if repeated) *)
@@ -225,6 +230,10 @@ let delete_cookie (c : t) ?path ?domain (name : string) : t =
 
 (* override the effective method (used by a method-override paw) *)
 let override_method (c : t) (m : H.meth) : t = c.meth_override <- Some m; c
+
+(* override the effective client IP / scheme (used by a trusted-proxy paw from forwarded headers) *)
+let override_remote_ip (c : t) (ip : string) : t = c.ip_override <- Some ip; c
+let override_scheme (c : t) (s : string) : t = c.scheme_override <- Some s; c
 
 (* set the captured path params (used by a :param/route) *)
 let set_path_params (c : t) (ps : (string * string) list) : t = c.path_params <- ps; c
