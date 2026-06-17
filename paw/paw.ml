@@ -58,8 +58,10 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
     let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true in
     let net = Eio.Stdenv.net env in
     (* the ACME HTTP-01 token table; shared with the issuer when ~acme is set, empty for a BYO cert
-       (then the :80 front is redirect-only). *)
+       (then the :80 front is redirect-only). [tls_lock] guards it (and the issuer's cert tables)
+       against concurrent access from the :80 front + worker-domain on-demand issuance. *)
     let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
+    let tls_lock = Mutex.create () in
     let tls_source, on_demand =
       match acme with
       | Some cfg ->
@@ -79,7 +81,7 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
         in
         let domains = match Acme.domains_override cfg with Some d -> d | None -> derived in
         let ({ source; on_demand } : Acme.running) =
-          Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net ~domains ~challenges cfg
+          Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net ~lock:tls_lock ~domains ~challenges cfg
         in
         (Some source, on_demand)
       | None -> (Option.map (fun t () -> Some t) tls, None)
@@ -87,7 +89,7 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
     (* in TLS-mode production the app is on :443; a :80 front 301-redirects HTTP→HTTPS (and serves the
        ACME HTTP-01 challenge from the shared table — empty, so redirect-only, for a BYO cert), so
        in-process HTTPS is transparent for both ACME and BYO. Dev keeps a single plain/forced port. *)
-    if Option.is_some tls_source && not is_dev then Acme.serve_http_front ~sw ~net ~challenges;
+    if Option.is_some tls_source && not is_dev then Acme.serve_http_front ~sw ~net ~lock:tls_lock ~challenges;
     run ~env ~tls:tls_source ~on_demand router)
 
 (** {1 The connection} *)

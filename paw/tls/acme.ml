@@ -4,7 +4,12 @@
    before expiry with zero-downtime hot-reload (no restart, no dropped connections).
 
    Only concrete (Exact) hostnames are auto-certable via HTTP-01; wildcards need DNS-01 and a dynamic
-   catch-all needs on-demand TLS — both out of scope here and reported clearly rather than failing. *)
+   catch-all needs on-demand TLS — both out of scope here and reported clearly rather than failing.
+
+   Concurrency: the server runs connection handlers across worker domains, so the in-memory state
+   ([challenges]/[chains]/[domains_of]/[attempted]) is guarded by one [lock]; the hot path — the
+   per-connection TLS [source] — reads a lock-free atomic snapshot config that is rebuilt only when a
+   certificate actually changes (never per connection). *)
 
 let letsencrypt_prod = "https://acme-v02.api.letsencrypt.org/directory"
 let letsencrypt_staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -46,22 +51,41 @@ let dns_enabled cfg = Option.is_some cfg.dns_provider
 
 type chain = Tls_termination.chain
 
-(* the result of running ACME: the live TLS source the server reads per connection (SNI-selecting
-   among all current certs), plus an optional on-demand handler (ensure a cert for an SNI host). *)
+(* the result of running ACME: the live TLS source the server reads per connection (a snapshot config,
+   rebuilt only on cert change), plus an optional on-demand handler (ensure a cert for an SNI host). *)
 type running = { source : unit -> Tls.Config.server option; on_demand : (string -> unit) option }
+
+(* at most one on-demand issuance attempt per host per this window — so a flood of connections to an
+   unissuable SNI host can't hammer Let's Encrypt into a rate-limit ban *)
+let on_demand_backoff = 300.
 
 type t = {
   cfg : config;
-  challenges : (string, string) Hashtbl.t; (* shared with the :80 front *)
+  lock : Mutex.t; (* guards [challenges]/[chains]/[domains_of]/[attempted] + the [config] rebuild —
+                     all touched across worker domains. The per-connection [source] stays lock-free. *)
+  challenges : (string, string) Hashtbl.t; (* shared with the :80 front (accessed under [lock]) *)
   chains : (string, chain) Hashtbl.t; (* label → cert chain: "managed" = the declared SAN; a host = on-demand *)
   domains_of : (string, string list) Hashtbl.t; (* label → the domains it covers, for renewal *)
+  attempted : (string, float) Hashtbl.t; (* on-demand host → last issuance attempt time (backoff) *)
+  config : Tls.Config.server option Atomic.t; (* the live SNI-selecting config, read lock-free per connection *)
 }
 
 let cert_key label = label ^ ".cert.pem"
 let key_key label = label ^ ".key.pem"
 
-(* the live TLS source: SNI-select among all current chains; None until the first cert lands *)
-let source t () = match Hashtbl.fold (fun _ c acc -> c :: acc) t.chains [] with [] -> None | cs -> Some (Tls_termination.server_of_chains cs)
+(* the live TLS source: the current snapshot config — rebuilt only when a cert changes (see
+   {!republish}), NOT per connection — read lock-free from any worker domain *)
+let source t () = Atomic.get t.config
+
+(* rebuild the SNI-selecting config from the current chains and publish it atomically. The caller
+   MUST hold [t.lock] (it reads [t.chains]); [source] sees the new config on its next read. *)
+let republish t =
+  let cfg =
+    match Hashtbl.fold (fun _ c acc -> c :: acc) t.chains [] with
+    | [] -> None
+    | cs -> ( try Some (Tls_termination.server_of_chains cs) with _ -> None)
+  in
+  Atomic.set t.config cfg
 
 (* the account key, persisted so the same ACME account is reused across restarts/replicas *)
 let account_key store =
@@ -85,19 +109,26 @@ let cert_days_left store ~label ~clock =
       ( match Ptime.Span.to_int_s (Ptime.diff not_after now) with Some secs -> Some (secs / 86400) | None -> Some 0)
     | _ -> None)
 
-(* install the stored chain for [label] into the live set (hot-reloadable: source reads it per conn) *)
-let load_chain t ~label =
-  match (Cert_store.(t.cfg.store.get (cert_key label)), Cert_store.(t.cfg.store.get (key_key label))) with
-  | Some cert, Some key -> ( try Hashtbl.replace t.chains label (Tls_termination.chain_of_pem ~cert ~key) with _ -> ())
-  | _ -> ()
+(* read + decode the stored chain for [label] (store I/O + decode; no lock held) *)
+let read_chain store ~label =
+  match (Cert_store.(store.get (cert_key label)), Cert_store.(store.get (key_key label))) with
+  | Some cert, Some key -> ( try Some (Tls_termination.chain_of_pem ~cert ~key) with _ -> None)
+  | _ -> None
 
-(* the HTTP response for one :80 request — serve the ACME HTTP-01 token if the path matches a
-   provisioned one, else 301-redirect to HTTPS. Pure, so it's unit-testable without binding :80. *)
-let http_front_response ~challenges ~host request_line =
+(* install the stored chain for [label] into the live set + republish (hot-reload: the next
+   per-connection [source] read sees it). Reads the store first (no lock), then briefly locks. *)
+let load_chain t ~label =
+  match read_chain t.cfg.store ~label with
+  | Some c -> Mutex.protect t.lock (fun () -> Hashtbl.replace t.chains label c; republish t)
+  | None -> ()
+
+(* the HTTP response for one :80 request — serve the ACME HTTP-01 token via [lookup] if the path
+   matches a provisioned one, else 301-redirect to HTTPS. Pure, so it's unit-testable. *)
+let http_front_response ~lookup ~host request_line =
   let prefix = "/.well-known/acme-challenge/" in
   match String.split_on_char ' ' request_line with
   | _ :: path :: _ when String.length path > String.length prefix && String.sub path 0 (String.length prefix) = prefix -> (
-    match Hashtbl.find_opt challenges (String.sub path (String.length prefix) (String.length path - String.length prefix)) with
+    match lookup (String.sub path (String.length prefix) (String.length path - String.length prefix)) with
     | Some ka -> Printf.sprintf "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" (String.length ka) ka
     | None -> "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
   | _ :: path :: _ ->
@@ -107,9 +138,10 @@ let http_front_response ~challenges ~host request_line =
 
 (* the dedicated :80 front (HTTP-01 challenge + HTTP→HTTPS redirect), owned by {!Fennec.serve} in
    TLS-mode prod. Independent of the app's :443, so it serves challenges during issuance and renewal
-   and redirects plain-HTTP visitors. [challenges] is shared with the ACME issuer (empty for BYO-cert,
-   making it redirect-only). *)
-let serve_http_front ~sw ~net ~challenges =
+   and redirects plain-HTTP visitors. Reads [challenges] under the shared [lock] (an on-demand
+   issuance may write it from another domain); empty ⇒ redirect-only (a BYO cert). *)
+let serve_http_front ~sw ~net ~lock ~challenges =
+  let lookup token = Mutex.protect lock (fun () -> Hashtbl.find_opt challenges token) in
   match (try Some (Eio.Net.listen ~sw ~reuse_addr:true ~backlog:64 net (`Tcp (Eio.Net.Ipaddr.V4.any, 80))) with _ -> None) with
   | None -> Printf.eprintf "fennec: could not bind :80 (need privilege / port free) — no HTTP->HTTPS redirect or ACME HTTP-01\n%!"
   | Some sock ->
@@ -125,14 +157,16 @@ let serve_http_front ~sw ~net ~challenges =
                    | h -> ( match String.index_opt h ':' with Some i when String.lowercase_ascii (String.trim (String.sub h 0 i)) = "host" -> String.trim (String.sub h (i + 1) (String.length h - i - 1)) | _ -> host_of ())
                    | exception _ -> "localhost"
                  in
-                 try Eio.Flow.copy_string (http_front_response ~challenges ~host:(host_of ()) line) flow with _ -> ())
+                 try Eio.Flow.copy_string (http_front_response ~lookup ~host:(host_of ()) line) flow with _ -> ())
            with _ -> ());
           loop ()
         in
         loop ())
 
-(* obtain (or, for a non-leaseholder replica, wait for) the cert for [label] covering [domains],
-   then install it into the live set *)
+(* obtain (or, for a non-leaseholder replica, wait for) the cert for [label] covering [domains], then
+   install it into the live set. The ACME network exchange runs WITHOUT [t.lock] held; only the brief
+   challenge writes (during the exchange) and the final chain install take it, so issuance never
+   blocks the per-connection TLS source. *)
 let issue t ~clock ~net ~label ~domains =
   let directory = match t.cfg.directory with Some d -> d | None -> if t.cfg.staging then letsencrypt_staging else letsencrypt_prod in
   let key = account_key t.cfg.store in
@@ -143,8 +177,8 @@ let issue t ~clock ~net ~label ~domains =
       t.cfg.store.with_lease ("issue:" ^ label) (fun () ->
           match
             Acme_client.obtain ~net ~clock ?solve_dns01 ~directory ~account_key:key ~email:(Option.value t.cfg.email ~default:"") ~domains
-              ~provision:(fun ~token ~key_auth -> Hashtbl.replace t.challenges token key_auth)
-              ~cleanup:(fun ~token -> Hashtbl.remove t.challenges token) ()
+              ~provision:(fun ~token ~key_auth -> Mutex.protect t.lock (fun () -> Hashtbl.replace t.challenges token key_auth))
+              ~cleanup:(fun ~token -> Mutex.protect t.lock (fun () -> Hashtbl.remove t.challenges token)) ()
           with
           | Ok (cert_pem, key_pem) ->
             t.cfg.store.put (cert_key label) cert_pem;
@@ -156,33 +190,50 @@ let issue t ~clock ~net ~label ~domains =
   if not did then (
     let rec wait n = if n <= 0 then () else match Cert_store.(t.cfg.store.get (cert_key label)) with Some _ -> () | None -> Eio.Time.sleep clock 2.0; wait (n - 1) in
     wait 60);
-  Hashtbl.replace t.domains_of label domains;
-  load_chain t ~label
+  (* install: read the freshly-stored chain (no lock), then briefly lock to record + publish *)
+  match read_chain t.cfg.store ~label with
+  | Some c -> Mutex.protect t.lock (fun () -> Hashtbl.replace t.domains_of label domains; Hashtbl.replace t.chains label c; republish t)
+  | None -> ()
 
 (* on-demand: ensure a cert for an SNI [host] (load cached, else issue) when the allowlist approves —
-   called during the handshake, so the first hit to a new tenant domain blocks briefly while issuing *)
+   called during the handshake. Guarded by [t.lock] + a per-host backoff ({!on_demand_backoff}): at
+   most one issuance attempt per host per window, so a flood of connections to an unissuable host
+   can't trigger an issuance storm (Let's Encrypt rate-limit safety). The backoff record also serves
+   as in-flight de-duplication across concurrent connections. *)
 let ensure t ~clock ~net ~allow host =
-  if (not (Hashtbl.mem t.chains host)) && allow host then (
-    load_chain t ~label:host;
-    if not (Hashtbl.mem t.chains host) then issue t ~clock ~net ~label:host ~domains:[ host ])
+  let now = Eio.Time.now clock in
+  let go =
+    Mutex.protect t.lock (fun () ->
+        if Hashtbl.mem t.chains host then false (* already have it *)
+        else if not (allow host) then false (* not approved by the app *)
+        else
+          match Hashtbl.find_opt t.attempted host with
+          | Some last when now -. last < on_demand_backoff -> false (* attempted recently — back off *)
+          | _ -> Hashtbl.replace t.attempted host now; true)
+  in
+  if go then (
+    load_chain t ~label:host; (* a cached cert from the store, if any *)
+    if not (Mutex.protect t.lock (fun () -> Hashtbl.mem t.chains host)) then issue t ~clock ~net ~label:host ~domains:[ host ])
 
-(* the full lifecycle, called from {!Fennec.serve} before the server binds. Returns the live TLS
-   source + an optional on-demand handler. [challenges] is shared with serve's :80 front. *)
-let run ~sw ~clock ~net ~domains ~challenges (cfg : config) : running =
-  let t = { cfg; challenges; chains = Hashtbl.create 8; domains_of = Hashtbl.create 8 } in
+(* the full lifecycle, called from {!Fennec.serve} before the server binds. [lock] + [challenges] are
+   shared with serve's :80 front. Returns the live TLS source + an optional on-demand handler. *)
+let run ~sw ~clock ~net ~lock ~domains ~challenges (cfg : config) : running =
+  let t = { cfg; lock; challenges; chains = Hashtbl.create 8; domains_of = Hashtbl.create 8; attempted = Hashtbl.create 8; config = Atomic.make None } in
   (* the declared domains → one SAN cert under the "managed" label *)
   (match (cfg.email, domains) with
   | Some _, _ :: _ -> (
     match cert_days_left cfg.store ~label:"managed" ~clock with
-    | Some d when d > 30 -> Hashtbl.replace t.domains_of "managed" domains; load_chain t ~label:"managed"
+    | Some d when d > 30 -> Mutex.protect t.lock (fun () -> Hashtbl.replace t.domains_of "managed" domains); load_chain t ~label:"managed"
     | _ -> issue t ~clock ~net ~label:"managed" ~domains)
   | None, _ -> if cfg.on_demand = None then Printf.eprintf "fennec acme: no email (pass ~email or set FENNEC_ACME_EMAIL) — HTTPS disabled\n%!"
   | _, [] -> if cfg.on_demand = None then Printf.eprintf "fennec acme: no concrete (Exact) domain — HTTPS disabled (wildcards need DNS-01; catch-all needs on-demand TLS)\n%!");
-  (* renewal: every ~12h re-issue any label under 30 days (declared SAN + each on-demand host) *)
+  (* renewal: every ~12h re-issue any label under 30 days (declared SAN + each on-demand host). A
+     locked snapshot of the labels avoids iterating the table while another fiber mutates it. *)
   Eio.Fiber.fork ~sw (fun () ->
       let rec loop () =
         Eio.Time.sleep clock (12. *. 3600.);
-        Hashtbl.iter (fun label ds -> match cert_days_left cfg.store ~label ~clock with Some d when d > 30 -> () | _ -> (try issue t ~clock ~net ~label ~domains:ds with _ -> ())) (Hashtbl.copy t.domains_of);
+        let labels = Mutex.protect t.lock (fun () -> Hashtbl.fold (fun l ds acc -> (l, ds) :: acc) t.domains_of []) in
+        List.iter (fun (label, ds) -> match cert_days_left cfg.store ~label ~clock with Some d when d > 30 -> () | _ -> (try issue t ~clock ~net ~label ~domains:ds with _ -> ())) labels;
         loop ()
       in
       loop ());
@@ -199,8 +250,9 @@ let%test ":80 front serves a provisioned HTTP-01 token; redirects everything els
   in
   let c = Hashtbl.create 4 in
   Hashtbl.replace c "tokenAAA" "tokenAAA.keyauthZZZ";
-  let ok = http_front_response ~challenges:c ~host:"ex.com" "GET /.well-known/acme-challenge/tokenAAA HTTP/1.1" in
-  let miss = http_front_response ~challenges:c ~host:"ex.com" "GET /.well-known/acme-challenge/unknown HTTP/1.1" in
-  let redir = http_front_response ~challenges:c ~host:"ex.com:80" "GET /app/page HTTP/1.1" in
+  let lookup = Hashtbl.find_opt c in
+  let ok = http_front_response ~lookup ~host:"ex.com" "GET /.well-known/acme-challenge/tokenAAA HTTP/1.1" in
+  let miss = http_front_response ~lookup ~host:"ex.com" "GET /.well-known/acme-challenge/unknown HTTP/1.1" in
+  let redir = http_front_response ~lookup ~host:"ex.com:80" "GET /app/page HTTP/1.1" in
   has ~sub:"200 OK" ok && has ~sub:"tokenAAA.keyauthZZZ" ok && has ~sub:"404" miss
   && has ~sub:"301 Moved Permanently" redir && has ~sub:"Location: https://ex.com/app/page" redir

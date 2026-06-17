@@ -53,19 +53,23 @@ val domains_override : config -> string list option
 (** [dns_enabled cfg] — whether a DNS provider is configured (so wildcards can be certified via DNS-01). *)
 val dns_enabled : config -> bool
 
-(** [serve_http_front ~sw ~net ~challenges] binds :80 and serves ACME HTTP-01 tokens from
+(** [serve_http_front ~sw ~net ~lock ~challenges] binds :80 and serves ACME HTTP-01 tokens from
     [challenges] (shared with the issuer; empty ⇒ redirect-only for a BYO cert), 301-redirecting
-    every other request to HTTPS. Owned by {!Fennec.serve} in TLS-mode production. *)
-val serve_http_front : sw:Eio.Switch.t -> net:_ Eio.Net.t -> challenges:(string, string) Hashtbl.t -> unit
+    every other request to HTTPS. Owned by {!Fennec.serve} in TLS-mode production. [lock] is the same
+    mutex passed to {!run} — it guards [challenges] against concurrent on-demand writes from worker
+    domains, so the read here is race-free. *)
+val serve_http_front : sw:Eio.Switch.t -> net:_ Eio.Net.t -> lock:Mutex.t -> challenges:(string, string) Hashtbl.t -> unit
 
 (** What {!run} returns: [source] is the live TLS config the server reads per connection (SNI-
     selecting among all current certs; [None] until the first lands), and [on_demand], when present,
     ensures a certificate for an SNI host (issuing on first connection). *)
 type running = { source : unit -> Tls.Config.server option; on_demand : (string -> unit) option }
 
-(** [run ~sw ~clock ~net ~domains ~challenges cfg] runs the ACME lifecycle on the server's switch: an
-    initial issue-or-load for [domains] (one SAN cert) and the renewal loop, provisioning HTTP-01
-    tokens into the shared [challenges] table (DNS-01 via the configured provider for wildcards), and
-    returns the live TLS {!running.source}. No-ops with a clear log if there's no email / domain (and
-    no on-demand). Called from {!Fennec.serve} before the server binds. *)
-val run : sw:Eio.Switch.t -> clock:_ Eio.Time.clock -> net:_ Eio.Net.t -> domains:string list -> challenges:(string, string) Hashtbl.t -> config -> running
+(** [run ~sw ~clock ~net ~lock ~domains ~challenges cfg] runs the ACME lifecycle on the server's
+    switch: an initial issue-or-load for [domains] (one SAN cert) and the renewal loop, provisioning
+    HTTP-01 tokens into the shared [challenges] table (DNS-01 via the configured provider for
+    wildcards), and returns the live TLS {!running.source}. No-ops with a clear log if there's no
+    email / domain (and no on-demand). [lock] (shared with {!serve_http_front}) guards the in-memory
+    cert + challenge tables, so issuance, renewal, and on-demand never race the per-connection source
+    or :80 front across worker domains. Called from {!Fennec.serve} before the server binds. *)
+val run : sw:Eio.Switch.t -> clock:_ Eio.Time.clock -> net:_ Eio.Net.t -> lock:Mutex.t -> domains:string list -> challenges:(string, string) Hashtbl.t -> config -> running

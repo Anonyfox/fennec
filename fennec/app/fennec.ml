@@ -186,6 +186,9 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
      [cert_ref]. ~tls (BYO cert) is a constant source. The certifiable domains are the router's
      concrete (Exact) hosts unless overridden — wildcards/catch-all are reported by Acme.run. *)
   let challenges : (string, string) Hashtbl.t = Hashtbl.create 8 in
+  (* guards the shared challenge table + the issuer's cert tables against concurrent access from the
+     :80 front and worker-domain on-demand issuance (the per-connection source itself is lock-free). *)
+  let tls_lock = Mutex.create () in
   (* ACME issues REAL certificates, so it runs only in production (FENNEC_ENV=production); FENNEC_ACME=1/0
      force on/off. In dev, ~acme no-ops (plain HTTP) — a dev build never touches Let's Encrypt. ~tls (a
      BYO cert) always applies, dev or prod. *)
@@ -215,13 +218,13 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
         |> List.sort_uniq compare
       in
       let domains = match Paw.Acme.domains_override cfg with Some d -> d | None -> derived in
-      let r = Paw.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~domains ~challenges cfg in
+      let r = Paw.Acme.run ~sw ~clock:(Eio.Stdenv.clock env) ~net:(Eio.Stdenv.net env) ~lock:tls_lock ~domains ~challenges cfg in
       (Some r.Paw.Acme.source, r.Paw.Acme.on_demand))
     else match tls with Some t -> (Some (fun () -> Some t), None) | None -> (None, None)
   in
   (* in TLS-mode production the app is on :443; a :80 front does the HTTP→HTTPS redirect (+ serves
      the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
-  if Option.is_some tls_source && not is_dev then Paw.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~challenges;
+  if Option.is_some tls_source && not is_dev then Paw.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~lock:tls_lock ~challenges;
   (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) ~net:(Eio.Stdenv.net env) | None -> ());
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
