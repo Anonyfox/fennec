@@ -181,7 +181,22 @@ let model_core ~loc (labels : label_declaration list) : structure =
         [%expr [%e acc] |> Sift.field [%e f] [%e get]])
       [%expr Sift.record [%e make]] labels
   in
-  let codec = [%stri let codec = Sift.seal [%e builder]] in
+  (* K4 STAGING: for arity 1..8 emit [Sift.objN Fields.f1 … ~make ~split] — a DIRECT decoder (read all
+     fields then construct in one application, no applicative currying), byte-identical to the builder.
+     A wider record falls back to [Sift.seal builder]. Same one ppx pass — this is just better output
+     from the deriver that already runs. *)
+  let n = List.length labels in
+  let codec_expr =
+    if n >= 1 && n <= 8 then (
+      let objn = B.pexp_ident ~loc { txt = Ldot (Lident "Sift", Printf.sprintf "obj%d" n); loc } in
+      let field_args = List.map (fun ld -> (Nolabel, B.pexp_ident ~loc { txt = Ldot (Lident "Fields", ld.pld_name.txt); loc })) labels in
+      let proj ld = B.pexp_field ~loc (B.evar ~loc "x") { txt = Lident ld.pld_name.txt; loc } in
+      let split_body = match labels with [ ld ] -> proj ld | _ -> B.pexp_tuple ~loc (List.map proj labels) in
+      let split = B.pexp_fun ~loc Nolabel None (B.pvar ~loc "x") split_body in
+      B.pexp_apply ~loc objn (field_args @ [ (Labelled "make", make); (Labelled "split", split) ]))
+    else [%expr Sift.seal [%e builder]]
+  in
+  let codec = [%stri let codec = [%e codec_expr]] in
   [ fields_mod; codec ]
 
 (* [@@deriving model]: the DB-agnostic model — just [Fields] + [codec], for forms / JSON APIs / any
