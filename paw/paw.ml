@@ -149,7 +149,8 @@ let html ?status ?headers body c = Conn.html ?status ?headers c body
 let json ?status ?headers body c = Conn.json ?status ?headers c body
 let text ?status ?headers body c = Conn.text ?status ?headers c body
 let redirect ?status url c = Conn.redirect ?status c url
-let send_file ?content_type ~path c = Conn.send_file c ?content_type ~path ()
+let send_file ?content_type ?download ~path c = Conn.send_file c ?content_type ?download ~path ()
+let download ?content_type ~filename body c = Conn.download c ?content_type ~filename body
 
 (** {1 The endpoint — flat-pipe app assembly}
 
@@ -218,6 +219,7 @@ module Force_https = Force_https
 module Basic_auth = Basic_auth
 
 module Bearer_auth = Bearer_auth
+module Webhook = Webhook
 
 (** {2 Traffic shaping & limits} *)
 module Rate_limit = Rate_limit
@@ -248,6 +250,9 @@ module Status_pages = Status_pages
 
 (** {2 Operations} *)
 module Health = Health
+
+(** {1 Server-Sent Events} *)
+module Sse = Sse
 
 (** {1 WebSockets} *)
 module Ws = Ws

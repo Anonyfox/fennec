@@ -205,8 +205,14 @@ val json : ?status:int -> ?headers:(string * string) list -> t -> string -> t
 (** Answer with a Location header + a 3xx status (302 by default). *)
 val redirect : ?status:int -> t -> string -> t
 
-(** Stream a file from disk (content type defaults to the path's MIME type). *)
-val send_file : t -> ?content_type:string -> path:string -> unit -> t
+(** Stream a file from disk (content type defaults to the path's MIME type). [download:name] serves it
+    as an attachment (the browser saves it as [name] rather than rendering it). *)
+val send_file : t -> ?content_type:string -> ?download:string -> path:string -> unit -> t
+
+(** Answer with in-memory bytes as a downloadable attachment — a generated CSV / PDF / export. The
+    [Content-Disposition] filename is sanitized (no header injection) with a unicode-safe [filename*];
+    [content_type] defaults to [filename]'s MIME type. *)
+val download : t -> ?content_type:string -> filename:string -> string -> t
 
 (** Stream a chunked (Transfer-Encoding: chunked) body: [produce emit] is run by the server,
     calling [emit] per chunk. Use content-type ["text/event-stream"] for SSE. *)

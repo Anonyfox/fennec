@@ -278,12 +278,29 @@ let redirect ?(status = 302) (c : t) (location : string) : t =
   if c.state = Unset then (c.resp_body <- ""; c.state <- Set);
   c
 
-(* stream a file from disk; the content type defaults to the path's MIME type *)
-let send_file (c : t) ?content_type ~(path : string) () : t =
+(* RFC 6266 Content-Disposition for an attachment: a sanitized ASCII [filename="…"] (control chars,
+   quotes and backslashes neutralized so a crafted name can't inject a header) PLUS an RFC 5987
+   [filename*=UTF-8''…] so non-ASCII names survive in modern browsers. Only the basename is used. *)
+let attachment_disposition (filename : string) : string =
+  let base = Filename.basename filename in
+  let ascii = String.map (fun ch -> if ch = '"' || ch = '\\' || Char.code ch < 0x20 || Char.code ch > 0x7e then '_' else ch) base in
+  Printf.sprintf "attachment; filename=\"%s\"; filename*=UTF-8''%s" ascii (H.percent_encode base)
+
+(* stream a file from disk; the content type defaults to the path's MIME type. [download:name] serves
+   it as an attachment (the browser saves it as [name] instead of rendering it). *)
+let send_file (c : t) ?content_type ?download ~(path : string) () : t =
   let ct = match content_type with Some t -> t | None -> Mime.of_path path in
+  let c = match download with Some name -> set_header c "content-disposition" (attachment_disposition name) | None -> c in
   c.stream <- Some (File (path, ct));
   c.state <- Streaming;
   c
+
+(* answer with in-memory bytes as a downloadable attachment (a generated CSV / PDF / report). The
+   content type defaults to [filename]'s MIME type. *)
+let download (c : t) ?content_type ~(filename : string) (body : string) : t =
+  let ct = match content_type with Some t -> t | None -> Mime.of_path filename in
+  let c = set_header c "content-disposition" (attachment_disposition filename) in
+  respond c { H.status = 200; headers = [ ("content-type", ct) ]; body }
 
 (* stream a chunked (Transfer-Encoding: chunked) body: [produce emit] is run by the
    server, calling [emit] for each chunk. Use content-type "text/event-stream" for SSE. *)
@@ -588,6 +605,24 @@ let%test "upgrade: handler set, answered, no buffered resp" =
 let%test "send_file sets a File stream + answers" =
   let c = send_file (make (req_ "/")) ~path:"/tmp/x.txt" () in
   answered c && (match stream c with Some (File (p, _)) -> p = "/tmp/x.txt" | _ -> false)
+
+let%test "send_file ~download adds an attachment Content-Disposition" =
+  let c = send_file (make (req_ "/")) ~download:"report.csv" ~path:"/tmp/x.csv" () in
+  match Headers.get (resp_skeleton c).H.headers "content-disposition" with Some v -> Fennec_hunt_unit.str_contains v {|filename="report.csv"|} | None -> false
+
+let%test "download answers with the body + attachment header + MIME content-type" =
+  let r = Option.get (resp (download (make (req_ "/")) ~filename:"export.csv" "a,b\n1,2\n")) in
+  r.H.body = "a,b\n1,2\n" && (match Headers.get r.H.headers "content-type" with Some ct -> Fennec_hunt_unit.str_contains ct "text/csv" | None -> false) && (match Headers.get r.H.headers "content-disposition" with Some v -> Fennec_hunt_unit.str_contains v {|filename="export.csv"|} | None -> false)
+
+let%test "download sanitizes a quote in the filename (no header injection) + unicode filename*" =
+  let r = Option.get (resp (download (make (req_ "/")) ~filename:"a\"b.txt" "x")) in
+  match Headers.get r.H.headers "content-disposition" with
+  | Some v -> (not (Fennec_hunt_unit.str_contains v "\"a\"b.txt\"")) && Fennec_hunt_unit.str_contains v "filename*=UTF-8''"
+  | None -> false
+
+let%test "download strips a path to its basename" =
+  let r = Option.get (resp (download (make (req_ "/")) ~filename:"/etc/passwd" "x")) in
+  match Headers.get r.H.headers "content-disposition" with Some v -> Fennec_hunt_unit.str_contains v {|filename="passwd"|} && not (Fennec_hunt_unit.str_contains v "/etc/") | None -> false
 
 let%test_unit "send_chunked content-type" =
   let c = send_chunked (make (req_ "/")) ~content_type:"text/event-stream" (fun emit -> emit "a"; emit "b") in

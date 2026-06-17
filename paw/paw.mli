@@ -170,8 +170,11 @@ val text : ?status:int -> ?headers:(string * string) list -> string -> Conn.t ->
 (** Answer with a redirect to a URL (302 by default). *)
 val redirect : ?status:int -> string -> Conn.t -> Conn.t
 
-(** Stream a file from disk as the response. *)
-val send_file : ?content_type:string -> path:string -> Conn.t -> Conn.t
+(** Stream a file from disk as the response. [download:name] serves it as a saved attachment. *)
+val send_file : ?content_type:string -> ?download:string -> path:string -> Conn.t -> Conn.t
+
+(** Answer with in-memory bytes as a downloadable attachment — a generated CSV / PDF / export. *)
+val download : ?content_type:string -> filename:string -> string -> Conn.t -> Conn.t
 
 (** {1 The endpoint — flat-pipe app assembly}
 
@@ -323,6 +326,10 @@ module Basic_auth = Basic_auth
     or rejected by your [verify]. *)
 module Bearer_auth = Bearer_auth
 
+(** Verify the HMAC signature on an inbound webhook (GitHub/Slack/generic) before trusting its body —
+    a constant-time {!Webhook.verify} for custom schemes, and a drop-in {!Webhook.guard} paw. *)
+module Webhook = Webhook
+
 (** {2 Traffic shaping & limits} *)
 
 (** Token-bucket rate limiting, keyed by any function of the connection. *)
@@ -387,6 +394,12 @@ module Status_pages = Status_pages
 
 (** A liveness / readiness probe endpoint (GET/HEAD [/healthz] by default). *)
 module Health = Health
+
+(** {1 Server-Sent Events} *)
+
+(** A long-lived [text/event-stream] response that pushes events to the browser's [EventSource] — live
+    updates without websockets. Formats the wire protocol and sets the headers over {!Conn.send_chunked}. *)
+module Sse = Sse
 
 (** {1 WebSockets} (RFC 6455) *)
 
