@@ -470,8 +470,15 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(re
           let resp = try Responder.finalize ~now:(now ()) ~req resp with _ -> resp in
           let keep_alive = want_keep_alive p in
           write_http w resp ~keep_alive;
-          Eio.Buf_write.flush w;
-          if keep_alive then loop ()))
+          (* Flush only when the read buffer is drained. A lone request (buffer empty, client waiting)
+             flushes immediately — no added latency. A pipelined burst (more requests already buffered)
+             keeps batching its responses into the write buffer, so N pipelined requests cost a handful
+             of write syscalls instead of N. (Buf_write also auto-flushes when its buffer fills, and
+             with_flow flushes on close, so nothing is ever stranded.) *)
+          if keep_alive then (
+            if Eio.Buf_read.buffered_bytes r = 0 then Eio.Buf_write.flush w;
+            loop ())
+          else Eio.Buf_write.flush w))
   in
   loop ()
 
