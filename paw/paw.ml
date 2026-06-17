@@ -112,6 +112,10 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
     if Option.is_some tls_source && not is_dev then Acme.serve_http_front ~sw ~net ~lock:tls_lock ~challenges;
     run ~env ~tls:tls_source ~on_demand router)
 
+(* render framework errors (404/405/500/503) as JSON instead of plain text — for an API,
+   [Paw.serve ~on_error:Paw.json_errors apps]. The default (plain text) needs no wiring. *)
+let json_errors = Server.json_on_error
+
 (** {1 The connection} *)
 module Conn = Conn
 
@@ -135,6 +139,8 @@ let query = Conn.query
 let cookie = Conn.cookie
 let header = Conn.req_header
 let body_param = Conn.body_param
+let file = Conn.file
+let files = Conn.files
 
 (* writes — conn-LAST, so they compose with [|>] *)
 let set_status = Conn.set_status
@@ -151,6 +157,11 @@ let text ?status ?headers body c = Conn.text ?status ?headers c body
 let redirect ?status url c = Conn.redirect ?status c url
 let send_file ?content_type ?download ~path c = Conn.send_file c ?content_type ?download ~path ()
 let download ?content_type ~filename body c = Conn.download c ?content_type ~filename body
+
+(* Server-Sent Events with a labelled [push] for the common case (data events, optionally named) — no
+   need to spell out {!Sse.data}. Reach for {!Sse.stream} directly for comment heartbeats / full control. *)
+let sse (producer : push:(?event:string -> ?id:string -> ?retry:int -> string -> unit) -> unit) c =
+  Sse.stream c (fun ~push -> producer ~push:(fun ?event ?id ?retry data -> push (Sse.data ?event ?id ?retry data)))
 
 (** {1 The endpoint — flat-pipe app assembly}
 

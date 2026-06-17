@@ -63,11 +63,11 @@ Each is a `make` returning a `Paw.t`, so it drops into any `seq` or `Endpoint`:
 
 The server already does the HTTP-correct thing on a miss: a path that exists for other methods returns **`405` with an `Allow` header** (not a blanket 404), and an **`OPTIONS`** probe with no explicit handler is auto-answered **`204` + `Allow`**. An explicit `OPTIONS` route or a `Cors` paw still wins.
 
-Building a JSON API? Pass the ready-made renderer — `Paw.serve ~on_error:Paw.Server.json_on_error apps` — and those framework errors come back as `{"error":…,"status":…}` instead of plain text.
+Building a JSON API? Pass the ready-made renderer — `Paw.serve ~on_error:Paw.json_errors apps` — and those framework errors come back as `{"error":…,"status":…}` instead of plain text.
 
 ## What a handler answers with
 
-`Paw.text` · `Paw.html` · `Paw.json` (you bring the encoder — paw ships no JSON/template engine; that's your data model's job) · `Paw.redirect` · `Paw.send_file` (with `?download` for attachments) · `Paw.download` (in-memory bytes as a saved file — a generated CSV/PDF) · `Paw.Sse.stream` (Server-Sent Events for live updates) · `Conn.send_chunked` (arbitrary streaming) · `Conn.upgrade` (WebSocket).
+All lifted to top-level `Paw.*` (conn-last, so they pipe): `Paw.text` · `Paw.html` · `Paw.json` (you bring the encoder — paw ships no JSON/template engine; that's your data model's job) · `Paw.redirect` · `Paw.send_file` (with `?download` for attachments) · `Paw.download` (in-memory bytes as a saved file — a generated CSV/PDF) · `Paw.sse` (Server-Sent Events: `c |> Paw.sse (fun ~push -> push ~event:"tick" data)`) · `Conn.send_chunked` (arbitrary streaming) · `Conn.upgrade` (WebSocket).
 
 ## Batteries that usually need wiring
 

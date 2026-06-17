@@ -98,6 +98,11 @@ val serve :
   Endpoint.t list ->
   unit
 
+(** A ready-made [~on_error] for {!serve} that renders framework errors (404/405/500/503) as
+    [{"error":…,"status":…}] JSON instead of plain text — for an API:
+    [Paw.serve ~on_error:Paw.json_errors apps]. The plain-text default needs no wiring. *)
+val json_errors : Server.request_error -> Http.response
+
 (** {1 The connection} *)
 
 (** The per-request carrier: the parsed request, the response being built, path params, and typed
@@ -123,13 +128,15 @@ module Assigns = Assigns
     Reach for {!Conn} directly for the long tail (files, streaming, raw header lists, …). *)
 
 (** Reads — point-free aliases of {!Conn}; go-to-definition and stack traces land there. [param]
-    checks path, then query, then form body. *)
+    checks path, then query, then form body; [file]/[files] read uploaded multipart parts. *)
 include module type of struct
   let param = Conn.param
   let query = Conn.query
   let cookie = Conn.cookie
   let header = Conn.req_header
   let body_param = Conn.body_param
+  let file = Conn.file
+  let files = Conn.files
 end
 
 (** Set the response status. *)
@@ -175,6 +182,13 @@ val send_file : ?content_type:string -> ?download:string -> path:string -> Conn.
 
 (** Answer with in-memory bytes as a downloadable attachment — a generated CSV / PDF / export. *)
 val download : ?content_type:string -> filename:string -> string -> Conn.t -> Conn.t
+
+(** Answer with a Server-Sent Events stream. [push data] sends a [data] event (optionally [~event]
+    named, [~id]'d, with a [~retry] hint); the producer loops, pushing as events occur. For comment
+    heartbeats and full control drop to {!Sse.stream}.
+
+    {[ let live c = c |> Paw.sse (fun ~push -> Stream.iter (fun e -> push ~event:"msg" e) feed) ]} *)
+val sse : (push:(?event:string -> ?id:string -> ?retry:int -> string -> unit) -> unit) -> Conn.t -> Conn.t
 
 (** {1 The endpoint — flat-pipe app assembly}
 

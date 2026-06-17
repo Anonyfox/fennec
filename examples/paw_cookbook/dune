@@ -2,5 +2,5 @@
 ; complete program linking fennec-paw + the Eio entry point and nothing else.
 ; Run any: `dune exec examples/paw_cookbook/<name>.exe`.
 (executables
- (names json_api crud middleware sessions websocket virtual_hosts tls_byo_cert https_acme)
+ (names json_api crud middleware sessions websocket sse virtual_hosts tls_byo_cert https_acme)
  (libraries fennec-paw eio_main))
