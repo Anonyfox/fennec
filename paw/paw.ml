@@ -221,6 +221,9 @@ module Health = Health
 module Body_limit = Body_limit
 module Cache_control = Cache_control
 module Set_header = Set_header
+module Status_pages = Status_pages
+module Accepts = Accepts
+module Normalize_path = Normalize_path
 
 (** {1 WebSockets} *)
 module Ws = Ws
