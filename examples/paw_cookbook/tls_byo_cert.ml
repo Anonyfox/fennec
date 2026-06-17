@@ -11,3 +11,6 @@ let app =
 let tls = Paw.Tls_termination.of_files ~cert:"/etc/ssl/example.com.pem" ~key:"/etc/ssl/example.com.key"
 
 let () = Paw.serve ~tls [ app ]
+
+(* For local testing without real cert files, drop ~tls and run with FENNEC_DEV_TLS=1 — serve then
+   uses a self-signed localhost cert in dev, so Force_https / HSTS behave exactly as they will here. *)

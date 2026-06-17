@@ -17,3 +17,5 @@ Every one is a small delta on the same shape: `Paw.serve [ endpoints ]`.
 | `https_acme.ml` | automatic HTTPS via Let's Encrypt — `serve ~acme` |
 
 Read top to bottom for a guided tour: start at the hello, add middleware, then state, then real-time, then multi-tenant routing, then TLS, then automatic certificates. The handler bodies are stubs — the routing, middleware, and serve wiring are the point.
+
+Testing HTTPS locally: run any server with `FENNEC_DEV_TLS=1` and `serve` terminates TLS on the dev port with a throwaway self-signed `localhost` cert — so Secure cookies, HSTS, and force-HTTPS behave exactly as in production, no cert files to manage (the browser warns on the self-signed cert; click through).
