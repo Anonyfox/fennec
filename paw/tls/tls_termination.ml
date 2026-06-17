@@ -18,7 +18,13 @@ let chain_of_pem ~cert ~key : chain =
   (or_fail "certificate" (X509.Certificate.decode_pem_multiple cert), or_fail "private key" (X509.Private_key.decode_pem key))
 
 (* a server config presenting one chain, or selecting among many by SNI (with the first as the
-   fallback for a client that sends no / an unmatched SNI) *)
+   fallback for a client that sends no / an unmatched SNI).
+
+   Secure by default WITHOUT tuning: we pass no [~version]/[~ciphers], so mirage-tls applies its
+   curated defaults — protocol floor TLS 1.2 (range TLS 1.2–1.3; 1.0/1.1 are not even offered) and a
+   modern ciphersuite set (no RC4/export/NULL). We deliberately do NOT pin them: mirage-tls is
+   security-maintained and its floor only ever rises, so tracking the library is safer than freezing a
+   range here. A dev never has to think about protocol/cipher hardening. *)
 let server_of_chains (chains : chain list) : t =
   ensure_rng ();
   match chains with

@@ -472,6 +472,42 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(re
   in
   loop ()
 
+(* ──── in-process TLS, end to end ──── *)
+
+(* The flagship proof: a self-signed cert terminates TLS in-process, and the very HTTPS client the
+   ACME client uses round-trips a request whose handler sees [Conn.scheme = "https"]. Over a genuine
+   TLS handshake on loopback — no openssl, no proxy — this locks BOTH that scheme=https propagates
+   (so Secure cookies / force-https work over in-process HTTPS) AND that {!Tls_termination.self_signed}
+   produces a server a real client can talk to. *)
+let%test "in-process TLS: real handshake + the handler sees scheme=https" =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env and clock = Eio.Stdenv.clock env and fs = Eio.Stdenv.fs env in
+  let now () = Eio.Time.now clock in
+  let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) 5.0 in
+  let cfg = Tls_termination.self_signed ~hosts:[ "localhost" ] () in
+  (* an endpoint that simply echoes the request's scheme back as the body *)
+  let ep = Endpoint.make ~name:"t" ~hosts:[ "*" ] () |> Endpoint.get "/" (fun c -> Conn.text c (Conn.scheme c)) in
+  let resolve ~host:_ = [ ep ] in
+  let sock = Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let port = match Eio.Net.listening_addr sock with `Tcp (_, p) -> p | _ -> 0 in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Net.accept_fork ~sw sock ~on_error:(fun _ -> ()) (fun flow addr ->
+          (* terminate TLS in-process, then drive the real connection loop with scheme="https" *)
+          match (try Some (Tls_eio.server_of_flow cfg flow) with _ -> None) with
+          | Some tls_flow -> handle_conn ~now ~clock ~timeout ~request_timeout:5.0 ~fs ~on_error:default_on_error ~scheme:"https" ~resolve tls_flow addr
+          | None -> ()));
+  (* an inline TLS client to the EXACT bound loopback address — deterministic (no DNS / IPv4-vs-IPv6
+     ambiguity). The accept-all authenticator stands in for "trust the dev cert". *)
+  let authenticator : X509.Authenticator.t = fun ?ip:_ ~host:_ _ -> Ok None in
+  let cconf = match Tls.Config.client ~authenticator () with Ok c -> c | Error (`Msg m) -> failwith m in
+  let raw = Eio.Net.connect ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, port)) in
+  let tls = Tls_eio.client_of_flow cconf raw in
+  Eio.Flow.copy_string "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" tls;
+  let response = Eio.Buf_read.take_all (Eio.Buf_read.of_flow tls ~max_size:65536) in
+  (* status line "HTTP/1.1 200 OK" + the handler's scheme echo as the body *)
+  contains response " 200 " && String.length response >= 5 && String.sub response (String.length response - 5) 5 = "https"
+
 (* Run a {!Host_router} table, blocking. In PROD the whole table is served on ONE port
    ([FENNEC_PORT], default 80) and selected per request by Host pattern — one process, arbitrary
    subdomains/wildcards. In DEV the same table is served on the GATEWAY port ([FENNEC_PORT] base,
