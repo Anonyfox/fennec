@@ -23,6 +23,15 @@ let decode_bytes (c : 'a t) (buf : Bigstringaf.t) : ('a, error list) result = Bs
    by its _id or a variant discriminant, or pull a single value, without decoding the whole record. *)
 let peek (c : 'a t) (key : string) (buf : Bigstringaf.t) : ('a, error list) result option = Bson_reader.peek_field c.shape key buf
 
+(* Validate a BSON document buffer against the shape WITHOUT building the value — the alloc-free tier.
+   Same Ok/Error verdict as [decode_bytes]; alloc-free (scan speed) when the shape's checks are all
+   structural, falling back to a full decode for refinement/cross-field rules that need the value. *)
+let valid_bytes (c : 'a t) (buf : Bigstringaf.t) : (unit, error list) result = Bson_reader.valid_value_bytes c.shape buf
+
+(* Is [buf] a structurally well-formed BSON document? Shape-agnostic, single pass, zero allocation —
+   the fast pre-filter / fuzz oracle (the pure-OCaml analog of libbson's bson_validate, and faster). *)
+let scan_valid (buf : Bigstringaf.t) : bool = Bson_reader.scan_valid buf
+
 (* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
 
 type view =

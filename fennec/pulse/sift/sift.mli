@@ -70,6 +70,18 @@ val decode_bytes : 'a t -> Bigstringaf.t -> ('a, error list) result
     variant discriminator, or pull a single value, without decoding the whole record. *)
 val peek : 'a t -> string -> Bigstringaf.t -> ('a, error list) result option
 
+(** Validate a BSON document buffer against the codec WITHOUT materializing the value — the alloc-free
+    tier. Returns the SAME Ok/Error verdict (and errors) as {!decode_bytes}, but runs at scan speed with
+    ~0 allocation when the shape's checks are all structural (types, required, nesting). For shapes with
+    refinements or cross-field rules — which need the materialized value — it falls back to a full decode
+    and discards the value. The in-process [$jsonSchema]: gate a wire/storage write without decoding it. *)
+val valid_bytes : 'a t -> Bigstringaf.t -> (unit, error list) result
+
+(** Is [buf] a structurally well-formed BSON document (consistent lengths, known type tags, terminated
+    keys, sound nesting, no out-of-bounds)? Shape-agnostic, single pass, ZERO allocation — a fast
+    pre-filter / fuzz oracle, the pure-OCaml analog of libbson's [bson_validate]. *)
+val scan_valid : Bigstringaf.t -> bool
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result

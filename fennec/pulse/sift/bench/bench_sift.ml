@@ -123,7 +123,10 @@ let fixture title ~iters (codec : 'a Sift.t) (doc : B.t) =
   (* the "official" C reference: libbson iterates the SAME buffer in place (borrowed, no tree, no OCaml
      values). A full walk — so for the wide/narrow fixture it reads all 20 fields where decode_bytes
      skips 17; for the all-fields-wanted fixtures it is the honest parse-speed floor. *)
-  if Ffi.available () then bench "libbson walk (C)" ~iters (fun () -> keep (Ffi.bson_bench_walk buf))
+  if Ffi.available () then bench "libbson walk (C)" ~iters (fun () -> keep (Ffi.bson_bench_walk buf));
+  (* T1 alloc-free tier: validate WITHOUT materializing — should run at scan speed, ~0 alloc, beating C. *)
+  bench "valid_bytes (T1)" ~iters (fun () -> keep (Sift.valid_bytes codec buf));
+  bench "scan_valid (T1)" ~iters (fun () -> keep (Sift.scan_valid buf))
 
 (* ── fixtures ─────────────────────────────────────────────────────────────── *)
 

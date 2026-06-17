@@ -21,9 +21,9 @@ let make ?(pos = 0) ?limit (buf : buffer) : t =
   let n = Bigstringaf.length buf in
   { buf; pos; limit = (match limit with Some l -> if l < n then l else n | None -> n) }
 
-let pos (c : t) : int = c.pos
-let limit (c : t) : int = c.limit
-let buffer (c : t) : buffer = c.buf
+let[@inline always] pos (c : t) : int = c.pos
+let[@inline always] limit (c : t) : int = c.limit
+let[@inline always] buffer (c : t) : buffer = c.buf
 let remaining (c : t) : int = c.limit - c.pos
 let at_end (c : t) : bool = c.pos >= c.limit
 
@@ -34,14 +34,28 @@ let sub (c : t) ~len : t = { buf = c.buf; pos = c.pos; limit = (let e = c.pos + 
 (* raised when a read would run past [limit] — a truncated/malformed buffer is rejected, never read OOB *)
 exception Truncated of { need : int; have : int }
 
-let need (c : t) (n : int) : unit = if c.pos + n > c.limit then raise (Truncated { need = n; have = c.limit - c.pos })
+let[@inline always] need (c : t) (n : int) : unit = if c.pos + n > c.limit then raise (Truncated { need = n; have = c.limit - c.pos })
 
 (* little-endian scalar reads (BSON's wire encoding); each advances [pos]. [need] bounds-checks against
    [limit] FIRST, and [limit ≤ Bigstringaf.length] is an invariant (see {!make}/{!sub}), so the byte is
    provably in range — the read itself is [unsafe_get] (one check, not the two a checked [Bigstringaf.get]
-   would do). Safe on hostile input: [need] still rejects a truncated buffer before any read. *)
-let uint8 (c : t) : int = need c 1; let b = Char.code (Bigstringaf.unsafe_get c.buf c.pos) in c.pos <- c.pos + 1; b
-let int32 (c : t) : int = need c 4; let v = Int32.to_int (Bigstringaf.unsafe_get_int32_le c.buf c.pos) in c.pos <- c.pos + 4; v
+   would do). Safe on hostile input: [need] still rejects a truncated buffer before any read.
+   [@inline always] on the hot primitives: cursor.ml is a separate module and flambda is off, so without
+   the hint these stay out-of-line calls in the per-field scan loop (the {!scan_valid}-vs-raw-walk gap). *)
+let[@inline always] uint8 (c : t) : int = need c 1; let b = Char.code (Bigstringaf.unsafe_get c.buf c.pos) in c.pos <- c.pos + 1; b
+let[@inline always] int32 (c : t) : int = need c 4; let v = Int32.to_int (Bigstringaf.unsafe_get_int32_le c.buf c.pos) in c.pos <- c.pos + 4; v
+
+(* a 4-byte LE value at [at] combined into an [int] from individual bytes — crucially NO boxed [Int32.t]
+   (which [Bigstringaf.get_int32_le] allocates on every call without flambda — per-length scan overhead).
+   For BSON LENGTHS only (a document/string size is always 0 .. 2^31-1, which fits even a 32-bit jsoo int);
+   a general signed int32 value still goes through {!int32}. [at] must be in range (caller checks). *)
+let[@inline always] len32_at (b : buffer) (at : int) : int =
+  Char.code (Bigstringaf.unsafe_get b at)
+  lor (Char.code (Bigstringaf.unsafe_get b (at + 1)) lsl 8)
+  lor (Char.code (Bigstringaf.unsafe_get b (at + 2)) lsl 16)
+  lor (Char.code (Bigstringaf.unsafe_get b (at + 3)) lsl 24)
+
+let[@inline always] len32 (c : t) : int = need c 4; let v = len32_at c.buf c.pos in c.pos <- c.pos + 4; v
 
 (* an UNSIGNED little-endian int32 (BSON timestamps store two u32s) — read jsoo-safely via
    [Int32.unsigned_to_int] (no 0xFFFFFFFF literal, which overflows a 32-bit jsoo int): native gets the
@@ -54,12 +68,12 @@ let uint32 (c : t) : int =
 let int64 (c : t) : int64 = need c 8; let v = Bigstringaf.unsafe_get_int64_le c.buf c.pos in c.pos <- c.pos + 8; v
 let double (c : t) : float = Int64.float_of_bits (int64 c)
 
-let skip (c : t) (n : int) : unit = need c n; c.pos <- c.pos + n
+let[@inline always] skip (c : t) (n : int) : unit = need c n; c.pos <- c.pos + n
 
 (* jump [pos] to an absolute offset (within bounds) — the zero-copy decoder rewinds to a document's
    start to scan it for the next wanted field (BSON fields may be in any order), reusing ONE cursor
    instead of allocating a fresh one per field *)
-let seek (c : t) (p : int) : unit = if p < 0 || p > c.limit then raise (Truncated { need = p - c.limit; have = 0 }); c.pos <- p
+let[@inline always] seek (c : t) (p : int) : unit = if p < 0 || p > c.limit then raise (Truncated { need = p - c.limit; have = 0 }); c.pos <- p
 
 (* advance past [len] bytes, returning their start offset — the caller pairs (off, len) as a span *)
 let take (c : t) ~len : int = need c len; let off = c.pos in c.pos <- c.pos + len; off
@@ -67,27 +81,33 @@ let take (c : t) ~len : int = need c len; let off = c.pos in c.pos <- c.pos + le
 (* a NUL-terminated C string (BSON keys): advance past it (and its NUL); return the byte LENGTH before
    the NUL — NOT a (offset,length) tuple, since the caller already knows the offset ([Cursor.pos] before
    the call), so the scan stays allocation-free in the per-field hot loop. Rejects an unterminated key. *)
-let key_len (c : t) : int =
+(* advance [pos] to the next NUL, returning its offset (top-level, NOT a local closure — a [let rec]
+   nested in [key_len] would allocate a fresh closure on every call, which is per-field overhead) *)
+let rec scan_to_nul (c : t) : int =
+  if c.pos >= c.limit then raise (Truncated { need = 1; have = 0 })
+  else if Bigstringaf.unsafe_get c.buf c.pos = '\000' then c.pos
+  else (c.pos <- c.pos + 1; scan_to_nul c)
+
+let[@inline always] key_len (c : t) : int =
   let start = c.pos in
-  let rec scan () =
-    if c.pos >= c.limit then raise (Truncated { need = 1; have = 0 })
-    else if Bigstringaf.unsafe_get c.buf c.pos = '\000' then (let len = c.pos - start in c.pos <- c.pos + 1; len)
-    else (c.pos <- c.pos + 1; scan ())
-  in
-  scan ()
+  let e = scan_to_nul c in
+  c.pos <- e + 1;
+  e - start
 
 (* copy a span out as an owned OCaml string — the T2 / owned-materialization path (T1 keeps it borrowed) *)
 let substring (c : t) ~off ~len : string = Bigstringaf.substring c.buf ~off ~len
 
 (* test the byte at [off] equals char [ch] without advancing — for span/byte comparisons during validation *)
-let byte_at (c : t) (off : int) : char = Bigstringaf.get c.buf off
+let[@inline always] byte_at (c : t) (off : int) : char = Bigstringaf.get c.buf off
 
 (* a little-endian int32 at an ABSOLUTE offset, WITHOUT moving [pos] — the scanner computes a value's
    byte length (a nested doc/string is length-prefixed) to skip it, before deciding to read it. Bounds-
    checked against [limit] so a garbage length can't peek out of the buffer. *)
+(* a length peeked at an absolute offset (used to size a value for skipping) — byte-combined, no boxed
+   int32; bounds-checked. For lengths (positive, < 2^31). *)
 let peek_int32 (c : t) (at : int) : int =
   if at < c.pos || at + 4 > c.limit then raise (Truncated { need = 4; have = c.limit - at });
-  Int32.to_int (Bigstringaf.unsafe_get_int32_le c.buf at)
+  len32_at c.buf at
 
 (* compare a buffer span [off, len) to an OCaml string WITHOUT copying it out — the zero-copy key match
    (a record field's name vs a scanned doc key). Returns false on any byte mismatch or length mismatch. *)

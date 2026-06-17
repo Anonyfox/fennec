@@ -384,4 +384,52 @@ let%test "k2: peek extracts one field (present/absent/invalid), skipping the res
   && (* a checked field projects with its checks *)
   (match Sift.peek Sift.(min_i 10 int) "count" buf with Some (Error [ e ]) -> e.Sift.code = "min" | _ -> false)
 
+(* ── SIFT-T1: alloc-free validation. [valid_bytes] must give the SAME Ok/Error verdict AND the same
+   errors as [decode_bytes] — for check-free shapes via the alloc-free check_type, for checked shapes via
+   the decode fallback. [scan_valid] is structural BSON well-formedness. ── *)
+
+let valid_matches (c : 'a Sift.t) (b : B.t) : bool =
+  let buf = buf_of_bson b in
+  match (Sift.valid_bytes c buf, Sift.decode_bytes c buf) with
+  | Ok (), Ok _ -> true
+  | Error e1, Error e2 -> e1 = e2
+  | _ -> false
+
+let%test "t1: valid_bytes == decode_bytes verdict+errors — check-free scalar bag (alloc-free check_type)" =
+  valid_matches bag_c (B.doc [ ("s", B.str "x"); ("n", B.int 1); ("f", B.Float 1.5); ("b", B.bool true); ("d", B.date 1L); ("i", B.str "id") ])
+  && valid_matches bag_c (B.doc [ ("s", B.int 1); ("n", B.str "no"); ("f", B.bool true); ("b", B.int 0); ("d", B.str "x"); ("i", B.int 9) ])
+  && valid_matches bag_c (B.doc [ ("s", B.str "x") ])
+  && valid_matches bag_c (B.doc [])
+  && valid_matches bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.0); ("f", B.int 5); ("b", B.bool false); ("d", B.int 1234); ("i", B.oid "507f1f77bcf86cd799439011") ])
+  && valid_matches bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.5); ("f", B.int 1); ("b", B.bool true); ("d", B.int 0); ("i", B.str "z") ])
+
+let%test "t1: valid_bytes == decode_bytes — options / maps / variants (check-free)" =
+  valid_matches opt_c (B.doc [ ("a", B.str "x"); ("b", B.array [ B.int 1 ]) ])
+  && valid_matches opt_c (B.doc [])
+  && valid_matches opt_c (B.doc [ ("a", B.Null); ("b", B.Null) ])
+  && valid_matches map_c (B.doc [ ("m", B.doc [ ("x", B.int 1); ("y", B.str "no") ]) ])
+  && valid_matches figure_c (B.doc [ ("kind", B.str "circle"); ("r", B.Float 2.0) ])
+  && valid_matches figure_c (B.doc [ ("kind", B.str "triangle") ])
+  && valid_matches figure_c (B.doc [ ("r", B.Float 1.0) ])
+  && valid_matches figure_c (B.doc [ ("kind", B.str "rect"); ("w", B.str "no"); ("h", B.int 1) ])
+  && valid_matches figure_c (B.doc [ ("r", B.Float 2.0); ("kind", B.str "circle") ]) (* tag not first *)
+
+let%test "t1: valid_bytes == decode_bytes — checked shapes fall back (verdict+errors match)" =
+  valid_matches nested_c (B.doc [ ("title", B.str "ok"); ("author", B.doc [ ("name", B.str "A"); ("email", B.str "a@b.io") ]) ])
+  && valid_matches nested_c (B.doc [ ("title", B.str "toolong"); ("author", B.doc [ ("name", B.str ""); ("email", B.str "no") ]) ])
+  && valid_matches range_c (B.doc [ ("lo", B.int 9); ("hi", B.int 3) ])
+  && valid_matches list_c (B.doc [ ("xs", B.array [ B.str "a"; B.str "" ]) ])
+
+let%test "t1: scan_valid — well-formed true; truncated / bogus-length false" =
+  let good = buf_of_bson (B.doc [ ("a", B.int 1); ("b", B.doc [ ("c", B.str "x") ]); ("d", B.array [ B.int 1; B.int 2 ]) ]) in
+  Sift.scan_valid good
+  && (let s = W.encode (B.doc [ ("a", B.int 1); ("title", B.str "hello") ]) in
+      not (Sift.scan_valid (Bigstringaf.of_string ~off:0 ~len:(String.length s - 3) s)))
+  && not (Sift.scan_valid (Bigstringaf.of_string ~off:0 ~len:4 "\255\255\255\255"))
+
+let%test "t1: valid_bytes rejects a malformed buffer structurally (no exception)" =
+  let s = W.encode (B.doc [ ("s", B.str "x"); ("n", B.int 1); ("f", B.Float 1.0); ("b", B.bool true); ("d", B.date 1L); ("i", B.str "id") ]) in
+  let truncated = Bigstringaf.of_string ~off:0 ~len:(String.length s - 4) s in
+  match Sift.valid_bytes bag_c truncated with Error [ e ] -> e.Sift.code = "malformed" | _ -> false
+
 let () = exit (Fennec_hunt_unit.run ())

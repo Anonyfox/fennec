@@ -75,7 +75,7 @@ let hexchars = "0123456789abcdef"
 
 (* a spec BSON string at the cursor: int32 (byte-length incl. NUL) + bytes + NUL. Owned copy. *)
 let read_bson_string (c : Cursor.t) : string =
-  let len = Cursor.int32 c in
+  let len = Cursor.len32 c in
   if len < 1 then raise (Malformed "BSON string: bad length");
   let off = Cursor.take c ~len:(len - 1) in
   let s = Cursor.substring c ~off ~len:(len - 1) in
@@ -99,24 +99,29 @@ let read_cstr_owned (c : Cursor.t) : string =
 
 (* the number of bytes a value of [tag] occupies, NOT counting the type byte or key — peeked WITHOUT
    advancing (the scanner uses it to skip a field's value). Mirrors Bson_wire.value_size. *)
-let value_size (c : Cursor.t) (tag : int) : int =
-  let off = Cursor.pos c in
-  if tag = tag_double || tag = tag_date || tag = tag_timestamp || tag = tag_int64 then 8
-  else if tag = tag_string || tag = tag_code || tag = tag_symbol then 4 + Cursor.peek_int32 c off
-  else if tag = tag_document || tag = tag_array || tag = tag_code_w_scope then Cursor.peek_int32 c off
-  else if tag = tag_binary then 5 + Cursor.peek_int32 c off
-  else if tag = tag_oid then 12
-  else if tag = tag_bool then 1
-  else if tag = tag_null || tag = tag_min_key || tag = tag_max_key then 0
-  else if tag = tag_int32 then 4
-  else if tag = tag_decimal128 then 16
-  else if tag = tag_regex then (
-    let lim = Cursor.limit c in
-    let rec nul i = if i >= lim then raise (Malformed "BSON regex: unterminated") else if Cursor.byte_at c i = '\000' then i else nul (i + 1) in
-    let e1 = nul off in
-    let e2 = nul (e1 + 1) in
-    e2 + 1 - off)
-  else raise (Malformed (Printf.sprintf "BSON: unknown type tag 0x%02x" tag))
+let regex_size (c : Cursor.t) (off : int) : int =
+  (* two NUL-terminated cstrings (pattern, options) — the rare path; a small inner scan is fine *)
+  let lim = Cursor.limit c in
+  let rec nul i = if i >= lim then raise (Malformed "BSON regex: unterminated") else if Cursor.byte_at c i = '\000' then i else nul (i + 1) in
+  let e1 = nul off in
+  let e2 = nul (e1 + 1) in
+  e2 + 1 - off
+
+let[@inline] value_size (c : Cursor.t) (tag : int) : int =
+  (* a [match] (jump table), NOT a sequential if-chain — the commonest tag (int32) must not cost a dozen
+     comparisons per skipped field. Literal tags (= the tag_* constants) so the compiler builds the table. *)
+  match tag with
+  | 0x10 -> 4 (* int32 *)
+  | 0x02 | 0x0d | 0x0e -> 4 + Cursor.peek_int32 c (Cursor.pos c) (* string / code / symbol *)
+  | 0x03 | 0x04 | 0x0f -> Cursor.peek_int32 c (Cursor.pos c) (* document / array / code-with-scope *)
+  | 0x01 | 0x09 | 0x11 | 0x12 -> 8 (* double / datetime / timestamp / int64 *)
+  | 0x08 -> 1 (* bool *)
+  | 0x07 -> 12 (* objectid *)
+  | 0x0a | 0xff | 0x7f -> 0 (* null / min_key / max_key *)
+  | 0x05 -> 5 + Cursor.peek_int32 c (Cursor.pos c) (* binary: int32 len + 1 subtype byte *)
+  | 0x13 -> 16 (* decimal128 *)
+  | 0x0b -> regex_size c (Cursor.pos c)
+  | _ -> raise (Malformed (Printf.sprintf "BSON: unknown type tag 0x%02x" tag))
 
 (* materialize ANY value as a {!Bson.t} — the [TBson] escape hatch (round-trips every BSON type). This
    one path DOES allocate a tree (the caller asked for the raw value); mirrors Bson_wire.read_value. *)
@@ -183,7 +188,7 @@ and materialize_doc (c : Cursor.t) : (string * Bson.t) list =
    needs it, so no allocation. *)
 let doc_bounds (c : Cursor.t) : int =
   let start = Cursor.pos c in
-  let len = Cursor.int32 c in
+  let len = Cursor.len32 c in
   if len < 5 then raise (Malformed "BSON document: bad length");
   let doc_end = start + len in
   if doc_end > Cursor.limit c then raise (Malformed "BSON document: length exceeds buffer");
@@ -194,17 +199,15 @@ let doc_bounds (c : Cursor.t) : int =
    (the 0x00 terminator), return 0 — a sentinel, never a real tag, so no [option] box in this hot loop.
    Keys are compared to buffer bytes in place — never copied; unwanted values are stepped over by their
    length prefix. *)
-let scan_find (c : Cursor.t) (key : string) : int =
-  let rec loop () =
-    let tag = Cursor.uint8 c in
-    if tag = 0 then 0
-    else
-      let koff = Cursor.pos c in
-      let klen = Cursor.key_len c in
-      if Cursor.span_eq_string c ~off:koff ~len:klen key then tag
-      else (Cursor.skip c (value_size c tag); loop ())
-  in
-  loop ()
+(* top-level recursion (NOT a [let rec loop] nested inside — that would allocate a closure capturing
+   [c]/[key] on every call, i.e. once per record decode) *)
+let rec scan_find (c : Cursor.t) (key : string) : int =
+  let tag = Cursor.uint8 c in
+  if tag = 0 then 0
+  else
+    let koff = Cursor.pos c in
+    let klen = Cursor.key_len c in
+    if Cursor.span_eq_string c ~off:koff ~len:klen key then tag else (Cursor.skip c (value_size c tag); scan_find c key)
 
 (* ---- the schema-directed decode: read a value of [shape] given its wire [tag], from [c] at it ----
 
@@ -357,3 +360,155 @@ let peek_field (shape : 'a shape) (key : string) (buf : Cursor.buffer) : ('a, er
       in
       Some r
   with Cursor.Truncated _ | Malformed _ | Invalid_argument _ -> Some (Error [ mkerr ~code:"malformed" ~path:[ key ] "malformed BSON" ])
+
+(* ---- T1: alloc-free validation (the borrowed tier — verdict without materializing the value) ----
+
+   This is where zero-copy is unambiguous: validate a buffer against a shape WITHOUT building any OCaml
+   value, so it runs at scan speed (which beats libbson, per the bench) at ~0 allocation. {!check_type}
+   mirrors {!read_buf}'s tag acceptance EXACTLY (same coercions: int accepts int32/integral-double, date
+   accepts datetime/int32/integral-double, …) and the record/required logic, but returns errors instead
+   of values and walks {!Shape.bound_field} members (no constructor needed). Numbers materialize only the
+   unavoidable boxed float for the integral/finite check (OCaml's float tax); everything else is alloc-free
+   on the valid path. *)
+
+let terr what tag = [ mkerr ~code:"type" ~params:[ ("expected", what); ("got", type_name_of_tag tag) ] (Printf.sprintf "expected %s, got %s" what (type_name_of_tag tag)) ]
+
+let rec check_type : type a. a shape -> tag:int -> Cursor.t -> error list =
+ fun shape ~tag c ->
+  match shape with
+  | TString -> if tag = tag_string then [] else terr "string" tag
+  | TInt ->
+      if tag = tag_int32 then []
+      else if tag = tag_double then (if Float.is_integer (Cursor.double c) then [] else terr "int" tag)
+      else terr "int" tag
+  | TFloat { allow_nonfinite } ->
+      if tag = tag_double then (if (not allow_nonfinite) && not (Float.is_finite (Cursor.double c)) then [ mkerr "non-finite float" ] else [])
+      else if tag = tag_int32 then []
+      else terr "float" tag
+  | TBool -> if tag = tag_bool then [] else terr "bool" tag
+  | TDate ->
+      if tag = tag_date || tag = tag_int32 then []
+      else if tag = tag_double then (if Float.is_integer (Cursor.double c) then [] else terr "date" tag)
+      else terr "date" tag
+  | TId -> if tag = tag_string || tag = tag_oid then [] else terr "id (string or objectid)" tag
+  | TBson -> []
+  | TUnit -> if tag = tag_null then [] else terr "null" tag
+  | TList el -> if tag <> tag_array then terr "array" tag else check_seq el c
+  | TOption el -> if tag = tag_null then [] else check_type el ~tag c
+  | TMap el -> if tag <> tag_document then terr "document" tag else check_kvs el c
+  | TCheck (_, _, _, inner) -> check_type inner ~tag c (* refinements handled by check_refine, gated by simply_checkable *)
+  | TNorm (_, inner) -> check_type inner ~tag c
+  | TConv (_, _, inner) -> check_type inner ~tag c
+  | TCoerce inner -> if tag = tag_string then [] else check_type inner ~tag c
+  | TLazy l -> check_type (Lazy.force l) ~tag c
+  | TObj o -> if tag <> tag_document then terr "document" tag else (let de = doc_bounds c in let ds = Cursor.pos c in check_members o.members c ds de)
+  | TVariant { tag = tagf; cases } -> if tag <> tag_document then terr "document" tag else check_variant tagf cases c
+
+and check_seq : type a. a shape -> Cursor.t -> error list =
+ fun el c ->
+  let de = doc_bounds c in
+  let r = check_seq_loop el c 0 [] in
+  Cursor.seek c de;
+  List.rev r
+
+and check_seq_loop : type a. a shape -> Cursor.t -> int -> error list -> error list =
+ fun el c i acc ->
+  let etag = Cursor.uint8 c in
+  if etag = 0 then acc
+  else (
+    let _klen = Cursor.key_len c in
+    let vend = Cursor.pos c + value_size c etag in
+    let e = check_type el ~tag:etag c in
+    Cursor.seek c vend;
+    check_seq_loop el c (i + 1) (match e with [] -> acc | _ -> List.rev_append (List.map (at (string_of_int i)) e) acc))
+
+and check_kvs : type a. a shape -> Cursor.t -> error list =
+ fun el c ->
+  let de = doc_bounds c in
+  let r = check_kvs_loop el c [] in
+  Cursor.seek c de;
+  List.rev r
+
+and check_kvs_loop : type a. a shape -> Cursor.t -> error list -> error list =
+ fun el c acc ->
+  let etag = Cursor.uint8 c in
+  if etag = 0 then acc
+  else (
+    let koff = Cursor.pos c in
+    let klen = Cursor.key_len c in
+    let vend = Cursor.pos c + value_size c etag in
+    let e = check_type el ~tag:etag c in
+    Cursor.seek c vend;
+    check_kvs_loop el c (match e with [] -> acc | _ -> let k = Cursor.substring c ~off:koff ~len:klen in List.rev_append (List.map (at k) e) acc))
+
+and check_members : type r. r bound_field list -> Cursor.t -> int -> int -> error list =
+ fun members c ds de ->
+  let errs = List.rev (check_members_loop members c ds []) in
+  Cursor.seek c de;
+  errs
+
+and check_members_loop : type r. r bound_field list -> Cursor.t -> int -> error list -> error list =
+ fun members c ds acc ->
+  match members with
+  | [] -> acc
+  | Bound_field f :: tl ->
+      Cursor.seek c ds;
+      let vt = scan_find c f.name in
+      let e =
+        if vt = 0 then (if f.required then [ mkerr ~code:"required" ~path:[ f.name ] "is required" ] else [])
+        else List.map (at f.name) (check_type f.shape ~tag:vt c)
+      in
+      check_members_loop tl c ds (match e with [] -> acc | _ -> List.rev_append e acc)
+
+and check_variant : type r. string -> r case list -> Cursor.t -> error list =
+ fun tagf cases c ->
+  let de = doc_bounds c in
+  let ds = Cursor.pos c in
+  let k = match scan_find c tagf with vt when vt = tag_string -> Some (read_bson_string c) | _ -> None in
+  let errs =
+    match k with
+    | None -> [ mkerr (Printf.sprintf "missing tag field %s" tagf) ]
+    | Some k -> (
+        match List.find_opt (fun (Case cs) -> cs.name = k) cases with
+        | None -> [ mkerr (Printf.sprintf "unknown %s %S" tagf k) ]
+        | Some (Case cs) -> List.map (at k) (check_members cs.body.members c ds de))
+  in
+  Cursor.seek c de;
+  errs
+
+(* ---- structural BSON validity: shape-agnostic, single pass, zero allocation ------------------- *)
+
+(* recursively verify a document: consistent lengths, known type tags, terminated keys, nested docs
+   sound, no out-of-bounds. Raises on the first malformation. *)
+let rec structural_walk (c : Cursor.t) : unit =
+  let de = doc_bounds c in
+  structural_loop c;
+  if Cursor.pos c <> de then raise (Malformed "BSON document: length mismatch")
+
+and structural_loop (c : Cursor.t) : unit =
+  let tag = Cursor.uint8 c in
+  if tag = 0 then ()
+  else (
+    let _ = Cursor.key_len c in
+    if tag = tag_document || tag = tag_array then structural_walk c else Cursor.skip c (value_size c tag);
+    structural_loop c)
+
+let scan_valid (buf : Cursor.buffer) : bool =
+  try
+    let c = Cursor.make buf in
+    structural_walk c;
+    Cursor.pos c = Bigstringaf.length buf
+  with Cursor.Truncated _ | Malformed _ | Invalid_argument _ -> false
+
+(* ---- entry: validate a buffer against a shape, alloc-free where the checks allow -------------- *)
+
+(* A COMPLETE validator — its Ok/Error verdict always equals {!decode_value_bytes}'s. Alloc-free when the
+   shape's checks are all structural (no refinements): [check_type] alone is then the full validation. When
+   the shape carries refinements / cross-field rules ([needs_checks]), those need the materialized value, so
+   it falls back to the full decode (and discards the value). A malformed buffer is a structured error. *)
+let valid_value_bytes (shape : 'a shape) (buf : Cursor.buffer) : (unit, error list) result =
+  if Engine.needs_checks shape then match decode_value_bytes shape buf with Ok _ -> Ok () | Error es -> Error es
+  else
+    match (try check_type shape ~tag:tag_document (Cursor.make buf) with Cursor.Truncated _ -> [ mkerr ~code:"malformed" "malformed BSON: truncated or out of bounds" ] | Malformed m -> [ mkerr ~code:"malformed" m ] | Invalid_argument _ -> [ mkerr ~code:"malformed" "malformed BSON" ]) with
+    | [] -> Ok ()
+    | es -> Error es
