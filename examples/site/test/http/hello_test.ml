@@ -1,5 +1,5 @@
 (* End-to-end proof of a server-rendered HANDLER against a live server: GET renders the page+form
-   (static HTML, no JS), POST reads typed input + validates over the Codec model, CSRF-gates the
+   (static HTML, no JS), POST reads typed input + validates over the Sift model, CSRF-gates the
    write, and flashes through a redirect (post-redirect-get). Each [check] has its own cookie jar. *)
 open Fennec_hunt.Http
 

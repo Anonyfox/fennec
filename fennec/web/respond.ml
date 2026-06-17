@@ -1,5 +1,5 @@
 (* Content negotiation + JSON output, so ONE resource action can serve a browser (HTML) and an API
-   client (JSON) off the same handler. JSON is encoded straight from the Codec model (its total
+   client (JSON) off the same handler. JSON is encoded straight from the Sift model (its total
    [enc]), so the wire shape matches the DB + form shape — no separate serializer. *)
 
 module Conn = Paw.Conn
@@ -31,22 +31,22 @@ let prefers_json (conn : Conn.t) : bool =
 let bson ?(status = 200) (conn : Conn.t) (b : Bson.t) : Conn.t = Conn.json ~status conn (Bson_json.to_string b)
 
 (* answer with ONE model value, encoded through its codec *)
-let model ?(status = 200) (conn : Conn.t) (c : 'a Codec.t) (v : 'a) : Conn.t = bson ~status conn (c.Codec.enc v)
+let model ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (v : 'a) : Conn.t = bson ~status conn (c.Sift.enc v)
 
 (* answer with a LIST of model values *)
-let models ?(status = 200) (conn : Conn.t) (c : 'a Codec.t) (vs : 'a list) : Conn.t =
-  bson ~status conn (Bson.array (List.map (fun v -> c.Codec.enc v) vs))
+let models ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (vs : 'a list) : Conn.t =
+  bson ~status conn (Bson.array (List.map (fun v -> c.Sift.enc v) vs))
 
 (* the JSON error envelope — the canonical {!Form.summary} shape:
    [{ form_errors: [..], field_errors: { field: [..] } }] *)
-let error_envelope (errs : Codec.error list) : Bson.t =
+let error_envelope (errs : Sift.error list) : Bson.t =
   let s = Form.summary errs in
   Bson.doc
     [ ("form_errors", Bson.array (List.map Bson.str s.form_errors));
       ("field_errors", Bson.doc (List.map (fun (f, ms) -> (f, Bson.array (List.map Bson.str ms))) s.field_errors)) ]
 
 (* answer with the validation-error envelope (422 by default) *)
-let errors ?(status = 422) (conn : Conn.t) (errs : Codec.error list) : Conn.t = bson ~status conn (error_envelope errs)
+let errors ?(status = 422) (conn : Conn.t) (errs : Sift.error list) : Conn.t = bson ~status conn (error_envelope errs)
 
 (* A typed handler outcome (ASP.NET TypedResults / a return-type union). Map it to a JSON response
    with the right status via {!api} — a JSON-API handler returns one of these instead of hand-building
@@ -56,10 +56,10 @@ type 'a outcome =
   | Created of 'a (* 201 + the value *)
   | No_content (* 204 *)
   | Not_found (* 404 *)
-  | Invalid of Codec.error list (* 422 + the error envelope *)
+  | Invalid of Sift.error list (* 422 + the error envelope *)
   | Redirect of string (* 303 to a location *)
 
-let api (conn : Conn.t) (c : 'a Codec.t) (o : 'a outcome) : Conn.t =
+let api (conn : Conn.t) (c : 'a Sift.t) (o : 'a outcome) : Conn.t =
   match o with
   | Ok_ v -> model conn c v
   | Created v -> model ~status:201 conn c v
@@ -87,17 +87,17 @@ let contains hay needle =
   nn = 0 || go 0
 
 let%test "error envelope uses the canonical form_errors/field_errors shape" =
-  let b = error_envelope [ Codec.err [] "form is invalid"; Codec.err [ "email" ] "is required" ] in
+  let b = error_envelope [ Sift.err [] "form is invalid"; Sift.err [ "email" ] "is required" ] in
   let s = Bson_json.to_string b in
   contains s "form_errors" && contains s "form is invalid" && contains s "field_errors" && contains s "email"
   && contains s "is required"
 
 type doc = { id : string }
 
-let doc_codec = Codec.(seal (record (fun id -> { id }) |> field (req "id" string) (fun d -> d.id)))
+let doc_codec = Sift.(seal (record (fun id -> { id }) |> field (req "id" string) (fun d -> d.id)))
 let conn () = Conn.make (H.make_request ~meth:H.GET ~path:"/x" ())
 
 let%test "api maps typed outcomes to the right status codes" =
   let st o = (Option.get (Conn.resp (api (conn ()) doc_codec o))).H.status in
   st (Ok_ { id = "a" }) = 200 && st (Created { id = "a" }) = 201 && st No_content = 204
-  && st Not_found = 404 && st (Invalid [ Codec.err [ "id" ] "is required" ]) = 422 && st (Redirect "/here") = 303
+  && st Not_found = 404 && st (Invalid [ Sift.err [ "id" ] "is required" ]) = 422 && st (Redirect "/here") = 303

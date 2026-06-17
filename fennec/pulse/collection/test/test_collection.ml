@@ -9,7 +9,7 @@ let getd d k = match get d k with Some (B.Document _ as x) -> x | _ -> B.Null
 type t = { id : string; title : string; tags : string list; note : string option }
 
 let codec =
-  Codec.(
+  Sift.(
     seal
       (record (fun id title tags note -> { id; title; tags; note })
       |> field doc_id (fun x -> x.id)
@@ -18,7 +18,7 @@ let codec =
       |> field (opt "note" string) (fun x -> x.note)))
 
 let%test "schema: object with properties; required omits opt/opt_list; stacked hints merge" =
-  let s = Schema.json_schema (Codec.view codec) in
+  let s = Schema.json_schema (Sift.view codec) in
   (match get s "required" with
   | Some (B.Array req) ->
       let names = List.filter_map (function B.String x -> Some x | _ -> None) req in
@@ -38,14 +38,14 @@ let%test "schema: object with properties; required omits opt/opt_list; stacked h
 type p = Fixed of float | Free
 
 let p_codec =
-  Codec.(
+  Sift.(
     variant ~tag:"kind"
       [ case "fixed" (record (fun a -> Fixed a) |> field (req "amount" (positive float)) (function Fixed a -> a | _ -> 0.))
           ~inj:Fun.id ~proj:(function Fixed _ as v -> Some v | _ -> None);
         case "free" (record Free) ~inj:Fun.id ~proj:(function Free -> Some Free | _ -> None) ])
 
 let%test "schema: variants render as oneOf with the tag pinned per case; numeric hints translate" =
-  match get (Schema.json_schema (Codec.view p_codec)) "oneOf" with
+  match get (Schema.json_schema (Sift.view p_codec)) "oneOf" with
   | Some (B.Array [ fixed; free ]) ->
       (let tagf = getd (getd fixed "properties") "kind" in
        get tagf "enum" = Some (B.Array [ B.str "fixed" ]))
@@ -59,8 +59,8 @@ let%test "schema: the validator wraps as { $jsonSchema: … }; maps render addit
   | B.Document [ ("$jsonSchema", B.Document _) ] -> true
   | _ -> false)
   &&
-  let mc = Codec.(seal (record (fun m -> m) |> field (req "i18n" (str_map (non_empty string))) (fun m -> m))) in
-  let s = Schema.json_schema (Codec.view mc) in
+  let mc = Sift.(seal (record (fun m -> m) |> field (req "i18n" (str_map (non_empty string))) (fun m -> m))) in
+  let s = Schema.json_schema (Sift.view mc) in
   let i18n = getd (getd s "properties") "i18n" in
   get i18n "bsonType" = Some (B.String "object")
   && (match get (getd i18n "additionalProperties") "minLength" with Some (B.Int 1) -> true | _ -> false)

@@ -4,7 +4,7 @@
    route_gen skips the bundle (server-only, no JS). Mounted in server.ml at any path with `Endpoint.form`.
 
    Re-rendering HTML is first-class: `submit` returns `again` (re-show the form with an error — the input
-   is PRESERVED, awaiting correction) or `redirect` (post-redirect-get). Codec-invalid input (empty / too
+   is PRESERVED, awaiting correction) or `redirect` (post-redirect-get). Sift-invalid input (empty / too
    long) re-renders automatically before `submit` runs, with the per-field error AND the typed value. *)
 type t = { name : string [@trim] [@non_empty] [@max_len 40] }
 [@@deriving model]

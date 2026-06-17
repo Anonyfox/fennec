@@ -16,8 +16,8 @@ type sim_writes = {
 
 type ('a, 'r) t = {
   name : string;
-  args : 'a Codec.args;
-  result : 'r Codec.t;
+  args : 'a Sift.args;
+  result : 'r Sift.t;
   stub : (sim_writes -> 'a -> unit) option;
 }
 
@@ -33,7 +33,7 @@ let define ?stub name ~args ~result =
   Hashtbl.replace _registry name
     (Option.map
        (fun s (params : Bson.t list) (sim : sim_writes) ->
-         match args.Codec.dec_args params with Ok a -> s sim a | Error _ -> ())
+         match args.Sift.dec_args params with Ok a -> s sim a | Error _ -> ())
        stub);
   Mutex.unlock _reg_lock;
   { name; args; result; stub }

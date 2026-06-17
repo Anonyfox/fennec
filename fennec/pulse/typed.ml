@@ -13,7 +13,7 @@
      collections plug into [publish] unchanged. *)
 
 module Make (R : Reactive.REACTIVE) = struct
-  exception Invalid of Codec.error list
+  exception Invalid of Sift.error list
 
   type 'a t = { def : 'a Def.t; coll : R.Collection.t }
 
@@ -62,10 +62,10 @@ module Make (R : Reactive.REACTIVE) = struct
 
   let collection t = t.coll (* the dynamic escape hatch *)
   let def t = t.def
-  let validate t v = Codec.validate (Def.codec t.def) v
+  let validate t v = Sift.validate (Def.codec t.def) v
 
   let insert t v =
-    match Codec.encode_checked (Def.codec t.def) v with
+    match Sift.encode_checked (Def.codec t.def) v with
     | Ok b ->
         (* an EMPTY [_id] means "mint one for me" (the [{ id = ""; … }] convention) — strip it so
            the substrate's id_generation does its job; a non-empty id passes through *)
@@ -94,14 +94,14 @@ module Make (R : Reactive.REACTIVE) = struct
 
   let find t ?(where = []) ?sort ?skip ?limit () : 'a list =
     R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ())
-    |> List.filter_map (fun d -> match Codec.decode (Def.codec t.def) d with Ok v -> Some v | Error _ -> None)
+    |> List.filter_map (fun d -> match Sift.decode (Def.codec t.def) d with Ok v -> Some v | Error _ -> None)
 
   let find_results t ?(where = []) ?sort ?skip ?limit () =
-    R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ()) |> List.map (Codec.decode (Def.codec t.def))
+    R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ()) |> List.map (Sift.decode (Def.codec t.def))
 
   let find_one t ?(where = []) ?sort () : 'a option =
     match R.Collection.find_one t.coll ?selector:(sel where) ?sort:(srt sort) () with
-    | Some d -> ( match Codec.decode (Def.codec t.def) d with Ok v -> Some v | Error _ -> None)
+    | Some d -> ( match Sift.decode (Def.codec t.def) d with Ok v -> Some v | Error _ -> None)
     | None -> None
 
   let count t ?(where = []) () = R.Collection.count t.coll ?selector:(sel where) ()
@@ -119,7 +119,7 @@ module Make (R : Reactive.REACTIVE) = struct
 
   (* distinct values of one field across the matching docs, decoded to the field's type (values
      that don't decode are skipped — the read policy) *)
-  let distinct t (f : 'b Codec.field) ?(where = []) () : 'b list =
-    R.Collection.distinct t.coll ~key:(Codec.field_name f) ?selector:(sel where) ()
-    |> List.filter_map (fun v -> match Codec.field_get f (Bson.doc [ (Codec.field_name f, v) ]) with Ok x -> Some x | Error _ -> None)
+  let distinct t (f : 'b Sift.field) ?(where = []) () : 'b list =
+    R.Collection.distinct t.coll ~key:(Sift.field_name f) ?selector:(sel where) ()
+    |> List.filter_map (fun v -> match Sift.field_get f (Bson.doc [ (Sift.field_name f, v) ]) with Ok x -> Some x | Error _ -> None)
 end

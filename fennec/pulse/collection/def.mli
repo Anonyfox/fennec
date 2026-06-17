@@ -15,9 +15,9 @@
 
 type 'a t
 
-val v : ?indexes:Index.t list -> string -> 'a Codec.t -> 'a t
+val v : ?indexes:Index.t list -> string -> 'a Sift.t -> 'a t
 val name : 'a t -> string
-val codec : 'a t -> 'a Codec.t
+val codec : 'a t -> 'a Sift.t
 val indexes : 'a t -> Index.t list
 
 (** The mongod validator document derived from the shape ({!Schema.validator}). *)

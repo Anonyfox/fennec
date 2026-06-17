@@ -16,7 +16,7 @@ type t = {
 
 (* the HAND-WRITTEN twin (what MODEL.md documents as the expansion) *)
 let twin =
-  Codec.(
+  Sift.(
     seal
       (record (fun id title done_ tags note -> { id; title; done_; tags; note })
       |> field doc_id (fun x -> x.id)
@@ -28,27 +28,27 @@ let twin =
 let sample = { id = "a1"; title = "Hello"; done_ = true; tags = [ "x" ]; note = "n" }
 
 let%test "golden: derived enc/dec ≡ hand-written (round-trip + identical wire bytes)" =
-  let d1 = codec.Codec.enc sample and d2 = twin.Codec.enc sample in
+  let d1 = codec.Sift.enc sample and d2 = twin.Sift.enc sample in
   B.equal d1 d2
-  && (match Codec.decode codec d2 with Ok v -> v = sample | Error _ -> false)
-  && (match Codec.decode twin d1 with Ok v -> v = sample | Error _ -> false)
+  && (match Sift.decode codec d2 with Ok v -> v = sample | Error _ -> false)
+  && (match Sift.decode twin d1 with Ok v -> v = sample | Error _ -> false)
 
 let%test "golden: conventions — done_ keys as \"done\"; [@key] honored; id is _id; absent list = []" =
-  (match codec.Codec.enc sample with
+  (match codec.Sift.enc sample with
   | B.Document kvs ->
       List.mem_assoc "done" kvs && List.mem_assoc "remark" kvs && List.mem_assoc "_id" kvs
       && not (List.mem_assoc "done_" kvs) && not (List.mem_assoc "note" kvs)
   | _ -> false)
   &&
-  match Codec.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "abc"); ("done", B.Bool false); ("remark", B.str "r") ]) with
+  match Sift.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "abc"); ("done", B.Bool false); ("remark", B.str "r") ]) with
   | Ok v -> v.tags = []
   | Error _ -> false
 
 let%test "golden: [@check] enforces (same battery as the server); view reflection identical" =
-  (match Codec.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "ab"); ("done", B.Bool false); ("remark", B.str "r") ]) with
+  (match Sift.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "ab"); ("done", B.Bool false); ("remark", B.str "r") ]) with
   | Error _ -> true
   | Ok _ -> false)
-  && Codec.view codec = Codec.view twin
+  && Sift.view codec = Sift.view twin
   && Def.name collection = "gtasks"
   && B.equal (Def.validator collection) (Schema.validator twin)
 
@@ -103,8 +103,8 @@ end
 
 let%test "embedded record: the deriver nests the codec; the doc round-trips through Author.codec" =
   let p = { Post.id = "p1"; title = "Hi"; author = { Author.name = "Ada"; email = "a@x.io" } } in
-  match Codec.decode Post.codec (Post.codec.Codec.enc p) with
-  | Ok q -> q = p && (match Post.codec.Codec.enc p with
+  match Sift.decode Post.codec (Post.codec.Sift.enc p) with
+  | Ok q -> q = p && (match Post.codec.Sift.enc p with
                       | B.Document kvs -> (match List.assoc_opt "author" kvs with Some (B.Document _) -> true | _ -> false)
                       | _ -> false)
   | Error _ -> false
@@ -131,17 +131,17 @@ let%test "dotted projection: siblings under one head merge into one nested objec
   let stored = B.doc [ ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "a@x.io") ]) ] in
   match Proj.decode proj stored with Ok o -> o#author#name = "Ada" && o#author#email = "a@x.io" | Error _ -> false
 
-(* ── typed dotted-path SELECTORS (Codec.dot) — symmetric to dotted projections ── *)
-let%test "Filter.eq over Codec.dot: nested selector compiles to the dotted wire key, value type checked" =
-  let sel = Filter.eq (Codec.dot Post.Fields.author Author.Fields.name) "Ada" in
+(* ── typed dotted-path SELECTORS (Sift.dot) — symmetric to dotted projections ── *)
+let%test "Filter.eq over Sift.dot: nested selector compiles to the dotted wire key, value type checked" =
+  let sel = Filter.eq (Sift.dot Post.Fields.author Author.Fields.name) "Ada" in
   (* Filter.eq Post.Fields.title 5 would be a TYPE error; dot's leaf (name:string) enforces the value *)
   match Filter.to_bson sel with
   | B.Document [ ("author.name", B.String "Ada") ] -> true
   | _ -> false
 
-let%test "Codec.dot chains for deeper paths and keeps the leaf type" =
-  let f = Codec.dot Post.Fields.author Author.Fields.email in
-  Codec.field_name f = "author.email"
+let%test "Sift.dot chains for deeper paths and keeps the leaf type" =
+  let f = Sift.dot Post.Fields.author Author.Fields.email in
+  Sift.field_name f = "author.email"
   && (match Filter.to_bson (Filter.in_ f [ "a@x.io"; "b@x.io" ]) with
      | B.Document [ ("author.email", B.Document [ ("$in", B.Array _) ]) ] -> true
      | _ -> false)
@@ -162,11 +162,11 @@ let%test "validation attributes: the inline catalog enforces (one model form, no
   let open Friendly in
   let bad = B.doc [ ("_id", B.str "z"); ("title", B.str ""); ("status", B.str "nope");
                     ("priority", B.int 9); ("email", B.str "X@Y") ] in
-  (match Codec.decode codec bad with
+  (match Sift.decode codec bad with
    | Error es -> List.length es >= 3   (* empty title + bad status + priority>5, all collected *)
    | Ok _ -> false)
   && (* trim + lowercase normalizers run *)
-  (match Codec.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "  Hi  "); ("status", B.str "todo");
+  (match Sift.decode codec (B.doc [ ("_id", B.str "z"); ("title", B.str "  Hi  "); ("status", B.str "todo");
                                      ("priority", B.int 2); ("email", B.str "ADA@X.IO") ]) with
    | Ok v -> v.title = "Hi" && v.email = "ada@x.io"
    | Error _ -> false)
@@ -196,15 +196,15 @@ let%test "[%index]: declares the right indexes (unique/asc/desc/compound) on the
       Index.(name (unique (compound [ asc Indexed.Fields.team; asc Indexed.Fields.email ]))) ]
 
 (* [@@deriving model] — the DB-agnostic sibling: just Fields + codec, no name, no Mongo tail
-   (a form/API model needs only fennec.pulse.codec, not a collection). *)
+   (a form/API model needs only fennec.pulse.sift, not a collection). *)
 module Signup = struct
   type t = { email : string; age : int } [@@deriving model]
 end
 
 let%test "deriving model: generates Fields + a working codec (no collection name needed)" =
-  Codec.field_name Signup.Fields.email = "email"
-  && Codec.field_name Signup.Fields.age = "age"
-  && (match Codec.decode Signup.codec (B.doc [ ("email", B.str "a@b"); ("age", B.int 5) ]) with
+  Sift.field_name Signup.Fields.email = "email"
+  && Sift.field_name Signup.Fields.age = "age"
+  && (match Sift.decode Signup.codec (B.doc [ ("email", B.str "a@b"); ("age", B.int 5) ]) with
      | Ok v -> v.Signup.email = "a@b" && v.Signup.age = 5
      | Error _ -> false)
 

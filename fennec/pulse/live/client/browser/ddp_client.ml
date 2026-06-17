@@ -572,11 +572,11 @@ let call_m t (m : ('a, 'r) Method.t) (a : 'a) : ('r, string * string) result opt
          (match r with
          | Error e -> Error e
          | Ok v -> (
-             match (Method.result m).Codec.dec v with
+             match (Method.result m).Sift.dec v with
              | Ok r -> Ok r
              | Error e -> Error ("client-decode", e))))
   in
-  let params = (Method.args m).Codec.enc_args a in
+  let params = (Method.args m).Sift.enc_args a in
   (match Method.stub m with
   | None -> ignore (send_method t ~name:(Method.name m) ~params ~random_seed:None resolve)
   | Some stub ->

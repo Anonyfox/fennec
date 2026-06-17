@@ -1,4 +1,4 @@
-(** Typed form INPUT over the SAME {!Codec} model that powers collections and DDP methods — the input
+(** Typed form INPUT over the SAME {!Sift} model that powers collections and DDP methods — the input
     half of a handler. {!read} coerces the stringly request a form (or query) submits into the shape's
     BSON and runs the codec's full decode + validation, so the handler gets a typed value with the
     model's refinements enforced and per-field errors for re-rendering. No HTML building — forms are
@@ -25,16 +25,16 @@ val read :
   ?from:source ->
   ?inject:(string * string) list ->
   ?ignore:string list ->
-  'a Codec.t ->
+  'a Sift.t ->
   Conn.t ->
-  ('a, Codec.error list) result
+  ('a, Sift.error list) result
 
 (** {!read} over an explicit assoc list — the testable core (no {!Conn}). *)
-val parse_assoc : 'a Codec.t -> (string * string) list -> ('a, Codec.error list) result
+val parse_assoc : 'a Sift.t -> (string * string) list -> ('a, Sift.error list) result
 
 (** The error messages attached to one field (by wire name) — inline feedback when re-rendering.
     Pass a field handle from the model's generated [Fields] module. *)
-val field_errors : _ Codec.field -> Codec.error list -> string list
+val field_errors : _ Sift.field -> Sift.error list -> string list
 
 (** The raw value the user just submitted for [name] — repopulate an input when re-rendering. *)
 val submitted : Conn.t -> string -> string
@@ -43,7 +43,7 @@ val submitted : Conn.t -> string -> string
     top-level (path-less) messages separated from per-field messages keyed by wire name. *)
 type error_summary = { form_errors : string list; field_errors : (string * string list) list }
 
-val summary : Codec.error list -> error_summary
+val summary : Sift.error list -> error_summary
 
 (** {2 Form-handler view-state + outcome}
 
@@ -55,7 +55,7 @@ val summary : Codec.error list -> error_summary
     [view] only reads it (a plain value — concurrency-safe). *)
 type ctx
 
-val ctx : conn:Conn.t -> flash:string option -> errors:Codec.error list -> ctx
+val ctx : conn:Conn.t -> flash:string option -> errors:Sift.error list -> ctx
 
 (** The flash banner (empty without a message). *)
 val flash : ctx -> Fur.vnode
@@ -73,7 +73,7 @@ val error : ctx -> string -> Fur.vnode
     states, awaiting corrections) is first-class: re-show the form with errors ([Again] — input
     preserved; codec-invalid input auto-does this), [Redirect] (post-redirect-get), or an arbitrary
     [Page]. Build with {!again}/{!redirect}/{!page}. *)
-type outcome = Again of Codec.error list | Redirect of string * string option | Page of Fur.vnode
+type outcome = Again of Sift.error list | Redirect of string * string option | Page of Fur.vnode
 
 (** Re-render the form with these per-field errors (wire-name, message), 422. *)
 val again : (string * string) list -> outcome

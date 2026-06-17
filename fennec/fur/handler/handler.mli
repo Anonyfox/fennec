@@ -1,6 +1,6 @@
 (** A HANDLER — a standalone, full HTTP handler authored as ONE .mlx
     ([frontend/handlers/<name>.mlx]): a server [load] ([conn -> outcome]) fused with an isomorphic
-    [view] ([payload -> vnode]). On [render payload] the framework seeds exactly that — a {!Codec}-typed
+    [view] ([payload -> vnode]). On [render payload] the framework seeds exactly that — a {!Sift}-typed
     value — SSRs the view, and ships the handler's OWN jsoo bundle so it hydrates into a tiny SPA.
     [load] may also [redirect]/[error]/[not_found] — a handler is a full HTTP handler, not just a page.
 
@@ -30,13 +30,13 @@ type 'p outcome =
 
 val render : 'p -> 'p outcome
 val html : 'p -> 'p outcome
-val json : 'a Codec.t -> 'a -> 'p outcome
+val json : 'a Sift.t -> 'a -> 'p outcome
 val text : string -> 'p outcome
 val redirect : string -> 'p outcome
 val not_found : 'p outcome
 val error : int -> 'p outcome
 
-(** Server-only values: NO {!Codec}, so a secret held in [load] cannot be seeded — putting one in a
+(** Server-only values: NO {!Sift}, so a secret held in [load] cannot be seeded — putting one in a
     payload is a COMPILE error (Eliom's no-identity-converter, by type). *)
 module Server_only : sig
   type 'a t
@@ -47,7 +47,7 @@ end
 
 (** Client read of the cross-stage payload (decode the seed with the same [codec]). No fallback: on a
     rendered handler the seed is always present, so a missing/garbled seed raises (corrupt page). *)
-val payload : 'a Codec.t -> key:string -> 'a
+val payload : 'a Sift.t -> key:string -> 'a
 
 (** The default handler document shell (head + styles + #app hydration root + seed + bundle script). *)
 val default_template : string -> Fur.Doc.ctx -> Fur.vnode
@@ -55,7 +55,7 @@ val default_template : string -> Fur.Doc.ctx -> Fur.vnode
 (** PURE render: seed ONLY [codec.enc value], SSR [view value], wrap in the shell -> the HTML string. *)
 val render_doc :
   key:string ->
-  codec:'p Codec.t ->
+  codec:'p Sift.t ->
   bundle:string ->
   ?styles:string ->
   ?template:(Fur.Doc.ctx -> Fur.vnode) ->

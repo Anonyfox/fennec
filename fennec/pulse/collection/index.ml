@@ -6,8 +6,8 @@
 type key = string * [ `Asc | `Desc ]
 type t = { keys : key list; unique : bool }
 
-let asc f = { keys = [ (Codec.field_name f, `Asc) ]; unique = false }
-let desc f = { keys = [ (Codec.field_name f, `Desc) ]; unique = false }
+let asc f = { keys = [ (Sift.field_name f, `Asc) ]; unique = false }
+let desc f = { keys = [ (Sift.field_name f, `Desc) ]; unique = false }
 let compound keys = { keys = List.concat_map (fun i -> i.keys) keys; unique = false }
 let unique i = { i with unique = true }
 

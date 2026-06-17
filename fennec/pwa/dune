@@ -3,7 +3,7 @@
 ; served by one paw, and registered by one head snippet. Generation is pure string templating —
 ; fully unit-testable natively, no browser involved. Multiple PWAs per origin work via manifest
 ; scopes (one app subpath each); multitenant-by-host is separate origins. Unwrapped: userland says
-; `Pwa.v` / `Pwa.paw` / `Pwa.head_html` (the Method/Codec/Ddp_client precedent).
+; `Pwa.v` / `Pwa.paw` / `Pwa.head_html` (the Method/Sift/Ddp_client precedent).
 
 (library
  (name fennec_pwa)

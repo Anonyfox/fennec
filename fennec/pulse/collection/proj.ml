@@ -6,9 +6,9 @@
    on this path, so a projected-away field is unmentionable, not [undefined]. A field not on the
    model is an unbound [Fields.x] (compile error) at the projection site. *)
 
-type 'o t = { project_doc : Bson.t; decode : Bson.t -> ('o, Codec.error list) result }
+type 'o t = { project_doc : Bson.t; decode : Bson.t -> ('o, Sift.error list) result }
 
-let v ~(fields : (string * Bson.t) list) ~(decode : Bson.t -> ('o, Codec.error list) result) : 'o t =
+let v ~(fields : (string * Bson.t) list) ~(decode : Bson.t -> ('o, Sift.error list) result) : 'o t =
   { project_doc = Bson.Document fields; decode }
 
 let project_doc t = t.project_doc

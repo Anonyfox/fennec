@@ -1,5 +1,5 @@
 (* Typed request extraction — the input half of an action. JSON bodies decode straight through the
-   Codec model (API input); path/query scalars coerce with the stdlib. HTML form bodies go through
+   Sift model (API input); path/query scalars coerce with the stdlib. HTML form bodies go through
    {!Form.read} (string coercion); this module is the JSON + scalar side. *)
 
 module Conn = Paw.Conn
@@ -10,10 +10,10 @@ let body (conn : Conn.t) : string = (Conn.req conn).Paw.Http.body
 
 (* decode a JSON request body into a codec's type — the API-input counterpart of {!Form.read}.
    Validation/refinements apply exactly as for forms; errors come back per-field. *)
-let json (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
+let json (c : 'a Sift.t) (conn : Conn.t) : ('a, Sift.error list) result =
   match Bson_json.of_string_opt (body conn) with
-  | None -> Error [ Codec.err ~code:"json" [] "invalid JSON body" ]
-  | Some b -> Codec.decode c b
+  | None -> Error [ Sift.err ~code:"json" [] "invalid JSON body" ]
+  | Some b -> Sift.decode c b
 
 (* substring test (no Str dependency) *)
 let contains hay needle =
@@ -25,7 +25,7 @@ let contains hay needle =
    ([Content-Type: application/json]) decodes through {!json}; anything else is treated as an HTML
    form body through {!Form.read} (so [~inject]/[~ignore] apply). Lets ONE handler accept both a
    browser form POST and an API JSON POST. *)
-let input ?inject ?ignore (c : 'a Codec.t) (conn : Conn.t) : ('a, Codec.error list) result =
+let input ?inject ?ignore (c : 'a Sift.t) (conn : Conn.t) : ('a, Sift.error list) result =
   match Conn.req_header conn "content-type" with
   | Some ct when contains (String.lowercase_ascii ct) "application/json" -> json c conn
   | _ -> Form.read ?inject ?ignore c conn
@@ -47,7 +47,7 @@ module H = Paw.Http
 type t = { name : string; age : int }
 
 let codec =
-  Codec.(seal (record (fun name age -> { name; age }) |> field (req "name" (non_empty string)) (fun t -> t.name) |> field (req "age" int) (fun t -> t.age)))
+  Sift.(seal (record (fun name age -> { name; age }) |> field (req "name" (non_empty string)) (fun t -> t.name) |> field (req "age" int) (fun t -> t.age)))
 
 let conn_with_body ?(headers = []) b = Conn.make (H.make_request ~meth:H.POST ~path:"/x" ~headers ~body:b ())
 
@@ -57,7 +57,7 @@ let%test "json decodes a valid body through the codec" =
   | Error _ -> false
 
 let%test "json reports a malformed body and codec validation errors" =
-  (match json codec (conn_with_body "not json") with Error [ e ] -> e.Codec.msg = "invalid JSON body" | _ -> false)
+  (match json codec (conn_with_body "not json") with Error [ e ] -> e.Sift.msg = "invalid JSON body" | _ -> false)
   && match json codec (conn_with_body {|{"name":"","age":36}|}) with Error errs -> errs <> [] | Ok _ -> false
 
 let%test "query_int_default coerces or falls back" =

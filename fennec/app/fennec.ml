@@ -25,7 +25,7 @@ module Mail = Fennec_mail (* outbound email: one MAIL_URL knob (unset ⇒ logged
    (an isomorphic view + a server conn block + the page's own jsoo bundle), and server-rendered HTML
    via [Handler]. Typed HTTP input is [Form]/[Action]; JSON APIs are hand-built with [Respond].
    Includes the isomorphic Fur core, so [h]/[text]/[signal]/[document] are all here too. *)
-module Codec = Codec (* the shape language — for hand-written codecs + the resource/form signatures *)
+module Sift = Sift (* the shape language — for hand-written codecs + the resource/form signatures *)
 
 module Fur = struct
   include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
@@ -34,7 +34,7 @@ module Fur = struct
      wired by the fur ppx + route_gen, not via a facade module: the generated server `serve` references
      the {!Fennec_fur_handler.Handler} runtime + {!Conn} directly. So nothing for them here. *)
   module Handler = Fennec_web.Handler (* render a component to a static HTML response + redirect/flash/csrf *)
-  module Form = Fennec_web.Form (* typed form/query INPUT over the Codec model *)
+  module Form = Fennec_web.Form (* typed form/query INPUT over the Sift model *)
   module Action = Fennec_web.Action (* typed path/query scalars + JSON-body decode *)
   module Respond = Fennec_web.Respond (* JSON output building blocks (hand-built APIs) *)
 end

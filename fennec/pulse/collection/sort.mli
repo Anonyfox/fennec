@@ -7,8 +7,8 @@
 
 type t
 
-val asc : _ Codec.field -> t
-val desc : _ Codec.field -> t
+val asc : _ Sift.field -> t
+val desc : _ Sift.field -> t
 val by : t list -> t
 val raw : Bson.t -> t
 val to_bson : t -> Bson.t

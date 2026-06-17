@@ -10,7 +10,7 @@
   site_store
   fennec.pulse.live.client
   fennec-mongo.bson
-  fennec.pulse.codec
+  fennec.pulse.sift
   fennec.pulse.collection)
  (preprocess
   (pps fennec.fur.ppx))

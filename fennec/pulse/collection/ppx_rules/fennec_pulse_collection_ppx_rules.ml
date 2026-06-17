@@ -3,8 +3,8 @@
    their own driver, so downstream pays ONE ppx process. Exposes [deriver] (global) + [rules].
 
    [@@fennec.collection "name"] — generates, for a plain record type t:
-     module Fields = struct let <f> = Codec.req/opt/opt_list/doc_id … end
-     let codec      = Codec.(seal (record (fun … -> {…}) |> field Fields.f (fun x -> x.f) |> …))
+     module Fields = struct let <f> = Sift.req/opt/opt_list/doc_id … end
+     let codec      = Sift.(seal (record (fun … -> {…}) |> field Fields.f (fun x -> x.f) |> …))
      let collection = Def.v "name" codec
    Conventions (annotation-free common case): a field named id/_id is the _id (doc_id); a TRAILING
    UNDERSCORE is an OCaml keyword escape, stripped for the wire key (done_ -> "done"); 'a option ->
@@ -66,34 +66,34 @@ let validators ~loc (ld : label_declaration) : (expression -> expression) list =
   let opt a f = match Attribute.get a ld with Some v -> [ f v ] | None -> [] in
   let num_bound which e =
     match kind with
-    | `Int -> [%expr [%e if which = `Min then [%expr Codec.min_i] else [%expr Codec.max_i]] [%e e]]
-    | _ -> [%expr [%e if which = `Min then [%expr Codec.min_f] else [%expr Codec.max_f]] [%e e]]
+    | `Int -> [%expr [%e if which = `Min then [%expr Sift.min_i] else [%expr Sift.max_i]] [%e e]]
+    | _ -> [%expr [%e if which = `Min then [%expr Sift.min_f] else [%expr Sift.max_f]] [%e e]]
   in
   List.concat
-    [ opt a_trim (fun () c -> [%expr Codec.trim [%e c]]);
-      opt a_lowercase (fun () c -> [%expr Codec.lowercase [%e c]]);
-      opt a_non_empty (fun () c -> [%expr Codec.non_empty [%e c]]);
-      opt a_min_len (fun n c -> [%expr Codec.min_len [%e Ast_builder.Default.eint ~loc n] [%e c]]);
-      opt a_max_len (fun n c -> [%expr Codec.max_len [%e Ast_builder.Default.eint ~loc n] [%e c]]);
-      opt a_email (fun () c -> [%expr Codec.email [%e c]]);
-      opt a_url (fun () c -> [%expr Codec.url [%e c]]);
-      opt a_slug (fun () c -> [%expr Codec.slug [%e c]]);
-      opt a_one_of (fun e c -> [%expr Codec.one_of [%e e] [%e c]]);
-      opt a_matches (fun e c -> [%expr Codec.pattern [%e e] [%e c]]);
-      opt a_positive (fun () c -> match kind with `Int -> [%expr Codec.positive_i [%e c]] | _ -> [%expr Codec.positive [%e c]]);
+    [ opt a_trim (fun () c -> [%expr Sift.trim [%e c]]);
+      opt a_lowercase (fun () c -> [%expr Sift.lowercase [%e c]]);
+      opt a_non_empty (fun () c -> [%expr Sift.non_empty [%e c]]);
+      opt a_min_len (fun n c -> [%expr Sift.min_len [%e Ast_builder.Default.eint ~loc n] [%e c]]);
+      opt a_max_len (fun n c -> [%expr Sift.max_len [%e Ast_builder.Default.eint ~loc n] [%e c]]);
+      opt a_email (fun () c -> [%expr Sift.email [%e c]]);
+      opt a_url (fun () c -> [%expr Sift.url [%e c]]);
+      opt a_slug (fun () c -> [%expr Sift.slug [%e c]]);
+      opt a_one_of (fun e c -> [%expr Sift.one_of [%e e] [%e c]]);
+      opt a_matches (fun e c -> [%expr Sift.pattern [%e e] [%e c]]);
+      opt a_positive (fun () c -> match kind with `Int -> [%expr Sift.positive_i [%e c]] | _ -> [%expr Sift.positive [%e c]]);
       opt a_min (fun e c -> [%expr [%e num_bound `Min e] [%e c]]);
       opt a_max (fun e c -> [%expr [%e num_bound `Max e] [%e c]]);
-      opt check_attr (fun e c -> [%expr Codec.check [%e e] [%e c]]) ]
+      opt check_attr (fun e c -> [%expr Sift.check [%e e] [%e c]]) ]
 
 (* the base codec expression for a core type (primitives + list/option of primitives) *)
 let rec base_codec ~loc (ct : core_type) : expression option =
   match ct.ptyp_desc with
-  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> Some [%expr Codec.string]
-  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> Some [%expr Codec.int]
-  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> Some [%expr Codec.float]
-  | Ptyp_constr ({ txt = Lident "bool"; _ }, []) -> Some [%expr Codec.bool]
-  | Ptyp_constr ({ txt = Lident "int64"; _ }, []) -> Some [%expr Codec.date]
-  | Ptyp_constr ({ txt = Ldot (Lident "Bson", "t"); _ }, []) -> Some [%expr Codec.bson]
+  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> Some [%expr Sift.string]
+  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> Some [%expr Sift.int]
+  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> Some [%expr Sift.float]
+  | Ptyp_constr ({ txt = Lident "bool"; _ }, []) -> Some [%expr Sift.bool]
+  | Ptyp_constr ({ txt = Lident "int64"; _ }, []) -> Some [%expr Sift.date]
+  | Ptyp_constr ({ txt = Ldot (Lident "Bson", "t"); _ }, []) -> Some [%expr Sift.bson]
   | Ptyp_constr ({ txt = Lident ("list" | "option"); _ }, [ el ]) -> base_codec ~loc el
   (* an embedded record: a field typed [M.t] (M a derived model) → its codec is [M.codec] *)
   | Ptyp_constr ({ txt = Ldot (m, "t"); _ }, []) when m <> Lident "Bson" ->
@@ -124,15 +124,15 @@ let field_spec ~loc (ld : label_declaration) : expression =
   in
   (* wrap the base codec with the field's validation attributes (innermost-first chain) *)
   let base = List.fold_left (fun acc wrap -> wrap acc) base (validators ~loc ld) in
-  if (fname = "id" || fname = "_id") && not (is_list || is_option) then [%expr Codec.doc_id]
+  if (fname = "id" || fname = "_id") && not (is_list || is_option) then [%expr Sift.doc_id]
   else
     let w = Ast_builder.Default.estring ~loc wire in
-    if is_list then [%expr Codec.opt_list [%e w] [%e base]]
-    else if is_option then [%expr Codec.opt [%e w] [%e base]]
-    else [%expr Codec.req [%e w] [%e base]]
+    if is_list then [%expr Sift.opt_list [%e w] [%e base]]
+    else if is_option then [%expr Sift.opt [%e w] [%e base]]
+    else [%expr Sift.req [%e w] [%e base]]
 
 (* the SHARED core both derivers emit: [module Fields = …] (typed handles + embedded re-exports) and
-   [let codec = …] (the validating builder). DB-agnostic — references only [Codec]. *)
+   [let codec = …] (the validating builder). DB-agnostic — references only [Sift]. *)
 let model_core ~loc (labels : label_declaration list) : structure =
   let module B = Ast_builder.Default in
   (* module Fields = struct
@@ -178,10 +178,10 @@ let model_core ~loc (labels : label_declaration list) : structure =
             (B.pexp_field ~loc (B.evar ~loc "x") { txt = Lident ld.pld_name.txt; loc })
         in
         let f = B.pexp_ident ~loc { txt = Ldot (Lident "Fields", ld.pld_name.txt); loc } in
-        [%expr [%e acc] |> Codec.field [%e f] [%e get]])
-      [%expr Codec.record [%e make]] labels
+        [%expr [%e acc] |> Sift.field [%e f] [%e get]])
+      [%expr Sift.record [%e make]] labels
   in
-  let codec = [%stri let codec = Codec.seal [%e builder]] in
+  let codec = [%stri let codec = Sift.seal [%e builder]] in
   [ fields_mod; codec ]
 
 (* [@@deriving model]: the DB-agnostic model — just [Fields] + [codec], for forms / JSON APIs / any
@@ -286,15 +286,15 @@ let fields_expander =
       (* the dotted wire key for a path: field_name of each segment's handle, joined by "." *)
       let rec wire_key acc_prefix = function
         | [] -> [%expr ""]
-        | [ seg ] -> [%expr Codec.field_name [%e handle acc_prefix seg]]
+        | [ seg ] -> [%expr Sift.field_name [%e handle acc_prefix seg]]
         | seg :: rest ->
-            [%expr Codec.field_name [%e handle acc_prefix seg] ^ "." ^ [%e wire_key (acc_prefix @ [ seg ]) rest]]
+            [%expr Sift.field_name [%e handle acc_prefix seg] ^ "." ^ [%e wire_key (acc_prefix @ [ seg ]) rest]]
       in
       let includes = List.map (fun (p, v) -> [%expr ([%e wire_key [] p], [%e v])]) specs in
       (* _id is shipped by default; suppress it unless a TOP-LEVEL field maps to wire "_id" *)
       let any_is_id =
         List.fold_right
-          (fun (p, _) acc -> match p with [ seg ] -> [%expr Codec.field_name [%e handle [] seg] = "_id" || [%e acc]] | _ -> acc)
+          (fun (p, _) acc -> match p with [ seg ] -> [%expr Sift.field_name [%e handle [] seg] = "_id" || [%e acc]] | _ -> acc)
           specs [%expr false]
       in
       let fields_list =
@@ -327,12 +327,12 @@ let fields_expander =
           (fun h acc ->
             let decode_h =
               match classify h with
-              | `Leaf -> [%expr Codec.field_get [%e handle prefix h] [%e doc]]
+              | `Leaf -> [%expr Sift.field_get [%e handle prefix h] [%e doc]]
               | `Branch tails ->
                   let sub = "__sub" ^ string_of_int depth ^ "_" ^ h in
                   [%expr
-                    match Bson.get [%e doc] (Codec.field_name [%e handle prefix h]) with
-                    | None -> Error [ Codec.err ~code:"required" [ [%e B.estring ~loc h] ] "is required" ]
+                    match Bson.get [%e doc] (Sift.field_name [%e handle prefix h]) with
+                    | None -> Error [ Sift.err ~code:"required" [ [%e B.estring ~loc h] ] "is required" ]
                     | Some [%p B.pvar ~loc sub] ->
                         [%e build (prefix @ [ h ]) (B.evar ~loc sub) (depth + 1) tails]]
             in
@@ -345,11 +345,11 @@ let fields_expander =
 
 (* ---- [%q …] / [%sort …] / [%set …] — write queries as expressions, not API calls -------------
    Resolved against the model's [Fields] in scope (open Task, or Task.(…)). A bare ident is a field
-   (Fields.x); record-access [a.b] is a dotted path (Codec.dot, navigating the embedded Fields).
+   (Fields.x); record-access [a.b] is a dotted path (Sift.dot, navigating the embedded Fields).
    Everything expands to the typed Filter/Sort/M calls, so a wrong field/value is still a compile error —
    only the noise is gone. Richer matchers/modifiers (regex/has/inc/push) use Filter/M directly. *)
 
-(* a field path expression (bare ident or a.b.c record-access) → the handle, dotted via Codec.dot *)
+(* a field path expression (bare ident or a.b.c record-access) → the handle, dotted via Sift.dot *)
 let segs_of_field e =
   let rec go e =
     match e.pexp_desc with
@@ -363,7 +363,7 @@ let field_handle ~loc segs =
   let module B = Ast_builder.Default in
   let rec chain modp = function
     | [ s ] -> B.pexp_ident ~loc { txt = Ldot (modp, s); loc }
-    | s :: rest -> [%expr Codec.dot [%e B.pexp_ident ~loc { txt = Ldot (modp, s); loc }] [%e chain (Ldot (modp, String.capitalize_ascii s)) rest]]
+    | s :: rest -> [%expr Sift.dot [%e B.pexp_ident ~loc { txt = Ldot (modp, s); loc }] [%e chain (Ldot (modp, String.capitalize_ascii s)) rest]]
     | [] -> assert false
   in
   chain (Lident "Fields") segs

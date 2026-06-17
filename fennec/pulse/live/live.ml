@@ -85,11 +85,11 @@ let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur
     Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
     |> Array.to_seq
     |> Seq.filter_map (fun d ->
-           match Codec.decode codec d with
+           match Sift.decode codec d with
            | Ok x -> Some x
            | Error es ->
                let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in
-               warn_once t key ("fennec/typed: skipping malformed doc " ^ key ^ " — " ^ Codec.errors_to_string es);
+               warn_once t key ("fennec/typed: skipping malformed doc " ^ key ^ " — " ^ Sift.errors_to_string es);
                None)
     |> Array.of_seq
   in
@@ -113,7 +113,7 @@ let find_p t (name : string) (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit ()
            | Error es ->
                let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in
                warn_once t key
-                 ("fennec/typed: skipping malformed projection " ^ key ^ " — " ^ Codec.errors_to_string es);
+                 ("fennec/typed: skipping malformed projection " ^ key ^ " — " ^ Sift.errors_to_string es);
                None)
     |> Array.of_seq
   in

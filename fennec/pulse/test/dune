@@ -7,7 +7,7 @@
   fennec.pulse
   fennec.pulse.method
   fennec.pulse.collection
-  fennec.pulse.codec
+  fennec.pulse.sift
   fennec-mongo.backend
   fennec-mongo.bson
   fennec-mongo.minimongo

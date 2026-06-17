@@ -1,4 +1,4 @@
-(* $jsonSchema, rendered from Codec's neutral [view] — the structural half of validation pushed
+(* $jsonSchema, rendered from Sift's neutral [view] — the structural half of validation pushed
    into the DATABASE: mongod rejects foreign writes that violate the declared shape, and minimongo
    enforces the identical rule in-engine. Renderable refinements ride their hints (min_len →
    minLength, pattern, enum, bounds, items…); arbitrary checks (H_none) are app-side-only, by
@@ -10,9 +10,9 @@ let doc = Bson.doc
 let str = Bson.str
 
 (* merge one hint into a schema document *)
-let apply_hint (h : Codec.hint) (kvs : (string * Bson.t) list) : (string * Bson.t) list =
+let apply_hint (h : Sift.hint) (kvs : (string * Bson.t) list) : (string * Bson.t) list =
   match h with
-  | Codec.H_none -> kvs
+  | Sift.H_none -> kvs
   | H_min_len n -> ("minLength", Bson.int n) :: kvs
   | H_max_len n -> ("maxLength", Bson.int n) :: kvs
   | H_pattern p -> ("pattern", str p) :: kvs
@@ -27,9 +27,9 @@ let apply_hint (h : Codec.hint) (kvs : (string * Bson.t) list) : (string * Bson.
 let bson_type names =
   match names with [ one ] -> ("bsonType", str one) | many -> ("bsonType", Bson.Array (List.map str many))
 
-let rec render (v : Codec.view) : (string * Bson.t) list =
+let rec render (v : Sift.view) : (string * Bson.t) list =
   match v with
-  | Codec.V_string -> [ bson_type [ "string" ] ]
+  | Sift.V_string -> [ bson_type [ "string" ] ]
   | V_int -> [ bson_type [ "int"; "long"; "double" ] ] (* EJSON/driver reality: ints may land wide *)
   | V_float -> [ bson_type [ "double"; "int"; "long" ] ]
   | V_bool -> [ bson_type [ "bool" ] ]
@@ -47,7 +47,7 @@ let rec render (v : Codec.view) : (string * Bson.t) list =
          Bson.Array
            (List.map
               (fun (name, fields) ->
-                let case_fields = (tag, true, Codec.V_check (Codec.H_enum [ name ], Codec.V_string)) :: fields in
+                let case_fields = (tag, true, Sift.V_check (Sift.H_enum [ name ], Sift.V_string)) :: fields in
                 doc (render_obj case_fields))
               cases)) ]
 
@@ -60,7 +60,7 @@ and render_obj fields =
   :: (("properties", doc properties)
      :: (if required = [] then [] else [ ("required", Bson.Array required) ]))
 
-let json_schema (view : Codec.view) : Bson.t = doc (render view)
+let json_schema (view : Sift.view) : Bson.t = doc (render view)
 
 (* the validator document mongod's create/collMod expects *)
-let validator (c : 'a Codec.t) : Bson.t = doc [ ("$jsonSchema", json_schema (Codec.view c)) ]
+let validator (c : 'a Sift.t) : Bson.t = doc [ ("$jsonSchema", json_schema (Sift.view c)) ]

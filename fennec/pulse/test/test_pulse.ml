@@ -121,7 +121,7 @@ let%test "methods: the invocation carries user_id and can rebind it via set_user
 (* ── the typed method layer: one shared value; the codec IS the validation ── *)
 
 let%test "typed methods: handle decodes args + encodes result; a malformed call is a 400 BEFORE the handler" =
-  let m = Method.define "typed_sum" ~args:(Codec.a2 Codec.int Codec.int) ~result:Codec.int in
+  let m = Method.define "typed_sum" ~args:(Sift.a2 Sift.int Sift.int) ~result:Sift.int in
   let ran = ref 0 in
   R.handle m (fun _ (a, b) ->
       incr ran;
@@ -131,7 +131,7 @@ let%test "typed methods: handle decodes args + encodes result; a malformed call 
   ok && bad = Some "400" && !ran = 1
 
 let%test "codec: roundtrips, EJSON float-ints, decode errors carry the shape" =
-  let open Codec in
+  let open Sift in
   (match (list int).dec ((list int).enc [ 1; 2; 3 ]) with Ok [ 1; 2; 3 ] -> true | _ -> false)
   && (match (option string).dec Bson.Null with Ok None -> true | _ -> false)
   && (match int.dec (Bson.Float 7.0) with Ok 7 -> true | _ -> false)
@@ -140,15 +140,15 @@ let%test "codec: roundtrips, EJSON float-ints, decode errors carry the shape" =
 
 let%test "codec: record codecs (obj2 + req/opt) roundtrip; errors name the field; None omits the key" =
   let c =
-    Codec.(
+    Sift.(
       obj2 (req "title" string) (opt "note" string)
         ~make:(fun title note -> (title, note))
         ~split:Fun.id)
   in
-  (match c.Codec.dec (c.Codec.enc ("a", Some "n")) with Ok ("a", Some "n") -> true | _ -> false)
-  && (match c.Codec.enc ("a", None) with Bson.Document [ ("title", _) ] -> true | _ -> false)
-  && (match c.Codec.dec (B.doc [ ("title", B.str "x") ]) with Ok ("x", None) -> true | _ -> false)
-  && (match c.Codec.dec (B.doc [ ("note", B.str "n") ]) with
+  (match c.Sift.dec (c.Sift.enc ("a", Some "n")) with Ok ("a", Some "n") -> true | _ -> false)
+  && (match c.Sift.enc ("a", None) with Bson.Document [ ("title", _) ] -> true | _ -> false)
+  && (match c.Sift.dec (B.doc [ ("title", B.str "x") ]) with Ok ("x", None) -> true | _ -> false)
+  && (match c.Sift.dec (B.doc [ ("note", B.str "n") ]) with
      | Error e -> e = "title: is required"
      | Ok _ -> false)
 
@@ -431,13 +431,13 @@ module T = Fennec_pulse.Typed.Make (R)
 
 type task = { id : string; title : string; done_ : bool; tags : string list }
 
-let f_id = Codec.doc_id
-let f_title = Codec.(req "title" (min_len 3 (trim string)))
-let f_done = Codec.(req "done" bool)
-let f_tags = Codec.(opt_list "tags" (slug string))
+let f_id = Sift.doc_id
+let f_title = Sift.(req "title" (min_len 3 (trim string)))
+let f_done = Sift.(req "done" bool)
+let f_tags = Sift.(opt_list "tags" (slug string))
 
 let task_codec =
-  Codec.(
+  Sift.(
     seal
       (record (fun id title done_ tags -> { id; title; done_; tags })
       |> field f_id (fun t -> t.id)
@@ -477,7 +477,7 @@ let%test "typed: the skip policy — legacy garbage is skipped by find, surfaced
   && (let bad =
         List.filter_map (function Error es -> Some es | Ok _ -> None) (T.find_results h ())
       in
-      match bad with [ es ] -> List.exists (fun e -> e.Codec.path = [ "title" ]) es | _ -> false)
+      match bad with [ es ] -> List.exists (fun e -> e.Sift.path = [ "title" ]) es | _ -> false)
   && T.count h () = 2 (* count is the substrate's truth — the skip is a READ policy, not a lie *)
 
 let%test "typed: the model's $jsonSchema is INSTALLED at attach — bad writes are rejected (mongod parity)" =
@@ -542,11 +542,11 @@ let%test "extended typed surface: Filter matchers, M modifiers, Sort, upsert, di
 
 (* ── indexes: declarative, reconciled at attach, unique enforced in-memory (Meteor-beating) ── *)
 type usr = { id : string; email : string; team : string }
-let uf_id = Codec.doc_id
-let uf_email = Codec.(req "email" string)
-let uf_team = Codec.(req "team" string)
+let uf_id = Sift.doc_id
+let uf_email = Sift.(req "email" string)
+let uf_team = Sift.(req "team" string)
 let usr_codec =
-  Codec.(seal (record (fun id email team -> { id; email; team })
+  Sift.(seal (record (fun id email team -> { id; email; team })
     |> field uf_id (fun u -> u.id) |> field uf_email (fun u -> u.email) |> field uf_team (fun u -> u.team)))
 
 let%test "index reconcile: declared indexes are created at attach; unique is enforced in-memory" =

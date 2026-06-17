@@ -3,7 +3,7 @@
    instance at boot (R.Typed.attach); the browser binds it to the live client. One declaration,
    every derivation. *)
 
-type 'a t = { name : string; codec : 'a Codec.t; indexes : Index.t list }
+type 'a t = { name : string; codec : 'a Sift.t; indexes : Index.t list }
 
 let v ?(indexes = []) name codec = { name; codec; indexes }
 let name d = d.name

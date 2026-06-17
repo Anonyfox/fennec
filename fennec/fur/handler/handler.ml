@@ -1,10 +1,10 @@
 (* A HANDLER — a standalone, full HTTP handler authored as ONE .mlx (frontend/handlers/<name>.mlx):
    a server [load] (conn -> outcome) fused with an isomorphic [view] (payload -> vnode). On [render
-   payload] the framework seeds exactly that — a Codec-typed value — SSRs the view, and ships the
+   payload] the framework seeds exactly that — a Sift-typed value — SSRs the view, and ships the
    handler's OWN jsoo bundle so it hydrates into a tiny SPA. [load] can also [redirect]/[error] — a
    handler does more than serve HTML, hence the name.
 
-   This module is the ISOMORPHIC runtime (jsoo-safe: Fur + Codec + Bson_json) shared by the server SSR
+   This module is the ISOMORPHIC runtime (jsoo-safe: Fur + Sift + Bson_json) shared by the server SSR
    and the bundle. The fur ppx (-handler) turns a handler file's [payload]/[load]/[view] into a server
    [serve] (using {!render_doc}) and a client [boot] (using {!payload} + {!Fur_csr.start_page}); the
    only Conn-aware code lives inside the generated server [serve].
@@ -14,13 +14,13 @@
    A handler is a TWO-STAGE computation: stage 1 = server [load]; stage 2 = client [view]/hydration.
    The values crossing 1->2 are the CROSS-STAGE-PERSISTENT ones (multi-stage programming — MetaOCaml;
    Eliom's injections + converters): the serializable values the view consumes. The CONVERTER is the
-   {!Codec}; behaviour (Fur signals) + live data (Pulse subscriptions) cross as HANDLES, never
+   {!Sift}; behaviour (Fur signals) + live data (Pulse subscriptions) cross as HANDLES, never
    serialized. We are NOT LiveView (no server-held state) — autonomous Meteor-style clients instead.
 
    {2 Safety — leak-proof by construction}
 
    The only thing that crosses is [codec.enc payload], in the {!Fur.Data} seed. The Conn, full records,
-   and Pulse handles have no Codec, so they cannot be seeded. {!Server_only} closes the gap: a secret
+   and Pulse handles have no Sift, so they cannot be seeded. {!Server_only} closes the gap: a secret
    wrapped in it has no codec, so putting it in a payload is a COMPILE error. *)
 
 module Bson_json = Fennec_mongo_bson_json.Bson_json
@@ -41,13 +41,13 @@ type 'p outcome =
    / [json codec v] (data) / … — one [view]/[payload], negotiated into the representation the caller asked for *)
 let render (p : 'p) : 'p outcome = Render p
 let html (p : 'p) : 'p outcome = Html p
-let json (codec : 'a Codec.t) (value : 'a) : 'p outcome = Json (Bson_json.to_string (codec.Codec.enc value))
+let json (codec : 'a Sift.t) (value : 'a) : 'p outcome = Json (Bson_json.to_string (codec.Sift.enc value))
 let text (s : string) : 'p outcome = Text s
 let redirect (url : string) : 'p outcome = Redirect url
 let not_found : 'p outcome = Not_found
 let error (status : int) : 'p outcome = Error status
 
-(* SERVER-ONLY values: NO {!Codec}, so a secret held in [load] can NEVER be seeded — putting one in a
+(* SERVER-ONLY values: NO {!Sift}, so a secret held in [load] can NEVER be seeded — putting one in a
    payload is a COMPILE error (Eliom's no-identity-converter, by type). *)
 module Server_only = struct
   type 'a t = Hold of 'a
@@ -59,12 +59,12 @@ end
 (* CLIENT read of the cross-stage payload: decode the seed with the SAME codec the server encoded
    with. On a rendered handler the seed is ALWAYS present (the server seeds before shipping the
    bundle), so there is no fallback — a missing/garbled seed is a corrupt page, which raises. *)
-let payload (codec : 'a Codec.t) ~key : 'a =
+let payload (codec : 'a Sift.t) ~key : 'a =
   match Hashtbl.find_opt (Fur.Data.seed_table ()) key with
   | None -> failwith ("handler: no seed for " ^ key)
   | Some s -> (
       match Bson_json.of_string_opt s with
-      | Some b -> ( match Codec.decode codec b with Ok v -> v | Error _ -> failwith ("handler: bad seed for " ^ key))
+      | Some b -> ( match Sift.decode codec b with Ok v -> v | Error _ -> failwith ("handler: bad seed for " ^ key))
       | None -> failwith ("handler: bad seed json for " ^ key))
 
 (* The default handler document shell: head + scoped styles + the #app hydration root (the SSR'd
@@ -79,9 +79,9 @@ let default_template (bundle : string) (ctx : Fur.Doc.ctx) : Fur.vnode =
 
 (* PURE render (no Conn): seed ONLY [codec.enc value], SSR [view value], wrap it in the shell -> the
    HTML document string. The ppx-generated [serve] runs [load], then calls this on [render]. *)
-let render_doc ~key ~(codec : 'p Codec.t) ~bundle ?(styles = "") ?template (value : 'p) (view : 'p -> Fur.vnode) : string =
+let render_doc ~key ~(codec : 'p Sift.t) ~bundle ?(styles = "") ?template (value : 'p) (view : 'p -> Fur.vnode) : string =
   Fur.Data.clear_seed ();
-  Fur.Data.put_seed key (Bson_json.to_string (codec.Codec.enc value));
+  Fur.Data.put_seed key (Bson_json.to_string (codec.Sift.enc value));
   let body = Fur.to_html (view value) in
   let ctx = { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script (); body; styles; client_js = "" } in
   Fur.document ((Option.value template ~default:(default_template bundle)) ctx)
@@ -105,7 +105,7 @@ let contains hay needle =
 type greeting = { who : string; count : int }
 
 let greeting_codec =
-  Codec.(seal (record (fun who count -> { who; count }) |> field (req "who" string) (fun g -> g.who) |> field (req "count" int) (fun g -> g.count)))
+  Sift.(seal (record (fun who count -> { who; count }) |> field (req "who" string) (fun g -> g.who) |> field (req "count" int) (fun g -> g.count)))
 
 let greet_view (g : greeting) = Fur.h "main" [] [ Fur.h "h1" [] [ Fur.text ("Hi " ^ g.who) ] ]
 
@@ -124,5 +124,5 @@ let%test "render_static SSRs the view but emits NO seed and NO bundle" =
   let out = render_static (greet_view { who = "Ada"; count = 3 }) in
   contains out "Hi Ada" && (not (contains out "__FUR_DATA__")) && (not (contains out "main.js")) && (not (contains out {|id="app"|}))
 
-let%test "Server_only holds a value but exposes no Codec — it cannot be seeded" =
+let%test "Server_only holds a value but exposes no Sift — it cannot be seeded" =
   Server_only.get (Server_only.wrap "sk-secret") = "sk-secret"

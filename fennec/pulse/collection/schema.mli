@@ -1,4 +1,4 @@
-(** $jsonSchema rendered from a codec's {!Codec.view} — the structural half of validation pushed
+(** $jsonSchema rendered from a codec's {!Sift.view} — the structural half of validation pushed
     into the DATABASE: install it and mongod rejects foreign writes violating the declared shape
     (minimongo enforces the identical rule in-engine). Renderable refinements translate via their
     hints; arbitrary checks are app-side-only by design. Objects deliberately leave
@@ -11,7 +11,7 @@
        (* hand to mongod's create/collMod — minimongo enforces the same rule in-engine *) ]} *)
 
 (** The schema document for a reflected shape. *)
-val json_schema : Codec.view -> Bson.t
+val json_schema : Sift.view -> Bson.t
 
 (** The [{ "$jsonSchema": … }] validator document mongod's create/collMod expects. *)
-val validator : 'a Codec.t -> Bson.t
+val validator : 'a Sift.t -> Bson.t

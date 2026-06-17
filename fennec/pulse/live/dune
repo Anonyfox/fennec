@@ -15,5 +15,5 @@
   fennec.fur
   fennec.ddp
   fennec.pulse.method
-  fennec.pulse.codec
+  fennec.pulse.sift
   fennec.pulse.collection))

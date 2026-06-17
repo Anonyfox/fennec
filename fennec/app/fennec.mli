@@ -60,7 +60,7 @@ module Endpoint = Paw.Endpoint
     server "handler" reads typed inputs, runs Pulse/Accounts logic, and answers with a component
     rendered to static HTML (no JS). JSON APIs are hand-built with {!Fur.Respond}. Includes the
     isomorphic Fur core, so [h]/[text]/[signal]/[to_html] are here too. *)
-module Codec = Codec
+module Sift = Sift
 
 module Fur : sig
   (* the [struct include] idiom keeps [vnode]/[attr]/[signal] EQUAL to the core Fur types (a bare

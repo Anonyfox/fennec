@@ -1,5 +1,5 @@
 (** Content negotiation + JSON output: one resource action serves a browser (HTML) and an API client
-    (JSON) off the same handler. JSON is encoded straight from the {!Codec} model, so the wire shape
+    (JSON) off the same handler. JSON is encoded straight from the {!Sift} model, so the wire shape
     matches the DB + form shape — no separate serializer.
 
     {[ let show conn post =
@@ -17,17 +17,17 @@ val prefers_json : Conn.t -> bool
 val bson : ?status:int -> Conn.t -> Bson.t -> Conn.t
 
 (** Answer with ONE model value, encoded through its codec. *)
-val model : ?status:int -> Conn.t -> 'a Codec.t -> 'a -> Conn.t
+val model : ?status:int -> Conn.t -> 'a Sift.t -> 'a -> Conn.t
 
 (** Answer with a LIST of model values. *)
-val models : ?status:int -> Conn.t -> 'a Codec.t -> 'a list -> Conn.t
+val models : ?status:int -> Conn.t -> 'a Sift.t -> 'a list -> Conn.t
 
 (** The JSON error envelope — the canonical {!Form.summary} shape:
     [{ form_errors: [..], field_errors: { field: [..] } }] (zod's [flatten] shape). *)
-val error_envelope : Codec.error list -> Bson.t
+val error_envelope : Sift.error list -> Bson.t
 
 (** Answer with the validation-error envelope ([422] by default). *)
-val errors : ?status:int -> Conn.t -> Codec.error list -> Conn.t
+val errors : ?status:int -> Conn.t -> Sift.error list -> Conn.t
 
 (** A typed handler outcome (ASP.NET [TypedResults] / a return-type union) — a JSON-API handler
     returns one of these and {!api} renders it with the right status, instead of hand-building the Conn.
@@ -39,8 +39,8 @@ type 'a outcome =
   | Created of 'a  (** 201 + the value *)
   | No_content  (** 204 *)
   | Not_found  (** 404 *)
-  | Invalid of Codec.error list  (** 422 + the error envelope *)
+  | Invalid of Sift.error list  (** 422 + the error envelope *)
   | Redirect of string  (** 303 to a location *)
 
 (** Render a typed {!outcome} to a JSON response with the matching status code. *)
-val api : Conn.t -> 'a Codec.t -> 'a outcome -> Conn.t
+val api : Conn.t -> 'a Sift.t -> 'a outcome -> Conn.t

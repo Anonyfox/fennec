@@ -6,7 +6,7 @@
 (library
  (name site_handlers)
  (modules :standard)
- (libraries fennec fennec.fur fennec.fur.html fennec.fur.handler fennec.pulse.codec site_components)
+ (libraries fennec fennec.fur fennec.fur.html fennec.fur.handler fennec.pulse.sift site_components)
  (preprocess
   (pps fennec.fur.ppx -handler))
  (flags
@@ -22,7 +22,7 @@
  (library
   (name site_handlers_client)
   (modules :standard)
-  (libraries fennec.fur fennec.fur.html fennec.fur.handler fennec.fur.client fennec.pulse.codec site_components)
+  (libraries fennec.fur fennec.fur.html fennec.fur.handler fennec.fur.client fennec.pulse.sift site_components)
   (preprocess
    (pps fennec.fur.ppx -handler -conn-client))
   (flags

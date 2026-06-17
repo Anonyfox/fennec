@@ -11,7 +11,7 @@
    [updated] then reveals truth — and because both sides mint the insert id from the call's seed,
    the optimistic row and the real one are the same row (no flicker). *)
 let add_task : (string, string) Method.t =
-  Method.define "addTask" ~args:(Codec.a1 Codec.string) ~result:Codec.string
+  Method.define "addTask" ~args:(Sift.a1 Sift.string) ~result:Sift.string
     ~stub:(fun sim title ->
       (* TYPED optimistic insert: validates with the SAME battery the server enforces *)
       ignore (Fennec_pulse_live.Sim.insert_t sim Task.collection { Task.id = ""; title; body = "" }))

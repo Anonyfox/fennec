@@ -5,7 +5,7 @@
     Methods are fennec's only client write path (there is no allow/deny, by decree). 
 
     {[ (* shared file — server and client reference this ONE value (no drift) *)
-       let add_task = Method.define "addTask" ~args:(Codec.a1 Codec.string) ~result:Codec.string
+       let add_task = Method.define "addTask" ~args:(Sift.a1 Sift.string) ~result:Sift.string
        (* server: *) let () = Pulse.method_ add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title })
        (* client: *) let _ = Pulse.call add_task "buy milk" ]}
 *)
@@ -27,16 +27,16 @@ type ('a, 'r) t
     handler's collection writes (handlers stay separate — they do auth/secrets/server-only work).
     A throwing stub is logged and skipped; the call still goes to the server. *)
 val define :
-  ?stub:(sim_writes -> 'a -> unit) -> string -> args:'a Codec.args -> result:'r Codec.t -> ('a, 'r) t
+  ?stub:(sim_writes -> 'a -> unit) -> string -> args:'a Sift.args -> result:'r Sift.t -> ('a, 'r) t
 
 (** The stable wire name sent over DDP. *)
 val name : _ t -> string
 
 (** The positional argument codec used by callers and handlers. *)
-val args : ('a, _) t -> 'a Codec.args
+val args : ('a, _) t -> 'a Sift.args
 
 (** The result codec used to encode handler output and decode client replies. *)
-val result : (_, 'r) t -> 'r Codec.t
+val result : (_, 'r) t -> 'r Sift.t
 
 (** The optional optimistic browser-side simulation, if one was declared. *)
 val stub : ('a, _) t -> (sim_writes -> 'a -> unit) option

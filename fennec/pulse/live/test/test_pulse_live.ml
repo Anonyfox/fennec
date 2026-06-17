@@ -317,7 +317,7 @@ let%test "outbox codec: round-trips entries (seed optional); malformed payloads 
 
 let%test "stub replay: a persisted (name, params, seed) re-runs the stub with byte-identical ids" =
   let m =
-    Method.define "replay_add" ~args:(Codec.a1 Codec.string) ~result:Codec.string
+    Method.define "replay_add" ~args:(Sift.a1 Sift.string) ~result:Sift.string
       ~stub:(fun sim title -> ignore (sim.Method.insert "tasks" (B.doc [ ("title", B.str title) ])))
   in
   ignore m;
@@ -335,7 +335,7 @@ type item = { id : string; label : string }
 
 let item_def =
   Def.v "items_t"
-    Codec.(
+    Sift.(
       seal
         (record (fun id label -> { id; label })
         |> field doc_id (fun x -> x.id)

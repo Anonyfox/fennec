@@ -12,7 +12,7 @@
   fennec.fur
   fennec.mail
   fennec.web
-  fennec.pulse.codec
+  fennec.pulse.sift
   fennec-mongo.driver
   fennec-mongo.dynamic
   eio

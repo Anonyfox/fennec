@@ -231,7 +231,7 @@ let rec enc_ty : type a. a ty -> a -> Bson.t =
   | TObj o -> Bson.Document (o.o_enc v)
   | TVariant { tag; cases } -> (
       let rec go = function
-        | [] -> invalid_arg "Codec: variant value matches no declared case"
+        | [] -> invalid_arg "Sift: variant value matches no declared case"
         | Case c :: rest -> (
             match c.c_proj v with
             | Some a -> Bson.Document ((tag, Bson.String c.c_name) :: c.c_obj.o_enc a)
@@ -523,7 +523,7 @@ let field_enc f v = enc_ty f.fld_ty v
 (* encode ONE element of a list field — total through any check/norm/conv wrapping: encode the
    singleton list and unwrap (the list encoder is structural) *)
 let field_elem_enc (f : 'a list field) (v : 'a) : Bson.t =
-  match enc_ty f.fld_ty [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Codec.field_elem_enc"
+  match enc_ty f.fld_ty [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Sift.field_elem_enc"
 
 let field_validate f v = match check_ty f.fld_ty v with [] -> Ok () | es -> Error (List.map (at f.fld_name) es)
 

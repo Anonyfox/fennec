@@ -14,11 +14,11 @@
 
     {[ type t = { id : string; title : string }
        let codec =
-         Codec.(record (fun id title -> { id; title })
+         Sift.(record (fun id title -> { id; title })
                 |> field doc_id (fun t -> t.id)
                 |> field (req "title" (non_empty (max_len 200 string))) (fun t -> t.title)
                 |> seal)
-       let bson = Codec.encode_checked codec { id = ""; title = "Buy milk" }   (* validates, then encodes *) ]}
+       let bson = Sift.encode_checked codec { id = ""; title = "Buy milk" }   (* validates, then encodes *) ]}
 
     In practice [@@deriving collection] generates this codec (plus the typed [Fields] and the
     collection) straight from the record — write the type, not the builder. *)
@@ -137,7 +137,7 @@ val unique_items : 'a list t -> 'a list t
 
     {[ type t = { id : string; title : string; tags : string list }
        let codec =
-         Codec.(record (fun id title tags -> { id; title; tags })
+         Sift.(record (fun id title tags -> { id; title; tags })
                 |> field doc_id (fun t -> t.id)
                 |> field (req "title" (min_len 3 string)) (fun t -> t.title)
                 |> field (opt_list "tags" string) (fun t -> t.tags)
@@ -163,7 +163,7 @@ val doc_id : string field
 
 (** [dot outer inner] navigates into an embedded record for a selector/modifier PATH: the result
     has the dotted wire name (e.g. ["author.name"]) and the LEAF's shape — so
-    [Filter.eq (Codec.dot Fields.author Author.Fields.name) v] compile-checks both field names AND the
+    [Filter.eq (Sift.dot Fields.author Author.Fields.name) v] compile-checks both field names AND the
     value's type, purely value-level. Chains: [dot a (dot b c)] → ["a.b.c"]. *)
 val dot : _ field -> 'a field -> 'a field
 
@@ -197,7 +197,7 @@ val seal : ('r, 'r) builder -> 'r t
 (** {1 Variants — tagged unions over a discriminator field (Mongo's polymorphic-document idiom)}
 
     {[ type shape = Circle of { r : float } | Rect of { w : float; h : float }
-       let codec = Codec.(variant ~tag:"kind"
+       let codec = Sift.(variant ~tag:"kind"
          [ case "circle" (record (fun r -> Circle { r }) |> field (req "r" float) (function Circle c -> c.r | _ -> 0.))
              ~inj:Fun.id ~proj:(function Circle _ as v -> Some v | _ -> None); ... ]) ]}
 

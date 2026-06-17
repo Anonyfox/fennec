@@ -10,8 +10,8 @@
 type t
 
 (** Ascending / descending single-key index. *)
-val asc : _ Codec.field -> t
-val desc : _ Codec.field -> t
+val asc : _ Sift.field -> t
+val desc : _ Sift.field -> t
 
 (** A compound index from several single keys ([compound [ asc a; desc b ]]). *)
 val compound : t list -> t

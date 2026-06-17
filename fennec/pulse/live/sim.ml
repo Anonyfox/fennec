@@ -17,12 +17,12 @@ module MS = Merge_store
    instant offline form errors with zero duplicated logic; an invalid value raises (caught by the
    stub-failure containment: logged, simulation skipped, the server still decides) *)
 let insert_t (w : Method.sim_writes) (def : 'a Def.t) (v : 'a) : string =
-  match Codec.encode_checked (Def.codec def) v with
+  match Sift.encode_checked (Def.codec def) v with
   | Ok (Bson.Document kvs) ->
       let kvs = List.filter (function "_id", Bson.String "" -> false | _ -> true) kvs in
       w.Method.insert (Def.name def) (Bson.Document kvs)
   | Ok _ -> invalid_arg "Sim.insert_t: codec must encode a document"
-  | Error es -> failwith ("invalid document: " ^ Codec.errors_to_string es)
+  | Error es -> failwith ("invalid document: " ^ Sift.errors_to_string es)
 
 let writes (box : MS.t) ~sim ~seed : Method.sim_writes =
   MS.begin_sim box sim;

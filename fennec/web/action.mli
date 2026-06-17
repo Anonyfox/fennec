@@ -1,5 +1,5 @@
 (** Typed request extraction — the input half of an action. JSON request bodies decode straight
-    through the {!Codec} model (the API-input counterpart of {!Form.parse}); path/query scalars
+    through the {!Sift} model (the API-input counterpart of {!Form.parse}); path/query scalars
     coerce with the stdlib. HTML form bodies go through {!Form.parse}.
 
     {[ let create conn =
@@ -14,13 +14,13 @@ val body : Conn.t -> string
 
 (** Decode a JSON request body into a codec's type — validation/refinements apply exactly as for
     forms; a malformed body or a failed check returns per-field errors. *)
-val json : 'a Codec.t -> Conn.t -> ('a, Codec.error list) result
+val json : 'a Sift.t -> Conn.t -> ('a, Sift.error list) result
 
 (** [input ?inject ?ignore codec conn] parses the request into [codec]'s type from whichever format
     the client sent: a JSON body ([Content-Type: application/json]) via {!json}, otherwise an HTML
     form body via {!Form.parse} (so [~inject]/[~ignore] apply). One handler, both clients. *)
 val input :
-  ?inject:(string * string) list -> ?ignore:string list -> 'a Codec.t -> Conn.t -> ('a, Codec.error list) result
+  ?inject:(string * string) list -> ?ignore:string list -> 'a Sift.t -> Conn.t -> ('a, Sift.error list) result
 
 (** A path parameter (e.g. [:id]). *)
 val path : Conn.t -> string -> string option

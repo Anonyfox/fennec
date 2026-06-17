@@ -12,13 +12,13 @@ exactly that. No themed umbrella: the deriver generates a per-model module, so u
 "works-on" arrows (methods → collections, publications → collections — app-code relationships,
 never library deps):
 
-- `fennec.pulse.codec` (NEW sibling under pulse — Pulse IS the data brand, all data lives under
-  it): `Codec`, the shape language — ty, combinators, checks, field handles, derived pp,
+- `fennec.pulse.sift` (NEW sibling under pulse — Pulse IS the data brand, all data lives under
+  it): `Sift`, the shape language — ty, combinators, checks, field handles, derived pp,
   introspection. Deps: bson only; jsoo-safe. Shapes describe VALUES and belong to no consumer
   WITHIN pulse: methods use them, collections use them — and anything outside pulse (a paw
-  validating a request body) deps this one sub-lib without pulling the engine. (Codec moves OUT of
+  validating a request body) deps this one sub-lib without pulling the engine. (Sift moves OUT of
   the method lib — it was born there by historical accident, not ontology.)
-- `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.pulse.codec.
+- `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.pulse.sift.
 - `fennec.pulse` (Reactive) — the dynamic engine and substrate. Unchanged.
 - `fennec.pulse.collection` (NEW, virtual — the Ddp_client pattern): the typed collection runtime.
   `Filter`/`M`/`Index`/`Schema` live HERE (collection vocabulary, meaningless without one), plus the
@@ -52,7 +52,7 @@ query over the cache); WRITES go through methods — `Task.insert` exists server
 optimistic stubs (the sim variant), never as a free client write (Meteor's client-side
 collection.insert was the allow/deny path we banned).
 
-Status: **phases 1–3, 5, 6 BUILT and proven** (fennec.pulse.codec GADT core · Schema · Filter/M/Index/Def
+Status: **phases 1–3, 5, 6 BUILT and proven** (fennec.pulse.sift GADT core · Schema · Filter/M/Index/Def
 + Typed.Make server runtime · find_c/Sim.insert_t client boundary · the example converted — zero
 Bson.get in the component, full vertical through the browser e2e). Remaining: the [@@fennec.collection]
 deriver (P4 — generates the hand-written form the example now demonstrates) and the mongod
@@ -153,7 +153,7 @@ let tid = Model.insert model { id = ""; title; done_ = false; tags = [] }  (* id
 Model.publish model "tasks" (fun _ -> Model.cursor model ~where:Filter.[ eq done_ false ] ())
 
 (* methods: the model's codec IS an argument codec — no second declaration *)
-let add_task = Method.define "addTask" ~args:(Codec.a1 (Model.codec model)) ~result:Codec.string ...
+let add_task = Method.define "addTask" ~args:(Sift.a1 (Model.codec model)) ~result:Sift.string ...
 
 (* component — typed all the way into the view *)
 let tasks = Model.find client model ~where:Filter.[ eq done_ false ] () in
@@ -168,8 +168,8 @@ that line is the whole pitch.
 
 ## The keystone: a GADT runtime-type core, invisible from outside
 
-Today `Codec.t` is a pair of opaque functions — nothing can be derived from it. The redesign makes
-field specs carry **structure**: internally, `'a Codec.t` wraps a GADT type representation
+Today `Sift.t` is a pair of opaque functions — nothing can be derived from it. The redesign makes
+field specs carry **structure**: internally, `'a Sift.t` wraps a GADT type representation
 
 ```ocaml
 type _ ty = String : string ty | Int : int ty | Bool : bool ty | Float : float ty
@@ -177,7 +177,7 @@ type _ ty = String : string ty | Int : int ty | Bool : bool ty | Float : float t
           | Obj : ... (* field list *) | Check : ('a -> bool) * string * 'a ty -> 'a ty | ...
 ```
 
-Userland never sees it — they write `Codec.string`, `Codec.req`, `obj4`, exactly as today. But from
+Userland never sees it — they write `Sift.string`, `Sift.req`, `obj4`, exactly as today. But from
 that one representation the framework derives, now and later:
 
 1. **The codec** (encode/decode with field-named errors) — as today.
@@ -199,7 +199,7 @@ that one representation the framework derives, now and later:
 
 ## Validation semantics — opt-in, stackable, airtight by path
 
-Checks are opt-in (`[@check]` / `Codec.check`) and STACK: multiple attributes (or nested combinator
+Checks are opt-in (`[@check]` / `Sift.check`) and STACK: multiple attributes (or nested combinator
 checks) compose in declaration order, each with its own message. Two kinds, deliberately:
 
 - **Structured refinements** — `min_len`/`max_len`/`pattern`/`min`/`max`/`one_of` — carry their
@@ -243,7 +243,7 @@ Every entry is a GADT node: composable, stackable, error-collecting, and transla
 | normalization | `[@trim]` `[@lowercase]` — runs BEFORE checks, on decode and encode | — |
 | numeric bounds | `[@min n]` `[@max n]` `[@positive]` `[@non_negative]` `[@multiple_of n]` | minimum/maximum/multipleOf |
 | float sanity | nan/inf REJECTED BY DEFAULT (`[@allow_nonfinite]` to opt out) | bsonType double |
-| dates | `int64` ms via `Codec.date`; `[@min]`/`[@max]`, `[@past]`/`[@future]` presets | minimum/maximum |
+| dates | `int64` ms via `Sift.date`; `[@min]`/`[@max]`, `[@past]`/`[@future]` presets | minimum/maximum |
 | list shape | `[@min_items n]` `[@max_items n]` `[@unique_items]` | minItems/maxItems/uniqueItems |
 | list elements | element ty carries its own checks — composes for free | items |
 | optional keys | `'a option` — absent OR null decodes `None`; `None` encodes as KEY OMITTED (Mongo-idiomatic); checks apply to `Some` | required omission |
@@ -327,7 +327,7 @@ paths into embedded records** — all typed, all auto-trimming the wire (`_id:0`
   the result is the faithful nested object `< author : < name : _; email : _ > >` (`o#author#name`).
   A wrong field at ANY depth is an unbound-handle compile error; `o#author#nope` / `o#body` are
   unmentionable. This needs the embedded field typed `Author.t` where `Author` also derives
-  `collection` (the deriver emits `Codec.req "author" Author.codec` + a `Fields` submodule
+  `collection` (the deriver emits `Sift.req "author" Author.codec` + a `Fields` submodule
   re-export for navigation).
 
 Still NOT typed by `[%fields]` (raw escape covers them): **exclusion** (can't yield a precise type)
@@ -356,7 +356,7 @@ the typed forms: `find/find_one/count/update/remove/upsert/distinct` over `Filte
 (`update`/`upsert` thread the typed selector AND modifier; `distinct` decodes to the field's type).
 Aggregation pipelines stay raw `Bson list` (arbitrary stages — inherently untyped).
 `lt`/`gt` are polymorphic (Mongo orders every BSON type — faithful, not a hole). **Nested-path
-selectors** use `Codec.dot` — pure value-level, no ppx: `Filter.eq (Codec.dot Fields.author
+selectors** use `Sift.dot` — pure value-level, no ppx: `Filter.eq (Sift.dot Fields.author
 Author.Fields.name) "Ada"` joins the wire names to `"author.name"` and takes the LEAF's type, so
 both field names and the value type are compile-checked; it chains for deeper paths.
 
@@ -372,7 +372,7 @@ both field names and the value type are compile-checked; it chains for deeper pa
 - **Projections are tuples, not phantom records**: `Model.project client model P.(f2 title done_)`
   → `(string * bool) array signal`. Composable, no new type declarations, no partial-record lies.
   Full `find` returns whole `t`s (the live cache holds whole docs anyway).
-- **`_id` is the author's choice**: include `Codec.doc_id` in the record (typed `string`, ObjectId
+- **`_id` is the author's choice**: include `Sift.doc_id` in the record (typed `string`, ObjectId
   coerced — the RX6 lesson baked in) or omit it and use `(id, t)` pair reads. No forced wrapper
   record, no `.v` hop.
 - **Malformed-doc policy is one deliberate default, not per-call-site choice**: typed reads SKIP
@@ -395,7 +395,7 @@ with a worse replacement already in the stack.
 
 ## Phases (bottom-up, each provable)
 
-1. **Codec core rebuild on the GADT `ty`** — same public combinators, plus introspection;
+1. **Sift core rebuild on the GADT `ty`** — same public combinators, plus introspection;
    field-named errors throughout; `check`; `doc_id`; the record-builder form (`record |> field
    |> seal`). (Pure; heavy unit tests.)
 2. **The `[@@fennec.model]` deriver** — a small framework-owned ppxlib rewriter targeting the

@@ -1,6 +1,6 @@
 ; fennec.web — typed server-side building blocks on Paw: server-rendered HTML responses (Handler),
-; typed form/query INPUT over the Codec model (Form), typed path/query + JSON-body decode (Action),
-; and JSON output building blocks (Respond). It owns NO new model — it projects the SAME Codec shape
+; typed form/query INPUT over the Sift model (Form), typed path/query + JSON-body decode (Action),
+; and JSON output building blocks (Respond). It owns NO new model — it projects the SAME Sift shape
 ; (the one that powers collections + DDP methods) onto HTTP. Native (server-side) only. Standalone
 ; Standalone HANDLERS (view + load + own bundle) are a Fur concept, not here — see fennec.fur.handler.
 
@@ -8,7 +8,7 @@
  (name fennec_web)
  (public_name fennec.web)
  (modes byte native)
- (libraries fennec-paw fennec.pulse.codec fennec-mongo.bson fennec-mongo.bson_json fennec.fur fennec.accounts)
+ (libraries fennec-paw fennec.pulse.sift fennec-mongo.bson fennec-mongo.bson_json fennec.fur fennec.accounts)
  (inline_tests
   (backend fennec-hunt.runner))
  (preprocess

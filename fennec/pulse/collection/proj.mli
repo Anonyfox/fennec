@@ -12,9 +12,9 @@
 type 'o t
 
 (** Used by the ppx; userland writes [\[%fields …\]]. *)
-val v : fields:(string * Bson.t) list -> decode:(Bson.t -> ('o, Codec.error list) result) -> 'o t
+val v : fields:(string * Bson.t) list -> decode:(Bson.t -> ('o, Sift.error list) result) -> 'o t
 
 (** The Mongo projection document ([{a:1, b:1}]) — what the cursor/wire trims by. *)
 val project_doc : 'o t -> Bson.t
 
-val decode : 'o t -> Bson.t -> ('o, Codec.error list) result
+val decode : 'o t -> Bson.t -> ('o, Sift.error list) result

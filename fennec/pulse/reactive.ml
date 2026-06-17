@@ -247,9 +247,9 @@ module Make (B : Fennec_mongo_backend.S) : REACTIVE with type backend_collection
     methods
       [ ( Method.name m,
           fun inv params ->
-            match (Method.args m).Codec.dec_args params with
+            match (Method.args m).Sift.dec_args params with
             | Error e -> error "400" ~reason:("invalid arguments: " ^ e)
-            | Ok a -> (Method.result m).Codec.enc (f inv a) ) ]
+            | Ok a -> (Method.result m).Sift.enc (f inv a) ) ]
 
   let call ?(user_id = None) name args = apply ~user_id name args
 

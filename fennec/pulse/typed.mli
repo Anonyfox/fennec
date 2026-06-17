@@ -12,7 +12,7 @@
 
 module Make (R : Reactive.REACTIVE) : sig
   (** Raised by a write whose value fails the shape's checks — the collected violations. *)
-  exception Invalid of Codec.error list
+  exception Invalid of Sift.error list
 
   (** A typed handle: the pure declaration bound to this instance's collection. *)
   type 'a t
@@ -40,7 +40,7 @@ module Make (R : Reactive.REACTIVE) : sig
   val def : 'a t -> 'a Def.t
 
   (** The form-feedback primitive: every violation, without writing. *)
-  val validate : 'a t -> 'a -> (unit, Codec.error list) result
+  val validate : 'a t -> 'a -> (unit, Sift.error list) result
 
   (** Validating insert: raises {!Invalid} rather than writing a bad document. Returns the [_id]. *)
   val insert : 'a t -> 'a -> string
@@ -60,7 +60,7 @@ module Make (R : Reactive.REACTIVE) : sig
 
   (** Every decode verdict, for code that must care about malformed documents. *)
   val find_results :
-    'a t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> ('a, Codec.error list) result list
+    'a t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> ('a, Sift.error list) result list
 
   val find_one : 'a t -> ?where:Filter.t list -> ?sort:Sort.t -> unit -> 'a option
   val count : 'a t -> ?where:Filter.t list -> unit -> int
@@ -76,5 +76,5 @@ module Make (R : Reactive.REACTIVE) : sig
 
   (** Distinct values of one field across matching docs, decoded to the field's type (undecodable
       values skipped). *)
-  val distinct : 'a t -> 'b Codec.field -> ?where:Filter.t list -> unit -> 'b list
+  val distinct : 'a t -> 'b Sift.field -> ?where:Filter.t list -> unit -> 'b list
 end
