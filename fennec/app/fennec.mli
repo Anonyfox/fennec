@@ -116,6 +116,9 @@ type request_error = Paw.Server.request_error =
   | Handler_exception of exn * Http.request  (** a handler or middleware raised *)
   | Handler_timeout of Http.request  (** the per-request deadline expired *)
   | No_route of Http.request  (** no endpoint matched the Host header (and no ["*"] default) *)
+  | Method_not_allowed of Http.request * Http.meth list
+      (** the path exists but not for this method; carries the methods it does serve. The server
+          renders [405] with an [Allow] header (and auto-answers [OPTIONS]) — override only the body. *)
 
 (** {1 HTTPS} *)
 

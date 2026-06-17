@@ -83,6 +83,12 @@ val handler : t -> Pipeline.t
     messages ([] when clean) — for fail-at-boot validation by {!Fennec.serve} / {!Paw.serve}. *)
 val conflicts : t -> string list
 
+(** The methods this endpoint declares for [path] (a static exact route, or a [:param]/[*splat]
+    pattern that matches), with {!Route_table} matching semantics. The server unions this across every
+    endpoint on the host once they all decline, to answer [405 Method Not Allowed] (with an [Allow]
+    header) and automatic [OPTIONS] rather than a blanket [404]. [[]] when [path] matches no route. *)
+val allowed_methods : t -> path:string -> Http.meth list
+
 (** The endpoint's stable name (as given to {!make}). *)
 val name : t -> string
 

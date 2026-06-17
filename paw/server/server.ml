@@ -330,6 +330,16 @@ type request_error =
   | Handler_exception of exn * CH.request
   | Handler_timeout of CH.request
   | No_route of CH.request
+  | Method_not_allowed of CH.request * CH.meth list (* the path exists but not for this method; the methods it DOES serve *)
+
+(* The [Allow] header value for a path's declared methods: HEAD is added whenever GET is served (a GET
+   route answers HEAD), OPTIONS is always present (we auto-answer it), and the list is emitted in a
+   stable canonical order with any non-standard methods last. *)
+let allow_header (declared : CH.meth list) : string =
+  let has m = List.mem m declared in
+  let std = List.filter (fun m -> has m || (m = CH.HEAD && has CH.GET) || m = CH.OPTIONS) [ CH.GET; CH.HEAD; CH.POST; CH.PUT; CH.PATCH; CH.DELETE; CH.OPTIONS ] in
+  let others = List.filter (function CH.Other _ -> true | _ -> false) declared in
+  String.concat ", " (List.map CH.string_of_meth (std @ others))
 
 (* ──── read_request ──── *)
 
@@ -358,6 +368,36 @@ let default_on_error : request_error -> CH.response = function
     CH.text ~status:500 "Internal Server Error"
   | Handler_timeout _ -> CH.text ~status:503 "Service Unavailable"
   | No_route _ -> CH.text ~status:404 "Not Found"
+  | Method_not_allowed (_, allowed) -> { (CH.text ~status:405 "Method Not Allowed") with CH.headers = [ ("allow", allow_header allowed) ] }
+
+(* No endpoint answered. [allowed] is the set of methods the path is declared for, unioned across every
+   endpoint on the host (empty ⇒ the path doesn't exist). A non-empty set means the request used the
+   WRONG method: an OPTIONS probe with no explicit handler gets an automatic 204 + Allow, anything else
+   gets a 405 + Allow. Only an empty set is a genuine 404. The Allow header is guaranteed present on the
+   405 even when a custom [on_error] renders its own body and forgets it. *)
+let resolve_miss ~on_error (req : CH.request) (allowed : CH.meth list) : CH.response =
+  match allowed with
+  | [] -> on_error (No_route req)
+  | _ when req.CH.meth = CH.OPTIONS -> { CH.status = 204; headers = [ ("allow", allow_header allowed) ]; body = "" }
+  | _ -> let r = on_error (Method_not_allowed (req, allowed)) in if Headers.mem r.CH.headers "allow" then r else { r with CH.headers = ("allow", allow_header allowed) :: r.CH.headers }
+
+(* ──── allow_header / resolve_miss ──── *)
+
+let amiss_ ?(meth = CH.GET) allowed = resolve_miss ~on_error:default_on_error (CH.make_request ~meth ~path:"/x" ()) allowed
+let%test "allow_header adds HEAD for GET and always OPTIONS, canonical order" = allow_header [ CH.POST; CH.GET ] = "GET, HEAD, POST, OPTIONS"
+let%test "allow_header: a lone POST gains OPTIONS but not HEAD" = allow_header [ CH.POST ] = "POST, OPTIONS"
+let%test "empty allowed → 404 (path absent)" = (amiss_ []).CH.status = 404
+let%test "wrong method on an existing path → 405" = (amiss_ ~meth:CH.DELETE [ CH.GET; CH.POST ]).CH.status = 405
+let%test "405 carries the Allow header" = Headers.get (amiss_ ~meth:CH.DELETE [ CH.GET ]).CH.headers "allow" = Some "GET, HEAD, OPTIONS"
+let%test "OPTIONS on an existing path → automatic 204 + Allow" =
+  let r = amiss_ ~meth:CH.OPTIONS [ CH.GET; CH.POST ] in
+  r.CH.status = 204 && Headers.get r.CH.headers "allow" = Some "GET, HEAD, POST, OPTIONS"
+let%test "OPTIONS on an absent path is still a 404" = (amiss_ ~meth:CH.OPTIONS []).CH.status = 404
+let%test_unit "a custom on_error 405 is backstopped with Allow" =
+  let on_error = function Method_not_allowed _ -> CH.text ~status:405 "nope" | e -> default_on_error e in
+  let r = resolve_miss ~on_error (CH.make_request ~meth:CH.PUT ~path:"/x" ()) [ CH.GET ] in
+  Fennec_hunt_unit.check "body is the custom one" (r.CH.body = "nope");
+  Fennec_hunt_unit.check "Allow stamped by the server" (Headers.get r.CH.headers "allow" = Some "GET, HEAD, OPTIONS")
 
 (* Run a handler under a per-request deadline. On timeout, Eio CANCELS the whole handler
    fiber tree — including any sub-fibers it forked (parallel fetches) and their in-flight
@@ -407,7 +447,7 @@ let%test_unit "sub-fibers cancelled at deadline" =
    connection, else "http"; it becomes [Conn.scheme] so Secure cookies / force-https work over
    in-process HTTPS with no proxy. A paw pipeline may answer with an HTTP response OR a websocket
    upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(resolve : host:string -> Pipeline.t list) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ?(allowed = fun ~host:(_ : string) ~path:(_ : string) -> []) ~(resolve : host:string -> Pipeline.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -443,7 +483,7 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(re
          through to the next. None answered / none matched → a clean 404. A handler exception becomes
          a clean 500, never a dropped connection. *)
       let rec try_each = function
-        | [] -> Conn.respond (Conn.make req) (on_error (No_route req))
+        | [] -> Conn.respond (Conn.make req) (resolve_miss ~on_error req (allowed ~host ~path:req.CH.path))
         | handler :: rest ->
           let c = run_handler ~clock ~timeout:request_timeout ~on_error handler req in
           if Conn.answered c then c else try_each rest
@@ -524,12 +564,57 @@ let%test "in-process TLS: real handshake + the handler sees scheme=https" =
   (* status line "HTTP/1.1 200 OK" + the handler's scheme echo as the body *)
   contains response " 200 " && String.length response >= 5 && String.sub response (String.length response - 5) 5 = "https"
 
+(* ──── 405 / automatic OPTIONS, end to end ──── *)
+
+(* drive one plaintext request through the real connection loop with the same [allowed] resolver the
+   server wires, and return the raw response — so the 405 / auto-OPTIONS path is proven over the wire,
+   not just in [resolve_miss]'s unit tests *)
+let serve_one_ ~env ~ep request_str =
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env and clock = Eio.Stdenv.clock env and fs = Eio.Stdenv.fs env in
+  let now () = Eio.Time.now clock in
+  let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) 5.0 in
+  let resolve ~host:_ = [ Endpoint.handler ep ] in
+  let allowed ~host:_ ~path = Endpoint.allowed_methods ep ~path in
+  let sock = Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let port = match Eio.Net.listening_addr sock with `Tcp (_, p) -> p | _ -> 0 in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Net.accept_fork ~sw sock ~on_error:(fun _ -> ()) (fun flow addr ->
+          handle_conn ~now ~clock ~timeout ~request_timeout:5.0 ~fs ~on_error:default_on_error ~scheme:"http" ~allowed ~resolve flow addr));
+  let raw = Eio.Net.connect ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, port)) in
+  Eio.Flow.copy_string request_str raw;
+  Eio.Buf_read.take_all (Eio.Buf_read.of_flow raw ~max_size:65536)
+
+(* a GET+POST endpoint, so the path exists for GET/HEAD/POST/OPTIONS but not DELETE *)
+let getpost_ep_ () = Endpoint.make ~name:"t" ~hosts:[ "*" ] () |> Endpoint.get "/" (fun c -> Conn.text c "home") |> Endpoint.post "/" (fun c -> Conn.text c "made")
+
+let%test "wire: wrong method on an existing path → 405 + Allow" =
+  Eio_main.run @@ fun env ->
+  let resp = serve_one_ ~env ~ep:(getpost_ep_ ()) "DELETE / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" in
+  contains resp " 405 " && contains (String.lowercase_ascii resp) "allow:" && contains resp "GET" && contains resp "POST" && contains resp "OPTIONS"
+
+let%test "wire: OPTIONS with no explicit handler → automatic 204 + Allow" =
+  Eio_main.run @@ fun env ->
+  let resp = serve_one_ ~env ~ep:(getpost_ep_ ()) "OPTIONS / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" in
+  contains resp " 204 " && contains (String.lowercase_ascii resp) "allow:"
+
+let%test "wire: an unknown path is still a 404" =
+  Eio_main.run @@ fun env ->
+  let resp = serve_one_ ~env ~ep:(getpost_ep_ ()) "DELETE /nope HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" in
+  contains resp " 404 "
+
 (* Run a {!Host_router} table, blocking. In PROD the whole table is served on ONE port
    ([FENNEC_PORT], default 80) and selected per request by Host pattern — one process, arbitrary
    subdomains/wildcards. In DEV the same table is served on the GATEWAY port ([FENNEC_PORT] base,
    default 4000) with identical Host routing (prod fidelity), and EACH non-catch-all endpoint also
    gets a forced convenience port ([base + 1 + i], declaration order) so a browser reaches it with
    no /etc/hosts. A different base (--port) shifts the whole block, so instances never collide.
+
+   Method-aware misses (computed only AFTER every endpoint on the host declines, never on the hot
+   path): a path declared for OTHER methods yields [405 Method Not Allowed] with an [Allow] header
+   (via the [~on_error] funnel, [Allow] guaranteed) rather than a blanket 404, and an [OPTIONS] probe
+   with no explicit handler is auto-answered [204 No Content] + [Allow]. Only a truly unknown path is
+   a 404. An explicit [OPTIONS] route or a CORS paw still wins (it answers before the dispatch declines).
    @param dev             dev mode. Default from FENNEC_ENV.
    @param timeout         per-request idle/header read timeout, seconds (default 30).
    @param request_timeout per-request handler deadline in seconds; <= 0 (the default) disables it —
@@ -593,6 +678,12 @@ let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parall
   (* the Host-routed resolver: the precompiled handlers of every endpoint matching the Host,
      most-specific-first, with overlap handled by the dispatch (first to answer wins). *)
   let by_host ~(host : string) : Pipeline.t list = handlers_for (Host_router.route_all router ~host) in
+  (* the parallel resolver consulted only AFTER every endpoint on the host declines: the methods the
+     path is declared for, unioned across those endpoints, so the server can answer 405 / auto-OPTIONS
+     instead of a blanket 404. Off the hot path entirely (a matched route never reaches it). *)
+  let allowed_for ~(host : string) ~(path : string) : CH.meth list =
+    Host_router.route_all router ~host |> List.concat_map (fun ep -> Endpoint.allowed_methods ep ~path) |> List.sort_uniq compare
+  in
   (* a concrete host that matches an endpoint's first pattern, so its forced port can resolve EXACTLY
      as the gateway would for that host — including any same-domain overlap peers and the catch-all. *)
   let repr_host (e : Endpoint.t Host_router.entry) =
@@ -612,16 +703,18 @@ let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parall
      prod — no /etc/hosts and no Host header needed. Several same-domain endpoints each get a port,
      and each shows the same full stack. *)
   let binds =
-    if not dev then [ (base, by_host) ]
+    if not dev then [ (base, by_host, allowed_for) ]
     else
       let forced =
         List.mapi
           (fun i (e : Endpoint.t Host_router.entry) ->
             let host = repr_host e in
-            (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> handlers_for (Host_router.route_all router ~host)))
+            ( Port_plan.endpoint_port plan ~index:i,
+              (fun ~host:(_ : string) -> handlers_for (Host_router.route_all router ~host)),
+              fun ~host:(_ : string) ~path -> allowed_for ~host ~path ))
           entries
       in
-      (Port_plan.gateway plan, by_host) :: forced
+      (Port_plan.gateway plan, by_host, allowed_for) :: forced
   in
   Eio.Switch.run @@ fun sw ->
   (* graceful shutdown: SIGINT/SIGTERM stops accepting + drains in-flight requests (each already
@@ -640,12 +733,12 @@ let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parall
       in
       wait ());
   List.iter
-    (fun (port, resolve) ->
+    (fun (port, resolve, allowed) ->
       let socket =
         try Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env) (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
         with Unix.Unix_error (Unix.EADDRINUSE, _, _) -> raise (Port_in_use port)
       in
-      let serve_conn ~scheme flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~resolve flow addr in
+      let serve_conn ~scheme flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~allowed ~resolve flow addr in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
         Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () ->

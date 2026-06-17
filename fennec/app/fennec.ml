@@ -48,6 +48,7 @@ type request_error = Paw.Server.request_error =
   | Handler_exception of exn * Http.request
   | Handler_timeout of Http.request
   | No_route of Http.request
+  | Method_not_allowed of Http.request * Http.meth list
 
 let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true
 

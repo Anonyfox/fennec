@@ -85,6 +85,21 @@ let handler (t : t) : Pipeline.t =
    validation by {!Fennec.serve} / {!Paw.serve}; [] when the endpoint is clean *)
 let conflicts (t : t) : string list = Route_table.conflicts (List.filter_map (function Route r -> Some r | Mw _ -> None) t.items)
 
+(* the methods this endpoint DECLARES for [path] — a static exact route OR a [:param]/[*splat] pattern
+   that matches — mirroring {!Route_table} matching exactly. The server unions this across every
+   endpoint on the host AFTER they all decline, to answer [405] (with [Allow]) and automatic [OPTIONS]
+   instead of a blanket [404]. Middleware items contribute nothing (they carry no method). *)
+let allowed_methods (t : t) ~(path : string) : H.meth list =
+  let segs = Route_match.segments path in
+  List.filter_map
+    (function
+      | Route r ->
+        let hit = if Route_match.has_params r.Route_table.path then Option.is_some (Route_match.match_segments (Route_match.segments r.Route_table.path) segs []) else r.Route_table.path = path in
+        if hit then Some r.Route_table.meth else None
+      | Mw _ -> None)
+    t.items
+  |> List.sort_uniq compare
+
 let name (t : t) : string = t.name
 let hosts (t : t) : string list = t.hosts
 
@@ -247,3 +262,16 @@ let%test "conflicts: distinct routes + middleware are clean" =
 let%test "conflicts: a duplicate split across middleware is still flagged" =
   let e = make ~name:"x" () |> get "/a" (fun c -> c) |> use (fun c -> c) |> get "/a" (fun c -> c) in
   List.length (conflicts e) = 1
+
+(* ──── allowed_methods (the 405 / auto-OPTIONS source of truth) ──── *)
+
+let%test "allowed_methods: a static path lists its declared methods" =
+  let e = make ~name:"x" () |> get "/a" (fun c -> c) |> post "/a" (fun c -> c) |> get "/b" (fun c -> c) in
+  let a = allowed_methods e ~path:"/a" in
+  List.mem H.GET a && List.mem H.POST a && not (List.mem H.PUT a)
+let%test "allowed_methods: a :param route matches a concrete path" =
+  let e = make ~name:"x" () |> get "/u/:id" (fun c -> c) |> delete "/u/:id" (fun c -> c) in
+  let a = allowed_methods e ~path:"/u/42" in
+  List.mem H.GET a && List.mem H.DELETE a
+let%test "allowed_methods: an unknown path is empty (→ a 404, not a 405)" = allowed_methods (make ~name:"x" () |> get "/a" (fun c -> c)) ~path:"/nope" = []
+let%test "allowed_methods: middleware contributes nothing" = allowed_methods (make ~name:"x" () |> use (fun c -> c)) ~path:"/x" = []
