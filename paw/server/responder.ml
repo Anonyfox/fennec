@@ -28,8 +28,17 @@ let content_type_of (resp : H.response) : string =
   | Some ct -> ct
   | None -> "application/octet-stream"
 
-(* hex md5 of the body — a strong validator for ETag (content-addressed) *)
-let body_etag (body : string) : string = Sem.make_etag (Digest.to_hex (Digest.string body))
+(* A content ETag for the body. An ETag is a CACHE validator, not a security primitive, so a 128-bit
+   crypto digest (MD5) is wasteful: a fast non-cryptographic 63-bit hash (FNV-1a-style, native-int, no
+   boxing) is plenty — a collision only ever costs a missed 304, never wrong content. Still a STRONG
+   validator (a deterministic function of the exact bytes), quoted per RFC 9110. Allocates only the
+   result. *)
+let body_etag (body : string) : string =
+  let h = ref 0x1000000000000077 (* odd 63-bit seed *) in
+  for i = 0 to String.length body - 1 do
+    h := (!h lxor Char.code (String.unsafe_get body i)) * 0x100000001b3 (* FNV-1a prime *)
+  done;
+  Printf.sprintf "\"%x\"" (!h land max_int)
 
 (* replace any existing (case-insensitive), then prepend — via {!Headers.put}, whose compare is
    allocation-free (no per-element lowercased copy), since finalize calls this several times/response *)
@@ -67,26 +76,18 @@ let finalize ?(now = 0.0) ~(req : H.request) (resp : H.response) : H.response =
     let keep = set_header keep "Date" (Date.format_cached now) in
     { H.status = 304; headers = keep; body = "" }
   else begin
-    (* 3. compression negotiation *)
-    let accept = header_ci req.H.headers "accept-encoding" in
-    let want = Sem.negotiate_encoding ~accept () in
-    let compressible =
-      Mime.compressible ct
-      && String.length resp.H.body >= min_compress_size
-      && (not (has_header resp.H.headers "content-encoding"))
-    in
+    (* 3. compression — negotiate the Accept-Encoding ONLY when the body is a compressible type, large
+       enough to be worth it, and not already encoded; otherwise skip the parse entirely. A small
+       compressible body still advertises Vary so caches know the representation varies by encoding. *)
+    let ct_compressible = Mime.compressible ct in
     let body, headers =
-      match want with
-      | Sem.Gzip when compressible ->
-        let z = Gzip.gzip resp.H.body in
-        (z, set_header (set_header headers "Content-Encoding" "gzip") "Vary" "Accept-Encoding")
-      | Sem.Deflate when compressible ->
-        let z = Gzip.deflate resp.H.body in
-        (z, set_header (set_header headers "Content-Encoding" "deflate") "Vary" "Accept-Encoding")
-      | _ ->
-        (* still advertise that representation varies by encoding for caches *)
-        let headers = if Mime.compressible ct then set_header headers "Vary" "Accept-Encoding" else headers in
-        (resp.H.body, headers)
+      if ct_compressible && String.length resp.H.body >= min_compress_size && not (has_header resp.H.headers "content-encoding") then
+        match Sem.negotiate_encoding ~accept:(header_ci req.H.headers "accept-encoding") () with
+        | Sem.Gzip -> (Gzip.gzip resp.H.body, set_header (set_header headers "Content-Encoding" "gzip") "Vary" "Accept-Encoding")
+        | Sem.Deflate -> (Gzip.deflate resp.H.body, set_header (set_header headers "Content-Encoding" "deflate") "Vary" "Accept-Encoding")
+        | Sem.Identity -> (resp.H.body, set_header headers "Vary" "Accept-Encoding")
+      else if ct_compressible then (resp.H.body, set_header headers "Vary" "Accept-Encoding")
+      else (resp.H.body, headers)
     in
 
     (* 4. Date + Content-Length; HEAD keeps headers but empty body *)
