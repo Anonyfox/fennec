@@ -1,0 +1,5 @@
+; Sift decode micro-benchmark — the zero-copy buffer path vs the Bson.t tree path, apples-to-apples.
+; Not a test: run on demand with `dune exec fennec/pulse/sift/bench/bench_sift.exe`.
+(executable
+ (name bench_sift)
+ (libraries fennec.pulse.sift fennec-mongo.bson fennec-mongo.wire bigstringaf unix))

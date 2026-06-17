@@ -49,6 +49,11 @@ let double (c : t) : float = Int64.float_of_bits (int64 c)
 
 let skip (c : t) (n : int) : unit = need c n; c.pos <- c.pos + n
 
+(* jump [pos] to an absolute offset (within bounds) — the zero-copy decoder rewinds to a document's
+   start to scan it for the next wanted field (BSON fields may be in any order), reusing ONE cursor
+   instead of allocating a fresh one per field *)
+let seek (c : t) (p : int) : unit = if p < 0 || p > c.limit then raise (Truncated { need = p - c.limit; have = 0 }); c.pos <- p
+
 (* advance past [len] bytes, returning their start offset — the caller pairs (off, len) as a span *)
 let take (c : t) ~len : int = need c len; let off = c.pos in c.pos <- c.pos + len; off
 

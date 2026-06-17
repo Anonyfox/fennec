@@ -173,60 +173,40 @@ and materialize_doc (c : Cursor.t) : (string * Bson.t) list =
   if Cursor.pos c <> stop then raise (Malformed "BSON document: length mismatch");
   kvs
 
-(* ---- the span-tape: scan ONE document level into a flat [int array] (stride 4) ------------------ *)
+(* ---- document bounds + schema-directed field scan (ONE shared cursor, no tape, no per-field alloc) *)
 
-(* one linear pass over the document at [c] (positioned at its int32 length): record each top-level
-   element as [key_off; key_len; value_tag; value_off] in a flat int array (no value materialized),
-   and advance [c] past the whole document. Returns (tape, field_count, doc_end). *)
-let scan_doc (c : Cursor.t) : int array * int * int =
+(* read a document's int32 length (cursor at it); return (first_element_pos, doc_end) and leave the
+   cursor just after the length. The terminator 0x00 sits at doc_end - 1. *)
+let doc_bounds (c : Cursor.t) : int * int =
   let start = Cursor.pos c in
   let len = Cursor.int32 c in
   if len < 5 then raise (Malformed "BSON document: bad length");
   let doc_end = start + len in
   if doc_end > Cursor.limit c then raise (Malformed "BSON document: length exceeds buffer");
-  let tape = ref (Array.make 32 0) in
-  let n = ref 0 in
-  let push koff klen tag voff =
-    let cap = Array.length !tape in
-    if (!n * 4) + 4 > cap then (
-      let bigger = Array.make (cap * 2) 0 in
-      Array.blit !tape 0 bigger 0 cap;
-      tape := bigger);
-    let t = !tape and base = !n * 4 in
-    t.(base) <- koff;
-    t.(base + 1) <- klen;
-    t.(base + 2) <- tag;
-    t.(base + 3) <- voff;
-    incr n
-  in
+  (Cursor.pos c, doc_end)
+
+(* scan the document for [key] from the cursor's CURRENT position (the caller rewinds to the document
+   start first). On a match, leave the cursor AT the value and return its wire tag; on miss (the 0x00
+   terminator), return None. Keys are compared to buffer bytes in place — never copied; unwanted values
+   are stepped over by their length prefix. *)
+let scan_find (c : Cursor.t) (key : string) : int option =
   let rec loop () =
     let tag = Cursor.uint8 c in
-    if tag = 0 then ()
-    else begin
-      let koff, klen = Cursor.cstring c in
-      let voff = Cursor.pos c in
-      push koff klen tag voff;
-      Cursor.skip c (value_size c tag);
-      loop ()
-    end
-  in
-  loop ();
-  if Cursor.pos c <> doc_end then raise (Malformed "BSON document: length mismatch");
-  (!tape, !n, doc_end)
-
-(* find a key in the tape (first occurrence wins — matches the tree path's [index_of]); returns the
-   matched element's (value_tag, value_off), comparing the field name to buffer bytes WITHOUT copying *)
-let tape_find (c : Cursor.t) (tape : int array) (n : int) (key : string) : (int * int) option =
-  let rec go i =
-    if i >= n then None
+    if tag = 0 then None
     else
-      let base = i * 4 in
-      if Cursor.span_eq_string c ~off:tape.(base) ~len:tape.(base + 1) key then Some (tape.(base + 2), tape.(base + 3))
-      else go (i + 1)
+      let koff, klen = Cursor.cstring c in
+      if Cursor.span_eq_string c ~off:koff ~len:klen key then Some tag
+      else (Cursor.skip c (value_size c tag); loop ())
   in
-  go 0
+  loop ()
 
-(* ---- the schema-directed decode: read a value of [shape] given its wire [tag] and a cursor at it -- *)
+(* ---- the schema-directed decode: read a value of [shape] given its wire [tag], from [c] at it ----
+
+   ONE cursor is threaded through the whole decode — no tape, no fresh cursor per field. A record
+   rewinds the cursor to its start to find each wanted field (BSON fields are few; in-place byte
+   compares cost nothing and allocate nothing); a list/map walks its elements forward. The only
+   allocations are the result value itself, owned strings when demanded, and one small reader closure
+   per nested document level — strictly less than building the Bson.t tree. *)
 
 let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) result =
  fun shape ~tag c ->
@@ -254,75 +234,85 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
   | TUnit -> if tag = tag_null then Ok () else expected_tag "null" tag
   | TList el ->
       if tag <> tag_array then expected_tag "array" tag
-      else
-        let tape, n, doc_end = scan_doc c in
-        let buf = Cursor.buffer c in
+      else (
+        let _ds, de = doc_bounds c in
+        (* array elements are positional ("0","1",…) and in order — walk forward, skipping each key.
+           Advance to each value's end EXPLICITLY (a type-mismatch read returns without consuming the
+           value, which would desync the shared cursor): compute the end from its length prefix. *)
         let rec collect i oks errs =
-          if i >= n then if errs = [] then Ok (List.rev oks) else Error (List.rev errs)
-          else
-            let base = i * 4 in
-            let cc = Cursor.make buf ~pos:tape.(base + 3) ~limit:doc_end in
-            match read_buf el ~tag:tape.(base + 2) cc with
+          let etag = Cursor.uint8 c in
+          if etag = 0 then (Cursor.seek c de; if errs = [] then Ok (List.rev oks) else Error (List.rev errs))
+          else (
+            let _k = Cursor.cstring c in
+            let vend = Cursor.pos c + value_size c etag in
+            let r = read_buf el ~tag:etag c in
+            Cursor.seek c vend;
+            match r with
             | Ok v -> collect (i + 1) (v :: oks) errs
-            | Error es -> collect (i + 1) oks (List.rev_append (List.map (at (string_of_int i)) es) errs)
+            | Error es -> collect (i + 1) oks (List.rev_append (List.map (at (string_of_int i)) es) errs))
         in
-        collect 0 [] []
+        collect 0 [] [])
   | TOption el -> if tag = tag_null then Ok None else ( match read_buf el ~tag c with Ok x -> Ok (Some x) | Error e -> Error e)
   | TMap el ->
       if tag <> tag_document then expected_tag "document" tag
-      else
-        let tape, n, doc_end = scan_doc c in
-        let buf = Cursor.buffer c in
-        let rec collect i oks errs =
-          if i >= n then if errs = [] then Ok (List.rev oks) else Error (List.rev errs)
-          else
-            let base = i * 4 in
-            let k = Cursor.substring c ~off:tape.(base) ~len:tape.(base + 1) in
-            let cc = Cursor.make buf ~pos:tape.(base + 3) ~limit:doc_end in
-            match read_buf el ~tag:tape.(base + 2) cc with
-            | Ok v -> collect (i + 1) ((k, v) :: oks) errs
-            | Error es -> collect (i + 1) oks (List.rev_append (List.map (at k) es) errs)
+      else (
+        let _ds, de = doc_bounds c in
+        let rec collect oks errs =
+          let etag = Cursor.uint8 c in
+          if etag = 0 then (Cursor.seek c de; if errs = [] then Ok (List.rev oks) else Error (List.rev errs))
+          else (
+            let koff, klen = Cursor.cstring c in
+            let k = Cursor.substring c ~off:koff ~len:klen in
+            let vend = Cursor.pos c + value_size c etag in
+            let r = read_buf el ~tag:etag c in
+            Cursor.seek c vend;
+            match r with
+            | Ok v -> collect ((k, v) :: oks) errs
+            | Error es -> collect oks (List.rev_append (List.map (at k) es) errs))
         in
-        collect 0 [] []
+        collect [] [])
   | TCheck (_, _, _, inner) -> read_buf inner ~tag c (* RAW phase: shape only; refinements run in run_checks *)
   | TNorm (f, inner) -> ( match read_buf inner ~tag c with Ok v -> Ok (f v) | Error e -> Error e)
   | TConv (_inj, proj, inner) -> (
       match read_buf inner ~tag c with Ok v -> ( match proj v with Ok x -> Ok x | Error m -> fail m) | Error e -> Error e)
   | TObj o ->
       if tag <> tag_document then expected_tag "document" tag
-      else
-        let tape, n, doc_end = scan_doc c in
-        o.decode_src (tape_reader (Cursor.buffer c) c tape n doc_end)
+      else (
+        let ds, de = doc_bounds c in
+        let r = o.decode_src (field_reader c ds) in
+        Cursor.seek c de;
+        r)
   | TVariant { tag = tagf; cases } ->
       if tag <> tag_document then expected_tag "document" tag
       else (
-        let tape, n, doc_end = scan_doc c in
-        match tape_find c tape n tagf with
-        | Some (vtag, voff) when vtag = tag_string ->
-            let k = read_bson_string (Cursor.make (Cursor.buffer c) ~pos:voff ~limit:doc_end) in
-            ( match List.find_opt (fun (Case cs) -> cs.name = k) cases with
-            | Some (Case cs) -> (
-                match cs.body.decode_src (tape_reader (Cursor.buffer c) c tape n doc_end) with
-                | Ok a -> Ok (cs.inject a)
-                | Error e -> Error (List.map (at k) e))
-            | None -> fail (Printf.sprintf "unknown %s %S" tagf k))
-        | _ -> fail (Printf.sprintf "missing tag field %s" tagf))
+        let ds, de = doc_bounds c in
+        Cursor.seek c ds;
+        let k = match scan_find c tagf with Some vt when vt = tag_string -> Some (read_bson_string c) | _ -> None in
+        let r =
+          match k with
+          | None -> fail (Printf.sprintf "missing tag field %s" tagf)
+          | Some k -> (
+              match List.find_opt (fun (Case cs) -> cs.name = k) cases with
+              | None -> fail (Printf.sprintf "unknown %s %S" tagf k)
+              | Some (Case cs) -> ( match cs.body.decode_src (field_reader c ds) with Ok a -> Ok (cs.inject a) | Error e -> Error (List.map (at k) e)))
+        in
+        Cursor.seek c de;
+        r)
   | TLazy l -> read_buf (Lazy.force l) ~tag c
   | TCoerce inner ->
       if tag = tag_string then (let s = read_bson_string c in Engine.read inner (Engine.coerce_string inner s))
       else read_buf inner ~tag c
 
-(* a {!Shape.field_reader} backed by a scanned tape: look the field up by key, read its value straight
-   from the buffer (a fresh bounded cursor at the value), or fall back / report required-missing —
-   exactly the tree path's [decode_field], over spans instead of a kvs index *)
-and tape_reader (buf : Cursor.buffer) (c : Cursor.t) (tape : int array) (n : int) (doc_end : int) : field_reader =
+(* the {!Shape.field_reader} for the document spanning [ds, …]: rewind the shared cursor to [ds] and
+   scan for the field's key, then read its value in place — exactly the tree path's [decode_field], but
+   over the raw bytes instead of a kvs index. One closure per document level; no per-field allocation. *)
+and field_reader (c : Cursor.t) (ds : int) : field_reader =
   {
     read_field =
       (fun (type a) (f : a field) : (a, error list) result ->
-        match tape_find c tape n f.key with
-        | Some (vtag, voff) -> (
-            let cc = Cursor.make buf ~pos:voff ~limit:doc_end in
-            match read_buf f.item ~tag:vtag cc with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
+        Cursor.seek c ds;
+        match scan_find c f.key with
+        | Some vtag -> ( match read_buf f.item ~tag:vtag c with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
         | None -> ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ]));
   }
 
