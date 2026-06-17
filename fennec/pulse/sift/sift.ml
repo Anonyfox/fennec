@@ -93,6 +93,14 @@ let view c = reflect c.shape
 let field_view (f : 'a field) : view = reflect f.item
 let field_required (f : 'a field) : bool = f.needed
 
+(* ---- derived operations (SIFT-K6): equal / compare / hash / default, free from the shape ----------
+   Monomorphic, structural — not OCaml's polymorphic runtime compare/hash. *)
+
+let equal (c : 'a t) (x : 'a) (y : 'a) : bool = Derived.equal c.shape x y
+let compare (c : 'a t) (x : 'a) (y : 'a) : int = Derived.compare c.shape x y
+let hash (c : 'a t) (v : 'a) : int = Derived.hash c.shape v
+let default (c : 'a t) : 'a = Derived.default c.shape
+
 (* ---- positional parameter lists (DDP method params) — unchanged surface ----------------- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }

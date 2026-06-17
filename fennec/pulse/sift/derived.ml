@@ -1,0 +1,154 @@
+(* derived.ml — free, shape-derived operations (the repr-style axis E): equal / compare / hash /
+   default. Each is composed structurally from the shape, MONOMORPHIC — no reliance on OCaml's
+   polymorphic runtime compare/hash (which is slow, samples large structures, and raises on functions).
+   A record's [equal] is the AND of its fields' equals, etc. The hook for later customization (ignore a
+   field, custom float semantics) without changing call sites. *)
+
+open Shape
+
+(* ---- structural equality (a record: all fields equal; a variant: same case + equal bodies) ------ *)
+
+let rec equal : type a. a shape -> a -> a -> bool =
+ fun shape x y ->
+  match shape with
+  | TString -> String.equal x y
+  | TInt -> Int.equal x y
+  | TFloat _ -> Float.equal x y
+  | TBool -> Bool.equal x y
+  | TDate -> Int64.equal x y
+  | TId -> String.equal x y
+  | TBson -> Bson.equal x y
+  | TUnit -> true
+  | TList el -> ( try List.for_all2 (equal el) x y with Invalid_argument _ -> false)
+  | TOption el -> ( match (x, y) with None, None -> true | Some a, Some b -> equal el a b | _ -> false)
+  | TMap el -> List.compare_lengths x y = 0 && List.for_all2 (fun (k1, v1) (k2, v2) -> String.equal k1 k2 && equal el v1 v2) x y
+  | TCheck (_, _, _, inner) -> equal inner x y
+  | TNorm (_, inner) -> equal inner x y
+  | TConv (inj, _, inner) -> equal inner (inj x) (inj y)
+  | TCoerce inner -> equal inner x y
+  | TLazy l -> equal (Lazy.force l) x y
+  | TObj o -> List.for_all (fun (Bound_field f) -> equal f.shape (f.get x) (f.get y)) o.members
+  | TVariant { cases; _ } -> equal_variant cases x y
+
+and equal_variant : type r. r case list -> r -> r -> bool =
+ fun cases x y ->
+  match cases with
+  | [] -> false
+  | Case c :: rest -> (
+      match c.project x with
+      | Some a -> ( match c.project y with Some b -> List.for_all (fun (Bound_field f) -> equal f.shape (f.get a) (f.get b)) c.body.members | None -> false)
+      | None -> equal_variant rest x y)
+
+(* ---- total ordering (lexicographic over fields / list elements; variants by case order) --------- *)
+
+let rec compare : type a. a shape -> a -> a -> int =
+ fun shape x y ->
+  match shape with
+  | TString -> String.compare x y
+  | TInt -> Int.compare x y
+  | TFloat _ -> Float.compare x y
+  | TBool -> Bool.compare x y
+  | TDate -> Int64.compare x y
+  | TId -> String.compare x y
+  | TBson -> Stdlib.compare x y
+  | TUnit -> 0
+  | TList el -> compare_list el x y
+  | TOption el -> ( match (x, y) with None, None -> 0 | None, Some _ -> -1 | Some _, None -> 1 | Some a, Some b -> compare el a b)
+  | TMap el -> compare_map el x y
+  | TCheck (_, _, _, inner) -> compare inner x y
+  | TNorm (_, inner) -> compare inner x y
+  | TConv (inj, _, inner) -> compare inner (inj x) (inj y)
+  | TCoerce inner -> compare inner x y
+  | TLazy l -> compare (Lazy.force l) x y
+  | TObj o -> compare_members o.members x y
+  | TVariant { cases; _ } -> compare_variant cases 0 x y
+
+and compare_list : type a. a shape -> a list -> a list -> int =
+ fun el xs ys ->
+  match (xs, ys) with [], [] -> 0 | [], _ -> -1 | _, [] -> 1 | x :: xr, y :: yr -> let c = compare el x y in if c <> 0 then c else compare_list el xr yr
+
+and compare_map : type a. a shape -> (string * a) list -> (string * a) list -> int =
+ fun el xs ys ->
+  match (xs, ys) with
+  | [], [] -> 0
+  | [], _ -> -1
+  | _, [] -> 1
+  | (k1, v1) :: xr, (k2, v2) :: yr -> let c = String.compare k1 k2 in if c <> 0 then c else let c = compare el v1 v2 in if c <> 0 then c else compare_map el xr yr
+
+and compare_members : type r. r bound_field list -> r -> r -> int =
+ fun members x y ->
+  match members with
+  | [] -> 0
+  | Bound_field f :: rest -> let c = compare f.shape (f.get x) (f.get y) in if c <> 0 then c else compare_members rest x y
+
+and compare_variant : type r. r case list -> int -> r -> r -> int =
+ fun cases idx x y ->
+  match cases with
+  | [] -> 0
+  | Case c :: rest -> (
+      match (c.project x, c.project y) with
+      | Some a, Some b -> compare_members c.body.members a b
+      | Some _, None -> -1 (* x is this (earlier) case, y is a later one *)
+      | None, Some _ -> 1
+      | None, None -> compare_variant rest (idx + 1) x y)
+
+(* ---- structural hash (monomorphic; combine = the classic 31x mix) -------------------------------- *)
+
+let combine a b = (a * 31) + b
+
+let rec hash : type a. a shape -> a -> int =
+ fun shape v ->
+  match shape with
+  | TString -> Hashtbl.hash v
+  | TInt -> v
+  | TFloat _ -> Hashtbl.hash v
+  | TBool -> if v then 1 else 0
+  | TDate -> Hashtbl.hash v
+  | TId -> Hashtbl.hash v
+  | TBson -> Hashtbl.hash v
+  | TUnit -> 0
+  | TList el -> List.fold_left (fun acc x -> combine acc (hash el x)) 7 v
+  | TOption el -> ( match v with None -> 0 | Some x -> combine 1 (hash el x))
+  | TMap el -> List.fold_left (fun acc (k, x) -> combine (combine acc (Hashtbl.hash k)) (hash el x)) 11 v
+  | TCheck (_, _, _, inner) -> hash inner v
+  | TNorm (_, inner) -> hash inner v
+  | TConv (inj, _, inner) -> hash inner (inj v)
+  | TCoerce inner -> hash inner v
+  | TLazy l -> hash (Lazy.force l) v
+  | TObj o -> List.fold_left (fun acc (Bound_field f) -> combine acc (hash f.shape (f.get v))) 17 o.members
+  | TVariant { cases; _ } -> hash_variant cases 1 v
+
+and hash_variant : type r. r case list -> int -> r -> int =
+ fun cases tag v ->
+  match cases with
+  | [] -> 0
+  | Case c :: rest -> ( match c.project v with Some a -> List.fold_left (fun acc (Bound_field f) -> combine acc (hash f.shape (f.get a))) tag c.body.members | None -> hash_variant rest (tag + 1) v)
+
+(* ---- a sensible default/zero value from the shape (form initial values, fixtures) --------------- *)
+
+(* leaves zero out; containers are empty; a record is built from its fields' defaults (via the same
+   constructor decode threads — so required fields get their leaf default); a variant defaults to its
+   first case. Terminates on recursive shapes ([fix]) because the recursion goes through a list/option,
+   which default to []/None WITHOUT defaulting an element. *)
+let rec default : type a. a shape -> a =
+ fun shape ->
+  match shape with
+  | TString -> ""
+  | TInt -> 0
+  | TFloat _ -> 0.0
+  | TBool -> false
+  | TDate -> 0L
+  | TId -> ""
+  | TBson -> Bson.Null
+  | TUnit -> ()
+  | TList _ -> []
+  | TOption _ -> None
+  | TMap _ -> []
+  | TCheck (_, _, _, inner) -> default inner
+  | TNorm (f, inner) -> f (default inner)
+  | TConv (_, proj, inner) -> ( match proj (default inner) with Ok b -> b | Error m -> invalid_arg ("Sift.default: conversion rejects the default value: " ^ m))
+  | TCoerce inner -> default inner
+  | TLazy l -> default (Lazy.force l)
+  | TObj o -> ( match o.decode_src { read_field = (fun f -> Ok (default f.item)) } with Ok v -> v | Error _ -> invalid_arg "Sift.default: record")
+  | TVariant { cases = []; _ } -> invalid_arg "Sift.default: variant has no cases"
+  | TVariant { cases = Case c :: _; _ } -> ( match c.body.decode_src { read_field = (fun f -> Ok (default f.item)) } with Ok a -> c.inject a | Error _ -> invalid_arg "Sift.default: variant")

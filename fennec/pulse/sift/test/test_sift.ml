@@ -500,4 +500,38 @@ let%test "k3: encode_bytes |> decode_bytes round-trips to the value" =
   && roundtrips nested_c ("ok", ("Ada", "ada@x.io"))
   && roundtrips figure_c (Rect (3.0, 4.0))
 
+(* ── SIFT-K6: derived ops — equal / compare / hash / default, shape-derived ── *)
+
+let%test "k6: equal — reflexive, distinguishes fields, variant cases" =
+  let v = ("hi", 42, 3.5, true, 1L, "id") in
+  Sift.equal bag_c v v
+  && (not (Sift.equal bag_c v ("hi", 43, 3.5, true, 1L, "id")))
+  && Sift.equal opt_c (None, []) (None, [])
+  && (not (Sift.equal opt_c (Some "x", []) (None, [])))
+  && Sift.equal figure_c (Circle 2.0) (Circle 2.0)
+  && (not (Sift.equal figure_c (Circle 2.0) (Rect (2.0, 3.0))))
+  && Sift.equal list_c [ "a"; "b" ] [ "a"; "b" ]
+  && (not (Sift.equal list_c [ "a"; "b" ] [ "a"; "c" ]))
+  && not (Sift.equal list_c [ "a" ] [ "a"; "b" ])
+
+let%test "k6: compare — total order, consistent with equal, sorts correctly" =
+  Sift.compare bag_c ("a", 1, 0., true, 0L, "x") ("a", 1, 0., true, 0L, "x") = 0
+  && Sift.compare bag_c ("a", 1, 0., true, 0L, "x") ("a", 2, 0., true, 0L, "x") < 0
+  && Sift.compare figure_c (Circle 1.0) (Rect (1., 1.)) < 0 (* Circle declared before Rect *)
+  && (let sorted = List.sort (Sift.compare range_c) [ (3, 9); (1, 2); (2, 5); (1, 1) ] in sorted = [ (1, 1); (1, 2); (2, 5); (3, 9) ])
+
+let%test "k6: hash — equal values hash equal" =
+  Sift.hash bag_c ("hi", 42, 3.5, true, 1L, "id") = Sift.hash bag_c ("hi", 42, 3.5, true, 1L, "id")
+  && Sift.hash figure_c (Circle 2.0) = Sift.hash figure_c (Circle 2.0)
+  && Sift.hash opt_c (None, []) = Sift.hash opt_c (None, [])
+
+let%test "k6: default — sensible zeros; round-trips through encode/decode" =
+  Sift.default bag_c = ("", 0, 0.0, false, 0L, "")
+  && Sift.default opt_c = (None, [])
+  && Sift.default list_c = []
+  && (match Sift.default figure_c with Circle 0.0 -> true | _ -> false)
+  && Sift.default nested_c = ("", ("", "")) (* nested record built from leaf defaults *)
+  && Sift.default coerce_c = 0 (* structural zero — note 0 would fail this shape's [min_i 1] on validation *)
+  && (match Sift.decode_bytes bag_c (Sift.encode_bytes bag_c (Sift.default bag_c)) with Ok ("", 0, 0.0, false, 0L, "") -> true | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

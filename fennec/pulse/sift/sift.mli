@@ -94,6 +94,24 @@ val size : 'a t -> 'a -> int
     serialising to the wire. Each document's length prefix is backpatched once its content end is known. *)
 val encode_bytes : 'a t -> 'a -> Bigstringaf.t
 
+(** {1 Derived operations (SIFT-K6)} *)
+
+(** Structural equality derived from the shape — monomorphic (not OCaml's polymorphic [=]): a record
+    is equal field-by-field, a variant when same-case with equal bodies. *)
+val equal : 'a t -> 'a -> 'a -> bool
+
+(** Total ordering derived from the shape (lexicographic over fields / list elements; variants by case
+    declaration order). Monomorphic. *)
+val compare : 'a t -> 'a -> 'a -> int
+
+(** A structural hash derived from the shape (monomorphic; combines field hashes). *)
+val hash : 'a t -> 'a -> int
+
+(** A sensible default/zero value from the shape: leaves zero out (["" / 0 / false / []]); a record is
+    built from its fields' defaults (required fields get their leaf default); a variant takes its first
+    case. For form initial values and fixtures. *)
+val default : 'a t -> 'a
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result
