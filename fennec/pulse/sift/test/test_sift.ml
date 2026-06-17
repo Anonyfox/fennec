@@ -445,4 +445,59 @@ let%test "t1: valid_bytes rejects a malformed buffer structurally (no exception)
   let truncated = Bigstringaf.of_string ~off:0 ~len:(String.length s - 4) s in
   match Sift.valid_bytes bag_c truncated with Error [ e ] -> e.Sift.code = "malformed" | _ -> false
 
+(* ── SIFT-K3: encode mirror. [size] must equal the EXACT byte length the codec's BSON encodes to,
+   including the optional/opt_list omission and the int32-vs-int64 / oid-vs-string choices. ── *)
+
+let size_matches (c : 'a Sift.t) (v : 'a) : bool = Sift.size c v = String.length (W.encode (c.Sift.enc v))
+
+let%test "k3: size == encoded length — scalars, ids, large ints" =
+  size_matches bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && size_matches bag_c ("", 0, 0.0, false, 0L, "plain")
+  && size_matches bag_c ("unicode → ✓", 5_000_000_000, -2.5, true, -1L, "507f1f77bcf86cd799439011")
+
+let%test "k3: size == encoded length — options (present + omitted), lists, maps" =
+  size_matches opt_c (Some "x", [ 1; 2; 3 ])
+  && size_matches opt_c (None, [])
+  && size_matches opt_c (Some "", [])
+  && size_matches list_c [ "a"; "bb"; "ccc"; "" ]
+  && size_matches list_c []
+  && size_matches map_c [ ("x", 1); ("y", 22); ("z", 333) ]
+
+let%test "k3: size == encoded length — nested records and variants" =
+  size_matches nested_c ("ok", ("Ada Lovelace", "ada@x.io"))
+  && size_matches figure_c (Circle 2.5)
+  && size_matches figure_c (Rect (3.0, 4.0))
+  && size_matches range_c (1, 9)
+  && size_matches coerce_c 5
+
+(* encode_bytes must be byte-identical to the tree path [Bson_wire.encode (codec.enc v)] *)
+let encode_matches (c : 'a Sift.t) (v : 'a) : bool = Bigstringaf.to_string (Sift.encode_bytes c v) = W.encode (c.Sift.enc v)
+
+(* and the whole loop must be the identity: encode_bytes |> decode_bytes = the value *)
+let roundtrips (c : 'a Sift.t) (v : 'a) : bool = match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> v' = v | Error _ -> false
+
+let%test "k3: encode_bytes is byte-identical to the tree path (scalars/ids/large ints/options/lists/maps)" =
+  encode_matches bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && encode_matches bag_c ("unicode → ✓", 5_000_000_000, -2.5, false, -1L, "plain")
+  && encode_matches opt_c (Some "x", [ 1; 2; 3 ])
+  && encode_matches opt_c (None, [])
+  && encode_matches opt_c (Some "", [])
+  && encode_matches list_c [ "a"; "bb"; "ccc"; "" ]
+  && encode_matches map_c [ ("x", 1); ("y", 22); ("z", 333) ]
+
+let%test "k3: encode_bytes byte-identical — nested, variants, TBson" =
+  encode_matches nested_c ("ok", ("Ada", "ada@x.io"))
+  && encode_matches figure_c (Circle 2.5)
+  && encode_matches figure_c (Rect (3.0, 4.0))
+  && encode_matches bson_c (B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("o", B.oid "507f1f77bcf86cd799439011"); ("d", B.date 99L); ("big", B.Int64 9000000000L) ])
+
+let%test "k3: encode_bytes |> decode_bytes round-trips to the value" =
+  roundtrips bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && roundtrips opt_c (Some "x", [ 1; 2; 3 ])
+  && roundtrips opt_c (None, [])
+  && roundtrips list_c [ "a"; "b"; "c" ]
+  && roundtrips map_c [ ("x", 1); ("y", 2) ]
+  && roundtrips nested_c ("ok", ("Ada", "ada@x.io"))
+  && roundtrips figure_c (Rect (3.0, 4.0))
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -117,7 +117,10 @@ and 'a field = { key : string; item : 'a shape; needed : bool; fallback : 'a opt
 and field_reader = { read_field : 'a. 'a field -> ('a, error list) result }
 
 and 'r bound_field =
-  | Bound_field : { name : string; shape : 'a shape; get : 'r -> 'a; required : bool } -> 'r bound_field
+  (* [omit v] is the encode-side rule: does this field, with value [v], get dropped from the wire? (an
+     absent optional / an empty opt_list — Mongo-idiomatic absence). Carried here so the encode
+     interpreters (size/write) reproduce [encode_field]'s omission WITHOUT building a {!Bson.t}. *)
+  | Bound_field : { name : string; shape : 'a shape; get : 'r -> 'a; required : bool; omit : 'a -> bool } -> 'r bound_field
 
 and 'r case =
   | Case : { name : string; body : 'a record_shape; inject : 'a -> 'r; project : 'r -> 'a option } -> 'r case

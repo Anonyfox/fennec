@@ -82,6 +82,18 @@ val valid_bytes : 'a t -> Bigstringaf.t -> (unit, error list) result
     pre-filter / fuzz oracle, the pure-OCaml analog of libbson's [bson_validate]. *)
 val scan_valid : Bigstringaf.t -> bool
 
+(** {1 Encode (zero-copy, SIFT-K3)} *)
+
+(** The EXACT wire byte length of encoding [v] through the codec, WITHOUT building it — equals
+    [String.length] of the BSON the codec would emit. For pre-sizing a buffer, a Content-Length header,
+    a quota check; and the basis of straight-to-buffer encode ({!encode_bytes}). *)
+val size : 'a t -> 'a -> int
+
+(** Encode [v] straight into a freshly-allocated buffer ([Bigstringaf.create (size c v)]) in a single
+    pass, WITHOUT building a {!Bson.t} tree — byte-identical to encoding through the tree then
+    serialising to the wire. Each document's length prefix is backpatched once its content end is known. *)
+val encode_bytes : 'a t -> 'a -> Bigstringaf.t
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result

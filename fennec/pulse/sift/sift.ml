@@ -32,6 +32,17 @@ let valid_bytes (c : 'a t) (buf : Bigstringaf.t) : (unit, error list) result = B
    the fast pre-filter / fuzz oracle (the pure-OCaml analog of libbson's bson_validate, and faster). *)
 let scan_valid (buf : Bigstringaf.t) : bool = Bson_reader.scan_valid buf
 
+(* ---- encode mirror (SIFT-K3) ----------------------------------------------------------- *)
+
+(* The EXACT wire byte length of encoding [v] through the codec, WITHOUT encoding it — equals
+   [String.length] of the BSON the codec would produce. For pre-sizing a buffer, a Content-Length, a
+   quota check; and the foundation of straight-to-buffer encode. *)
+let size (c : 'a t) (v : 'a) : int = Engine.size c.shape v
+
+(* Encode [v] straight into a freshly-sized buffer, NO Bson.t tree — byte-identical to encoding through
+   the tree then serialising. Single pass; each document's length is backpatched once known. *)
+let encode_bytes (c : 'a t) (v : 'a) : Bigstringaf.t = Bson_writer.encode_value_bytes c.shape v
+
 (* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
 
 type view =

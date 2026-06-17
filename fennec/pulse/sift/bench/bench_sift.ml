@@ -126,7 +126,14 @@ let fixture title ~iters (codec : 'a Sift.t) (doc : B.t) =
   if Ffi.available () then bench "libbson walk (C)" ~iters (fun () -> keep (Ffi.bson_bench_walk buf));
   (* T1 alloc-free tier: validate WITHOUT materializing — should run at scan speed, ~0 alloc, beating C. *)
   bench "valid_bytes (T1)" ~iters (fun () -> keep (Sift.valid_bytes codec buf));
-  bench "scan_valid (T1)" ~iters (fun () -> keep (Sift.scan_valid buf))
+  bench "scan_valid (T1)" ~iters (fun () -> keep (Sift.scan_valid buf));
+  (* K3 encode: zero-copy (size→alloc→write) vs today's tree path (enc → Bson.t → Bson_wire.encode) *)
+  match Sift.decode codec parsed with
+  | Error _ -> ()
+  | Ok value ->
+      bench "tree encode" ~iters (fun () -> keep (W.encode (codec.Sift.enc value)));
+      bench "zerocopy encode" ~iters (fun () -> keep (Sift.encode_bytes codec value));
+      bench "size only" ~iters (fun () -> keep (Sift.size codec value))
 
 (* ── fixtures ─────────────────────────────────────────────────────────────── *)
 

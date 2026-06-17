@@ -231,6 +231,72 @@ and cases_need_checks : type a. a case list -> bool = function
   | [] -> false
   | Case c :: tl -> (match c.body.invariants with [] -> false | _ :: _ -> true) || members_need_checks c.body.members || cases_need_checks tl
 
+(* ---- encode-side sizing: the EXACT wire byte length of encoding a value, WITHOUT building it ----
+
+   [size shape v] = String.length (Bson_wire.encode (write shape v)) — mirrors Bson_wire's value layout
+   and {!write}'s tag choices (int32 vs int64 by range, oid vs string for an id, optional/opt_list
+   omission via {!Shape.bound_field}'s [omit]). The free public capability AND the foundation the
+   straight-to-buffer writer reuses (size once → allocate once → write a single pass). *)
+
+let i32_min = Int32.to_int Int32.min_int (* jsoo-safe: no -2147483648 literal (would overflow a 32-bit int) *)
+let i32_max = Int32.to_int Int32.max_int
+let in_i32 n = n >= i32_min && n <= i32_max
+let rec dec_len n = if n < 10 then 1 else 1 + dec_len (n / 10) (* decimal digits of a non-negative int (array indices), no alloc *)
+
+(* bytes to encode a {!Bson.t} value (NOT its tag/key) — for the [TBson] escape hatch; mirrors emit_value *)
+let rec bson_size (b : Bson.t) : int =
+  match b with
+  | Bson.Null | Bson.Min_key | Bson.Max_key -> 0
+  | Bson.Bool _ -> 1
+  | Bson.Int n -> if in_i32 n then 4 else 8
+  | Bson.Int64 _ | Bson.Float _ | Bson.Date _ | Bson.Timestamp _ -> 8
+  | Bson.String s | Bson.Code s | Bson.Symbol s -> 4 + String.length s + 1
+  | Bson.Object_id _ -> 12
+  | Bson.Document fields -> bson_doc_size fields
+  | Bson.Array xs -> bson_doc_size (List.mapi (fun i x -> (string_of_int i, x)) xs)
+  | Bson.Binary { base64; _ } -> 5 + String.length (try Base64.decode_exn base64 with _ -> "")
+  | Bson.Regex { pattern; options } -> String.length pattern + 1 + String.length options + 1
+  | Bson.Code_with_scope (code, scope) -> 4 + (4 + String.length code + 1) + bson_doc_size scope
+  | Bson.Decimal128 _ -> 16
+and bson_doc_size fields = List.fold_left (fun acc (k, v) -> acc + 1 + String.length k + 1 + bson_size v) 4 fields + 1
+
+let rec size : type a. a shape -> a -> int =
+ fun shape v ->
+  match shape with
+  | TString -> 4 + String.length v + 1
+  | TInt -> if in_i32 v then 4 else 8
+  | TFloat _ -> 8
+  | TBool -> 1
+  | TDate -> 8
+  | TId -> if looks_like_oid v then 12 else 4 + String.length v + 1
+  | TBson -> bson_size v
+  | TUnit -> 0
+  | TList el -> list_size el 0 4 v + 1
+  | TOption el -> ( match v with Some x -> size el x | None -> 0)
+  | TMap el -> List.fold_left (fun acc (k, x) -> acc + 1 + String.length k + 1 + size el x) 4 v + 1
+  | TCheck (_, _, _, inner) -> size inner v
+  | TNorm (f, inner) -> size inner (f v)
+  | TConv (inj, _, inner) -> size inner (inj v)
+  | TCoerce inner -> size inner v
+  | TLazy l -> size (Lazy.force l) v
+  | TObj o -> 4 + members_size o.members v + 1
+  | TVariant { tag; cases } -> variant_size tag cases v
+
+and list_size : type a. a shape -> int -> int -> a list -> int =
+ fun el i acc -> function [] -> acc | x :: tl -> list_size el (i + 1) (acc + 1 + dec_len i + 1 + size el x) tl
+
+and members_size : type r. r bound_field list -> r -> int =
+ fun members r ->
+  List.fold_left (fun acc (Bound_field f) -> let v = f.get r in if f.omit v then acc else acc + 1 + String.length f.name + 1 + size f.shape v) 0 members
+
+and variant_size : type r. string -> r case list -> r -> int =
+ fun tag cases v ->
+  let rec go = function
+    | [] -> invalid_arg "Sift: variant value matches no declared case"
+    | Case c :: rest -> ( match c.project v with Some a -> 4 + (1 + String.length tag + 1 + (4 + String.length c.name + 1)) + members_size c.body.members a + 1 | None -> go rest)
+  in
+  go cases
+
 (* ---- derived pretty-printing --------------------------------------------------- *)
 
 let rec pretty : type a. a shape -> Format.formatter -> a -> unit =

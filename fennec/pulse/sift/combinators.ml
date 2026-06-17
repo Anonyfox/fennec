@@ -174,7 +174,18 @@ let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k
         | Error e1, Error e2 -> Error (e1 @ e2)
         | Error e, Ok _ | Ok _, Error e -> Error e);
     acc_encode = (fun r -> b.acc_encode r @ (match encode_field f (get r) with Some kv -> [ kv ] | None -> []));
-    acc_members = Bound_field { name = f.key; shape = f.item; get = get; required = f.needed } :: b.acc_members;
+    acc_members =
+      Bound_field
+        { name = f.key;
+          shape = f.item;
+          get;
+          required = f.needed;
+          (* mirror {!encode_field}: a required field never omits (so [not f.needed] short-circuits
+             before any [write]); an optional/opt_list field omits when its value encodes to Null / the
+             matching empty array *)
+          omit = (fun v -> (not f.needed) && (match write f.item v with Bson.Null -> true | Bson.Array [] -> f.fallback = Some v | _ -> false));
+        }
+      :: b.acc_members;
     acc_invariants = b.acc_invariants;
   }
 
