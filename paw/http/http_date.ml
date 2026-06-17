@@ -19,8 +19,25 @@ let format (epoch : float) : string =
   Printf.sprintf "%s, %02d %s %04d %02d:%02d:%02d GMT" days.(tm.Unix.tm_wday) tm.Unix.tm_mday
     months.(tm.Unix.tm_mon) (tm.Unix.tm_year + 1900) tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
 
+(* The Date header changes once per second, but a busy server emits it on every response. Cache the
+   formatted string for the current second so we run gmtime + sprintf ~once/second, not once/response.
+   Lock-free + multicore-safe via an atomic: a concurrent miss across domains just reformats the same
+   second to the same string. Use this for "now"; {!format} stays for arbitrary times (Last-Modified). *)
+let date_cache = Atomic.make (min_int, "")
+
+let format_cached (epoch : float) : string =
+  let sec = int_of_float epoch in
+  let cached_sec, cached_str = Atomic.get date_cache in
+  if sec = cached_sec then cached_str
+  else
+    let s = format epoch in
+    Atomic.set date_cache (sec, s);
+    s
+
 (* ──── format ──── *)
 let%test "format RFC example"   = format 784_111_777.0 = "Sun, 06 Nov 1994 08:49:37 GMT"
+let%test "format_cached matches format (same second)" = format_cached 1_700_000_001.4 = format 1_700_000_001.4
+let%test "format_cached truncates to the second" = format_cached 1_700_000_042.0 = format 1_700_000_042.9
 let%test "format epoch 0"       = format 0.0 = "Thu, 01 Jan 1970 00:00:00 GMT"
 let%test "format length 29"     = String.length (format 1_700_000_000.0) = 29
 

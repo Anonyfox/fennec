@@ -31,10 +31,9 @@ let content_type_of (resp : H.response) : string =
 (* hex md5 of the body — a strong validator for ETag (content-addressed) *)
 let body_etag (body : string) : string = Sem.make_etag (Digest.to_hex (Digest.string body))
 
-let set_header headers k v =
-  (* replace any existing (case-insensitive), then add *)
-  let kl = String.lowercase_ascii k in
-  (k, v) :: List.filter (fun (hk, _) -> String.lowercase_ascii hk <> kl) headers
+(* replace any existing (case-insensitive), then prepend — via {!Headers.put}, whose compare is
+   allocation-free (no per-element lowercased copy), since finalize calls this several times/response *)
+let set_header headers k v = Headers.put headers k v
 
 let has_header headers k = Sem.header headers k <> None
 
@@ -65,7 +64,7 @@ let finalize ?(now = 0.0) ~(req : H.request) (resp : H.response) : H.response =
           List.mem kl [ "etag"; "cache-control"; "vary"; "last-modified"; "content-type" ])
         headers
     in
-    let keep = set_header keep "Date" (Date.format now) in
+    let keep = set_header keep "Date" (Date.format_cached now) in
     { H.status = 304; headers = keep; body = "" }
   else begin
     (* 3. compression negotiation *)
@@ -91,7 +90,7 @@ let finalize ?(now = 0.0) ~(req : H.request) (resp : H.response) : H.response =
     in
 
     (* 4. Date + Content-Length; HEAD keeps headers but empty body *)
-    let headers = set_header headers "Date" (Date.format now) in
+    let headers = set_header headers "Date" (Date.format_cached now) in
     let headers = set_header headers "Content-Length" (string_of_int (String.length body)) in
     { H.status = resp.H.status; headers; body = (if is_head then "" else body) }
   end

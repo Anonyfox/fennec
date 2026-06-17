@@ -11,6 +11,11 @@
 (** Format epoch seconds as an IMF-fixdate, e.g. ["Sun, 06 Nov 1994 08:49:37 GMT"]. *)
 val format : float -> string
 
+(** Like {!format} but caches the result for the current whole second (lock-free, multicore-safe).
+    Use for the per-response [Date] header on a busy server — it formats ~once/second instead of
+    once/response. Equivalent to [format] truncated to the second. *)
+val format_cached : float -> string
+
 (** Parse any of the three HTTP-date forms (IMF-fixdate, RFC 850, asctime) into
     epoch seconds. Returns [None] on anything unparseable. *)
 val parse : string -> float option
