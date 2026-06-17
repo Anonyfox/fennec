@@ -39,3 +39,12 @@ val of_pem : cert:string -> key:string -> t
     unknown SNI).
     @raise Failure on a malformed certificate, key, or configuration. *)
 val of_file_pairs : (string * string) list -> t
+
+(** [self_signed ?hosts ()] builds a throwaway in-memory self-signed certificate covering [hosts]
+    (default [["localhost"]]) — for OPT-IN local HTTPS in DEVELOPMENT only. {!Fennec.serve} uses it
+    automatically when [FENNEC_DEV_TLS] is set in a dev run with no [~tls]/[~acme], so a developer can
+    exercise the HTTPS path (Secure cookies, HSTS, redirects, SNI) on [https://localhost] with zero
+    cert wrangling. It chains to no trusted CA, so browsers warn — expected, and never used in
+    production.
+    @raise Failure if certificate generation fails. *)
+val self_signed : ?hosts:string list -> unit -> t

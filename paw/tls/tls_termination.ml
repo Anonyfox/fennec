@@ -38,6 +38,25 @@ let of_file_pairs (pairs : (string * string) list) : t =
   let read p = In_channel.with_open_bin p In_channel.input_all in
   server_of_chains (List.map (fun (cert, key) -> chain_of_pem ~cert:(read cert) ~key:(read key)) pairs)
 
+(* a throwaway, in-memory self-signed certificate covering [hosts] (default ["localhost"]) — for
+   OPT-IN local HTTPS in DEVELOPMENT only ({!Fennec.serve} reaches for this only in dev when
+   FENNEC_DEV_TLS is set, never in production). It chains to no trusted CA, so a browser shows the
+   usual "not secure" warning to click through — expected for a dev cert, and the point is to exercise
+   the HTTPS path (Secure cookies, HSTS, redirects, SNI) locally without hand-managing a cert. *)
+let self_signed ?(hosts = [ "localhost" ]) () : t =
+  ensure_rng ();
+  let hosts = match hosts with [] -> [ "localhost" ] | hs -> hs in
+  let dn = X509.Distinguished_name.[ Relative_distinguished_name.singleton (CN (List.hd hosts)) ] in
+  let key = X509.Private_key.generate ~bits:2048 `RSA in
+  let csr = match X509.Signing_request.create dn key with Ok c -> c | Error (`Msg m) -> failwith ("fennec: dev TLS CSR — " ^ m) in
+  (* the SAN must be supplied to [sign] — extensions carried on the CSR are ignored (x509 docs) *)
+  let san = X509.General_name.(singleton DNS hosts) in
+  let exts = X509.Extension.(singleton Subject_alt_name (false, san)) in
+  let valid_until = match Ptime.of_float_s 4070908800.0 (* 2099-01-01: a dev cert never needs renewing *) with Some t -> t | None -> Ptime.epoch in
+  match X509.Signing_request.sign csr ~valid_from:Ptime.epoch ~valid_until ~extensions:exts key dn with
+  | Ok cert -> server_of_chains [ ([ cert ], key) ]
+  | Error e -> failwith (Format.asprintf "fennec: dev TLS self-sign — %a" X509.Validation.pp_signature_error e)
+
 (* ──── tls_termination test ──── *)
 
 (* a real, end-to-end load: generate a self-signed cert with openssl, then prove [of_files] decodes
@@ -61,3 +80,26 @@ let%test "of_files loads a cert (Single) + server_of_chains SNI-selects among di
         with
         | () -> true
         | exception _ -> false)
+
+(* the dev self-signed cert builds a valid config AND actually covers the requested hosts (its SAN is
+   what mirage-tls matches SNI against), so https://localhost works locally with no openssl, no files. *)
+let%test "self_signed builds a config whose certificate covers the requested hosts" =
+  match
+    ignore (self_signed ());
+    (* re-sign with a known key so we can inspect the cert's hostnames directly *)
+    Mirage_crypto_rng_unix.use_default ();
+    let key = X509.Private_key.generate ~bits:2048 `RSA in
+    let dn = X509.Distinguished_name.[ Relative_distinguished_name.singleton (CN "localhost") ] in
+    let csr = match X509.Signing_request.create dn key with Ok c -> c | Error (`Msg m) -> failwith m in
+    let san = X509.General_name.(singleton DNS [ "localhost"; "app.test" ]) in
+    let exts = X509.Extension.(singleton Subject_alt_name (false, san)) in
+    let until = Option.value (Ptime.of_float_s 4070908800.0) ~default:Ptime.epoch in
+    match X509.Signing_request.sign csr ~valid_from:Ptime.epoch ~valid_until:until ~extensions:exts key dn with
+    | Error _ -> failwith "sign"
+    | Ok cert ->
+      let names = X509.Certificate.hostnames cert in
+      let has h = X509.Host.Set.exists (fun (_, d) -> Domain_name.to_string d = h) names in
+      if has "localhost" && has "app.test" then () else failwith "missing SAN"
+  with
+  | () -> true
+  | exception _ -> false

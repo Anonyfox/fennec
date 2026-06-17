@@ -222,6 +222,23 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
       (Some r.Paw.Acme.source, r.Paw.Acme.on_demand))
     else match tls with Some t -> (Some (fun () -> Some t), None) | None -> (None, None)
   in
+  (* opt-in zero-config local HTTPS: in dev with no BYO/ACME cert, FENNEC_DEV_TLS=1 terminates TLS on
+     the dev port with a throwaway self-signed cert for localhost (+ the endpoints' Exact hosts), so a
+     dev can exercise HTTPS-only behaviour (Secure cookies, HSTS, redirects) locally with no cert to
+     manage. Built once, presented as a constant source. Never engaged in production. *)
+  let tls_source =
+    match tls_source with
+    | Some _ -> tls_source
+    | None when is_dev && (match Sys.getenv_opt "FENNEC_DEV_TLS" with Some ("1" | "on" | "true" | "yes") -> true | _ -> false) ->
+      let hosts =
+        "localhost"
+        :: List.concat_map (fun e -> List.filter_map (fun h -> match Paw.Host_pattern.of_string h with Ok (Paw.Host_pattern.Exact d) -> Some d | _ -> None) (Endpoint.hosts e)) endpoints
+        |> List.sort_uniq compare
+      in
+      let cfg = Paw.Tls_termination.self_signed ~hosts () in
+      Some (fun () -> Some cfg)
+    | None -> None
+  in
   (* in TLS-mode production the app is on :443; a :80 front does the HTTP→HTTPS redirect (+ serves
      the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
   if Option.is_some tls_source && not is_dev then Paw.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~lock:tls_lock ~challenges;

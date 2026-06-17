@@ -86,6 +86,23 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
         (Some source, on_demand)
       | None -> (Option.map (fun t () -> Some t) tls, None)
     in
+    (* opt-in zero-config local HTTPS: in dev with no BYO/ACME cert, FENNEC_DEV_TLS=1 terminates TLS
+       on the dev port with a throwaway self-signed cert for localhost (+ the endpoints' Exact hosts),
+       so HTTPS-only behaviour (Secure cookies, HSTS, redirects) is testable locally with no cert to
+       manage. Built once, presented as a constant source. *)
+    let tls_source =
+      match tls_source with
+      | Some _ -> tls_source
+      | None when is_dev && (match Sys.getenv_opt "FENNEC_DEV_TLS" with Some ("1" | "on" | "true" | "yes") -> true | _ -> false) ->
+        let hosts =
+          "localhost"
+          :: List.concat_map (fun e -> List.filter_map (fun h -> match Host_pattern.of_string h with Ok (Host_pattern.Exact d) -> Some d | _ -> None) (Endpoint.hosts e)) endpoints
+          |> List.sort_uniq compare
+        in
+        let cfg = Tls_termination.self_signed ~hosts () in
+        Some (fun () -> Some cfg)
+      | None -> None
+    in
     (* in TLS-mode production the app is on :443; a :80 front 301-redirects HTTP→HTTPS (and serves the
        ACME HTTP-01 challenge from the shared table — empty, so redirect-only, for a BYO cert), so
        in-process HTTPS is transparent for both ACME and BYO. Dev keeps a single plain/forced port. *)
