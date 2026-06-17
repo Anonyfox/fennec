@@ -34,7 +34,9 @@ type request_result =
   | Bad_request of string (* malformed — answer 400 and close *)
   | Too_large of string (* body/headers over a limit — answer 413 and close *)
 
-let header h k = List.assoc_opt (String.lowercase_ascii k) h
+(* case-insensitive lookup via {!Headers} — allocation-free compare (no lowercased copy of the key
+   per call), and independent of how the parsed keys are cased *)
+let header h k = Headers.get h k
 
 (* does [hay] contain [needle]? (small, no regex) *)
 let contains hay needle =
