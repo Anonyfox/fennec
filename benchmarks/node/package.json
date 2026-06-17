@@ -1,0 +1,9 @@
+{
+  "name": "paw-bench-node",
+  "private": true,
+  "type": "module",
+  "description": "Fastify + cluster — the popular lean Node choice, clustered to use all cores",
+  "dependencies": {
+    "fastify": "^5"
+  }
+}

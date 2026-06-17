@@ -1,0 +1,6 @@
+; The fennec-paw benchmark server. Links fennec-paw + the Eio entry point only.
+; Built with the workspace; run: FENNEC_ENV=production FENNEC_PORT=8080 \
+;   dune exec --profile release benchmarks/paw/server.exe
+(executable
+ (name server)
+ (libraries fennec-paw eio_main))

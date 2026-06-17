@@ -1,0 +1,10 @@
+[package]
+name = "paw-bench-rust"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+
+# the typical `cargo build --release` profile (what people actually ship); already
+# highly optimized. (lto = "fat" would squeeze a little more but isn't the default choice.)

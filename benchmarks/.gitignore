@@ -1,0 +1,7 @@
+# build artifacts — reproducible from source
+go/server
+rust/target/
+node/node_modules/
+node/package-lock.json
+elixir/_build/
+elixir/deps/

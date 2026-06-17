@@ -1,0 +1,4 @@
+; Only the paw benchmark is an OCaml/dune project. The others (go/ rust/ elixir/ node/)
+; are foreign subrepos with their own build tools — keep dune from scanning them (and
+; their target/ node_modules/ build artifacts).
+(dirs paw)
