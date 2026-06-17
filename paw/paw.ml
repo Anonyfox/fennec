@@ -211,11 +211,16 @@ module Static = Static
 module Logger = Logger
 module Rate_limit = Rate_limit
 module Basic_auth = Basic_auth
+module Bearer_auth = Bearer_auth
 module Force_https = Force_https
 module Security_headers = Security_headers
 module Request_id = Request_id
 module Metrics = Metrics
 module Method_override = Method_override
+module Health = Health
+module Body_limit = Body_limit
+module Cache_control = Cache_control
+module Set_header = Set_header
 
 (** {1 WebSockets} *)
 module Ws = Ws
