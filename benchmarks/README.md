@@ -48,3 +48,41 @@ isn't what we're comparing). `/user/{id}` exercises routing + path-param capture
 
 Build artifacts (`target/`, `node_modules/`, `deps/`, `_build/`, the Go binary)
 are git-ignored.
+
+## Results
+
+Measured on a 10-core arm64 Mac (Apple Silicon), `wrk -t4 -c256`. The load client
+and the servers share the same 10 cores, so **absolute numbers are machine-capped
+and bounce ±~15% run-to-run** (thermal + co-resident client). Read this as *tiers*,
+not precise figures — the rankings are stable across runs.
+
+| stack | /plaintext | /json | /user/:id | /plaintext ×16 (pipelined) |
+|---|--:|--:|--:|--:|
+| rust (actix) | ~174k | ~170k | ~164k | **~2.3M** |
+| go (net/http) | ~173k | ~165k | ~157k | ~400k |
+| node (Fastify×cluster) | ~165k | ~162k | ~159k | ~400k |
+| elixir (Plug/Bandit) | ~139k | ~138k | ~136k | ~205k |
+| **paw (fennec-paw)** | **~140k** | **~140k** | **~132k** | **~250k** |
+
+**Two things are being measured.** *Per-request* (no pipelining) is the realistic
+request/response pattern; on loopback it is dominated by kernel syscalls + the
+co-resident client, so every modern stack clusters together. *Pipelined ×16*
+amortizes the syscalls and exposes each framework's own ceiling.
+
+**Reading it honestly:**
+
+- **Per-request, paw is in the pack** — ~80% of the compiled/optimized tier
+  (Go/Rust/Node), on par with Elixir — *while doing strictly more per response*
+  (ETag + Vary + compression negotiation that the others skip by default). For
+  the request rates real apps see, the framework is not the bottleneck; the OS is.
+- **Pipelined, Rust is in a class of its own** (actix + tokio), as expected for
+  "the extreme case." Go and Node sit ~400k; paw, after the flush-batching fix
+  (`flush only when the read buffer is drained`), reaches ~250k — now past
+  Elixir/Bandit. The remaining gap to Go/Node is the **Eio IO layer + paw's extra
+  per-response work**, not paw's routing/response logic.
+- **Pure framework cost** (see `examples/paw_bench`, in-process, no socket): paw
+  finalizes a full small request in ~290 ns ≈ 3.4M req/s of framework work — far
+  above any socket number here, confirming the wall is the OS/IO, not paw's code.
+
+Bottom line: paw is genuinely competitive — a managed-runtime framework holding
+~80% of the compiled leaders on realistic load while carrying more batteries.
