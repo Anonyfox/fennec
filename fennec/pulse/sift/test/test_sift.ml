@@ -420,6 +420,19 @@ let%test "t1: valid_bytes == decode_bytes — checked shapes fall back (verdict+
   && valid_matches range_c (B.doc [ ("lo", B.int 9); ("hi", B.int 3) ])
   && valid_matches list_c (B.doc [ ("xs", B.array [ B.str "a"; B.str "" ]) ])
 
+(* check-free nested record + list-of-records — exercises check_bz's NESTED TObj path (nested_c above
+   has checks, so it falls back to decode and never hits check_bz's recursion) *)
+let crow = Sift.(seal (record (fun id n -> (id, n)) |> field (req "id" int) fst |> field (req "n" string) snd))
+let crows_c = Sift.(seal (record (fun rows -> rows) |> field (req "rows" (list crow)) (fun rows -> rows)))
+let cinner = Sift.(seal (record (fun a b -> (a, b)) |> field (req "x" int) fst |> field (req "y" string) snd))
+let couter_c = Sift.(seal (record (fun t inner -> (t, inner)) |> field (req "t" string) fst |> field (req "inner" cinner) snd))
+
+let%test "t1: valid_bytes — check-free nested record + list-of-records match decode_bytes" =
+  valid_matches crows_c (B.doc [ ("rows", B.array [ B.doc [ ("id", B.int 1); ("n", B.str "a") ]; B.doc [ ("id", B.int 2); ("n", B.str "b") ] ]) ])
+  && valid_matches crows_c (B.doc [ ("rows", B.array [ B.doc [ ("id", B.str "no"); ("n", B.str "a") ] ]) ])
+  && valid_matches couter_c (B.doc [ ("t", B.str "x"); ("inner", B.doc [ ("x", B.int 1); ("y", B.str "z") ]) ])
+  && valid_matches couter_c (B.doc [ ("t", B.str "x"); ("inner", B.doc [ ("x", B.int 1) ]) ])
+
 let%test "t1: scan_valid — well-formed true; truncated / bogus-length false" =
   let good = buf_of_bson (B.doc [ ("a", B.int 1); ("b", B.doc [ ("c", B.str "x") ]); ("d", B.array [ B.int 1; B.int 2 ]) ]) in
   Sift.scan_valid good

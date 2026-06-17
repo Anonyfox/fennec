@@ -157,13 +157,18 @@ let wide_doc =
   B.doc
     (List.init 20 (fun i ->
          let k = Printf.sprintf "f%02d" i in
+         (* the three WANTED fields get their shape's type; the other 17 are mixed junk to be skipped *)
          let v =
-           match i mod 5 with
-           | 0 -> B.str (Printf.sprintf "value-%d" i)
-           | 1 -> B.int (i * 7)
-           | 2 -> B.Float (float_of_int i +. 0.5)
-           | 3 -> B.bool (i land 1 = 0)
-           | _ -> B.doc [ ("nested", B.int i); ("label", B.str "x") ]
+           if k = "f00" then B.str "value-0"
+           else if k = "f10" then B.int 70
+           else if k = "f19" then B.bool true
+           else
+             match i mod 5 with
+             | 0 -> B.str (Printf.sprintf "value-%d" i)
+             | 1 -> B.int (i * 7)
+             | 2 -> B.Float (float_of_int i +. 0.5)
+             | 3 -> B.bool (i land 1 = 0)
+             | _ -> B.doc [ ("nested", B.int i); ("label", B.str "x") ]
          in
          (k, v)))
 

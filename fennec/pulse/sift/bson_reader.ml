@@ -373,132 +373,210 @@ let peek_field (shape : 'a shape) (key : string) (buf : Cursor.buffer) : ('a, er
 
 let terr what tag = [ mkerr ~code:"type" ~params:[ ("expected", what); ("got", type_name_of_tag tag) ] (Printf.sprintf "expected %s, got %s" what (type_name_of_tag tag)) ]
 
-let rec check_type : type a. a shape -> tag:int -> Cursor.t -> error list =
- fun shape ~tag c ->
+(* ---- structural BSON validity + the int-threading scan, shared by scan_valid and check_bz -------- *)
+
+(* A BESPOKE int-threading scanner — NOT built on {!Cursor}. The position is a plain [int] argument
+   (register-held; no mutable [Cursor.pos] field, whose read-modify-write per byte is the measured tax of
+   the abstracted path), helpers are top-level (no captured closures), reads are [unsafe_get] AFTER an
+   explicit bounds check against [len] (so still safe on hostile input — a malformed buffer raises [Bad],
+   caught as [false], never an OOB read). This is the "pay the duplication to beat libbson" path; it
+   duplicates the BSON value-sizing that {!value_size} expresses for the Cursor world. *)
+exception Bad
+
+let sv_len32 (b : Cursor.buffer) (len : int) (at : int) : int =
+  if at + 4 > len then raise Bad;
+  Char.code (Bigstringaf.unsafe_get b at)
+  lor (Char.code (Bigstringaf.unsafe_get b (at + 1)) lsl 8)
+  lor (Char.code (Bigstringaf.unsafe_get b (at + 2)) lsl 16)
+  lor (Char.code (Bigstringaf.unsafe_get b (at + 3)) lsl 24)
+
+let rec sv_cstr (b : Cursor.buffer) (len : int) (at : int) : int =
+  if at >= len then raise Bad else if Char.code (Bigstringaf.unsafe_get b at) = 0 then at + 1 else sv_cstr b len (at + 1)
+
+(* skip the value of [tag] at [at]; return the offset just past it (bounds-checked). Sub-documents and
+   arrays RECURSE through {!sv_walk} (so nesting is validated, not just length-skipped). *)
+and sv_skip (b : Cursor.buffer) (len : int) (at : int) (tag : int) : int =
+  match tag with
+  | 0x10 -> if at + 4 > len then raise Bad else at + 4
+  | 0x01 | 0x09 | 0x11 | 0x12 -> if at + 8 > len then raise Bad else at + 8
+  | 0x08 -> if at + 1 > len then raise Bad else at + 1
+  | 0x07 -> if at + 12 > len then raise Bad else at + 12
+  | 0x0a | 0xff | 0x7f -> at
+  | 0x02 | 0x0d | 0x0e -> let n = sv_len32 b len at in if n < 1 then raise Bad else let e = at + 4 + n in if e > len then raise Bad else e
+  | 0x03 | 0x04 -> sv_walk b len at
+  | 0x0f -> let n = sv_len32 b len at in if n < 4 then raise Bad else let e = at + n in if e > len then raise Bad else e
+  | 0x05 -> let n = sv_len32 b len at in if n < 0 then raise Bad else let e = at + 5 + n in if e > len then raise Bad else e
+  | 0x13 -> if at + 16 > len then raise Bad else at + 16
+  | 0x0b -> sv_cstr b len (sv_cstr b len at)
+  | _ -> raise Bad
+
+and sv_loop (b : Cursor.buffer) (len : int) (stop : int) (p : int) : unit =
+  if p >= stop then raise Bad
+  else
+    let tag = Char.code (Bigstringaf.unsafe_get b p) in
+    if tag = 0 then (if p + 1 <> stop then raise Bad)
+    else
+      let kend = sv_cstr b len (p + 1) in
+      sv_loop b len stop (sv_skip b len kend tag)
+
+(* validate the document at [at]; return the offset past it (= at + its int32 length) *)
+and sv_walk (b : Cursor.buffer) (len : int) (at : int) : int =
+  let dlen = sv_len32 b len at in
+  if dlen < 5 then raise Bad;
+  let stop = at + dlen in
+  if stop > len then raise Bad;
+  sv_loop b len stop (at + 4);
+  stop
+
+let scan_valid (buf : Cursor.buffer) : bool =
+  let len = Bigstringaf.length buf in
+  try sv_walk buf len 0 = len with Bad | Invalid_argument _ -> false
+
+(* ---- shape-directed validation, int-threading (same technique as scan_valid) -------------------
+
+   {!check_bz} is the bespoke twin of the old Cursor-based check_type: it validates a value against a
+   shape (types + required + nesting) WITHOUT a {!Cursor} (position is an [int] arg) and WITHOUT
+   materializing, so {!valid_bytes} for a structural shape runs at scan speed (beats libbson) at ~0
+   allocation. Verdict + errors are identical to {!decode_value_bytes} (differential-tested). A double is
+   read only for the int/date integral check and the finite-float check (OCaml's float box). *)
+
+let sv_double (b : Cursor.buffer) (len : int) (at : int) : float =
+  if at + 8 > len then raise Bad else Int64.float_of_bits (Bigstringaf.unsafe_get_int64_le b at)
+
+(* the end of a value already STRUCTURALLY validated by check_bz — navigate by length, NOT by a full
+   re-walk (sv_skip recurses into sub-docs via sv_walk; here check_bz already validated the nesting, so
+   for a doc/array we just jump past its int32 length — avoids the double-walk in sequences) *)
+let sv_end (b : Cursor.buffer) (len : int) (at : int) (tag : int) : int =
+  if tag = 0x03 || tag = 0x04 then (let e = at + sv_len32 b len at in if e > len then raise Bad else e) else sv_skip b len at tag
+
+(* byte-compare a buffer key span [kstart, kstart+klen) to the OCaml string [key] (no copy) *)
+let rec key_eq (b : Cursor.buffer) (kstart : int) (key : string) (klen : int) (i : int) : bool =
+  i >= klen || (Char.code (Bigstringaf.unsafe_get b (kstart + i)) = Char.code (String.unsafe_get key i) && key_eq b kstart key klen (i + 1))
+
+(* find [key] among the elements in [p, stop); on a match return its value's (tag, offset) PACKED as
+   [tag lor (voff lsl 8)] — no tuple, so the per-field hot loop allocates nothing; 0 means not found *)
+let rec find_field (b : Cursor.buffer) (len : int) (p : int) (stop : int) (key : string) (klen : int) : int =
+  if p >= stop then 0
+  else
+    let tag = Char.code (Bigstringaf.unsafe_get b p) in
+    if tag = 0 then 0
+    else
+      let kstart = p + 1 in
+      let kend = sv_cstr b len kstart in
+      let voff = kend in
+      if kend - 1 - kstart = klen && key_eq b kstart key klen 0 then tag lor (voff lsl 8)
+      else find_field b len (sv_skip b len voff tag) stop key klen
+
+let rec check_bz : type a. a shape -> int -> Cursor.buffer -> int -> int -> error list =
+ fun shape tag b len pos ->
   match shape with
-  | TString -> if tag = tag_string then [] else terr "string" tag
+  | TString -> if tag = 0x02 then [] else terr "string" tag
   | TInt ->
-      if tag = tag_int32 then []
-      else if tag = tag_double then (if Float.is_integer (Cursor.double c) then [] else terr "int" tag)
+      if tag = 0x10 then []
+      else if tag = 0x01 then (if Float.is_integer (sv_double b len pos) then [] else terr "int" tag)
       else terr "int" tag
   | TFloat { allow_nonfinite } ->
-      if tag = tag_double then (if (not allow_nonfinite) && not (Float.is_finite (Cursor.double c)) then [ mkerr "non-finite float" ] else [])
-      else if tag = tag_int32 then []
+      if tag = 0x01 then (if (not allow_nonfinite) && not (Float.is_finite (sv_double b len pos)) then [ mkerr "non-finite float" ] else [])
+      else if tag = 0x10 then []
       else terr "float" tag
-  | TBool -> if tag = tag_bool then [] else terr "bool" tag
+  | TBool -> if tag = 0x08 then [] else terr "bool" tag
   | TDate ->
-      if tag = tag_date || tag = tag_int32 then []
-      else if tag = tag_double then (if Float.is_integer (Cursor.double c) then [] else terr "date" tag)
+      if tag = 0x09 || tag = 0x10 then []
+      else if tag = 0x01 then (if Float.is_integer (sv_double b len pos) then [] else terr "date" tag)
       else terr "date" tag
-  | TId -> if tag = tag_string || tag = tag_oid then [] else terr "id (string or objectid)" tag
+  | TId -> if tag = 0x02 || tag = 0x07 then [] else terr "id (string or objectid)" tag
   | TBson -> []
-  | TUnit -> if tag = tag_null then [] else terr "null" tag
-  | TList el -> if tag <> tag_array then terr "array" tag else check_seq el c
-  | TOption el -> if tag = tag_null then [] else check_type el ~tag c
-  | TMap el -> if tag <> tag_document then terr "document" tag else check_kvs el c
-  | TCheck (_, _, _, inner) -> check_type inner ~tag c (* refinements handled by check_refine, gated by simply_checkable *)
-  | TNorm (_, inner) -> check_type inner ~tag c
-  | TConv (_, _, inner) -> check_type inner ~tag c
-  | TCoerce inner -> if tag = tag_string then [] else check_type inner ~tag c
-  | TLazy l -> check_type (Lazy.force l) ~tag c
-  | TObj o -> if tag <> tag_document then terr "document" tag else (let de = doc_bounds c in let ds = Cursor.pos c in check_members o.members c ds de)
-  | TVariant { tag = tagf; cases } -> if tag <> tag_document then terr "document" tag else check_variant tagf cases c
+  | TUnit -> if tag = 0x0a then [] else terr "null" tag
+  | TList el -> if tag <> 0x04 then terr "array" tag else check_seq_bz el b len pos
+  | TOption el -> if tag = 0x0a then [] else check_bz el tag b len pos
+  | TMap el -> if tag <> 0x03 then terr "document" tag else check_kvs_bz el b len pos
+  | TCheck (_, _, _, inner) -> check_bz inner tag b len pos
+  | TNorm (_, inner) -> check_bz inner tag b len pos
+  | TConv (_, _, inner) -> check_bz inner tag b len pos
+  | TCoerce inner -> if tag = 0x02 then [] else check_bz inner tag b len pos
+  | TLazy l -> check_bz (Lazy.force l) tag b len pos
+  | TObj o ->
+      if tag <> 0x03 then terr "document" tag
+      else (
+        let dlen = sv_len32 b len pos in
+        if dlen < 5 then raise Bad;
+        let stop = pos + dlen in
+        if stop > len then raise Bad;
+        List.rev (check_members_bz o.members b len pos stop []))
+  | TVariant { tag = tagf; cases } -> if tag <> 0x03 then terr "document" tag else check_variant_bz tagf cases b len pos
 
-and check_seq : type a. a shape -> Cursor.t -> error list =
- fun el c ->
-  let de = doc_bounds c in
-  let r = check_seq_loop el c 0 [] in
-  Cursor.seek c de;
-  List.rev r
-
-and check_seq_loop : type a. a shape -> Cursor.t -> int -> error list -> error list =
- fun el c i acc ->
-  let etag = Cursor.uint8 c in
-  if etag = 0 then acc
-  else (
-    let _klen = Cursor.key_len c in
-    let vend = Cursor.pos c + value_size c etag in
-    let e = check_type el ~tag:etag c in
-    Cursor.seek c vend;
-    check_seq_loop el c (i + 1) (match e with [] -> acc | _ -> List.rev_append (List.map (at (string_of_int i)) e) acc))
-
-and check_kvs : type a. a shape -> Cursor.t -> error list =
- fun el c ->
-  let de = doc_bounds c in
-  let r = check_kvs_loop el c [] in
-  Cursor.seek c de;
-  List.rev r
-
-and check_kvs_loop : type a. a shape -> Cursor.t -> error list -> error list =
- fun el c acc ->
-  let etag = Cursor.uint8 c in
-  if etag = 0 then acc
-  else (
-    let koff = Cursor.pos c in
-    let klen = Cursor.key_len c in
-    let vend = Cursor.pos c + value_size c etag in
-    let e = check_type el ~tag:etag c in
-    Cursor.seek c vend;
-    check_kvs_loop el c (match e with [] -> acc | _ -> let k = Cursor.substring c ~off:koff ~len:klen in List.rev_append (List.map (at k) e) acc))
-
-and check_members : type r. r bound_field list -> Cursor.t -> int -> int -> error list =
- fun members c ds de ->
-  let errs = List.rev (check_members_loop members c ds []) in
-  Cursor.seek c de;
-  errs
-
-and check_members_loop : type r. r bound_field list -> Cursor.t -> int -> error list -> error list =
- fun members c ds acc ->
+and check_members_bz : type r. r bound_field list -> Cursor.buffer -> int -> int -> int -> error list -> error list =
+ fun members b len start stop acc ->
   match members with
   | [] -> acc
   | Bound_field f :: tl ->
-      Cursor.seek c ds;
-      let vt = scan_find c f.name in
+      let packed = find_field b len (start + 4) stop f.name (String.length f.name) in
       let e =
-        if vt = 0 then (if f.required then [ mkerr ~code:"required" ~path:[ f.name ] "is required" ] else [])
-        else List.map (at f.name) (check_type f.shape ~tag:vt c)
+        if packed = 0 then (if f.required then [ mkerr ~code:"required" ~path:[ f.name ] "is required" ] else [])
+        else
+          (* tag the path ONLY on the error branch — [List.map (at f.name) …] would otherwise allocate the
+             [at f.name] partial-application closure per field even when the field is valid (empty list) *)
+          match check_bz f.shape (packed land 0xff) b len (packed lsr 8) with [] -> [] | es -> List.map (at f.name) es
       in
-      check_members_loop tl c ds (match e with [] -> acc | _ -> List.rev_append e acc)
+      check_members_bz tl b len start stop (match e with [] -> acc | _ -> List.rev_append e acc)
 
-and check_variant : type r. string -> r case list -> Cursor.t -> error list =
- fun tagf cases c ->
-  let de = doc_bounds c in
-  let ds = Cursor.pos c in
-  let k = match scan_find c tagf with vt when vt = tag_string -> Some (read_bson_string c) | _ -> None in
-  let errs =
-    match k with
-    | None -> [ mkerr (Printf.sprintf "missing tag field %s" tagf) ]
-    | Some k -> (
-        match List.find_opt (fun (Case cs) -> cs.name = k) cases with
-        | None -> [ mkerr (Printf.sprintf "unknown %s %S" tagf k) ]
-        | Some (Case cs) -> List.map (at k) (check_members cs.body.members c ds de))
-  in
-  Cursor.seek c de;
-  errs
+and check_seq_bz : type a. a shape -> Cursor.buffer -> int -> int -> error list =
+ fun el b len pos ->
+  let dlen = sv_len32 b len pos in
+  if dlen < 5 then raise Bad;
+  let stop = pos + dlen in
+  if stop > len then raise Bad;
+  List.rev (check_seq_loop_bz el b len stop (pos + 4) 0 [])
 
-(* ---- structural BSON validity: shape-agnostic, single pass, zero allocation ------------------- *)
+and check_seq_loop_bz : type a. a shape -> Cursor.buffer -> int -> int -> int -> int -> error list -> error list =
+ fun el b len stop p i acc ->
+  if p >= stop then raise Bad
+  else
+    let tag = Char.code (Bigstringaf.unsafe_get b p) in
+    if tag = 0 then (if p + 1 <> stop then raise Bad else acc)
+    else
+      let kend = sv_cstr b len (p + 1) in
+      let e = check_bz el tag b len kend in
+      check_seq_loop_bz el b len stop (sv_end b len kend tag) (i + 1)
+        (match e with [] -> acc | _ -> List.rev_append (List.map (at (string_of_int i)) e) acc)
 
-(* recursively verify a document: consistent lengths, known type tags, terminated keys, nested docs
-   sound, no out-of-bounds. Raises on the first malformation. *)
-let rec structural_walk (c : Cursor.t) : unit =
-  let de = doc_bounds c in
-  structural_loop c;
-  if Cursor.pos c <> de then raise (Malformed "BSON document: length mismatch")
+and check_kvs_bz : type a. a shape -> Cursor.buffer -> int -> int -> error list =
+ fun el b len pos ->
+  let dlen = sv_len32 b len pos in
+  if dlen < 5 then raise Bad;
+  let stop = pos + dlen in
+  if stop > len then raise Bad;
+  List.rev (check_kvs_loop_bz el b len stop (pos + 4) [])
 
-and structural_loop (c : Cursor.t) : unit =
-  let tag = Cursor.uint8 c in
-  if tag = 0 then ()
-  else (
-    let _ = Cursor.key_len c in
-    if tag = tag_document || tag = tag_array then structural_walk c else Cursor.skip c (value_size c tag);
-    structural_loop c)
+and check_kvs_loop_bz : type a. a shape -> Cursor.buffer -> int -> int -> int -> error list -> error list =
+ fun el b len stop p acc ->
+  if p >= stop then raise Bad
+  else
+    let tag = Char.code (Bigstringaf.unsafe_get b p) in
+    if tag = 0 then (if p + 1 <> stop then raise Bad else acc)
+    else
+      let kstart = p + 1 in
+      let kend = sv_cstr b len kstart in
+      let e = check_bz el tag b len kend in
+      check_kvs_loop_bz el b len stop (sv_end b len kend tag)
+        (match e with [] -> acc | _ -> let k = Bigstringaf.substring b ~off:kstart ~len:(kend - 1 - kstart) in List.rev_append (List.map (at k) e) acc)
 
-let scan_valid (buf : Cursor.buffer) : bool =
-  try
-    let c = Cursor.make buf in
-    structural_walk c;
-    Cursor.pos c = Bigstringaf.length buf
-  with Cursor.Truncated _ | Malformed _ | Invalid_argument _ -> false
+and check_variant_bz : type r. string -> r case list -> Cursor.buffer -> int -> int -> error list =
+ fun tagf cases b len pos ->
+  let dlen = sv_len32 b len pos in
+  if dlen < 5 then raise Bad;
+  let stop = pos + dlen in
+  if stop > len then raise Bad;
+  let packed = find_field b len (pos + 4) stop tagf (String.length tagf) in
+  if packed land 0xff <> 0x02 then [ mkerr (Printf.sprintf "missing tag field %s" tagf) ]
+  else
+    let tvoff = packed lsr 8 in
+    let slen = sv_len32 b len tvoff in
+    if slen < 1 || tvoff + 4 + slen > len then raise Bad;
+    let k = Bigstringaf.substring b ~off:(tvoff + 4) ~len:(slen - 1) in
+    match List.find_opt (fun (Case cs) -> cs.name = k) cases with
+    | None -> [ mkerr (Printf.sprintf "unknown %s %S" tagf k) ]
+    | Some (Case cs) -> List.map (at k) (List.rev (check_members_bz cs.body.members b len pos stop []))
 
 (* ---- entry: validate a buffer against a shape, alloc-free where the checks allow -------------- *)
 
@@ -509,6 +587,6 @@ let scan_valid (buf : Cursor.buffer) : bool =
 let valid_value_bytes (shape : 'a shape) (buf : Cursor.buffer) : (unit, error list) result =
   if Engine.needs_checks shape then match decode_value_bytes shape buf with Ok _ -> Ok () | Error es -> Error es
   else
-    match (try check_type shape ~tag:tag_document (Cursor.make buf) with Cursor.Truncated _ -> [ mkerr ~code:"malformed" "malformed BSON: truncated or out of bounds" ] | Malformed m -> [ mkerr ~code:"malformed" m ] | Invalid_argument _ -> [ mkerr ~code:"malformed" "malformed BSON" ]) with
+    match (try check_bz shape tag_document buf (Bigstringaf.length buf) 0 with Bad | Cursor.Truncated _ | Invalid_argument _ -> [ mkerr ~code:"malformed" "malformed BSON" ]) with
     | [] -> Ok ()
     | es -> Error es
