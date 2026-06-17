@@ -57,6 +57,11 @@ bench_stack() {
     echo "$name $route $rps" >>"$RESULTS"
     printf '  %-14s  %12s req/s\n' "$route" "$rps"
   done
+  # realistic ~11-header (browser-shaped) request — where real per-header parse cost lives
+  wrk -t"$THREADS" -c"$CONNS" -d"${WARMUP}s" -s "$ROOT/benchmarks/manyheaders.lua" "http://127.0.0.1:$PORT/plaintext" >/dev/null 2>&1
+  mh=$(measure -s "$ROOT/benchmarks/manyheaders.lua" "http://127.0.0.1:$PORT/plaintext")
+  echo "$name many_headers $mh" >>"$RESULTS"
+  printf '  %-14s  %12s req/s\n' "11-header" "$mh"
   # pipelined ×16 on /plaintext — amortizes syscalls, exposing the framework's own ceiling
   wrk -t"$THREADS" -c"$CONNS" -d"${WARMUP}s" -s "$ROOT/benchmarks/pipeline.lua" "http://127.0.0.1:$PORT/plaintext" >/dev/null 2>&1
   ppl=$(measure -s "$ROOT/benchmarks/pipeline.lua" "http://127.0.0.1:$PORT/plaintext")
@@ -86,8 +91,8 @@ printf '\n================ req/s (higher is better) ================\n'
 awk '
   { r[$1","$2]=$3; if(!seen[$1]++){order[++n]=$1} }
   END {
-    printf "%-10s %13s %13s %13s %18s\n", "stack", "/plaintext", "/json", "/user/:id", "plaintext×16(pl)"
-    for (i=1;i<=n;i++){ s=order[i]; printf "%-10s %13s %13s %13s %18s\n", s, r[s",plaintext"], r[s",json"], r[s",user/42"], r[s",plaintext_x16"] }
+    printf "%-10s %12s %12s %14s %16s\n", "stack", "/plaintext", "/json", "11-header", "plaintext×16(pl)"
+    for (i=1;i<=n;i++){ s=order[i]; printf "%-10s %12s %12s %14s %16s\n", s, r[s",plaintext"], r[s",json"], r[s",many_headers"], r[s",plaintext_x16"] }
   }' "$RESULTS"
-echo "(no-pipeline = realistic request/response; ×16 = pipelined, isolates framework cost)"
+echo "(plaintext/json/11-header = no pipelining; 11-header ≈ real browser traffic; ×16 = pipelined framework ceiling)"
 rm -f "$RESULTS"

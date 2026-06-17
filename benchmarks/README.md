@@ -56,17 +56,20 @@ and the servers share the same 10 cores, so **absolute numbers are machine-cappe
 and bounce ±~15% run-to-run** (thermal + co-resident client). Read this as *tiers*,
 not precise figures — the rankings are stable across runs.
 
-| stack | /plaintext | /json | /user/:id | /plaintext ×16 (pipelined) |
+| stack | /plaintext | /json | 11-header¹ | /plaintext ×16 (pipelined) |
 |---|--:|--:|--:|--:|
-| rust (actix) | ~180k | ~178k | ~178k | **~2.4M** |
-| go (net/http) | ~177k | ~174k | ~172k | ~380k |
-| node (Fastify×cluster) | ~170k | ~166k | ~165k | ~430k |
-| elixir (Plug/Bandit) | ~145k | ~152k | ~146k | ~253k |
-| **paw (fennec-paw)** | **~150–164k** | **~150k** | **~149–164k** | **~1.3–1.44M** |
+| rust (actix) | ~180k | ~179k | ~177k | **~2.4M** |
+| go (net/http) | ~178k | ~175k | ~169k | ~410k |
+| node (Fastify×cluster) | ~170k | ~160k | ~165k | ~428k |
+| elixir (Plug/Bandit) | ~148k | ~150k | ~129k | ~260k |
+| **paw (fennec-paw)** | **~144–164k** | **~150k** | **~148–165k** | **~1.33–1.45M** |
 
-(paw is benchmarked last, when the machine is hottest, so its per-request figure
-reads low in-suite — ~164k isolated, ~142k in-suite; the pipelined figure is large
-enough to be robust to that.)
+¹ a realistic browser-shaped request (~11 headers — cookies, user-agent, accept, …),
+where real per-header parse cost lives; the 1-header `/plaintext` hides it.
+
+(paw is benchmarked last, when the machine is hottest, so its per-request figures
+read ~10–15% low in-suite vs isolated — e.g. 11-header is ~148k in-suite, ~165k
+isolated. The pipelined figure is large enough to be robust to that.)
 
 **Two things are being measured.** *Per-request* (no pipelining) is the realistic
 request/response pattern; on loopback it is dominated by kernel syscalls + the
@@ -80,15 +83,19 @@ amortizes the syscalls and exposes each framework's own ceiling.
   Go/Node's ~380–430k — **3× faster** — with only Rust ahead. This is the real
   proof: as a *framework*, paw's routing + response path is far faster than Go's or
   Node's; it was the per-request Eio timers (now off the hot path) that hid it.
-- **Per-request, paw is in the pack** — ≈ Node, ~85–95% of Go — *while doing
-  strictly more per response* (ETag + Vary + compression negotiation the others
-  skip). This number is OS-syscall-floored (1 read + 1 write/request on loopback),
-  so every stack clusters; the small gap to Go is paw's extra work + allocation
-  pressure (the stop-the-world minor GC across 10 domains), not its logic.
+- **On realistic (11-header) traffic, paw is ≈ Go/Node and clearly above Elixir**
+  — *while doing strictly more per response* (ETag + Vary + compression
+  negotiation the others skip). The hand-crafted zero-copy C parser
+  (`http/http_parse_stubs.c`) is why: it scans the head with no per-header
+  allocation, so paw doesn't degrade as headers pile up (the OCaml line-by-line
+  parser dropped to ~153k on the same request; the C parser holds ~165k).
+- **`/plaintext` (1 header) is OS-syscall-floored** — 1 read + 1 write/request on
+  loopback — so every stack clusters there; that synthetic number isn't the
+  framework. (The parse is ~6% of it; the wall is the Eio IO layer, accepted.)
 - **Pure framework cost** (`examples/paw_bench`, in-process, no socket): paw
   finalizes a full small request in ~290 ns ≈ 3.4M req/s of framework work.
 
-Bottom line: as a framework, paw **surpasses Go and Node** (3× pipelined) and trails
-only Rust; on raw loopback per-request it sits at the OS floor with everyone else,
-≈ Node, while carrying more batteries. The next lever for the per-request floor is
-cutting parse allocation (less GC / fewer stop-the-world pauses) — a zero-copy parser.
+Bottom line: as a framework, paw **surpasses Go and Node** (3× pipelined), matches
+them on realistic traffic, and trails only Rust — while carrying more batteries.
+The one C hot path (the request-head parser) is the deliberate "close to metal"
+cheat that keeps the per-header cost off the table; everything else is idiomatic OCaml.
