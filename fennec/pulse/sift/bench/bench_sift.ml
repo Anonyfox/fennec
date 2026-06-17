@@ -214,12 +214,15 @@ let () =
   fixture "3. nested record (sub-doc + list)" ~iters:1_000_000 nested_codec nested_doc;
   fixture "4. list of 100 ints" ~iters:500_000 list_codec list_doc;
   fixture "5. list of 50 sub-records" ~iters:200_000 rows_codec rows_doc;
-  Printf.printf "\n  staging ceiling probe (small record): hand-written direct decode vs the applicative builder\n%!";
+  Printf.printf "\n  K4 staging probe (small record): applicative builder vs objN staged vs hand-written\n%!";
   let swire = W.encode small_doc in
   let sbuf = Bigstringaf.of_string ~off:0 ~len:(String.length swire) swire in
-  (match (Sift.decode_bytes small_codec sbuf, hand_decode_small sbuf) with
-  | Ok v, Some v' -> assert (v = v') (* the hand decoder agrees with decode_bytes *)
+  (* the SAME 4-field record built via obj4 (the staged decoder the deriver will emit) *)
+  let small_codec_obj = Sift.(obj4 (req "_id" id) (req "title" string) (req "count" int) (req "active" bool) ~make:(fun a b c d -> (a, b, c, d)) ~split:(fun (a, b, c, d) -> (a, b, c, d))) in
+  (match (Sift.decode_bytes small_codec sbuf, Sift.decode_bytes small_codec_obj sbuf, hand_decode_small sbuf) with
+  | Ok v, Ok v2, Some v' -> assert (v = v2 && v = v') (* all three agree *)
   | _ -> assert false);
-  bench "zerocopy bytes" ~iters:2_000_000 (fun () -> keep (Sift.decode_bytes small_codec sbuf));
+  bench "applicative (record|>field)" ~iters:2_000_000 (fun () -> keep (Sift.decode_bytes small_codec sbuf));
+  bench "objN staged (obj4)" ~iters:2_000_000 (fun () -> keep (Sift.decode_bytes small_codec_obj sbuf));
   bench "hand direct decode" ~iters:2_000_000 (fun () -> keep (hand_decode_small sbuf));
   Printf.printf "\n%!"

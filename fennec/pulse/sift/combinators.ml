@@ -246,27 +246,87 @@ let case name (b : ('a, 'a) builder) ~(inj : 'a -> 'r) ~(proj : 'r -> 'a option)
 
 let variant ~tag cases : 'r t = of_shape (TVariant { tag; cases })
 
-(* ---- back-compat: the tuple-style objN over the builder ------------------------------- *)
+(* ---- objN: DIRECT record construction (the staged decoder the deriver targets) ------------------
 
-let obj1 fa ~make ~split = seal (record make |> field fa split)
+   The applicative builder ([record … |> field … |> seal]) applies an N-ary constructor ONE field at a
+   time, which compiles to O(N) growing caml_curry closures — measured at ~82% of decode allocation.
+   These objN read all N fields through the reader, then apply [make] to all of them at ONCE (a single
+   caml_applyN, no intermediate closures). Errors COLLECT in field order, byte-identical to the
+   applicative builder. They build the [record_shape] directly (their own [decode_src]); decode reads
+   fields via the SAME field_reader, so both the tree path AND decode_bytes get the win. [@@deriving
+   collection/model] emits these for arity ≤ 8; a wider record falls back to the applicative builder
+   (still correct, just not staged). *)
+
+let errs : type a. (a, error list) result -> error list = function Ok _ -> [] | Error e -> e
+
+(* a member with the standard wire-omission predicate (mirrors {!field}) *)
+let bound (f : 'a field) (get : 'r -> 'a) : 'r bound_field =
+  Bound_field { name = f.key; shape = f.item; get; required = f.needed; omit = (fun v -> (not f.needed) && (match write f.item v with Bson.Null -> true | Bson.Array [] -> f.fallback = Some v | _ -> false)) }
+
+let direct (decode_src : field_reader -> ('r, error list) result) (members : 'r bound_field list) (encode_doc : 'r -> (string * Bson.t) list) : 'r t =
+  of_shape (TObj { decode_doc = (fun kvs -> decode_src (tree_reader (index_of kvs))); decode_src; encode_doc; members; invariants = [] })
+
+let pack l = List.filter_map Fun.id l
+
+let obj1 fa ~make ~split =
+  direct (fun fr -> match fr.read_field fa with Ok a -> Ok (make a) | r -> Error (errs r)) [ bound fa split ] (fun r -> pack [ encode_field fa (split r) ])
 
 let obj2 fa fb ~make ~split =
-  seal (record make |> field fa (fun r -> fst (split r)) |> field fb (fun r -> snd (split r)))
+  direct
+    (fun fr -> match (fr.read_field fa, fr.read_field fb) with Ok a, Ok b -> Ok (make a b) | r1, r2 -> Error (errs r1 @ errs r2))
+    [ bound fa (fun r -> fst (split r)); bound fb (fun r -> snd (split r)) ]
+    (fun r -> let a, b = split r in pack [ encode_field fa a; encode_field fb b ])
 
 let obj3 fa fb fc ~make ~split =
-  seal
-    (record make
-    |> field fa (fun r -> let a, _, _ = split r in a)
-    |> field fb (fun r -> let _, b, _ = split r in b)
-    |> field fc (fun r -> let _, _, c = split r in c))
+  direct
+    (fun fr -> match (fr.read_field fa, fr.read_field fb, fr.read_field fc) with Ok a, Ok b, Ok c -> Ok (make a b c) | r1, r2, r3 -> Error (errs r1 @ errs r2 @ errs r3))
+    [ bound fa (fun r -> let a, _, _ = split r in a); bound fb (fun r -> let _, b, _ = split r in b); bound fc (fun r -> let _, _, c = split r in c) ]
+    (fun r -> let a, b, c = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c ])
 
 let obj4 fa fb fc fd ~make ~split =
-  seal
-    (record make
-    |> field fa (fun r -> let a, _, _, _ = split r in a)
-    |> field fb (fun r -> let _, b, _, _ = split r in b)
-    |> field fc (fun r -> let _, _, c, _ = split r in c)
-    |> field fd (fun r -> let _, _, _, d = split r in d))
+  direct
+    (fun fr ->
+      match (fr.read_field fa, fr.read_field fb, fr.read_field fc, fr.read_field fd) with
+      | Ok a, Ok b, Ok c, Ok d -> Ok (make a b c d)
+      | r1, r2, r3, r4 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4))
+    [ bound fa (fun r -> let a, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _ = split r in b); bound fc (fun r -> let _, _, c, _ = split r in c); bound fd (fun r -> let _, _, _, d = split r in d) ]
+    (fun r -> let a, b, c, d = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d ])
+
+let obj5 fa fb fc fd fe ~make ~split =
+  direct
+    (fun fr ->
+      match (fr.read_field fa, fr.read_field fb, fr.read_field fc, fr.read_field fd, fr.read_field fe) with
+      | Ok a, Ok b, Ok c, Ok d, Ok e -> Ok (make a b c d e)
+      | r1, r2, r3, r4, r5 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5))
+    [ bound fa (fun r -> let a, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _ = split r in d); bound fe (fun r -> let _, _, _, _, e = split r in e) ]
+    (fun r -> let a, b, c, d, e = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e ])
+
+let obj6 fa fb fc fd fe ff ~make ~split =
+  direct
+    (fun fr ->
+      match (fr.read_field fa, fr.read_field fb, fr.read_field fc, fr.read_field fd, fr.read_field fe, fr.read_field ff) with
+      | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f -> Ok (make a b c d e f)
+      | r1, r2, r3, r4, r5, r6 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6))
+    [ bound fa (fun r -> let a, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f = split r in f) ]
+    (fun r -> let a, b, c, d, e, f = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e; encode_field ff f ])
+
+let obj7 fa fb fc fd fe ff fg ~make ~split =
+  direct
+    (fun fr ->
+      match (fr.read_field fa, fr.read_field fb, fr.read_field fc, fr.read_field fd, fr.read_field fe, fr.read_field ff, fr.read_field fg) with
+      | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f, Ok g -> Ok (make a b c d e f g)
+      | r1, r2, r3, r4, r5, r6, r7 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6 @ errs r7))
+    [ bound fa (fun r -> let a, _, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f, _ = split r in f); bound fg (fun r -> let _, _, _, _, _, _, g = split r in g) ]
+    (fun r -> let a, b, c, d, e, f, g = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e; encode_field ff f; encode_field fg g ])
+
+let obj8 fa fb fc fd fe ff fg fh ~make ~split =
+  direct
+    (fun fr ->
+      match (fr.read_field fa, fr.read_field fb, fr.read_field fc, fr.read_field fd, fr.read_field fe, fr.read_field ff, fr.read_field fg, fr.read_field fh) with
+      | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f, Ok g, Ok h -> Ok (make a b c d e f g h)
+      | r1, r2, r3, r4, r5, r6, r7, r8 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6 @ errs r7 @ errs r8))
+    [ bound fa (fun r -> let a, _, _, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _, _, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f, _, _ = split r in f); bound fg (fun r -> let _, _, _, _, _, _, g, _ = split r in g); bound fh (fun r -> let _, _, _, _, _, _, _, h = split r in h) ]
+    (fun r -> let a, b, c, d, e, f, g, h = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e; encode_field ff f; encode_field fg g; encode_field fh h ])
 
 (* ---- introspection: the neutral reflection renderers consume --------------------------- *)
 

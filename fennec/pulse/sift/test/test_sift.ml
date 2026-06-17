@@ -599,4 +599,21 @@ let%test "axisA: fold_bytes — streams a sequence of concatenated documents" =
   let decoded = List.rev (Sift.fold_bytes bag_c buf [] (fun acc r -> r :: acc)) in
   List.length decoded = 3 && List.for_all2 (fun v r -> match r with Ok v' -> Sift.equal bag_c v v' | _ -> false) docs decoded
 
+(* ── K4: the staged objN decoder is byte-identical to the applicative builder ── *)
+
+(* the SAME 3-field record, built both ways *)
+let viaobj = Sift.(obj3 (req "s" string) (req "n" (min_i 1 int)) (opt "note" string) ~make:(fun s n note -> (s, n, note)) ~split:(fun (s, n, note) -> (s, n, note)))
+let viabuilder = Sift.(seal (record (fun s n note -> (s, n, note)) |> field (req "s" string) (fun (s, _, _) -> s) |> field (req "n" (min_i 1 int)) (fun (_, n, _) -> n) |> field (opt "note" string) (fun (_, _, x) -> x)))
+
+let%test "k4: objN decoder == applicative builder (decode verdict+errors, encode, size)" =
+  let same_decode b = Sift.decode viaobj b = Sift.decode viabuilder b in
+  let same_enc v = viaobj.Sift.enc v = viabuilder.Sift.enc v && Sift.size viaobj v = Sift.size viabuilder v in
+  same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ]) (* ok *)
+  && same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5) ]) (* note absent → None *)
+  && same_decode (B.doc [ ("s", B.int 1); ("n", B.int 0) ]) (* TWO errors: s type + n<min — must collect in same order *)
+  && same_decode (B.doc []) (* required s, n missing *)
+  && same_enc ("a", 7, Some "z")
+  && same_enc ("a", 7, None) (* None omits the key, both ways *)
+  && (match Sift.decode_bytes viaobj (buf_of_bson (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ])) with Ok ("x", 5, Some "hi") -> true | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())
