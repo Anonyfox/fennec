@@ -201,6 +201,36 @@ let rec run_checks : type a. a shape -> a -> error list =
   | TLazy l -> run_checks (Lazy.force l) v
   | TCoerce inner -> run_checks inner v
 
+(* does this SHAPE carry any check that {!run_checks} could fire — a refinement ([TCheck]), a
+   finite-float guard, or a record/variant invariant — anywhere in its tree? A property of the shape
+   (O(shape), NOT O(value)) and allocation-free, so decode can SKIP the whole [run_checks] value-walk
+   when there is nothing to check (the common read path: data validated on write, trusted on read). A
+   recursive shape ([TLazy], from [fix]) can't be traversed finitely → answer conservatively [true]
+   (validate it), never a false negative that would silently skip a real check. *)
+let rec needs_checks : type a. a shape -> bool =
+ fun shape ->
+  match shape with
+  | TString | TInt | TBool | TDate | TId | TBson | TUnit -> false
+  | TFloat { allow_nonfinite } -> not allow_nonfinite
+  | TList el -> needs_checks el
+  | TOption el -> needs_checks el
+  | TMap el -> needs_checks el
+  | TCheck _ -> true
+  | TNorm (_, inner) -> needs_checks inner
+  | TConv (_, _, inner) -> needs_checks inner
+  | TCoerce inner -> needs_checks inner
+  | TObj o -> obj_needs_checks o
+  | TVariant { cases; _ } -> cases_need_checks cases
+  | TLazy _ -> true
+and obj_needs_checks : type a. a record_shape -> bool =
+ fun o -> (match o.invariants with [] -> false | _ :: _ -> true) || members_need_checks o.members
+and members_need_checks : type a. a bound_field list -> bool = function
+  | [] -> false
+  | Bound_field f :: tl -> needs_checks f.shape || members_need_checks tl
+and cases_need_checks : type a. a case list -> bool = function
+  | [] -> false
+  | Case c :: tl -> (match c.body.invariants with [] -> false | _ :: _ -> true) || members_need_checks c.body.members || cases_need_checks tl
+
 (* ---- derived pretty-printing --------------------------------------------------- *)
 
 let rec pretty : type a. a shape -> Format.formatter -> a -> unit =

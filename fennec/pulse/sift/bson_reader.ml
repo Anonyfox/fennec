@@ -93,7 +93,8 @@ let byte_to_subtype b = Printf.sprintf "%02x" (b land 0xff)
 
 (* an owned NUL-terminated string at the cursor (regex pattern/options) *)
 let read_cstr_owned (c : Cursor.t) : string =
-  let off, len = Cursor.cstring c in
+  let off = Cursor.pos c in
+  let len = Cursor.key_len c in
   Cursor.substring c ~off ~len
 
 (* the number of bytes a value of [tag] occupies, NOT counting the type byte or key — peeked WITHOUT
@@ -164,7 +165,8 @@ and materialize_doc (c : Cursor.t) : (string * Bson.t) list =
     let tag = Cursor.uint8 c in
     if tag = 0 then List.rev acc
     else
-      let koff, klen = Cursor.cstring c in
+      let koff = Cursor.pos c in
+      let klen = Cursor.key_len c in
       let key = Cursor.substring c ~off:koff ~len:klen in
       let v = materialize c tag in
       loop ((key, v) :: acc)
@@ -175,27 +177,31 @@ and materialize_doc (c : Cursor.t) : (string * Bson.t) list =
 
 (* ---- document bounds + schema-directed field scan (ONE shared cursor, no tape, no per-field alloc) *)
 
-(* read a document's int32 length (cursor at it); return (first_element_pos, doc_end) and leave the
-   cursor just after the length. The terminator 0x00 sits at doc_end - 1. *)
-let doc_bounds (c : Cursor.t) : int * int =
+(* read a document's int32 length (cursor at it); return [doc_end] and leave the cursor just after the
+   length, i.e. AT the first element ([Cursor.pos c] is the document start). The terminator 0x00 sits at
+   [doc_end - 1]. Returns a bare int (not a tuple) — the caller grabs the start from [Cursor.pos] when it
+   needs it, so no allocation. *)
+let doc_bounds (c : Cursor.t) : int =
   let start = Cursor.pos c in
   let len = Cursor.int32 c in
   if len < 5 then raise (Malformed "BSON document: bad length");
   let doc_end = start + len in
   if doc_end > Cursor.limit c then raise (Malformed "BSON document: length exceeds buffer");
-  (Cursor.pos c, doc_end)
+  doc_end
 
 (* scan the document for [key] from the cursor's CURRENT position (the caller rewinds to the document
-   start first). On a match, leave the cursor AT the value and return its wire tag; on miss (the 0x00
-   terminator), return None. Keys are compared to buffer bytes in place — never copied; unwanted values
-   are stepped over by their length prefix. *)
-let scan_find (c : Cursor.t) (key : string) : int option =
+   start first). On a match, leave the cursor AT the value and return its wire tag (1..255); on miss
+   (the 0x00 terminator), return 0 — a sentinel, never a real tag, so no [option] box in this hot loop.
+   Keys are compared to buffer bytes in place — never copied; unwanted values are stepped over by their
+   length prefix. *)
+let scan_find (c : Cursor.t) (key : string) : int =
   let rec loop () =
     let tag = Cursor.uint8 c in
-    if tag = 0 then None
+    if tag = 0 then 0
     else
-      let koff, klen = Cursor.cstring c in
-      if Cursor.span_eq_string c ~off:koff ~len:klen key then Some tag
+      let koff = Cursor.pos c in
+      let klen = Cursor.key_len c in
+      if Cursor.span_eq_string c ~off:koff ~len:klen key then tag
       else (Cursor.skip c (value_size c tag); loop ())
   in
   loop ()
@@ -235,7 +241,7 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
   | TList el ->
       if tag <> tag_array then expected_tag "array" tag
       else (
-        let _ds, de = doc_bounds c in
+        let de = doc_bounds c in
         (* array elements are positional ("0","1",…) and in order — walk forward, skipping each key.
            Advance to each value's end EXPLICITLY (a type-mismatch read returns without consuming the
            value, which would desync the shared cursor): compute the end from its length prefix. *)
@@ -243,7 +249,7 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
           let etag = Cursor.uint8 c in
           if etag = 0 then (Cursor.seek c de; if errs = [] then Ok (List.rev oks) else Error (List.rev errs))
           else (
-            let _k = Cursor.cstring c in
+            let _klen = Cursor.key_len c in
             let vend = Cursor.pos c + value_size c etag in
             let r = read_buf el ~tag:etag c in
             Cursor.seek c vend;
@@ -256,12 +262,13 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
   | TMap el ->
       if tag <> tag_document then expected_tag "document" tag
       else (
-        let _ds, de = doc_bounds c in
+        let de = doc_bounds c in
         let rec collect oks errs =
           let etag = Cursor.uint8 c in
           if etag = 0 then (Cursor.seek c de; if errs = [] then Ok (List.rev oks) else Error (List.rev errs))
           else (
-            let koff, klen = Cursor.cstring c in
+            let koff = Cursor.pos c in
+            let klen = Cursor.key_len c in
             let k = Cursor.substring c ~off:koff ~len:klen in
             let vend = Cursor.pos c + value_size c etag in
             let r = read_buf el ~tag:etag c in
@@ -278,16 +285,17 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
   | TObj o ->
       if tag <> tag_document then expected_tag "document" tag
       else (
-        let ds, de = doc_bounds c in
+        let de = doc_bounds c in
+        let ds = Cursor.pos c in
         let r = o.decode_src (field_reader c ds) in
         Cursor.seek c de;
         r)
   | TVariant { tag = tagf; cases } ->
       if tag <> tag_document then expected_tag "document" tag
       else (
-        let ds, de = doc_bounds c in
-        Cursor.seek c ds;
-        let k = match scan_find c tagf with Some vt when vt = tag_string -> Some (read_bson_string c) | _ -> None in
+        let de = doc_bounds c in
+        let ds = Cursor.pos c in
+        let k = match scan_find c tagf with vt when vt = tag_string -> Some (read_bson_string c) | _ -> None in
         let r =
           match k with
           | None -> fail (Printf.sprintf "missing tag field %s" tagf)
@@ -311,9 +319,9 @@ and field_reader (c : Cursor.t) (ds : int) : field_reader =
     read_field =
       (fun (type a) (f : a field) : (a, error list) result ->
         Cursor.seek c ds;
-        match scan_find c f.key with
-        | Some vtag -> ( match read_buf f.item ~tag:vtag c with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
-        | None -> ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ]));
+        let vtag = scan_find c f.key in
+        if vtag = 0 then ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
+        else match read_buf f.item ~tag:vtag c with Ok _ as ok -> ok | Error es -> Error (List.map (at f.key) es));
   }
 
 (* ---- entry: decode a BSON document buffer into the shape's value ------------------------------- *)
@@ -325,7 +333,7 @@ and field_reader (c : Cursor.t) (ds : int) : field_reader =
 let decode_value_bytes (shape : 'a shape) (buf : Cursor.buffer) : ('a, error list) result =
   match (try read_buf shape ~tag:tag_document (Cursor.make buf) with Cursor.Truncated _ -> Error [ mkerr ~code:"malformed" "malformed BSON: truncated or out of bounds" ] | Malformed m -> Error [ mkerr ~code:"malformed" m ] | Invalid_argument _ -> Error [ mkerr ~code:"malformed" "malformed BSON" ]) with
   | Error es -> Error es
-  | Ok v -> ( match Engine.run_checks shape v with [] -> Ok v | es -> Error es)
+  | Ok v -> if not (Engine.needs_checks shape) then Ok v else ( match Engine.run_checks shape v with [] -> Ok v | es -> Error es)
 
 (* ---- projection: decode ONE top-level field, reading only its bytes ---------------------------- *)
 
@@ -338,14 +346,14 @@ let decode_value_bytes (shape : 'a shape) (buf : Cursor.buffer) : ('a, error lis
 let peek_field (shape : 'a shape) (key : string) (buf : Cursor.buffer) : ('a, error list) result option =
   try
     let c = Cursor.make buf in
-    let _ds, _de = doc_bounds c in
-    match scan_find c key with
-    | None -> None
-    | Some vtag ->
-        let r =
-          match read_buf shape ~tag:vtag c with
-          | Error es -> Error (List.map (at key) es)
-          | Ok v -> ( match Engine.run_checks shape v with [] -> Ok v | es -> Error (List.map (at key) es))
-        in
-        Some r
+    let _de = doc_bounds c in
+    let vtag = scan_find c key in
+    if vtag = 0 then None
+    else
+      let r =
+        match read_buf shape ~tag:vtag c with
+        | Error es -> Error (List.map (at key) es)
+        | Ok v -> if not (Engine.needs_checks shape) then Ok v else ( match Engine.run_checks shape v with [] -> Ok v | es -> Error (List.map (at key) es))
+      in
+      Some r
   with Cursor.Truncated _ | Malformed _ | Invalid_argument _ -> Some (Error [ mkerr ~code:"malformed" ~path:[ key ] "malformed BSON" ])

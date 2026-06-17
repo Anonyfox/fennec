@@ -11,7 +11,7 @@ type 'a t = { shape : 'a shape; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string)
 let decode_value shape b =
   match read shape b with
   | Error es -> Error es
-  | Ok v -> ( match run_checks shape v with [] -> Ok v | es -> Error es)
+  | Ok v -> if not (needs_checks shape) then Ok v else ( match run_checks shape v with [] -> Ok v | es -> Error es)
 
 let of_shape shape =
   { shape;
