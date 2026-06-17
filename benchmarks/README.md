@@ -91,7 +91,13 @@ amortizes the syscalls and exposes each framework's own ceiling.
   parser dropped to ~153k on the same request; the C parser holds ~165k).
 - **`/plaintext` (1 header) is OS-syscall-floored** — 1 read + 1 write/request on
   loopback — so every stack clusters there; that synthetic number isn't the
-  framework. (The parse is ~6% of it; the wall is the Eio IO layer, accepted.)
+  framework. Measured: a *bare* Eio server (no paw — just read-head + fixed reply)
+  hits the **same** ~160k floor as full paw, so paw adds ≈ zero overhead to Eio's
+  per-request IO; the floor is Eio's effect-based IO on the posix/kqueue backend
+  (~90% of Go's netpoller). A synchronous write path was tried vs Eio's background
+  flusher and is a wash — Eio's fibers are cheap; we are not holding it wrong. On
+  Linux, Eio's io_uring backend batches submissions and should lift this floor for
+  free — a runtime-level win, not a framework change.
 - **Pure framework cost** (`examples/paw_bench`, in-process, no socket): paw
   finalizes a full small request in ~290 ns ≈ 3.4M req/s of framework work.
 
