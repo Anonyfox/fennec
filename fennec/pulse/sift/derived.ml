@@ -215,3 +215,48 @@ and full_replace : type a. a shape -> a -> a -> delta =
   let new_fields = fields new_ in
   let new_names = List.map fst new_fields in
   { set = new_fields; unset = List.filter_map (fun (n, _) -> if List.mem n new_names then None else Some n) (fields old) }
+
+(* ---- arbitrary: a random value conforming to the shape (property testing) ----------------------
+
+   A structural generator from the shape. Refinements are satisfied by REJECTION sampling (regenerate
+   until the predicate holds, bounded) — so simple ones (length/enum/range) are met; a hard [pattern] or
+   a record-level cross-field invariant may not be (honest: best-effort). [fuel] bounds recursion depth
+   (a [fix] shape generates shallow trees because the recursion runs through a list/option that empties).
+   Pure given the {!Random.State.t} (jsoo-safe), so a seeded state reproduces. *)
+
+let hexchars = "0123456789abcdef"
+let rand_string st = String.init (Random.State.int st 11) (fun _ -> Char.chr (Char.code 'a' + Random.State.int st 26))
+let rand_hex24 st = String.init 24 (fun _ -> hexchars.[Random.State.int st 16])
+
+let rec gen : type a. a shape -> Random.State.t -> int -> a =
+ fun shape st fuel ->
+  match shape with
+  | TString -> rand_string st
+  | TInt -> Random.State.int st 2001 - 1000
+  | TFloat _ -> (Random.State.float st 2000.) -. 1000.
+  | TBool -> Random.State.bool st
+  | TDate -> Random.State.int64 st 1_700_000_000_000L
+  | TId -> rand_hex24 st
+  | TBson -> Bson.Int (Random.State.int st 1000)
+  | TUnit -> ()
+  | TList el -> let n = if fuel <= 0 then 0 else Random.State.int st (min 6 (fuel + 1)) in List.init n (fun _ -> gen el st (fuel - 1))
+  | TOption el -> if fuel > 0 && Random.State.bool st then Some (gen el st (fuel - 1)) else None
+  | TMap el -> let n = if fuel <= 0 then 0 else Random.State.int st 4 in List.init n (fun i -> (Printf.sprintf "k%d" i, gen el st (fuel - 1)))
+  | TCheck (p, _, _, inner) -> gen_reject p inner st fuel 20
+  | TNorm (f, inner) -> f (gen inner st fuel)
+  | TConv (_, proj, inner) -> gen_conv proj inner st fuel 20
+  | TCoerce inner -> gen inner st fuel
+  | TLazy l -> gen (Lazy.force l) st (fuel - 1)
+  | TObj o -> ( match o.decode_src { read_field = (fun f -> Ok (gen f.item st (fuel - 1))) } with Ok v -> v | Error _ -> invalid_arg "Sift.arbitrary: record")
+  | TVariant { cases; _ } ->
+      let arr = Array.of_list cases in
+      let (Case c) = arr.(Random.State.int st (Array.length arr)) in
+      ( match c.body.decode_src { read_field = (fun f -> Ok (gen f.item st (fuel - 1))) } with Ok a -> c.inject a | Error _ -> invalid_arg "Sift.arbitrary: variant")
+
+and gen_reject : type a. (a -> bool) -> a shape -> Random.State.t -> int -> int -> a =
+ fun p inner st fuel tries -> let v = gen inner st fuel in if tries <= 0 || p (Engine.normalize inner v) then v else gen_reject p inner st fuel (tries - 1)
+
+and gen_conv : type a b. (a -> (b, string) result) -> a shape -> Random.State.t -> int -> int -> b =
+ fun proj inner st fuel tries -> match proj (gen inner st fuel) with Ok b -> b | Error _ when tries > 0 -> gen_conv proj inner st fuel (tries - 1) | Error m -> invalid_arg ("Sift.arbitrary: conversion rejects generated values: " ^ m)
+
+let arbitrary : type a. a shape -> Random.State.t -> a = fun shape st -> gen shape st 4

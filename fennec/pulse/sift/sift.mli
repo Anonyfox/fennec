@@ -121,6 +121,11 @@ type delta = { set : (string * Bson.t) list; unset : string list }
 
 val diff : 'a t -> 'a -> 'a -> delta
 
+(** A random value conforming to the shape, for property testing — structural, with refinements met
+    best-effort by rejection sampling (simple length/enum/range yes; a hard [pattern] or a record-level
+    cross-field invariant may not be). Pure given the {!Random.State.t}, so a seeded state reproduces. *)
+val arbitrary : 'a t -> Random.State.t -> 'a
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result

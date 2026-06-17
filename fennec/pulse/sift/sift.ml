@@ -106,6 +106,10 @@ type delta = Derived.delta = { set : (string * Bson.t) list; unset : string list
 
 let diff (c : 'a t) (old : 'a) (new_ : 'a) : delta = Derived.diff c.shape old new_
 
+(* a random value conforming to the shape (refinements best-effort via rejection) — property testing.
+   Pure given the [Random.State.t], so a seeded state reproduces. *)
+let arbitrary (c : 'a t) (st : Random.State.t) : 'a = Derived.arbitrary c.shape st
+
 (* ---- positional parameter lists (DDP method params) — unchanged surface ----------------- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }

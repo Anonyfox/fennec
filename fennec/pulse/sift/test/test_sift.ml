@@ -550,4 +550,15 @@ let%test "k6: diff — maps (changed/added/removed keys), variants (body + case 
   && (match Sift.diff figure_c (Rect (1., 2.)) (Rect (1., 9.)) with { Sift.set = [ ("h", B.Float 9.) ]; unset = [] } -> true | _ -> false)
   && (let d = Sift.diff figure_c (Circle 1.) (Rect (3., 4.)) in List.mem "kind" (List.map fst d.Sift.set) && List.mem "w" (List.map fst d.Sift.set) && d.Sift.unset = [ "r" ])
 
+let%test "k6: arbitrary — random values round-trip through encode/decode (and equal themselves)" =
+  let st = Random.State.make [| 1; 2; 3 |] in
+  let survives : 'a. 'a Sift.t -> bool =
+   fun c ->
+    let rec loop i = i = 0 || (let v = Sift.arbitrary c st in (match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> Sift.equal c v v' | Error _ -> false) && loop (i - 1)) in
+    loop 200
+  in
+  (* shapes whose refinements rejection CAN meet (length/non-empty); a [pattern] like email or a
+     cross-field invariant is the documented best-effort limit, so not exercised here *)
+  survives bag_c && survives opt_c && survives list_c && survives figure_c
+
 let () = exit (Fennec_hunt_unit.run ())
