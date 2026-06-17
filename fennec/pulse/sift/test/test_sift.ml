@@ -193,4 +193,33 @@ let%test "a missing required field has code \"required\"; a type mismatch has co
   (match Sift.decode c (B.doc []) with Error [ e ] -> e.Sift.code = "required" | _ -> false)
   && match Sift.decode c (B.doc [ ("n", B.str "x") ]) with Error [ e ] -> e.Sift.code = "type" | _ -> false
 
+(* ── fix: self-referential codecs (trees, threads) ── *)
+type tree = { v : string; kids : tree list }
+
+let tree_codec =
+  Sift.(fix (fun tree -> seal (record (fun v kids -> { v; kids }) |> field (req "v" string) (fun t -> t.v) |> field (opt_list "kids" tree) (fun t -> t.kids))))
+
+let%test "fix: a recursive tree round-trips at depth" =
+  let t = { v = "root"; kids = [ { v = "a"; kids = [] }; { v = "b"; kids = [ { v = "b1"; kids = [] } ] } ] } in
+  match Sift.decode tree_codec (tree_codec.Sift.enc t) with Ok t' -> t' = t | Error _ -> false
+let%test "fix: a nested decode error is still path-tagged" =
+  ( match Sift.decode tree_codec (B.doc [ ("v", B.str "r"); ("kids", B.array [ B.doc [ ("v", B.int 5) ] ]) ]) with Error (e :: _) -> e.Sift.path <> [] | _ -> false)
+
+(* ── from_string: accept-and-parse stringly input ── *)
+let%test "from_string: native OR stringly number, then the inner checks run" =
+  let c = Sift.(from_string (min_i 1 int)) in
+  (match Sift.decode c (B.int 5) with Ok 5 -> true | _ -> false)
+  && (match Sift.decode c (B.str "5") with Ok 5 -> true | _ -> false)
+  && err (Sift.decode c (B.str "0")) (* parsed to 0, then min_i 1 rejects *)
+  && err (Sift.decode c (B.str "abc")) (* unparseable → type error *)
+let%test "from_string: bool/float coercions" =
+  (match Sift.decode Sift.(from_string bool) (B.str "true") with Ok true -> true | _ -> false) && (match Sift.decode Sift.(from_string float) (B.str "2.5") with Ok 2.5 -> true | _ -> false)
+let%test "from_string: encode stays native, reflects as the inner type" =
+  (match (Sift.from_string Sift.int).Sift.enc 7 with B.Int 7 -> true | _ -> false) && Sift.view Sift.(from_string int) = Sift.V_int
+
+(* ── map: total two-way transform ── *)
+let%test "map: round-trips through a transform both ways" =
+  let c = Sift.(map (fun s -> `Tag s) (function `Tag s -> s) string) in
+  (match Sift.decode c (B.str "x") with Ok (`Tag "x") -> true | _ -> false) && (match c.Sift.enc (`Tag "y") with B.String "y" -> true | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

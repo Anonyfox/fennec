@@ -90,6 +90,8 @@ type _ ty =
   | TConv : ('b -> 'a) * ('a -> ('b, string) result) * 'a ty -> 'b ty
   | TObj : 'r obj -> 'r ty
   | TVariant : { tag : string; cases : 'r case list } -> 'r ty
+  | TLazy : 'a ty Lazy.t -> 'a ty (* a self-referential codec ({!fix}) — forced on demand, finite values terminate *)
+  | TCoerce : 'a ty -> 'a ty (* {!from_string}: decode also accepts a [String] and parses it to the inner leaf *)
 
 and 'r obj = {
   o_dec : (string * Bson.t) list -> ('r, error list) result;
@@ -129,6 +131,19 @@ let expected what got =
   fail ~code:"type"
     ~params:[ ("expected", what); ("got", type_name got) ]
     (Printf.sprintf "expected %s, got %s" what (type_name got))
+
+(* coerce a submitted String to the inner leaf's natural Bson, so {!from_string} can re-decode it —
+   numbers / bools / dates that arrived stringly (forms, query strings, lenient JSON). Non-leaf or
+   unparseable values pass the String through, where the inner decoder rejects it with a typed error. *)
+let rec coerce_str : type a. a ty -> string -> Bson.t =
+ fun ty s ->
+  match ty with
+  | TInt -> ( match int_of_string_opt (String.trim s) with Some i -> Bson.Int i | None -> Bson.String s)
+  | TFloat _ -> ( match float_of_string_opt (String.trim s) with Some f -> Bson.Float f | None -> Bson.String s)
+  | TBool -> Bson.Bool (match String.lowercase_ascii (String.trim s) with "true" | "1" | "on" | "yes" -> true | _ -> false)
+  | TDate -> ( match Int64.of_string_opt (String.trim s) with Some ms -> Bson.Date ms | None -> Bson.String s)
+  | TCheck (_, _, _, inner) | TNorm (_, inner) | TCoerce inner -> coerce_str inner s
+  | _ -> Bson.String s
 
 let rec dec_ty : type a. a ty -> Bson.t -> (a, error list) result =
  fun ty b ->
@@ -209,6 +224,8 @@ let rec dec_ty : type a. a ty -> Bson.t -> (a, error list) result =
               | None -> fail (Printf.sprintf "unknown %s %S" tag k))
           | _ -> fail (Printf.sprintf "missing tag field %s" tag))
       | v -> expected "document" v)
+  | TLazy l -> dec_ty (Lazy.force l) b
+  | TCoerce inner -> ( match b with Bson.String s -> dec_ty inner (coerce_str inner s) | other -> dec_ty inner other)
 
 (* encode is TOTAL (a typed value always serializes); refinement checks belong to [check_ty] *)
 let rec enc_ty : type a. a ty -> a -> Bson.t =
@@ -238,6 +255,8 @@ let rec enc_ty : type a. a ty -> a -> Bson.t =
             | None -> go rest)
       in
       go cases)
+  | TLazy l -> enc_ty (Lazy.force l) v
+  | TCoerce inner -> enc_ty inner v
 
 (* the inner normalizer chain applied to a value (normalizers must be idempotent) *)
 let rec norm_ty : type a. a ty -> a -> a =
@@ -245,6 +264,8 @@ let rec norm_ty : type a. a ty -> a -> a =
   match ty with
   | TNorm (f, inner) -> f (norm_ty inner v)
   | TCheck (_, _, _, inner) -> norm_ty inner v
+  | TCoerce inner -> norm_ty inner v
+  | TLazy l -> norm_ty (Lazy.force l) v
   | _ -> v
 
 (* run every check against an in-memory value (the encode-side gate: writes validate). ONE engine
@@ -282,6 +303,8 @@ let rec check_ty : type a. a ty -> a -> error list =
             | None -> go rest)
       in
       go cases)
+  | TLazy l -> check_ty (Lazy.force l) v
+  | TCoerce inner -> check_ty inner v
 
 (* ---- derived pretty-printing --------------------------------------------------- *)
 
@@ -327,6 +350,8 @@ let rec pp_ty : type a. a ty -> Format.formatter -> a -> unit =
             | None -> go rest)
       in
       go cases)
+  | TLazy l -> pp_ty (Lazy.force l) fmt v
+  | TCoerce inner -> pp_ty inner fmt v
 
 (* ---- the public codec value ----------------------------------------------------- *)
 
@@ -368,6 +393,19 @@ let option c = of_ty (TOption c.ty)
 let str_map c = of_ty (TMap c.ty)
 let conv proj inj c = of_ty (TConv (inj, proj, c.ty))
 let make ~enc ~dec = conv dec enc bson
+
+(* a total, two-way transform — [conv] without the fallible decode side (the common case) *)
+let map (to_ : 'a -> 'b) (of_ : 'b -> 'a) (c : 'a t) : 'b t = conv (fun a -> Ok (to_ a)) of_ c
+
+(* decode ALSO accepts a [String] and parses it to the leaf (numbers/bools/dates that arrive stringly —
+   forms, query strings, lenient JSON); a native value still decodes directly. Encode is unchanged. *)
+let from_string c = of_ty (TCoerce c.ty)
+
+(* a self-referential codec: [fix (fun self -> … self …)] — trees, comment threads, nested menus. The
+   [self] passed in refers back to the whole codec; it's forced lazily, so finite values terminate. *)
+let fix (f : 'a t -> 'a t) : 'a t =
+  let rec lazy_ty = lazy ((f (of_ty (TLazy lazy_ty))).ty) in
+  of_ty (Lazy.force lazy_ty)
 
 (* ---- refinements + normalizers ----------------------------------------------------- *)
 
@@ -621,6 +659,8 @@ let rec view_of_ty : type a. a ty -> view = function
          List.map
            (fun (Case c) -> (c.c_name, List.map (fun (PF p) -> (p.f_name, p.f_required, view_of_ty p.f_ty)) c.c_obj.o_fields))
            cases)
+  | TCoerce inner -> view_of_ty inner (* transparent: a coerced leaf reflects as its inner type *)
+  | TLazy _ -> V_bson (* recursion: opaque to schema reflection (a finite view can't unfold a cycle) *)
 
 let view c = view_of_ty c.ty
 

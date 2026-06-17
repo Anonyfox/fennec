@@ -99,6 +99,25 @@ val conv : ('a -> ('b, string) result) -> ('b -> 'a) -> 'a t -> 'b t
 (** An arbitrary codec from closures (reflects as opaque [V_bson]). *)
 val make : enc:('a -> Bson.t) -> dec:(Bson.t -> ('a, string) result) -> 'a t
 
+(** [map to_ of_ c] — a total two-way transform of [c]'s decoded value ({!conv} without the fallible
+    decode side). *)
+val map : ('a -> 'b) -> ('b -> 'a) -> 'a t -> 'b t
+
+(** Make decode ALSO accept a [String] and parse it to the leaf — for numbers / bools / dates that
+    arrive stringly (HTML forms, query strings, lenient JSON). A native value still decodes directly,
+    encoding is unchanged, and it reflects as the inner type (so schema / form rendering are unaffected).
+    {[ Sift.(from_string (min_i 1 int)) (* accepts 5 or "5" *) ]} *)
+val from_string : 'a t -> 'a t
+
+(** A self-referential codec — trees, comment threads, nested menus. The [self] handed to [f] refers
+    back to the whole codec and is forced lazily, so finite values terminate.
+    {[ let rec tree = Sift.fix (fun tree ->
+         seal (record (fun v kids -> { v; kids })
+               |> field (req "v" string) (fun t -> t.v)
+               |> field (opt_list "kids" tree) (fun t -> t.kids))) ]}
+    Reflects as opaque ([V_bson]) — a finite {!view} can't unfold a cycle. *)
+val fix : ('a t -> 'a t) -> 'a t
+
 (** {1 Refinements and normalizers}
 
     Stackable — wrap as many as needed; violations collect. Named refinements carry a {!hint} a
