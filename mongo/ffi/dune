@@ -8,6 +8,7 @@
 (library
  (name fennec_mongo_ffi)
  (public_name fennec-mongo.ffi)
+ (libraries bigstringaf)
  (foreign_stubs
   (language c)
   (names mongoc_stubs)

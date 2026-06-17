@@ -16,6 +16,7 @@
 
 module B = Bson
 module W = Mongo_wire.Bson_wire
+module Ffi = Fennec_mongo_ffi.Mongo_ffi
 
 let bench name ~iters (f : unit -> unit) =
   for _ = 1 to max 1 (iters / 10) do f () done;
@@ -31,6 +32,46 @@ let bench name ~iters (f : unit -> unit) =
 
 let keep x = ignore (Sys.opaque_identity x)
 
+(* A pure-OCaml structural walk of a BSON buffer — the OCaml analog of the libbson C walk: iterate every
+   field, touch its key + value first byte, recurse into sub-docs/arrays, skip scalars by their length
+   prefix. Helpers are TOP-LEVEL (buf passed explicitly, no captured closure per call) so it is genuinely
+   zero-allocation, unsafe reads on the known-good fixture (mirrors the tuned Cursor's post-bounds-check
+   codegen). This isolates OCaml SCAN speed from value MATERIALISATION: the gap to [zerocopy bytes] is the
+   cost of building owned OCaml values; the gap to [libbson walk (C)] is pure OCaml-vs-C scanning. *)
+let wu8 buf at = Char.code (Bigstringaf.unsafe_get buf at)
+let wi32 buf at = Int32.to_int (Bigstringaf.unsafe_get_int32_le buf at)
+let rec wnul buf at = if wu8 buf at = 0 then at else wnul buf (at + 1)
+
+let wvsize buf at tag =
+  match tag with
+  | 0x01 | 0x09 | 0x11 | 0x12 -> 8
+  | 0x02 | 0x0d | 0x0e -> 4 + wi32 buf at
+  | 0x03 | 0x04 | 0x0f -> wi32 buf at
+  | 0x05 -> 5 + wi32 buf at
+  | 0x07 -> 12
+  | 0x08 -> 1
+  | 0x0a | 0xff | 0x7f -> 0
+  | 0x10 -> 4
+  | 0x13 -> 16
+  | 0x0b -> wnul buf (wnul buf at + 1) + 1 - at
+  | _ -> 0
+
+let rec wwalk buf pos acc = wloop buf (pos + 4) acc
+and wloop buf p acc =
+  let tag = wu8 buf p in
+  if tag = 0 then acc
+  else
+    let kstart = p + 1 in
+    let voff = wnul buf kstart + 1 in
+    let acc = acc + wu8 buf kstart in
+    if tag = 0x03 || tag = 0x04 then wloop buf (voff + wi32 buf voff) (wwalk buf voff acc)
+    else
+      let vsz = wvsize buf voff tag in
+      let acc = if vsz > 0 then acc + wu8 buf voff else acc in
+      wloop buf (voff + vsz) acc
+
+let ocaml_walk (buf : Bigstringaf.t) : int = wwalk buf 0 0
+
 (* run all three paths for one (codec, document) fixture *)
 let fixture title ~iters (codec : 'a Sift.t) (doc : B.t) =
   let wire = W.encode doc in
@@ -42,7 +83,12 @@ let fixture title ~iters (codec : 'a Sift.t) (doc : B.t) =
   Printf.printf "  %s  (%d wire bytes)\n%!" title (String.length wire);
   bench "tree parse+decode" ~iters (fun () -> keep (Sift.decode codec (W.decode wire)));
   bench "tree decode-only" ~iters (fun () -> keep (Sift.decode codec parsed));
-  bench "zerocopy bytes" ~iters (fun () -> keep (Sift.decode_bytes codec buf))
+  bench "zerocopy bytes" ~iters (fun () -> keep (Sift.decode_bytes codec buf));
+  bench "ocaml scan-only" ~iters (fun () -> keep (ocaml_walk buf));
+  (* the "official" C reference: libbson iterates the SAME buffer in place (borrowed, no tree, no OCaml
+     values). A full walk — so for the wide/narrow fixture it reads all 20 fields where decode_bytes
+     skips 17; for the all-fields-wanted fixtures it is the honest parse-speed floor. *)
+  if Ffi.available () then bench "libbson walk (C)" ~iters (fun () -> keep (Ffi.bson_bench_walk buf))
 
 (* ── fixtures ─────────────────────────────────────────────────────────────── *)
 

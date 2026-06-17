@@ -30,6 +30,7 @@
 #include <caml/fail.h>
 #include <caml/custom.h>
 #include <caml/threads.h>
+#include <caml/bigarray.h>
 
 /* ------------------------------------------------------------------ pool --- */
 
@@ -630,6 +631,52 @@ CAMLprim value ocaml_mongo_watch_close(value v_stream) {
   CAMLreturn(Val_unit);
 }
 
+/* ----------------------------------------------------------- bench helper ---
+ * Raw libbson full-document iteration over a Bigstring buffer (no tree, BORROWED
+ * values — bson_init_static wraps the bytes, bson_iter walks in place) — the
+ * "official" parse speed to benchmark Sift.decode_bytes against. Recurses into
+ * sub-documents and arrays; touches every key + value so the optimiser cannot
+ * elide the work; returns a checksum. No runtime-lock juggling: it is pure CPU,
+ * never blocks, and only reads the Bigarray (an OCaml value) — so we keep the
+ * lock and never allocate an OCaml value until the final return. */
+static int64_t bench_walk_doc(const bson_t *doc) {
+  bson_iter_t it;
+  int64_t acc = 0;
+  if (!bson_iter_init(&it, doc)) return -1;
+  while (bson_iter_next(&it)) {
+    const char *k = bson_iter_key(&it);
+    if (k) acc += (unsigned char)k[0];
+    switch (bson_iter_type(&it)) {
+      case BSON_TYPE_UTF8: { uint32_t l = 0; const char *s = bson_iter_utf8(&it, &l); acc += l + (l ? (unsigned char)s[0] : 0); break; }
+      case BSON_TYPE_INT32: acc += bson_iter_int32(&it); break;
+      case BSON_TYPE_INT64: acc += bson_iter_int64(&it); break;
+      case BSON_TYPE_DOUBLE: acc += (int64_t)bson_iter_double(&it); break;
+      case BSON_TYPE_BOOL: acc += bson_iter_bool(&it) ? 1 : 0; break;
+      case BSON_TYPE_DATE_TIME: acc += bson_iter_date_time(&it); break;
+      case BSON_TYPE_OID: { const bson_oid_t *o = bson_iter_oid(&it); if (o) acc += o->bytes[0]; break; }
+      case BSON_TYPE_DOCUMENT: case BSON_TYPE_ARRAY: {
+        uint32_t len = 0; const uint8_t *data = NULL; bson_t child;
+        if (bson_iter_type(&it) == BSON_TYPE_ARRAY) bson_iter_array(&it, &len, &data);
+        else bson_iter_document(&it, &len, &data);
+        if (data && bson_init_static(&child, data, len)) acc += bench_walk_doc(&child);
+        break;
+      }
+      default: break;
+    }
+  }
+  return acc;
+}
+
+CAMLprim value ocaml_bson_bench_walk(value v_buf) {
+  CAMLparam1(v_buf);
+  const uint8_t *data = (const uint8_t *)Caml_ba_data_val(v_buf);
+  size_t len = (size_t)Caml_ba_array_val(v_buf)->dim[0];
+  bson_t doc;
+  int64_t acc = -1;
+  if (bson_init_static(&doc, data, len)) acc = bench_walk_doc(&doc);
+  CAMLreturn(Val_long((intnat)acc));
+}
+
 #else /* !HAVE_MONGOC — native driver not built; every entry point raises a clear error */
 
 #include <caml/mlvalues.h>
@@ -656,6 +703,7 @@ CAMLprim value ocaml_mongo_delete_one(value a, value b, value c, value d) { (voi
 CAMLprim value ocaml_mongo_watch_open(value a, value b, value c, value d, value e) { (void)a; (void)b; (void)c; (void)d; (void)e; return mongo_unavailable(); }
 CAMLprim value ocaml_mongo_watch_next(value a) { (void)a; return mongo_unavailable(); }
 CAMLprim value ocaml_mongo_watch_close(value a) { (void)a; return mongo_unavailable(); }
+CAMLprim value ocaml_bson_bench_walk(value a) { (void)a; return Val_long(-1); }
 
 #endif
 
