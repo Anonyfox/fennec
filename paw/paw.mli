@@ -288,7 +288,16 @@ module Host_pattern = Host_pattern
 
 (** {1 Middleware battery}
 
-    Each module's [make] returns a plain {!t}, so they drop into any {!seq} or {!Endpoint}. *)
+    Prebuilt paws — the lego blocks. Each module's [make] returns a plain {!t}, so they drop into any
+    {!seq} or {!Endpoint}. They are allocation-lean by construction (header paws build their
+    before-send hook once at [make]; guards decline in O(1)), so mounting a stack costs almost nothing
+    per request.
+
+    On a miss the server is already HTTP-correct without any paw: a path that exists for other methods
+    returns [405] with an [Allow] header (not a blanket 404), and an [OPTIONS] probe with no explicit
+    handler is auto-answered [204] + [Allow] (an explicit [OPTIONS] route or {!Cors} still wins). *)
+
+(** {2 Sessions & security} *)
 
 (** Signed-cookie (or server-side) sessions, HttpOnly + SameSite by default. *)
 module Session = Session
@@ -299,23 +308,33 @@ module Csrf = Csrf
 (** Cross-Origin Resource Sharing, including preflight. *)
 module Cors = Cors
 
-(** Static file serving from disk or an embedded map — path-traversal-safe, with ETag/304/range. *)
-module Static = Static
-
-(** One-line-per-response request logging (coloured on a TTY). *)
-module Logger = Logger
-
-(** Token-bucket rate limiting, keyed by any function of the connection. *)
-module Rate_limit = Rate_limit
-
-(** HTTP Basic authentication. *)
-module Basic_auth = Basic_auth
+(** Conservative security headers (CSP, HSTS, [X-Content-Type-Options], …). *)
+module Security_headers = Security_headers
 
 (** Redirect plain HTTP to HTTPS (honouring [X-Forwarded-Proto]). *)
 module Force_https = Force_https
 
-(** Conservative security headers (CSP, HSTS, [X-Content-Type-Options], …). *)
-module Security_headers = Security_headers
+(** {2 Authentication} *)
+
+(** HTTP Basic authentication. *)
+module Basic_auth = Basic_auth
+
+(** HTTP Bearer-token authentication — [401] + [WWW-Authenticate: Bearer] when the token is missing
+    or rejected by your [verify]. *)
+module Bearer_auth = Bearer_auth
+
+(** {2 Traffic shaping & limits} *)
+
+(** Token-bucket rate limiting, keyed by any function of the connection. *)
+module Rate_limit = Rate_limit
+
+(** Reject a request whose body exceeds a byte cap with [413 Payload Too Large]. *)
+module Body_limit = Body_limit
+
+(** {2 Observability} *)
+
+(** One-line-per-response request logging (coloured on a TTY). *)
+module Logger = Logger
 
 (** A correlation id per request (from [X-Request-Id] or freshly minted), stored in {!Assigns}. *)
 module Request_id = Request_id
@@ -323,8 +342,43 @@ module Request_id = Request_id
 (** Per-request timing handed to a reporter callback. *)
 module Metrics = Metrics
 
+(** {2 Request hygiene} — normalize the request before it reaches a route *)
+
 (** Let an HTML form spoof PUT/PATCH/DELETE via a [_method] field or override header. *)
 module Method_override = Method_override
+
+(** Canonicalize the path by stripping trailing slashes, with a [308] (method/body-preserving)
+    redirect — so URLs stay canonical and routes only declare the slash-free form. *)
+module Normalize_path = Normalize_path
+
+(** Behind a reverse proxy / load balancer, recover the real client IP and scheme from
+    [X-Forwarded-For] / [X-Forwarded-Proto] — but only when the connecting peer is trusted, so they
+    cannot be forged. Sets {!Conn.remote_ip} / {!Conn.scheme} for every downstream paw. *)
+module Trusted_proxy = Trusted_proxy
+
+(** Content negotiation: [406 Not Acceptable] unless the request's [Accept] header accepts one of the
+    media types the endpoint serves (Plug's [:accepts]). *)
+module Accepts = Accepts
+
+(** {2 Response shaping & assets} *)
+
+(** Static file serving from disk or an embedded map — path-traversal-safe, with ETag/304/range. *)
+module Static = Static
+
+(** Set a [Cache-Control] directive on answered responses (unless the handler set its own). *)
+module Cache_control = Cache_control
+
+(** Add fixed response headers — each only if absent, so a handler's own value wins. *)
+module Set_header = Set_header
+
+(** Give error responses a body when the handler left it empty (a bare [set_status 4xx/5xx]) — default
+    ["<code> <reason>"] text, or branded HTML/JSON pages. *)
+module Status_pages = Status_pages
+
+(** {2 Operations} *)
+
+(** A liveness / readiness probe endpoint (GET/HEAD [/healthz] by default). *)
+module Health = Health
 
 (** {1 WebSockets} (RFC 6455) *)
 

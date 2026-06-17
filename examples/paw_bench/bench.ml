@@ -80,6 +80,25 @@ let full_request handler req () =
   let resp = match Paw.Conn.resp c with Some r -> r | None -> H.text ~status:404 "" in
   keep (Paw.Responder.finalize ~now:1_700_000_000.0 ~req resp)
 
+(* a realistic always-on production battery on a single route, vs the bare endpoint — the delta is
+   exactly what the prebuilt paws add per request. The request flows THROUGH all of them: the guards
+   pass (small body, no trailing slash, not /healthz) and the header paws register before_send hooks
+   that run at finalize. *)
+let h_bare = Paw.endpoint () |> Paw.get "/route/1" (fun c -> Paw.text "ok" c) |> Paw.Endpoint.handler
+
+let h_battery =
+  Paw.endpoint ()
+  |> Paw.use (Paw.Request_id.make ())
+  |> Paw.use (Paw.Security_headers.make ())
+  |> Paw.use (Paw.Body_limit.make ~max_bytes:1_048_576 ())
+  |> Paw.use (Paw.Normalize_path.make ())
+  |> Paw.use (Paw.Health.make ())
+  |> Paw.use (Paw.Cache_control.make "no-store")
+  |> Paw.use (Paw.Set_header.make [ ("x-powered-by", "fennec") ])
+  |> Paw.use (Paw.Status_pages.make ())
+  |> Paw.get "/route/1" (fun c -> Paw.text "ok" c)
+  |> Paw.Endpoint.handler
+
 (* ── the suite ────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -105,5 +124,9 @@ let () =
   section "end to end (route + handler + finalize, no socket)";
   bench "full request: 1 route, small body" ~iters:500_000 (full_request h1 req_root);
   bench "full request: 10 routes, hit last" ~iters:500_000 (full_request h10 req_last10);
+
+  section "middleware battery (the prebuilt-paws overhead: 8-paw stack vs bare, same route)";
+  bench "full request: bare endpoint" ~iters:500_000 (full_request h_bare req_root);
+  bench "full request: 8-paw battery" ~iters:500_000 (full_request h_battery req_root);
 
   Printf.printf "\n%!"
