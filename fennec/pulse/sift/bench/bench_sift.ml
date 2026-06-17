@@ -72,6 +72,41 @@ and wloop buf p acc =
 
 let ocaml_walk (buf : Bigstringaf.t) : int = wwalk buf 0 0
 
+(* The STAGING CEILING probe: a hand-written direct decoder for the small fixture — scans for each field
+   and applies the constructor in ONE call (id, title, count, active), with NO applicative builder (no
+   incremental currying of an N-ary make, no Ok threading, no per-field/closure plumbing). It still
+   materialises the same owned OCaml values (the oid hex string, the title copy) as decode_bytes, so the
+   gap between this and [zerocopy bytes] is precisely the applicative-builder tax — what a ppx/staged
+   decoder (K4) would recover. Pure OCaml, no Obj.magic. *)
+let hexc = "0123456789abcdef"
+let woid buf at = String.init 24 (fun i -> let b = wu8 buf (at + (i / 2)) in if i land 1 = 0 then hexc.[b lsr 4] else hexc.[b land 0xf])
+let wstr buf at = let len = wi32 buf at in Bigstringaf.substring buf ~off:(at + 4) ~len:(len - 1)
+
+(* find a top-level field by key; returns its value tag (or 0 if absent), leaving the value offset in
+   [vref]. Mirrors scan_find: rescans from the doc start, byte-compares keys in place. Helpers are
+   top-level (no per-call closure) so the probe measures the true staged ceiling, not bench artifacts. *)
+let rec wkeyeq buf kstart key klen i = i >= klen || (wu8 buf (kstart + i) = Char.code (String.unsafe_get key i) && wkeyeq buf kstart key klen (i + 1))
+let rec wfind_loop buf key klen vref p =
+  let tag = wu8 buf p in
+  if tag = 0 then 0
+  else
+    let kstart = p + 1 in
+    let kend = wnul buf kstart in
+    let voff = kend + 1 in
+    if kend - kstart = klen && wkeyeq buf kstart key klen 0 then (vref := voff; tag) else wfind_loop buf key klen vref (voff + wvsize buf voff tag)
+let wfind buf key vref = wfind_loop buf key (String.length key) vref 4
+
+let hand_decode_small buf : (string * string * int * bool) option =
+  let v = ref 0 in
+  let t_id = wfind buf "_id" v in let o_id = !v in
+  let t_ti = wfind buf "title" v in let o_ti = !v in
+  let t_co = wfind buf "count" v in let o_co = !v in
+  let t_ac = wfind buf "active" v in let o_ac = !v in
+  if t_id = 0 || t_ti = 0 || t_co = 0 || t_ac = 0 then None
+  else
+    let id = if t_id = 0x07 then woid buf o_id else wstr buf o_id in
+    Some (id, wstr buf o_ti, wi32 buf o_co, wu8 buf o_ac <> 0)
+
 (* run all three paths for one (codec, document) fixture *)
 let fixture title ~iters (codec : 'a Sift.t) (doc : B.t) =
   let wire = W.encode doc in
@@ -164,4 +199,12 @@ let () =
   fixture "3. nested record (sub-doc + list)" ~iters:1_000_000 nested_codec nested_doc;
   fixture "4. list of 100 ints" ~iters:500_000 list_codec list_doc;
   fixture "5. list of 50 sub-records" ~iters:200_000 rows_codec rows_doc;
+  Printf.printf "\n  staging ceiling probe (small record): hand-written direct decode vs the applicative builder\n%!";
+  let swire = W.encode small_doc in
+  let sbuf = Bigstringaf.of_string ~off:0 ~len:(String.length swire) swire in
+  (match (Sift.decode_bytes small_codec sbuf, hand_decode_small sbuf) with
+  | Ok v, Some v' -> assert (v = v') (* the hand decoder agrees with decode_bytes *)
+  | _ -> assert false);
+  bench "zerocopy bytes" ~iters:2_000_000 (fun () -> keep (Sift.decode_bytes small_codec sbuf));
+  bench "hand direct decode" ~iters:2_000_000 (fun () -> keep (hand_decode_small sbuf));
   Printf.printf "\n%!"
