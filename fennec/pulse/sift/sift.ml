@@ -43,6 +43,11 @@ let size (c : 'a t) (v : 'a) : int = Engine.size c.shape v
    the tree then serialising. Single pass; each document's length is backpatched once known. *)
 let encode_bytes (c : 'a t) (v : 'a) : Bigstringaf.t = Bson_writer.encode_value_bytes c.shape v
 
+(* RELAXED JSON encode (plain JSON for HTTP APIs), straight from the value, no Bson.t tree — distinct
+   from {!to_json_string} (the bridge's CANONICAL extended JSON, lossless for BSON/mongosh interchange).
+   Round-trips via {!of_json_string}. *)
+let encode_json (c : 'a t) (v : 'a) : string = Json_writer.encode_json c.shape v
+
 (* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
 
 type view =

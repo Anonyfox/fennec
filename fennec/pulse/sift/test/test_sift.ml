@@ -573,4 +573,23 @@ let%test "k6: patch — the inverse of diff (patch old (diff old new) = new)" =
   && rt figure_c (Rect (1., 2.)) (Rect (1., 9.)) (* same-case body change *)
   && rt bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1); ("y", 9); ("z", 3) ]
 
+(* ── axis A: relaxed JSON encode — plain JSON that round-trips via of_json_string ── *)
+
+let%test "axisA: encode_json — relaxed (plain) JSON, round-trips, escapes, no extended wrapping" =
+  let rt : 'a. 'a Sift.t -> 'a -> bool =
+   fun c v -> match Sift.of_json_string c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | Error _ -> false
+  in
+  let contains hay sub =
+    let hl = String.length hay and sl = String.length sub in
+    let rec go i = i + sl <= hl && (String.sub hay i sl = sub || go (i + 1)) in
+    go 0
+  in
+  rt bag_c ("hi\"x\\y", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && rt opt_c (Some "x", [ 1; 2; 3 ])
+  && rt opt_c (None, [])
+  && rt list_c [ "a"; "b\nc"; "d" ] (* non-empty elements: list_c's element has non_empty *)
+  && rt figure_c (Rect (3.0, 4.0))
+  && rt nested_c ("ok", ("Ada", "ada@x.io"))
+  && (let j = Sift.encode_json bag_c ("x", 42, 1.0, true, 0L, "abc") in contains j "42" && contains j "\"abc\"" && not (contains j "$number") && not (contains j "$oid"))
+
 let () = exit (Fennec_hunt_unit.run ())

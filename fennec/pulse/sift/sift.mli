@@ -94,6 +94,13 @@ val size : 'a t -> 'a -> int
     serialising to the wire. Each document's length prefix is backpatched once its content end is known. *)
 val encode_bytes : 'a t -> 'a -> Bigstringaf.t
 
+(** RELAXED JSON encode — plain JSON (strings/numbers/[]/{}) straight from the value, no {!Bson.t} tree:
+    what an HTTP API sends. Distinct from {!to_json_string}, which emits the bridge's CANONICAL extended
+    JSON ([$numberInt]/[$oid]/[$date], lossless for BSON/mongosh interchange). Round-trips via
+    {!of_json_string} (an id reads back as a string, a date as a number — decode's coercions accept
+    both). A non-finite float, which plain JSON cannot represent, is emitted as [null]. *)
+val encode_json : 'a t -> 'a -> string
+
 (** {1 Derived operations (SIFT-K6)} *)
 
 (** Structural equality derived from the shape — monomorphic (not OCaml's polymorphic [=]): a record
