@@ -15,4 +15,4 @@
 (library
  (name sift)
  (public_name fennec.pulse.sift)
- (libraries fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.json))
+ (libraries fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.json bigstringaf))
