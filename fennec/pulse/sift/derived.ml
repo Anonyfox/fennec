@@ -152,3 +152,66 @@ let rec default : type a. a shape -> a =
   | TObj o -> ( match o.decode_src { read_field = (fun f -> Ok (default f.item)) } with Ok v -> v | Error _ -> invalid_arg "Sift.default: record")
   | TVariant { cases = []; _ } -> invalid_arg "Sift.default: variant has no cases"
   | TVariant { cases = Case c :: _; _ } -> ( match c.body.decode_src { read_field = (fun f -> Ok (default f.item)) } with Ok a -> c.inject a | Error _ -> invalid_arg "Sift.default: variant")
+
+(* ---- structural diff: the minimal change from [old] to [new] as Mongo-style $set/$unset ----------
+
+   The reactive-sync primitive: for two values of a DOCUMENT-shaped codec (record / map / variant) it
+   reports exactly which fields changed (with their new encoded value) and which became absent. Maps
+   straight onto a Mongo update modifier ($set/$unset) AND a DDP [changed]/[cleared] message — compute
+   the minimal wire update from old→new without re-sending the unchanged fields. Field equality uses the
+   shape's {!equal}; absence uses the field's [omit] (an optional gone to None, an opt_list to []). *)
+
+type delta = { set : (string * Bson.t) list; unset : string list }
+
+let no_change = { set = []; unset = [] }
+
+let rec diff : type a. a shape -> a -> a -> delta =
+ fun shape old new_ ->
+  match shape with
+  | TObj o -> diff_members o.members old new_
+  | TMap el -> diff_map el old new_
+  | TVariant { tag; cases } -> diff_variant shape tag cases old new_
+  | TCheck (_, _, _, inner) -> diff inner old new_
+  | TNorm (_, inner) -> diff inner old new_
+  | TConv (inj, _, inner) -> diff inner (inj old) (inj new_)
+  | TCoerce inner -> diff inner old new_
+  | TLazy l -> diff (Lazy.force l) old new_
+  | _ -> invalid_arg "Sift.diff: needs a document-shaped codec (record / map / variant)"
+
+and diff_members : type r. r bound_field list -> r -> r -> delta =
+ fun members old new_ ->
+  let rec go set unset = function
+    | [] -> { set = List.rev set; unset = List.rev unset }
+    | Bound_field f :: rest ->
+        let ov = f.get old and nv = f.get new_ in
+        if equal f.shape ov nv then go set unset rest
+        else if f.omit nv then go set (f.name :: unset) rest
+        else go ((f.name, Engine.write f.shape nv) :: set) unset rest
+  in
+  go [] [] members
+
+and diff_map : type a. a shape -> (string * a) list -> (string * a) list -> delta =
+ fun el old new_ ->
+  let set = List.filter_map (fun (k, nv) -> match List.assoc_opt k old with Some ov when equal el ov nv -> None | _ -> Some (k, Engine.write el nv)) new_ in
+  let unset = List.filter_map (fun (k, _) -> if List.mem_assoc k new_ then None else Some k) old in
+  { set; unset }
+
+and diff_variant : type r. r shape -> string -> r case list -> r -> r -> delta =
+ fun shape _tag cases old new_ ->
+  let rec go = function
+    | [] -> no_change
+    | Case c :: rest -> (
+        match c.project old with
+        | Some a -> ( match c.project new_ with Some b -> diff_members c.body.members a b (* same case: tag unchanged, diff the body *) | None -> full_replace shape old new_)
+        | None -> go rest)
+  in
+  go cases
+
+(* the case changed: $set the whole new document (tag + new body fields), $unset the old fields that the
+   new case no longer has. Only this rare path materialises old/new via {!Engine.write}. *)
+and full_replace : type a. a shape -> a -> a -> delta =
+ fun shape old new_ ->
+  let fields v = match Engine.write shape v with Bson.Document kvs -> kvs | _ -> [] in
+  let new_fields = fields new_ in
+  let new_names = List.map fst new_fields in
+  { set = new_fields; unset = List.filter_map (fun (n, _) -> if List.mem n new_names then None else Some n) (fields old) }

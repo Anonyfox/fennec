@@ -112,6 +112,15 @@ val hash : 'a t -> 'a -> int
     case. For form initial values and fixtures. *)
 val default : 'a t -> 'a
 
+(** The minimal change from [old] to [new] for a document-shaped codec (record / map / variant), as a
+    Mongo-style update: [set] are the fields that changed or appeared (with their new encoded value),
+    [unset] are the fields that became absent (an optional gone to [None], an opt_list to [[]]). Maps
+    straight onto a Mongo [$set]/[$unset] modifier and a DDP [changed]/[cleared] message — the
+    reactive-sync / minimal-update primitive. *)
+type delta = { set : (string * Bson.t) list; unset : string list }
+
+val diff : 'a t -> 'a -> 'a -> delta
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result

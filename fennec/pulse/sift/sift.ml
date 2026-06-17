@@ -101,6 +101,11 @@ let compare (c : 'a t) (x : 'a) (y : 'a) : int = Derived.compare c.shape x y
 let hash (c : 'a t) (v : 'a) : int = Derived.hash c.shape v
 let default (c : 'a t) : 'a = Derived.default c.shape
 
+(* structural diff (old → new) as Mongo-style $set/$unset — the reactive-sync / minimal-update primitive *)
+type delta = Derived.delta = { set : (string * Bson.t) list; unset : string list }
+
+let diff (c : 'a t) (old : 'a) (new_ : 'a) : delta = Derived.diff c.shape old new_
+
 (* ---- positional parameter lists (DDP method params) — unchanged surface ----------------- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }

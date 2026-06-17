@@ -534,4 +534,20 @@ let%test "k6: default — sensible zeros; round-trips through encode/decode" =
   && Sift.default coerce_c = 0 (* structural zero — note 0 would fail this shape's [min_i 1] on validation *)
   && (match Sift.decode_bytes bag_c (Sift.encode_bytes bag_c (Sift.default bag_c)) with Ok ("", 0, 0.0, false, 0L, "") -> true | _ -> false)
 
+let%test "k6: diff — no change, field change, optional set/unset" =
+  let v = ("a", 1, 0.0, true, 0L, "x") in
+  Sift.diff bag_c v v = { Sift.set = []; unset = [] }
+  && (match Sift.diff bag_c v ("a", 2, 0.0, true, 0L, "x") with { Sift.set = [ ("n", B.Int 2) ]; unset = [] } -> true | _ -> false)
+  && (match Sift.diff opt_c (Some "x", [ 1 ]) (None, [ 1 ]) with { Sift.set = []; unset = [ "a" ] } -> true | _ -> false)
+  && (match Sift.diff opt_c (None, []) (Some "y", []) with { Sift.set = [ ("a", B.String "y") ]; unset = [] } -> true | _ -> false)
+  && (match Sift.diff opt_c (Some "x", [ 1; 2 ]) (Some "x", []) with { Sift.set = []; unset = [ "b" ] } -> true | _ -> false)
+
+let bare_map_c = Sift.(str_map int) (* a top-level dynamic-key map (not a record wrapping one) *)
+
+let%test "k6: diff — maps (changed/added/removed keys), variants (body + case change)" =
+  (match Sift.diff bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1); ("y", 9); ("z", 3) ] with { Sift.set = [ ("y", B.Int 9); ("z", B.Int 3) ]; unset = [] } -> true | _ -> false)
+  && (match Sift.diff bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1) ] with { Sift.set = []; unset = [ "y" ] } -> true | _ -> false)
+  && (match Sift.diff figure_c (Rect (1., 2.)) (Rect (1., 9.)) with { Sift.set = [ ("h", B.Float 9.) ]; unset = [] } -> true | _ -> false)
+  && (let d = Sift.diff figure_c (Circle 1.) (Rect (3., 4.)) in List.mem "kind" (List.map fst d.Sift.set) && List.mem "w" (List.map fst d.Sift.set) && d.Sift.unset = [ "r" ])
+
 let () = exit (Fennec_hunt_unit.run ())
