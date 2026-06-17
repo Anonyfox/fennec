@@ -24,7 +24,6 @@ type parsed = {
 
 (* Request limits. The Buf_read max_size bounds total buffered bytes; these add
    semantic caps so a hostile request gets a clean 4xx, not a silent desync. *)
-let max_header_count = 100
 let max_body_size = 8 * 1024 * 1024 (* 8 MiB request body *)
 
 (* outcome of parsing one request off the connection *)
@@ -76,57 +75,60 @@ let read_chunked (r : Eio.Buf_read.t) : (string, string) result =
   in
   loop ()
 
-(* [continue] is invoked just before the body is read, to honour Expect: 100-continue. *)
-let read_request ~(continue : unit -> unit) (r : Eio.Buf_read.t) : request_result =
-  match try `Line (Eio.Buf_read.line r) with End_of_file | Failure _ -> `Eof with
+(* a request line + headers larger than this is rejected (slowloris / oversized-head bound) *)
+let max_head_size = 64 * 1024
+
+(* [continue] is invoked just before the body is read, to honour Expect: 100-continue. [out] is a
+   per-connection scratch int array (reused across requests, so parsing the head allocates nothing
+   beyond the materialized strings). The head is scanned by the hand-crafted C parser ({!Http_parse});
+   the body is read here. The blocking [ensure] that grows the buffer — and ONLY it — is bounded by
+   [timeout] (a fully-buffered / pipelined head never arms a timer). *)
+let read_request ~(continue : unit -> unit) ~(timeout : Eio.Time.Timeout.t) (r : Eio.Buf_read.t) (out : int array) : request_result =
+  let rec parse_head () =
+    let cs = Eio.Buf_read.peek r in
+    let n = Http_parse.parse cs.Cstruct.buffer cs.Cstruct.off cs.Cstruct.len out Http_parse.max_headers in
+    if n >= 0 then `Head (cs, n)
+    else if n = Http_parse.malformed then `Bad
+    else if n = Http_parse.too_many then `Too_large
+    else if cs.Cstruct.len >= max_head_size then `Too_large (* incomplete but already oversized *)
+    else
+      match Eio.Time.Timeout.run timeout (fun () -> Ok (Eio.Buf_read.ensure r (cs.Cstruct.len + 1))) with
+      | Ok () -> parse_head ()
+      | Error `Timeout -> `Eof (* idle / slow client — close *)
+      | exception (End_of_file | Eio.Buf_read.Buffer_limit_exceeded) -> if cs.Cstruct.len = 0 then `Eof else `Bad
+  in
+  match parse_head () with
   | `Eof -> Conn_eof
-  | `Line "" -> Conn_eof (* leading blank line: treat as end *)
-  | `Line reqline -> (
-    (* request line: METHOD SP TARGET SP VERSION — reject if malformed *)
-    match String.split_on_char ' ' reqline with
-    | [ meth; target; version ] when meth <> "" && target <> "" ->
-      let rec headers acc n =
-        if n > max_header_count then `Too_many
-        else
-          match Eio.Buf_read.line r with
-          | "" -> `Done (List.rev acc)
-          | line -> (
-            match String.index_opt line ':' with
-            | Some i ->
-              let k = String.lowercase_ascii (String.trim (String.sub line 0 i)) in
-              let v = String.trim (String.sub line (i + 1) (String.length line - i - 1)) in
-              headers ((k, v) :: acc) (n + 1)
-            | None -> headers acc (n + 1) (* tolerate a fold/garbage header line *))
-          | exception (End_of_file | Failure _) -> `Done (List.rev acc)
-      in
-      (match headers [] 0 with
-       | `Too_many -> Too_large "too many headers"
-       | `Done hs -> (
-         let mk body = Req { meth; target; version; headers = hs; body } in
-         let te = header hs "transfer-encoding" and cl = header hs "content-length" in
-         let chunked = match te with Some v -> contains (String.lowercase_ascii v) "chunked" | None -> false in
-         (* Content-Length AND Transfer-Encoding together is a request-smuggling vector *)
-         if chunked && cl <> None then Bad_request "content-length with transfer-encoding"
-         else begin
-           (match header hs "expect" with
-            | Some v when contains (String.lowercase_ascii v) "100-continue" -> continue ()
-            | _ -> ());
-           if chunked then (match read_chunked r with Ok body -> mk body | Error e -> Bad_request e)
-           else
-             match cl with
-             | None -> mk ""
-             | Some n -> (
-               match int_of_string_opt (String.trim n) with
-               | None -> Bad_request "invalid content-length"
-               | Some len when len < 0 -> Bad_request "negative content-length"
-               | Some len when len > max_body_size -> Too_large "request body too large"
-               | Some 0 -> mk ""
-               | Some len -> (
-                 match Eio.Buf_read.take len r with
-                 | body -> mk body
-                 | exception (End_of_file | Failure _) -> Bad_request "truncated body"))
-         end))
-    | _ -> Bad_request "malformed request line")
+  | `Bad -> Bad_request "malformed request head"
+  | `Too_large -> Too_large "request head too large"
+  | `Head (cs, n) ->
+    let buf = cs.Cstruct.buffer in
+    let sub off len = Bigstringaf.substring buf ~off ~len in
+    (* materialize from the C-provided offsets while [cs] is still valid (before consume); no
+       per-header trim/lowercase — the C parser already trims OWS, and lookups are case-insensitive *)
+    let meth = sub out.(0) out.(1) and target = sub out.(2) out.(3) and version = sub out.(4) out.(5) in
+    let rec build i acc = if i < 0 then acc else let o = 7 + (4 * i) in build (i - 1) ((sub out.(o) out.(o + 1), sub out.(o + 2) out.(o + 3)) :: acc) in
+    let hs = build (out.(6) - 1) [] in
+    Eio.Buf_read.consume r n;
+    let mk body = Req { meth; target; version; headers = hs; body } in
+    let te = header hs "transfer-encoding" and cl = header hs "content-length" in
+    let chunked = match te with Some v -> contains (String.lowercase_ascii v) "chunked" | None -> false in
+    (* Content-Length AND Transfer-Encoding together is a request-smuggling vector *)
+    if chunked && cl <> None then Bad_request "content-length with transfer-encoding"
+    else begin
+      (match header hs "expect" with Some v when contains (String.lowercase_ascii v) "100-continue" -> continue () | _ -> ());
+      if chunked then (match read_chunked r with Ok body -> mk body | Error e -> Bad_request e)
+      else
+        match cl with
+        | None -> mk ""
+        | Some v -> (
+          match int_of_string_opt (String.trim v) with
+          | None -> Bad_request "invalid content-length"
+          | Some len when len < 0 -> Bad_request "negative content-length"
+          | Some len when len > max_body_size -> Too_large "request body too large"
+          | Some 0 -> mk ""
+          | Some len -> (match Eio.Buf_read.take len r with body -> mk body | exception (End_of_file | Failure _) -> Bad_request "truncated body"))
+    end
 
 let to_request ~host ~scheme ~remote_ip (p : parsed) : CH.request =
   let path, query_string = CH.split_target p.target in
@@ -331,7 +333,7 @@ type request_error =
 
 (* ──── read_request ──── *)
 
-let parse_ ?(continue = fun () -> ()) s = read_request ~continue (Eio.Buf_read.of_string s)
+let parse_ ?(continue = fun () -> ()) s = read_request ~continue ~timeout:Eio.Time.Timeout.none (Eio.Buf_read.of_string s) (Http_parse.make_out ())
 let body_of_ = function Req p -> Some p.body | _ -> None
 let is_bad_ = function Bad_request _ -> true | _ -> false
 
@@ -419,20 +421,16 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(re
   in
   (* honour Expect: 100-continue: tell the client to go ahead before we read the body *)
   let continue () = Eio.Buf_write.string w "HTTP/1.1 100 Continue\r\n\r\n"; Eio.Buf_write.flush w in
+  (* per-connection scratch for the C head parser, reused across this connection's requests *)
+  let out = Http_parse.make_out () in
   let rec loop () =
-    (* Read the next request. When bytes are ALREADY buffered (a pipelined burst, or a request that
-       arrived during the previous response) the read won't block, so we skip the timer entirely —
-       arming an Eio timer per buffered read was the bulk of the pipelining cost. Only a read that
-       WILL block (an idle keep-alive wait or a slow/slowloris client) gets the idle/header timeout. *)
-    match
-      (if Eio.Buf_read.buffered_bytes r > 0 then Ok (read_request ~continue r)
-       else Eio.Time.Timeout.run timeout (fun () -> Ok (read_request ~continue r)))
-    with
-    | Error `Timeout -> ()
-    | Ok Conn_eof -> ()
-    | Ok (Bad_request _) -> respond_and_close (CH.text ~status:400 "Bad Request")
-    | Ok (Too_large _) -> respond_and_close (CH.text ~status:413 "Payload Too Large")
-    | Ok (Req p) -> (
+    (* read_request scans the head with the hand-crafted C parser and bounds ONLY its blocking
+       buffer-grow by [timeout]; a fully-buffered / pipelined head never arms a timer. *)
+    match read_request ~continue ~timeout r out with
+    | Conn_eof -> ()
+    | Bad_request _ -> respond_and_close (CH.text ~status:400 "Bad Request")
+    | Too_large _ -> respond_and_close (CH.text ~status:413 "Payload Too Large")
+    | Req p -> (
       (* [scheme] is the real transport: "https" when we terminated TLS in-process, else "http" — so
          Secure cookies / force-https Just Work over in-process HTTPS. Behind a TLS-terminating proxy
          (plaintext transport here), a force-https / session paw still reads X-Forwarded-Proto, which

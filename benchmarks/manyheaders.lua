@@ -1,0 +1,11 @@
+-- a realistic browser-shaped request: ~11 headers (the 1-header benchmark hides per-header parse cost)
+wrk.headers["User-Agent"]="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+wrk.headers["Accept"]="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+wrk.headers["Accept-Encoding"]="gzip, deflate, br"
+wrk.headers["Accept-Language"]="en-US,en;q=0.9"
+wrk.headers["Cookie"]="session=abc123def456; theme=dark; lang=en; tz=UTC"
+wrk.headers["Referer"]="https://app.example.com/dashboard"
+wrk.headers["Cache-Control"]="no-cache"
+wrk.headers["Sec-Fetch-Site"]="same-origin"
+wrk.headers["DNT"]="1"
+wrk.headers["Connection"]="keep-alive"

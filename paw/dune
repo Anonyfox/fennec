@@ -19,6 +19,7 @@
   base64
   zlib
   bigstringaf
+  cstruct
   tls
   tls-eio
   x509
