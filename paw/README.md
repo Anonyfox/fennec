@@ -51,7 +51,17 @@ The whole public API is the single `Paw` module (`paw.mli` is its table of conte
 
 Each is a `make` returning a `Paw.t`, so it drops into any `seq` or `Endpoint`:
 
-`Session` · `Csrf` · `Cors` · `Static` · `Logger` · `Rate_limit` · `Basic_auth` · `Force_https` · `Security_headers` · `Request_id` · `Metrics` · `Method_override`
+- **Sessions & security** — `Session` · `Csrf` · `Cors` · `Security_headers` · `Force_https`
+- **Authentication** — `Basic_auth` · `Bearer_auth`
+- **Traffic shaping & limits** — `Rate_limit` · `Body_limit`
+- **Observability** — `Logger` · `Request_id` · `Metrics`
+- **Request hygiene** — `Method_override` · `Normalize_path` (trailing-slash 308) · `Trusted_proxy` (real client IP/scheme from `X-Forwarded-*`) · `Accepts` (406 content negotiation)
+- **Response shaping & assets** — `Static` · `Cache_control` · `Set_header` · `Status_pages` (bodies for empty error responses)
+- **Operations** — `Health` (a liveness probe)
+
+### Built-in behaviours (no wiring)
+
+The server already does the HTTP-correct thing on a miss: a path that exists for other methods returns **`405` with an `Allow` header** (not a blanket 404), and an **`OPTIONS`** probe with no explicit handler is auto-answered **`204` + `Allow`**. An explicit `OPTIONS` route or a `Cors` paw still wins.
 
 ## Batteries that usually need wiring
 

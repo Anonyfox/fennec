@@ -202,29 +202,50 @@ module Endpoint = Endpoint
 module Host_router = Host_router
 module Host_pattern = Host_pattern
 
-(** {1 Middleware battery} *)
+(** {1 Middleware battery}
+
+    Prebuilt paws — the lego blocks. Each [make]s a {!t}; pipe the ones you want onto an endpoint. *)
+
+(** {2 Sessions & security} *)
 module Session = Session
 
 module Csrf = Csrf
 module Cors = Cors
-module Static = Static
-module Logger = Logger
-module Rate_limit = Rate_limit
-module Basic_auth = Basic_auth
-module Bearer_auth = Bearer_auth
-module Force_https = Force_https
 module Security_headers = Security_headers
+module Force_https = Force_https
+
+(** {2 Authentication} *)
+module Basic_auth = Basic_auth
+
+module Bearer_auth = Bearer_auth
+
+(** {2 Traffic shaping & limits} *)
+module Rate_limit = Rate_limit
+
+module Body_limit = Body_limit
+
+(** {2 Observability} *)
+module Logger = Logger
+
 module Request_id = Request_id
 module Metrics = Metrics
+
+(** {2 Request hygiene} — normalize the request before it reaches a route *)
 module Method_override = Method_override
-module Health = Health
-module Body_limit = Body_limit
+
+module Normalize_path = Normalize_path
+module Trusted_proxy = Trusted_proxy
+module Accepts = Accepts
+
+(** {2 Response shaping & assets} *)
+module Static = Static
+
 module Cache_control = Cache_control
 module Set_header = Set_header
 module Status_pages = Status_pages
-module Accepts = Accepts
-module Normalize_path = Normalize_path
-module Trusted_proxy = Trusted_proxy
+
+(** {2 Operations} *)
+module Health = Health
 
 (** {1 WebSockets} *)
 module Ws = Ws
