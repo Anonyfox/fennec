@@ -1,5 +1,5 @@
-(* The shape language. ONE GADT type representation ([ty]) inside; plain combinators outside.
-   Everything else derives from [ty]: the codec (decode collects path-tagged errors; encode is
+(* The shape language. ONE GADT type representation ([shape]) inside; plain combinators outside.
+   Everything else derives from [shape]: the codec (decode collects path-tagged errors; encode is
    total), encode-side validation ([validate] / [encode_checked] — an invalid value cannot pass a
    write boundary), normalizers (run BEFORE checks, on both directions), derived pretty-printing
    ([pp]/[show], nested), and the neutral [view] reflection downstream renderers consume
@@ -73,40 +73,40 @@ let params_of_hint = function
   | H_min f | H_max f | H_multiple_of f -> [ ("n", fmt_num f) ]
   | H_none | H_unique_items -> []
 
-type _ ty =
-  | TString : string ty
-  | TInt : int ty
-  | TFloat : { allow_nonfinite : bool } -> float ty
-  | TBool : bool ty
-  | TDate : int64 ty (* Bson.Date, ms since epoch *)
-  | TId : string ty (* "_id" values: String or ObjectId, surfaced as string *)
-  | TBson : Bson.t ty (* the dynamic escape hatch *)
-  | TUnit : unit ty
-  | TList : 'a ty -> 'a list ty
-  | TOption : 'a ty -> 'a option ty
-  | TMap : 'a ty -> (string * 'a) list ty (* dynamic-key subdocuments *)
-  | TCheck : ('a -> bool) * string * hint * 'a ty -> 'a ty
-  | TNorm : ('a -> 'a) * 'a ty -> 'a ty
-  | TConv : ('b -> 'a) * ('a -> ('b, string) result) * 'a ty -> 'b ty
-  | TObj : 'r obj -> 'r ty
-  | TVariant : { tag : string; cases : 'r case list } -> 'r ty
-  | TLazy : 'a ty Lazy.t -> 'a ty (* a self-referential codec ({!fix}) — forced on demand, finite values terminate *)
-  | TCoerce : 'a ty -> 'a ty (* {!from_string}: decode also accepts a [String] and parses it to the inner leaf *)
+type _ shape =
+  | TString : string shape
+  | TInt : int shape
+  | TFloat : { allow_nonfinite : bool } -> float shape
+  | TBool : bool shape
+  | TDate : int64 shape (* Bson.Date, ms since epoch *)
+  | TId : string shape (* "_id" values: String or ObjectId, surfaced as string *)
+  | TBson : Bson.t shape (* the dynamic escape hatch *)
+  | TUnit : unit shape
+  | TList : 'a shape -> 'a list shape
+  | TOption : 'a shape -> 'a option shape
+  | TMap : 'a shape -> (string * 'a) list shape (* dynamic-key subdocuments *)
+  | TCheck : ('a -> bool) * string * hint * 'a shape -> 'a shape
+  | TNorm : ('a -> 'a) * 'a shape -> 'a shape
+  | TConv : ('b -> 'a) * ('a -> ('b, string) result) * 'a shape -> 'b shape
+  | TObj : 'r record_shape -> 'r shape
+  | TVariant : { tag : string; cases : 'r case list } -> 'r shape
+  | TLazy : 'a shape Lazy.t -> 'a shape (* a self-referential codec ({!fix}) — forced on demand, finite values terminate *)
+  | TCoerce : 'a shape -> 'a shape (* {!from_string}: decode also accepts a [String] and parses it to the inner leaf *)
 
-and 'r obj = {
-  o_dec : (string * Bson.t) list -> ('r, error list) result;
-  o_enc : 'r -> (string * Bson.t) list;
-  o_fields : 'r packed_field list;
-  o_checks : (('r -> bool) * string) list; (* record-level (cross-field) checks *)
+and 'r record_shape = {
+  decode_doc : (string * Bson.t) list -> ('r, error list) result;
+  encode_doc : 'r -> (string * Bson.t) list;
+  members : 'r bound_field list;
+  invariants : (('r -> bool) * string) list; (* record-level (cross-field) checks *)
 }
 
-and 'r packed_field =
-  | PF : { f_name : string; f_ty : 'a ty; f_get : 'r -> 'a; f_required : bool } -> 'r packed_field
+and 'r bound_field =
+  | Bound_field : { name : string; shape : 'a shape; get : 'r -> 'a; required : bool } -> 'r bound_field
 
 and 'r case =
-  | Case : { c_name : string; c_obj : 'a obj; c_inj : 'a -> 'r; c_proj : 'r -> 'a option } -> 'r case
+  | Case : { name : string; body : 'a record_shape; inject : 'a -> 'r; project : 'r -> 'a option } -> 'r case
 
-(* ---- decode / encode / checks, derived from ty -------------------------------- *)
+(* ---- decode / encode / checks, derived from shape -------------------------------- *)
 
 let looks_like_oid s =
   String.length s = 24
@@ -135,19 +135,19 @@ let expected what got =
 (* coerce a submitted String to the inner leaf's natural Bson, so {!from_string} can re-decode it —
    numbers / bools / dates that arrived stringly (forms, query strings, lenient JSON). Non-leaf or
    unparseable values pass the String through, where the inner decoder rejects it with a typed error. *)
-let rec coerce_str : type a. a ty -> string -> Bson.t =
- fun ty s ->
-  match ty with
+let rec coerce_string : type a. a shape -> string -> Bson.t =
+ fun shape s ->
+  match shape with
   | TInt -> ( match int_of_string_opt (String.trim s) with Some i -> Bson.Int i | None -> Bson.String s)
   | TFloat _ -> ( match float_of_string_opt (String.trim s) with Some f -> Bson.Float f | None -> Bson.String s)
   | TBool -> Bson.Bool (match String.lowercase_ascii (String.trim s) with "true" | "1" | "on" | "yes" -> true | _ -> false)
   | TDate -> ( match Int64.of_string_opt (String.trim s) with Some ms -> Bson.Date ms | None -> Bson.String s)
-  | TCheck (_, _, _, inner) | TNorm (_, inner) | TCoerce inner -> coerce_str inner s
+  | TCheck (_, _, _, inner) | TNorm (_, inner) | TCoerce inner -> coerce_string inner s
   | _ -> Bson.String s
 
-let rec dec_ty : type a. a ty -> Bson.t -> (a, error list) result =
- fun ty b ->
-  match ty with
+let rec read : type a. a shape -> Bson.t -> (a, error list) result =
+ fun shape b ->
+  match shape with
   | TString -> ( match b with Bson.String s -> Ok s | v -> expected "string" v)
   | TInt -> (
       match b with
@@ -180,7 +180,7 @@ let rec dec_ty : type a. a ty -> Bson.t -> (a, error list) result =
           let oks, errs =
             List.fold_left
               (fun (oks, errs) (i, x) ->
-                match dec_ty el x with
+                match read el x with
                 | Ok v -> (v :: oks, errs)
                 | Error es -> (oks, List.rev_append (List.map (at (string_of_int i)) es) errs))
               ([], [])
@@ -189,48 +189,48 @@ let rec dec_ty : type a. a ty -> Bson.t -> (a, error list) result =
           if errs = [] then Ok (List.rev oks) else Error (List.rev errs)
       | v -> expected "array" v)
   | TOption el -> (
-      match b with Bson.Null -> Ok None | v -> ( match dec_ty el v with Ok x -> Ok (Some x) | Error e -> Error e))
+      match b with Bson.Null -> Ok None | v -> ( match read el v with Ok x -> Ok (Some x) | Error e -> Error e))
   | TMap el -> (
       match b with
       | Bson.Document kvs ->
           let oks, errs =
             List.fold_left
               (fun (oks, errs) (k, v) ->
-                match dec_ty el v with
+                match read el v with
                 | Ok x -> ((k, x) :: oks, errs)
                 | Error es -> (oks, List.rev_append (List.map (at k) es) errs))
               ([], []) kvs
           in
           if errs = [] then Ok (List.rev oks) else Error (List.rev errs)
       | v -> expected "document" v)
-  | TCheck (_, _, _, inner) -> dec_ty inner b (* RAW phase: shape only; refinements run in check_ty *)
-  | TNorm (f, inner) -> ( match dec_ty inner b with Ok v -> Ok (f v) | Error e -> Error e)
+  | TCheck (_, _, _, inner) -> read inner b (* RAW phase: shape only; refinements run in run_checks *)
+  | TNorm (f, inner) -> ( match read inner b with Ok v -> Ok (f v) | Error e -> Error e)
   | TConv (_inj, proj, inner) -> (
-      match dec_ty inner b with
+      match read inner b with
       | Ok v -> ( match proj v with Ok x -> Ok x | Error m -> fail m)
       | Error e -> Error e)
   | TObj o -> (
-      (* RAW phase: build the record (missing/type errors); record-level checks run in check_ty,
+      (* RAW phase: build the record (missing/type errors); record-level checks run in run_checks,
          so a field's refinement failure can't mask a cross-field violation — all collect *)
-      match b with Bson.Document kvs -> o.o_dec kvs | v -> expected "document" v)
+      match b with Bson.Document kvs -> o.decode_doc kvs | v -> expected "document" v)
   | TVariant { tag; cases } -> (
       match b with
       | Bson.Document kvs -> (
           match List.assoc_opt tag kvs with
           | Some (Bson.String k) -> (
-              match List.find_opt (fun (Case c) -> c.c_name = k) cases with
+              match List.find_opt (fun (Case c) -> c.name = k) cases with
               | Some (Case c) -> (
-                  match c.c_obj.o_dec kvs with Ok a -> Ok (c.c_inj a) | Error e -> Error (List.map (at k) e))
+                  match c.body.decode_doc kvs with Ok a -> Ok (c.inject a) | Error e -> Error (List.map (at k) e))
               | None -> fail (Printf.sprintf "unknown %s %S" tag k))
           | _ -> fail (Printf.sprintf "missing tag field %s" tag))
       | v -> expected "document" v)
-  | TLazy l -> dec_ty (Lazy.force l) b
-  | TCoerce inner -> ( match b with Bson.String s -> dec_ty inner (coerce_str inner s) | other -> dec_ty inner other)
+  | TLazy l -> read (Lazy.force l) b
+  | TCoerce inner -> ( match b with Bson.String s -> read inner (coerce_string inner s) | other -> read inner other)
 
-(* encode is TOTAL (a typed value always serializes); refinement checks belong to [check_ty] *)
-let rec enc_ty : type a. a ty -> a -> Bson.t =
- fun ty v ->
-  match ty with
+(* encode is TOTAL (a typed value always serializes); refinement checks belong to [run_checks] *)
+let rec write : type a. a shape -> a -> Bson.t =
+ fun shape v ->
+  match shape with
   | TString -> Bson.String v
   | TInt -> Bson.Int v
   | TFloat _ -> Bson.Float v
@@ -239,78 +239,78 @@ let rec enc_ty : type a. a ty -> a -> Bson.t =
   | TId -> if looks_like_oid v then Bson.Object_id v else Bson.String v
   | TBson -> v
   | TUnit -> Bson.Null
-  | TList el -> Bson.Array (List.map (enc_ty el) v)
-  | TOption el -> ( match v with Some x -> enc_ty el x | None -> Bson.Null)
-  | TMap el -> Bson.Document (List.map (fun (k, x) -> (k, enc_ty el x)) v)
-  | TCheck (_, _, _, inner) -> enc_ty inner v
-  | TNorm (f, inner) -> enc_ty inner (f v)
-  | TConv (inj, _, inner) -> enc_ty inner (inj v)
-  | TObj o -> Bson.Document (o.o_enc v)
+  | TList el -> Bson.Array (List.map (write el) v)
+  | TOption el -> ( match v with Some x -> write el x | None -> Bson.Null)
+  | TMap el -> Bson.Document (List.map (fun (k, x) -> (k, write el x)) v)
+  | TCheck (_, _, _, inner) -> write inner v
+  | TNorm (f, inner) -> write inner (f v)
+  | TConv (inj, _, inner) -> write inner (inj v)
+  | TObj o -> Bson.Document (o.encode_doc v)
   | TVariant { tag; cases } -> (
       let rec go = function
         | [] -> invalid_arg "Sift: variant value matches no declared case"
         | Case c :: rest -> (
-            match c.c_proj v with
-            | Some a -> Bson.Document ((tag, Bson.String c.c_name) :: c.c_obj.o_enc a)
+            match c.project v with
+            | Some a -> Bson.Document ((tag, Bson.String c.name) :: c.body.encode_doc a)
             | None -> go rest)
       in
       go cases)
-  | TLazy l -> enc_ty (Lazy.force l) v
-  | TCoerce inner -> enc_ty inner v
+  | TLazy l -> write (Lazy.force l) v
+  | TCoerce inner -> write inner v
 
 (* the inner normalizer chain applied to a value (normalizers must be idempotent) *)
-let rec norm_ty : type a. a ty -> a -> a =
- fun ty v ->
-  match ty with
-  | TNorm (f, inner) -> f (norm_ty inner v)
-  | TCheck (_, _, _, inner) -> norm_ty inner v
-  | TCoerce inner -> norm_ty inner v
-  | TLazy l -> norm_ty (Lazy.force l) v
+let rec normalize : type a. a shape -> a -> a =
+ fun shape v ->
+  match shape with
+  | TNorm (f, inner) -> f (normalize inner v)
+  | TCheck (_, _, _, inner) -> normalize inner v
+  | TCoerce inner -> normalize inner v
+  | TLazy l -> normalize (Lazy.force l) v
   | _ -> v
 
 (* run every check against an in-memory value (the encode-side gate: writes validate). ONE engine
    for both directions: [decode] = raw shape decode, then this. *)
-let rec check_ty : type a. a ty -> a -> error list =
- fun ty v ->
-  match ty with
+let rec run_checks : type a. a shape -> a -> error list =
+ fun shape v ->
+  match shape with
   | TString | TInt | TBool | TDate | TId | TBson | TUnit -> []
   | TFloat { allow_nonfinite } ->
       if (not allow_nonfinite) && not (Float.is_finite v) then [ mkerr ~code:"finite" "non-finite float" ] else []
-  | TList el -> List.concat (List.mapi (fun i x -> List.map (at (string_of_int i)) (check_ty el x)) v)
-  | TOption el -> ( match v with Some x -> check_ty el x | None -> [])
-  | TMap el -> List.concat (List.map (fun (k, x) -> List.map (at k) (check_ty el x)) v)
+  | TList el -> List.concat (List.mapi (fun i x -> List.map (at (string_of_int i)) (run_checks el x)) v)
+  | TOption el -> ( match v with Some x -> run_checks el x | None -> [])
+  | TMap el -> List.concat (List.map (fun (k, x) -> List.map (at k) (run_checks el x)) v)
   | TCheck (p, msg, hint, inner) ->
-      let inner_errs = check_ty inner v in
+      let inner_errs = run_checks inner v in
       (* the predicate sees the NORMALIZED value — decode/validate parity *)
-      if p (norm_ty inner v) then inner_errs
+      if p (normalize inner v) then inner_errs
       else mkerr ~code:(code_of_hint hint) ~params:(params_of_hint hint) msg :: inner_errs
-  | TNorm (f, inner) -> check_ty inner (f v)
-  | TConv (inj, _, inner) -> check_ty inner (inj v)
+  | TNorm (f, inner) -> run_checks inner (f v)
+  | TConv (inj, _, inner) -> run_checks inner (inj v)
   | TObj o ->
       let field_errs =
         List.concat
-          (List.map (fun (PF f) -> List.map (at f.f_name) (check_ty f.f_ty (f.f_get v))) o.o_fields)
+          (List.map (fun (Bound_field f) -> List.map (at f.name) (run_checks f.shape (f.get v))) o.members)
       in
-      let rec_errs = List.filter_map (fun (p, msg) -> if p v then None else Some (mkerr ~code:"check" msg)) o.o_checks in
+      let rec_errs = List.filter_map (fun (p, msg) -> if p v then None else Some (mkerr ~code:"check" msg)) o.invariants in
       field_errs @ rec_errs
   | TVariant { cases; _ } -> (
       let rec go = function
         | [] -> []
         | Case c :: rest -> (
-            match c.c_proj v with
+            match c.project v with
             | Some a ->
-                List.concat (List.map (fun (PF f) -> List.map (at f.f_name) (check_ty f.f_ty (f.f_get a))) c.c_obj.o_fields)
+                List.concat (List.map (fun (Bound_field f) -> List.map (at f.name) (run_checks f.shape (f.get a))) c.body.members)
             | None -> go rest)
       in
       go cases)
-  | TLazy l -> check_ty (Lazy.force l) v
-  | TCoerce inner -> check_ty inner v
+  | TLazy l -> run_checks (Lazy.force l) v
+  | TCoerce inner -> run_checks inner v
 
 (* ---- derived pretty-printing --------------------------------------------------- *)
 
-let rec pp_ty : type a. a ty -> Format.formatter -> a -> unit =
- fun ty fmt v ->
-  match ty with
+let rec pretty : type a. a shape -> Format.formatter -> a -> unit =
+ fun shape fmt v ->
+  match shape with
   | TString -> Format.fprintf fmt "%S" v
   | TInt -> Format.fprintf fmt "%d" v
   | TFloat _ -> Format.fprintf fmt "%g" v
@@ -321,60 +321,60 @@ let rec pp_ty : type a. a ty -> Format.formatter -> a -> unit =
   | TUnit -> Format.fprintf fmt "()"
   | TList el ->
       Format.fprintf fmt "@[<hv 1>[%a]@]"
-        (Format.pp_print_list ~pp_sep:(fun f () -> Format.fprintf f ";@ ") (pp_ty el))
+        (Format.pp_print_list ~pp_sep:(fun f () -> Format.fprintf f ";@ ") (pretty el))
         v
-  | TOption el -> ( match v with Some x -> pp_ty el fmt x | None -> Format.fprintf fmt "-")
+  | TOption el -> ( match v with Some x -> pretty el fmt x | None -> Format.fprintf fmt "-")
   | TMap el ->
       Format.fprintf fmt "@[<hv 2>{%a}@]"
         (Format.pp_print_list ~pp_sep:(fun f () -> Format.fprintf f ";@ ")
-           (fun f (k, x) -> Format.fprintf f "%s: %a" k (pp_ty el) x))
+           (fun f (k, x) -> Format.fprintf f "%s: %a" k (pretty el) x))
         v
-  | TCheck (_, _, _, inner) -> pp_ty inner fmt v
-  | TNorm (_, inner) -> pp_ty inner fmt v
-  | TConv (inj, _, inner) -> pp_ty inner fmt (inj v)
+  | TCheck (_, _, _, inner) -> pretty inner fmt v
+  | TNorm (_, inner) -> pretty inner fmt v
+  | TConv (inj, _, inner) -> pretty inner fmt (inj v)
   | TObj o ->
       Format.fprintf fmt "@[<hv 2>{ %a }@]"
         (Format.pp_print_list ~pp_sep:(fun f () -> Format.fprintf f ";@ ")
-           (fun f (PF p) -> Format.fprintf f "%s = %a" p.f_name (pp_ty p.f_ty) (p.f_get v)))
-        o.o_fields
+           (fun f (Bound_field p) -> Format.fprintf f "%s = %a" p.name (pretty p.shape) (p.get v)))
+        o.members
   | TVariant { cases; _ } -> (
       let rec go = function
         | [] -> Format.fprintf fmt "<?>"
         | Case c :: rest -> (
-            match c.c_proj v with
+            match c.project v with
             | Some a ->
-                Format.fprintf fmt "@[<hv 2>%s { %a }@]" c.c_name
+                Format.fprintf fmt "@[<hv 2>%s { %a }@]" c.name
                   (Format.pp_print_list ~pp_sep:(fun f () -> Format.fprintf f ";@ ")
-                     (fun f (PF p) -> Format.fprintf f "%s = %a" p.f_name (pp_ty p.f_ty) (p.f_get a)))
-                  c.c_obj.o_fields
+                     (fun f (Bound_field p) -> Format.fprintf f "%s = %a" p.name (pretty p.shape) (p.get a)))
+                  c.body.members
             | None -> go rest)
       in
       go cases)
-  | TLazy l -> pp_ty (Lazy.force l) fmt v
-  | TCoerce inner -> pp_ty inner fmt v
+  | TLazy l -> pretty (Lazy.force l) fmt v
+  | TCoerce inner -> pretty inner fmt v
 
 (* ---- the public codec value ----------------------------------------------------- *)
 
 (* [enc]/[dec] kept as plain record fields for back-compat ([dec]'s error is the rendered string);
-   [ty] is the representation everything else derives from. *)
-type 'a t = { ty : 'a ty; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string) result }
+   [shape] is the representation everything else derives from. *)
+type 'a t = { shape : 'a shape; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string) result }
 
 (* decode = RAW shape decode, then the check phase — so refinement violations COLLECT across
    stacked checks, sibling fields, and record-level rules instead of short-circuiting *)
-let dec_full ty b =
-  match dec_ty ty b with
+let decode_value shape b =
+  match read shape b with
   | Error es -> Error es
-  | Ok v -> ( match check_ty ty v with [] -> Ok v | es -> Error es)
+  | Ok v -> ( match run_checks shape v with [] -> Ok v | es -> Error es)
 
-let of_ty ty =
-  { ty;
-    enc = enc_ty ty;
-    dec = (fun b -> match dec_full ty b with Ok v -> Ok v | Error es -> Error (errors_to_string es)) }
+let of_shape shape =
+  { shape;
+    enc = write shape;
+    dec = (fun b -> match decode_value shape b with Ok v -> Ok v | Error es -> Error (errors_to_string es)) }
 
-let decode c b = dec_full c.ty b
-let validate c v = match check_ty c.ty v with [] -> Ok () | es -> Error es
-let encode_checked c v = match check_ty c.ty v with [] -> Ok (c.enc v) | es -> Error es
-let pp c fmt v = pp_ty c.ty fmt v
+let decode c b = decode_value c.shape b
+let validate c v = match run_checks c.shape v with [] -> Ok () | es -> Error es
+let encode_checked c v = match run_checks c.shape v with [] -> Ok (c.enc v) | es -> Error es
+let pp c fmt v = pretty c.shape fmt v
 let show c v = Format.asprintf "%a" (pp c) v
 
 (* ---- JSON I/O — one shape drives BOTH BSON and JSON, via the extended-JSON bridge --------------- *)
@@ -385,27 +385,27 @@ module Json = Fennec_mongo_json.Json
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 
 let to_json c v = Bson_json.to_json (c.enc v)
-let of_json c j = dec_full c.ty (Bson_json.of_json j)
+let of_json c j = decode_value c.shape (Bson_json.of_json j)
 let to_json_string c v = Bson_json.to_string (c.enc v)
 
 let of_json_string c s =
-  match Bson_json.of_string_opt s with Some b -> dec_full c.ty b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
+  match Bson_json.of_string_opt s with Some b -> decode_value c.shape b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
 
 (* ---- primitives ------------------------------------------------------------------ *)
 
-let string = of_ty TString
-let int = of_ty TInt
-let float = of_ty (TFloat { allow_nonfinite = false })
-let float_nonfinite = of_ty (TFloat { allow_nonfinite = true })
-let bool = of_ty TBool
-let date = of_ty TDate
-let id = of_ty TId
-let bson = of_ty TBson
-let unit = of_ty TUnit
-let list c = of_ty (TList c.ty)
-let option c = of_ty (TOption c.ty)
-let str_map c = of_ty (TMap c.ty)
-let conv proj inj c = of_ty (TConv (inj, proj, c.ty))
+let string = of_shape TString
+let int = of_shape TInt
+let float = of_shape (TFloat { allow_nonfinite = false })
+let float_nonfinite = of_shape (TFloat { allow_nonfinite = true })
+let bool = of_shape TBool
+let date = of_shape TDate
+let id = of_shape TId
+let bson = of_shape TBson
+let unit = of_shape TUnit
+let list c = of_shape (TList c.shape)
+let option c = of_shape (TOption c.shape)
+let str_map c = of_shape (TMap c.shape)
+let conv proj inj c = of_shape (TConv (inj, proj, c.shape))
 let make ~enc ~dec = conv dec enc bson
 
 (* a total, two-way transform — [conv] without the fallible decode side (the common case) *)
@@ -413,18 +413,18 @@ let map (to_ : 'a -> 'b) (of_ : 'b -> 'a) (c : 'a t) : 'b t = conv (fun a -> Ok 
 
 (* decode ALSO accepts a [String] and parses it to the leaf (numbers/bools/dates that arrive stringly —
    forms, query strings, lenient JSON); a native value still decodes directly. Encode is unchanged. *)
-let from_string c = of_ty (TCoerce c.ty)
+let from_string c = of_shape (TCoerce c.shape)
 
 (* a self-referential codec: [fix (fun self -> … self …)] — trees, comment threads, nested menus. The
    [self] passed in refers back to the whole codec; it's forced lazily, so finite values terminate. *)
 let fix (f : 'a t -> 'a t) : 'a t =
-  let rec lazy_ty = lazy ((f (of_ty (TLazy lazy_ty))).ty) in
-  of_ty (Lazy.force lazy_ty)
+  let rec lazy_ty = lazy ((f (of_shape (TLazy lazy_ty))).shape) in
+  of_shape (Lazy.force lazy_ty)
 
 (* ---- refinements + normalizers ----------------------------------------------------- *)
 
-let check ?(msg = "invalid value") p c = of_ty (TCheck (p, msg, H_none, c.ty))
-let refine p msg hint c = of_ty (TCheck (p, msg, hint, c.ty))
+let check ?(msg = "invalid value") p c = of_shape (TCheck (p, msg, H_none, c.shape))
+let refine p msg hint c = of_shape (TCheck (p, msg, hint, c.shape))
 
 let min_len n c = refine (fun s -> String.length s >= n) (Printf.sprintf "must be at least %d characters" n) (H_min_len n) c
 let max_len n c = refine (fun s -> String.length s <= n) (Printf.sprintf "must be at most %d characters" n) (H_max_len n) c
@@ -482,8 +482,8 @@ let pattern re c = refine (fun s -> pattern_matches re s) (Printf.sprintf "must 
 let email c = pattern "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z][a-zA-Z]+$" c
 let url c = pattern "^https?://[^ ]+$" c
 let slug c = pattern "^[a-z0-9-]+$" c
-let trim c = of_ty (TNorm (String.trim, c.ty))
-let lowercase c = of_ty (TNorm (String.lowercase_ascii, c.ty))
+let trim c = of_shape (TNorm (String.trim, c.shape))
+let lowercase c = of_shape (TNorm (String.lowercase_ascii, c.shape))
 
 let min_i n c = refine (fun v -> v >= n) (Printf.sprintf "must be ≥ %d" n) (H_min (float_of_int n)) c
 let max_i n c = refine (fun v -> v <= n) (Printf.sprintf "must be ≤ %d" n) (H_max (float_of_int n)) c
@@ -502,22 +502,22 @@ let unique_items c =
 
 (* ---- records: the builder (the deriver's target) ------------------------------------ *)
 
-type 'a field = { fld_name : string; fld_ty : 'a ty; fld_required : bool; fld_default : 'a option }
+type 'a field = { key : string; item : 'a shape; needed : bool; fallback : 'a option }
 
-let req name c = { fld_name = name; fld_ty = c.ty; fld_required = true; fld_default = None }
-let opt name c = { fld_name = name; fld_ty = (option c).ty; fld_required = false; fld_default = Some None }
-let opt_list name c = { fld_name = name; fld_ty = (list c).ty; fld_required = false; fld_default = Some [] }
-let dft name c v = { fld_name = name; fld_ty = c.ty; fld_required = false; fld_default = Some v }
+let req name c = { key = name; item = c.shape; needed = true; fallback = None }
+let opt name c = { key = name; item = (option c).shape; needed = false; fallback = Some None }
+let opt_list name c = { key = name; item = (list c).shape; needed = false; fallback = Some [] }
+let dft name c v = { key = name; item = c.shape; needed = false; fallback = Some v }
 
-let dec_field (f : 'a field) kvs : ('a, error list) result =
-  match List.assoc_opt f.fld_name kvs with
-  | Some v -> ( match dec_ty f.fld_ty v with Ok x -> Ok x | Error es -> Error (List.map (at f.fld_name) es))
+let decode_named (f : 'a field) kvs : ('a, error list) result =
+  match List.assoc_opt f.key kvs with
+  | Some v -> ( match read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
   | None -> (
-      match f.fld_default with
+      match f.fallback with
       | Some d -> Ok d
       (* path-tagged by field name (like the type-mismatch case above), so a missing required field
          is attributable to it — what per-field consumers (form feedback) need *)
-      | None -> Error [ mkerr ~code:"required" ~path:[ f.fld_name ] "is required" ])
+      | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
 
 (* a doc's keys indexed for O(1) field lookup, built ONCE per record decode — the record builder used
    to [List.assoc_opt] per field, i.e. O(fields × keys). First occurrence wins, matching the prior
@@ -527,47 +527,47 @@ let index_of (kvs : (string * Bson.t) list) : (string, Bson.t) Hashtbl.t =
   List.iter (fun (k, v) -> if not (Hashtbl.mem tbl k) then Hashtbl.replace tbl k v) kvs;
   tbl
 
-let dec_field_idx (f : 'a field) (idx : (string, Bson.t) Hashtbl.t) : ('a, error list) result =
-  match Hashtbl.find_opt idx f.fld_name with
-  | Some v -> ( match dec_ty f.fld_ty v with Ok x -> Ok x | Error es -> Error (List.map (at f.fld_name) es))
-  | None -> ( match f.fld_default with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.fld_name ] "is required" ])
+let decode_field (f : 'a field) (idx : (string, Bson.t) Hashtbl.t) : ('a, error list) result =
+  match Hashtbl.find_opt idx f.key with
+  | Some v -> ( match read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
+  | None -> ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
 
 (* [None]/default-empty encodes by omitting the key — Mongo-idiomatic absence *)
-let enc_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
-  match enc_ty f.fld_ty v with
-  | Bson.Null when not f.fld_required -> None
-  | Bson.Array [] when f.fld_default = Some v -> None
-  | b -> Some (f.fld_name, b)
+let encode_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
+  match write f.item v with
+  | Bson.Null when not f.needed -> None
+  | Bson.Array [] when f.fallback = Some v -> None
+  | b -> Some (f.key, b)
 
 type ('r, 'k) builder = {
-  b_dec : (string, Bson.t) Hashtbl.t -> ('k, error list) result;
-  b_enc : 'r -> (string * Bson.t) list;
-  b_fields : 'r packed_field list; (* reverse order *)
-  b_checks : (('r -> bool) * string) list;
+  acc_decode : (string, Bson.t) Hashtbl.t -> ('k, error list) result;
+  acc_encode : 'r -> (string * Bson.t) list;
+  acc_members : 'r bound_field list; (* reverse order *)
+  acc_invariants : (('r -> bool) * string) list;
 }
 
 let record (make : 'k) : ('r, 'k) builder =
-  { b_dec = (fun _ -> Ok make); b_enc = (fun _ -> []); b_fields = []; b_checks = [] }
+  { acc_decode = (fun _ -> Ok make); acc_encode = (fun _ -> []); acc_members = []; acc_invariants = [] }
 
 let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k) builder =
   {
-    b_dec =
+    acc_decode =
       (fun idx ->
-        match (b.b_dec idx, dec_field_idx f idx) with
+        match (b.acc_decode idx, decode_field f idx) with
         | Ok k, Ok a -> Ok (k a)
         | Error e1, Error e2 -> Error (e1 @ e2)
         | Error e, Ok _ | Ok _, Error e -> Error e);
-    b_enc = (fun r -> b.b_enc r @ (match enc_field f (get r) with Some kv -> [ kv ] | None -> []));
-    b_fields = PF { f_name = f.fld_name; f_ty = f.fld_ty; f_get = get; f_required = f.fld_required } :: b.b_fields;
-    b_checks = b.b_checks;
+    acc_encode = (fun r -> b.acc_encode r @ (match encode_field f (get r) with Some kv -> [ kv ] | None -> []));
+    acc_members = Bound_field { name = f.key; shape = f.item; get = get; required = f.needed } :: b.acc_members;
+    acc_invariants = b.acc_invariants;
   }
 
-let checking p msg b = { b with b_checks = (p, msg) :: b.b_checks }
+let checking p msg b = { b with acc_invariants = (p, msg) :: b.acc_invariants }
 
-let obj_of_builder (b : ('r, 'r) builder) : 'r obj =
-  { o_dec = (fun kvs -> b.b_dec (index_of kvs)); o_enc = b.b_enc; o_fields = List.rev b.b_fields; o_checks = List.rev b.b_checks }
+let record_of_builder (b : ('r, 'r) builder) : 'r record_shape =
+  { decode_doc = (fun kvs -> b.acc_decode (index_of kvs)); encode_doc = b.acc_encode; members = List.rev b.acc_members; invariants = List.rev b.acc_invariants }
 
-let seal (b : ('r, 'r) builder) : 'r t = of_ty (TObj (obj_of_builder b))
+let seal (b : ('r, 'r) builder) : 'r t = of_shape (TObj (record_of_builder b))
 let doc_id = req "_id" id
 
 (* navigate into an embedded record for a SELECTOR/MODIFIER path: the resulting field has the dotted
@@ -576,40 +576,40 @@ let doc_id = req "_id" id
    field's own codec is irrelevant here (we only borrow its wire name); the leaf decides the type.
    Required at the leaf (a dotted equality on an absent path simply matches nothing). *)
 let dot (outer : _ field) (inner : 'a field) : 'a field =
-  { fld_name = outer.fld_name ^ "." ^ inner.fld_name;
-    fld_ty = inner.fld_ty;
-    fld_required = inner.fld_required;
-    fld_default = inner.fld_default }
+  { key = outer.key ^ "." ^ inner.key;
+    item = inner.item;
+    needed = inner.needed;
+    fallback = inner.fallback }
 
 (* accessors for the collection vocabulary (Filter/M/Index build on field handles) *)
-let field_name f = f.fld_name
-let field_enc f v = enc_ty f.fld_ty v
+let field_name f = f.key
+let field_enc f v = write f.item v
 
 (* encode ONE element of a list field — total through any check/norm/conv wrapping: encode the
    singleton list and unwrap (the list encoder is structural) *)
 let field_elem_enc (f : 'a list field) (v : 'a) : Bson.t =
-  match enc_ty f.fld_ty [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Sift.field_elem_enc"
+  match write f.item [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Sift.field_elem_enc"
 
-let field_validate f v = match check_ty f.fld_ty v with [] -> Ok () | es -> Error (List.map (at f.fld_name) es)
+let field_validate f v = match run_checks f.item v with [] -> Ok () | es -> Error (List.map (at f.key) es)
 
 (* decode ONE field out of a document (raw decode + the field's checks) — the projection primitive:
    reading a projected slice without ever constructing the full record *)
 let field_get (f : 'a field) (doc : Bson.t) : ('a, error list) result =
   match doc with
   | Bson.Document kvs -> (
-      match dec_field f kvs with
+      match decode_named f kvs with
       | Error es -> Error es
-      | Ok v -> ( match check_ty f.fld_ty v with [] -> Ok v | es -> Error (List.map (at f.fld_name) es)))
-  | _ -> Error [ mkerr ~code:"type" ~path:[ f.fld_name ] "expected document" ]
+      | Ok v -> ( match run_checks f.item v with [] -> Ok v | es -> Error (List.map (at f.key) es)))
+  | _ -> Error [ mkerr ~code:"type" ~path:[ f.key ] "expected document" ]
 
 (* ---- variants (tagged unions over a discriminator field) ----------------------------- *)
 
 type 'r vcase = 'r case
 
 let case name (b : ('a, 'a) builder) ~(inj : 'a -> 'r) ~(proj : 'r -> 'a option) : 'r vcase =
-  Case { c_name = name; c_obj = obj_of_builder b; c_inj = inj; c_proj = proj }
+  Case { name = name; body = record_of_builder b; inject = inj; project = proj }
 
-let variant ~tag cases : 'r t = of_ty (TVariant { tag; cases })
+let variant ~tag cases : 'r t = of_shape (TVariant { tag; cases })
 
 (* ---- back-compat: the tuple-style objN over the builder ------------------------------- *)
 
@@ -651,7 +651,7 @@ type view =
   | V_obj of (string * bool (* required *) * view) list
   | V_variant of string * (string * (string * bool * view) list) list
 
-let rec view_of_ty : type a. a ty -> view = function
+let rec reflect : type a. a shape -> view = function
   | TString -> V_string
   | TInt -> V_int
   | TFloat _ -> V_float
@@ -660,28 +660,28 @@ let rec view_of_ty : type a. a ty -> view = function
   | TId -> V_id
   | TBson -> V_bson
   | TUnit -> V_unit
-  | TList el -> V_list (view_of_ty el)
-  | TOption el -> V_option (view_of_ty el)
-  | TMap el -> V_map (view_of_ty el)
-  | TCheck (_, _, h, inner) -> V_check (h, view_of_ty inner)
-  | TNorm (_, inner) -> view_of_ty inner
-  | TConv (_, _, inner) -> view_of_ty inner
-  | TObj o -> V_obj (List.map (fun (PF p) -> (p.f_name, p.f_required, view_of_ty p.f_ty)) o.o_fields)
+  | TList el -> V_list (reflect el)
+  | TOption el -> V_option (reflect el)
+  | TMap el -> V_map (reflect el)
+  | TCheck (_, _, h, inner) -> V_check (h, reflect inner)
+  | TNorm (_, inner) -> reflect inner
+  | TConv (_, _, inner) -> reflect inner
+  | TObj o -> V_obj (List.map (fun (Bound_field p) -> (p.name, p.required, reflect p.shape)) o.members)
   | TVariant { tag; cases } ->
       V_variant
         (tag,
          List.map
-           (fun (Case c) -> (c.c_name, List.map (fun (PF p) -> (p.f_name, p.f_required, view_of_ty p.f_ty)) c.c_obj.o_fields))
+           (fun (Case c) -> (c.name, List.map (fun (Bound_field p) -> (p.name, p.required, reflect p.shape)) c.body.members))
            cases)
-  | TCoerce inner -> view_of_ty inner (* transparent: a coerced leaf reflects as its inner type *)
+  | TCoerce inner -> reflect inner (* transparent: a coerced leaf reflects as its inner type *)
   | TLazy _ -> V_bson (* recursion: opaque to schema reflection (a finite view can't unfold a cycle) *)
 
-let view c = view_of_ty c.ty
+let view c = reflect c.shape
 
 (* the structural view of ONE field's shape — drives form input-type inference + HTML5 constraint
    attributes (a renderer reads the leaf kind + refinement hints without touching the GADT) *)
-let field_view (f : 'a field) : view = view_of_ty f.fld_ty
-let field_required (f : 'a field) : bool = f.fld_required
+let field_view (f : 'a field) : view = reflect f.item
+let field_required (f : 'a field) : bool = f.needed
 
 (* ---- positional parameter lists (DDP method params) — unchanged surface ----------------- *)
 

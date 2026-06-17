@@ -45,12 +45,12 @@ val errors_to_string : error list -> string
 (** {1 The codec value} *)
 
 (** The type representation — abstract here; reflect with {!view}. *)
-type 'a ty
+type 'a shape
 
 (** A codec: the representation plus the precompiled encode/decode. [dec]'s error is the RENDERED
     collected errors (back-compat); use {!decode} for the structured list. [enc] is total — a typed
     value always serializes; refinement checking on the write side is {!validate}/{!encode_checked}. *)
-type 'a t = { ty : 'a ty; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string) result }
+type 'a t = { shape : 'a shape; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string) result }
 
 (** Structured decode: every violation, each with its field path. *)
 val decode : 'a t -> Bson.t -> ('a, error list) result
