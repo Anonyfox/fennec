@@ -114,7 +114,8 @@ let unique_items c =
 
 (* ---- records: the builder (the deriver's target) ------------------------------------ *)
 
-type 'a field = { key : string; item : 'a shape; needed : bool; fallback : 'a option }
+(* [type 'a field] now lives in {!Shape} (so {!Shape.record_shape} can carry a format-agnostic
+   {!Shape.field_reader} that pulls fields of every type). The constructors stay here. *)
 
 let req name c = { key = name; item = c.shape; needed = true; fallback = None }
 let opt name c = { key = name; item = (option c).shape; needed = false; fallback = Some None }
@@ -152,7 +153,10 @@ let encode_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
   | b -> Some (f.key, b)
 
 type ('r, 'k) builder = {
-  acc_decode : (string, Bson.t) Hashtbl.t -> ('k, error list) result;
+  (* decode is now driven by a {!Shape.field_reader} — the SAME builder feeds the tree path (a kvs
+     index, via {!record_of_builder}) and the zero-copy buffer path (spans), the constructor threaded
+     once. The source (index / span-tape) lives in the reader's closure, not in this type. *)
+  acc_decode : field_reader -> ('k, error list) result;
   acc_encode : 'r -> (string * Bson.t) list;
   acc_members : 'r bound_field list; (* reverse order *)
   acc_invariants : (('r -> bool) * string) list;
@@ -164,8 +168,8 @@ let record (make : 'k) : ('r, 'k) builder =
 let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k) builder =
   {
     acc_decode =
-      (fun idx ->
-        match (b.acc_decode idx, decode_field f idx) with
+      (fun fr ->
+        match (b.acc_decode fr, fr.read_field f) with
         | Ok k, Ok a -> Ok (k a)
         | Error e1, Error e2 -> Error (e1 @ e2)
         | Error e, Ok _ | Ok _, Error e -> Error e);
@@ -176,8 +180,16 @@ let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k
 
 let checking p msg b = { b with acc_invariants = (p, msg) :: b.acc_invariants }
 
+(* the tree reader: a kvs index wrapped as a {!Shape.field_reader} — so the legacy [decode_doc] entry
+   reuses the exact same constructor threading as the buffer path (no logic duplication) *)
+let tree_reader (idx : (string, Bson.t) Hashtbl.t) : field_reader = { read_field = (fun f -> decode_field f idx) }
+
 let record_of_builder (b : ('r, 'r) builder) : 'r record_shape =
-  { decode_doc = (fun kvs -> b.acc_decode (index_of kvs)); encode_doc = b.acc_encode; members = List.rev b.acc_members; invariants = List.rev b.acc_invariants }
+  { decode_doc = (fun kvs -> b.acc_decode (tree_reader (index_of kvs)));
+    decode_src = b.acc_decode;
+    encode_doc = b.acc_encode;
+    members = List.rev b.acc_members;
+    invariants = List.rev b.acc_invariants }
 
 let seal (b : ('r, 'r) builder) : 'r t = of_shape (TObj (record_of_builder b))
 let doc_id = req "_id" id

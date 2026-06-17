@@ -233,4 +233,141 @@ let%test "json decode validates with the same path-collected errors as BSON deco
   err (Sift.of_json_string json_c {|{"id":"x","n":0}|}) (* n=0 fails min_i 1 *)
   && (match Sift.of_json_string json_c "not json at all" with Error [ e ] -> e.Sift.code = "json" | _ -> false)
 
+(* ── SIFT-K2: the zero-copy buffer decode [decode_bytes] must match the tree decode of the SAME wire
+   bytes — value-for-value AND error-for-error (paths/codes/params), schema-directed + single-pass.
+   The oracle decodes one identical byte buffer through BOTH paths and compares: agreement with the
+   established tree path IS the correctness claim. ── *)
+
+module W = Mongo_wire.Bson_wire
+
+let buf_of_bson (b : B.t) : Bigstringaf.t =
+  let s = W.encode b in
+  Bigstringaf.of_string ~off:0 ~len:(String.length s) s
+
+let same (c : 'a Sift.t) (b : B.t) : bool =
+  let s = W.encode b in
+  let buf = Bigstringaf.of_string ~off:0 ~len:(String.length s) s in
+  Sift.decode_bytes c buf = Sift.decode c (W.decode s)
+
+(* a 6-scalar record exercising every leaf kind (string/int/float/bool/date/id) *)
+let bag_c =
+  Sift.(
+    seal
+      (record (fun s n f b d i -> (s, n, f, b, d, i))
+      |> field (req "s" string) (fun (s, _, _, _, _, _) -> s)
+      |> field (req "n" int) (fun (_, n, _, _, _, _) -> n)
+      |> field (req "f" float) (fun (_, _, f, _, _, _) -> f)
+      |> field (req "b" bool) (fun (_, _, _, b, _, _) -> b)
+      |> field (req "d" date) (fun (_, _, _, _, d, _) -> d)
+      |> field (req "i" id) (fun (_, _, _, _, _, i) -> i)))
+
+let%test "k2: scalar bag round-trips, and matches the tree path byte-for-byte" =
+  same bag_c (B.doc [ ("s", B.str "hi"); ("n", B.int 42); ("f", B.Float 3.5); ("b", B.bool true); ("d", B.date 1700000000000L); ("i", B.oid "507f1f77bcf86cd799439011") ])
+
+let%test "k2: decode_bytes yields the RIGHT value directly (oracle is not vacuous)" =
+  match
+    Sift.decode_bytes bag_c
+      (buf_of_bson (B.doc [ ("s", B.str "hi"); ("n", B.Float 3.0); ("f", B.int 2); ("b", B.bool true); ("d", B.int 10); ("i", B.str "id") ]))
+  with
+  | Ok ("hi", 3, 2.0, true, 10L, "id") -> true
+  | _ -> false
+
+let%test "k2: numeric coercions agree (int<-integral double, date<-int/double, float<-int, id<-string)" =
+  same bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.0); ("f", B.int 5); ("b", B.bool false); ("d", B.int 1234); ("i", B.str "abc") ])
+  && same bag_c (B.doc [ ("s", B.str "x"); ("n", B.int 7); ("f", B.Float 5.5); ("b", B.bool false); ("d", B.Float 2.0); ("i", B.oid "507f1f77bcf86cd799439011") ])
+
+let%test "k2: type mismatches + missing-required COLLECT identically (same paths/codes/order)" =
+  same bag_c (B.doc [ ("s", B.int 1); ("n", B.str "no"); ("f", B.bool true); ("b", B.int 0); ("d", B.str "x"); ("i", B.int 9) ])
+  && same bag_c (B.doc [ ("s", B.str "x") ])
+  && same bag_c (B.doc [])
+
+let%test "k2: non-integral double, and int64, for an int field both error like the tree path" =
+  same bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.5); ("f", B.int 1); ("b", B.bool true); ("d", B.int 0); ("i", B.str "z") ])
+  && same bag_c (B.doc [ ("s", B.str "x"); ("n", B.Int64 5L); ("f", B.int 1); ("b", B.bool true); ("d", B.int 0); ("i", B.str "z") ])
+
+(* field ORDER independence + skipping UNWANTED fields of every sizing class (doc/array/binary/oid/
+   int64/date) — value_size must step over each correctly to reach the wanted ones *)
+let%test "k2: shuffled field order + ignored extras of every type decode identically" =
+  same bag_c
+    (B.doc
+       [ ("extra_i64", B.Int64 99L); ("i", B.str "zz"); ("extra_doc", B.doc [ ("q", B.int 1); ("r", B.str "y") ]);
+         ("d", B.date 5L); ("extra_arr", B.array [ B.int 1; B.str "two"; B.bool false ]); ("b", B.bool true);
+         ("extra_bin", B.Binary { subtype = "00"; base64 = "aGVsbG8=" }); ("f", B.Float 1.5);
+         ("extra_oid", B.oid "507f1f77bcf86cd799439011"); ("n", B.int 3); ("s", B.str "ok") ])
+
+(* options: present / absent / null *)
+let opt_c = Sift.(seal (record (fun a b -> (a, b)) |> field (opt "a" string) fst |> field (opt_list "b" int) snd))
+
+let%test "k2: optional fields — present, absent, explicit null — agree" =
+  same opt_c (B.doc [ ("a", B.str "x"); ("b", B.array [ B.int 1; B.int 2 ]) ])
+  && same opt_c (B.doc [])
+  && same opt_c (B.doc [ ("a", B.Null); ("b", B.Null) ])
+
+(* lists with per-element errors carrying the index path *)
+let list_c = Sift.(seal (record (fun xs -> xs) |> field (req "xs" (list (non_empty string))) (fun xs -> xs)))
+
+let%test "k2: list element errors carry the same index path" =
+  same list_c (B.doc [ ("xs", B.array [ B.str "a"; B.str ""; B.str "c"; B.int 7 ]) ])
+  && same list_c (B.doc [ ("xs", B.array []) ])
+  && same list_c (B.doc [ ("xs", B.str "not an array") ])
+
+(* string-keyed maps *)
+let map_c = Sift.(seal (record (fun m -> m) |> field (req "m" (str_map int)) (fun m -> m)))
+
+let%test "k2: maps decode (keys + per-key error paths) identically" =
+  same map_c (B.doc [ ("m", B.doc [ ("x", B.int 1); ("y", B.int 2) ]) ])
+  && same map_c (B.doc [ ("m", B.doc [ ("x", B.int 1); ("y", B.str "no") ]) ])
+
+(* nested records: refinement error paths nest (author.email) *)
+let nested_c =
+  let author =
+    Sift.(seal (record (fun n e -> (n, e)) |> field (req "name" (non_empty string)) fst |> field (req "email" (email string)) snd))
+  in
+  Sift.(seal (record (fun t a -> (t, a)) |> field (req "title" (max_len 5 string)) fst |> field (req "author" author) snd))
+
+let%test "k2: nested record + nested refinement paths agree" =
+  same nested_c (B.doc [ ("title", B.str "ok"); ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "ada@x.io") ]) ])
+  && same nested_c (B.doc [ ("title", B.str "toolong"); ("author", B.doc [ ("name", B.str ""); ("email", B.str "nope") ]) ])
+  && same nested_c (B.doc [ ("title", B.str "ok"); ("author", B.int 7) ])
+
+(* variants: good tag, unknown tag, missing/non-string tag, tag not first *)
+type figure = Circle of float | Rect of (float * float)
+
+let figure_c =
+  Sift.(
+    variant ~tag:"kind"
+      [ case "circle" (record (fun r -> r) |> field (req "r" float) (fun r -> r)) ~inj:(fun r -> Circle r) ~proj:(function Circle r -> Some r | _ -> None);
+        case "rect" (record (fun w h -> (w, h)) |> field (req "w" float) fst |> field (req "h" float) snd) ~inj:(fun (w, h) -> Rect (w, h)) ~proj:(function Rect (w, h) -> Some (w, h) | _ -> None) ])
+
+let%test "k2: variants — dispatch, unknown tag, missing tag, body errors, tag-not-first — all agree" =
+  same figure_c (B.doc [ ("kind", B.str "circle"); ("r", B.Float 2.0) ])
+  && same figure_c (B.doc [ ("kind", B.str "rect"); ("w", B.Float 3.0); ("h", B.int 4) ])
+  && same figure_c (B.doc [ ("kind", B.str "triangle"); ("r", B.Float 1.0) ])
+  && same figure_c (B.doc [ ("r", B.Float 1.0) ])
+  && same figure_c (B.doc [ ("kind", B.int 1) ])
+  && same figure_c (B.doc [ ("kind", B.str "rect"); ("w", B.str "no") ])
+  && same figure_c (B.doc [ ("r", B.Float 2.0); ("kind", B.str "circle") ])
+
+(* from_string (TCoerce): native value OR stringly value through a field *)
+let coerce_c = Sift.(seal (record (fun n -> n) |> field (req "n" (from_string (min_i 1 int))) (fun n -> n)))
+
+let%test "k2: from_string field — native, stringly, and the inner check all agree" =
+  same coerce_c (B.doc [ ("n", B.int 5) ])
+  && same coerce_c (B.doc [ ("n", B.str "5") ])
+  && same coerce_c (B.doc [ ("n", B.str "0") ])
+  && same coerce_c (B.doc [ ("n", B.str "abc") ])
+
+(* TBson escape hatch: a rich nested value round-trips through materialize *)
+let bson_c = Sift.(seal (record (fun v -> v) |> field (req "v" bson) (fun v -> v)))
+
+let%test "k2: TBson field materializes a rich nested value identically" =
+  same bson_c (B.doc [ ("v", B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("o", B.oid "507f1f77bcf86cd799439011"); ("d", B.date 99L); ("big", B.Int64 9000000000L) ]) ])
+
+(* cross-field invariant runs through decode_bytes' shared check phase *)
+let range_c =
+  Sift.(seal (record (fun lo hi -> (lo, hi)) |> field (req "lo" int) fst |> field (req "hi" int) snd |> checking (fun (lo, hi) -> lo <= hi) "lo must be <= hi"))
+
+let%test "k2: cross-field invariant collects identically via decode_bytes" =
+  same range_c (B.doc [ ("lo", B.int 1); ("hi", B.int 9) ]) && same range_c (B.doc [ ("lo", B.int 9); ("hi", B.int 3) ])
+
 let () = exit (Fennec_hunt_unit.run ())

@@ -55,6 +55,14 @@ type 'a t = { shape : 'a shape; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string)
 (** Structured decode: every violation, each with its field path. *)
 val decode : 'a t -> Bson.t -> ('a, error list) result
 
+(** Decode a top-level BSON document {e buffer} into the value, schema-directed and single-pass,
+    WITHOUT building a {!Bson.t} tree — scans each document level into a flat span index and reads
+    only the wanted fields straight from the bytes (unwanted fields are skipped by their length
+    prefix; keys match in place; strings copy only when an owned result is demanded). Returns the
+    SAME value and SAME path-tagged errors as {!decode}; a malformed buffer is a structured error,
+    never an exception. The fast path for decoding stored/wire documents. *)
+val decode_bytes : 'a t -> Bigstringaf.t -> ('a, error list) result
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result

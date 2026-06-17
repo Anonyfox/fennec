@@ -94,11 +94,27 @@ type _ shape =
   | TCoerce : 'a shape -> 'a shape (* {!from_string}: decode also accepts a [String] and parses it to the inner leaf *)
 
 and 'r record_shape = {
+  (* the BSON-tree decode (a kvs list) — the original path, kept verbatim so the engine/facade stay
+     green. It is now a thin wrapper that drives [decode_src] with a kvs-backed reader. *)
   decode_doc : (string * Bson.t) list -> ('r, error list) result;
+  (* the FORMAT-AGNOSTIC decode: pull each field through a {!field_reader}, threading the record's
+     constructor. The same builder serves the tree path (a kvs index) AND the zero-copy buffer path
+     (spans scanned straight from bytes) — the serde "Deserializer drives the visitor" inversion. *)
+  decode_src : field_reader -> ('r, error list) result;
   encode_doc : 'r -> (string * Bson.t) list;
   members : 'r bound_field list;
   invariants : (('r -> bool) * string) list; (* record-level (cross-field) checks *)
 }
+
+(* one field of a record: its wire [key], the leaf [item] shape, whether it is [needed] (required),
+   and the [fallback] used when absent (the [None]/[[]]/default that makes a field optional) *)
+and 'a field = { key : string; item : 'a shape; needed : bool; fallback : 'a option }
+
+(* a pull source of a document's fields: given a [field] (key + shape), produce its decoded value (or
+   collected errors). Rank-2 — ONE reader decodes fields of every type. The tree path captures a kvs
+   index in the closure; the buffer path captures the scanned span-tape. This is what lets a record's
+   constructor be threaded once and fed from ANY format. *)
+and field_reader = { read_field : 'a. 'a field -> ('a, error list) result }
 
 and 'r bound_field =
   | Bound_field : { name : string; shape : 'a shape; get : 'r -> 'a; required : bool } -> 'r bound_field

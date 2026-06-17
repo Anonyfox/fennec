@@ -7,6 +7,17 @@ include Shape
 include Codec
 include Combinators
 
+(* ---- zero-copy decode: straight from a BSON document buffer (SIFT-K2) ------------------- *)
+
+(* Decode a top-level BSON document buffer into the codec's value WITHOUT building a {!Bson.t} tree:
+   a single linear pass per document level scans fields into a flat span-tape, and the shape pulls
+   exactly the fields it wants, reading each value's bytes straight into the OCaml value. Unwanted
+   fields are skipped by their length prefix; keys are matched in place; strings copy only when an
+   owned result is demanded. Returns the SAME value and SAME collected errors as {!decode} (the raw
+   read mirrors the engine; the refinement phase is the shared one). For the storage/wire fast path —
+   {!decode} (over an already-parsed {!Bson.t}) stays the tree entry. *)
+let decode_bytes (c : 'a t) (buf : Bigstringaf.t) : ('a, error list) result = Bson_reader.decode_value_bytes c.shape buf
+
 (* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
 
 type view =

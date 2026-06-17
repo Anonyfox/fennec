@@ -18,6 +18,8 @@ type t = { buf : buffer; mutable pos : int; limit : int }
 let make ?(pos = 0) ?limit (buf : buffer) : t = { buf; pos; limit = (match limit with Some l -> l | None -> Bigstringaf.length buf) }
 
 let pos (c : t) : int = c.pos
+let limit (c : t) : int = c.limit
+let buffer (c : t) : buffer = c.buf
 let remaining (c : t) : int = c.limit - c.pos
 let at_end (c : t) : bool = c.pos >= c.limit
 
@@ -33,6 +35,15 @@ let need (c : t) (n : int) : unit = if c.pos + n > c.limit then raise (Truncated
 (* little-endian scalar reads (BSON's wire encoding); each advances [pos] and is bounds-checked *)
 let uint8 (c : t) : int = need c 1; let b = Char.code (Bigstringaf.get c.buf c.pos) in c.pos <- c.pos + 1; b
 let int32 (c : t) : int = need c 4; let v = Int32.to_int (Bigstringaf.get_int32_le c.buf c.pos) in c.pos <- c.pos + 4; v
+
+(* an UNSIGNED little-endian int32 (BSON timestamps store two u32s) — read jsoo-safely via
+   [Int32.unsigned_to_int] (no 0xFFFFFFFF literal, which overflows a 32-bit jsoo int): native gets the
+   true unsigned value; a 32-bit runtime, which cannot represent it, falls back to the signed reading *)
+let uint32 (c : t) : int =
+  need c 4;
+  let v = Bigstringaf.get_int32_le c.buf c.pos in
+  c.pos <- c.pos + 4;
+  match Int32.unsigned_to_int v with Some i -> i | None -> Int32.to_int v
 let int64 (c : t) : int64 = need c 8; let v = Bigstringaf.get_int64_le c.buf c.pos in c.pos <- c.pos + 8; v
 let double (c : t) : float = Int64.float_of_bits (int64 c)
 
@@ -57,3 +68,18 @@ let substring (c : t) ~off ~len : string = Bigstringaf.substring c.buf ~off ~len
 
 (* test the byte at [off] equals char [ch] without advancing — for span/byte comparisons during validation *)
 let byte_at (c : t) (off : int) : char = Bigstringaf.get c.buf off
+
+(* a little-endian int32 at an ABSOLUTE offset, WITHOUT moving [pos] — the scanner computes a value's
+   byte length (a nested doc/string is length-prefixed) to skip it, before deciding to read it. Bounds-
+   checked against [limit] so a garbage length can't peek out of the buffer. *)
+let peek_int32 (c : t) (at : int) : int =
+  if at < c.pos || at + 4 > c.limit then raise (Truncated { need = 4; have = c.limit - at });
+  Int32.to_int (Bigstringaf.get_int32_le c.buf at)
+
+(* compare a buffer span [off, len) to an OCaml string WITHOUT copying it out — the zero-copy key match
+   (a record field's name vs a scanned doc key). Returns false on any byte mismatch or length mismatch. *)
+let span_eq_string (c : t) ~off ~len (s : string) : bool =
+  len = String.length s
+  &&
+  let rec go i = i >= len || (Bigstringaf.get c.buf (off + i) = String.unsafe_get s i && go (i + 1)) in
+  go 0
