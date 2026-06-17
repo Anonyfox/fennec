@@ -251,6 +251,9 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
     | Some ("1" | "on" | "true") -> Printf.eprintf "%s\n%!" (Dev_proto.urls_line named)
     | _ -> Printf.eprintf "%s serving %d endpoint(s)%s\n%!" Dev_proto.chatter_prefix (List.length named) (if livereload_on then " (dev: livereload on)" else "")
   in
+  (* fail at boot on an ambiguous route table — a (method, exact path) declared twice — rather than
+     silently shadowing the second handler at runtime *)
+  (match List.concat_map Endpoint.conflicts endpoints with [] -> () | cs -> List.iter (fun c -> Printf.eprintf "fennec: %s\n%!" c) cs; exit 1);
   (* the routing table is the single source of truth for which domains we answer. Build it from the
      endpoints (name + host patterns); an invalid config (clashing domains, two catch-alls, a bad
      pattern, …) fails loudly here rather than mis-routing at runtime. *)

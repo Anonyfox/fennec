@@ -48,6 +48,9 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
       Printf.eprintf "paw: %s\n%!" msg;
       exit 1
   in
+  (* fail at boot on an ambiguous route table — a (method, exact path) declared twice — rather than
+     silently shadowing the second handler at runtime *)
+  (match List.concat_map Endpoint.conflicts endpoints with [] -> () | cs -> List.iter (fun c -> Printf.eprintf "paw: %s\n%!" c) cs; exit 1);
   match Host_router.build (List.map (fun e -> (Endpoint.name e, Endpoint.hosts e, e)) endpoints) with
   | Error errs ->
     prerr_endline (Host_router.describe_errors errs);

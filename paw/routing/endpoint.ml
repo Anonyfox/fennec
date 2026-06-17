@@ -232,3 +232,18 @@ let%test "overlap: all decline -> no answer (the server then 404s)" =
   let a = make ~name:"a" ~hosts:[ "app.com" ] () |> get "/a" (fun c -> Conn.text c "a") in
   let b = make ~name:"b" ~hosts:[ "app.com" ] () |> get "/b" (fun c -> Conn.text c "b") in
   first_answer (req_ "/neither") [ a; b ] = None
+
+(* ──── boot conflict detection (a (method, exact path) declared twice) ──── *)
+
+let%test "conflicts: duplicate GET path is flagged" =
+  let e = make ~name:"x" () |> get "/a" (fun c -> c) |> get "/a" (fun c -> c) in
+  List.length (conflicts e) = 1
+let%test "conflicts: same path, different methods is clean (incl. form = GET+POST)" =
+  let e = make ~name:"x" () |> get "/a" (fun c -> c) |> post "/a" (fun c -> c) |> form "/f" (fun c -> c) in
+  conflicts e = []
+let%test "conflicts: distinct routes + middleware are clean" =
+  let e = make ~name:"x" () |> use (fun c -> c) |> get "/a" (fun c -> c) |> get "/b" (fun c -> c) in
+  conflicts e = []
+let%test "conflicts: a duplicate split across middleware is still flagged" =
+  let e = make ~name:"x" () |> get "/a" (fun c -> c) |> use (fun c -> c) |> get "/a" (fun c -> c) in
+  List.length (conflicts e) = 1
