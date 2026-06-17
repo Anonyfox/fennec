@@ -342,6 +342,10 @@ module Request_id = Request_id
 (** Per-request timing handed to a reporter callback. *)
 module Metrics = Metrics
 
+(** Stamp the request's processing time onto the response as a [Server-Timing] header (and optionally
+    [X-Response-Time]) — the client-visible companion to {!Logger} / {!Metrics}. *)
+module Response_time = Response_time
+
 (** {2 Request hygiene} — normalize the request before it reaches a route *)
 
 (** Let an HTML form spoof PUT/PATCH/DELETE via a [_method] field or override header. *)
@@ -359,6 +363,10 @@ module Trusted_proxy = Trusted_proxy
 (** Content negotiation: [406 Not Acceptable] unless the request's [Accept] header accepts one of the
     media types the endpoint serves (Plug's [:accepts]). *)
 module Accepts = Accepts
+
+(** Allow or deny a request by client IP — exact IPs or IPv4 CIDR. Pairs with {!Trusted_proxy} to
+    filter the real client behind a proxy; for admin/internal endpoints and sender-pinned webhooks. *)
+module Ip_filter = Ip_filter
 
 (** {2 Response shaping & assets} *)
 

@@ -229,6 +229,7 @@ module Logger = Logger
 
 module Request_id = Request_id
 module Metrics = Metrics
+module Response_time = Response_time
 
 (** {2 Request hygiene} — normalize the request before it reaches a route *)
 module Method_override = Method_override
@@ -236,6 +237,7 @@ module Method_override = Method_override
 module Normalize_path = Normalize_path
 module Trusted_proxy = Trusted_proxy
 module Accepts = Accepts
+module Ip_filter = Ip_filter
 
 (** {2 Response shaping & assets} *)
 module Static = Static

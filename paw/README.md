@@ -54,14 +54,16 @@ Each is a `make` returning a `Paw.t`, so it drops into any `seq` or `Endpoint`:
 - **Sessions & security** — `Session` · `Csrf` · `Cors` · `Security_headers` · `Force_https`
 - **Authentication** — `Basic_auth` · `Bearer_auth`
 - **Traffic shaping & limits** — `Rate_limit` · `Body_limit`
-- **Observability** — `Logger` · `Request_id` · `Metrics`
-- **Request hygiene** — `Method_override` · `Normalize_path` (trailing-slash 308) · `Trusted_proxy` (real client IP/scheme from `X-Forwarded-*`) · `Accepts` (406 content negotiation)
+- **Observability** — `Logger` · `Request_id` · `Metrics` · `Response_time` (`Server-Timing` header)
+- **Request hygiene** — `Method_override` · `Normalize_path` (trailing-slash 308) · `Trusted_proxy` (real client IP/scheme from `X-Forwarded-*`) · `Accepts` (406 content negotiation) · `Ip_filter` (allow/deny by IP or IPv4 CIDR)
 - **Response shaping & assets** — `Static` · `Cache_control` · `Set_header` · `Status_pages` (bodies for empty error responses)
 - **Operations** — `Health` (a liveness probe)
 
 ### Built-in behaviours (no wiring)
 
 The server already does the HTTP-correct thing on a miss: a path that exists for other methods returns **`405` with an `Allow` header** (not a blanket 404), and an **`OPTIONS`** probe with no explicit handler is auto-answered **`204` + `Allow`**. An explicit `OPTIONS` route or a `Cors` paw still wins.
+
+Building a JSON API? Pass the ready-made renderer — `Paw.serve ~on_error:Paw.Server.json_on_error apps` — and those framework errors come back as `{"error":…,"status":…}` instead of plain text.
 
 ## Batteries that usually need wiring
 

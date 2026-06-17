@@ -370,6 +370,35 @@ let default_on_error : request_error -> CH.response = function
   | No_route _ -> CH.text ~status:404 "Not Found"
   | Method_not_allowed (_, allowed) -> { (CH.text ~status:405 "Method Not Allowed") with CH.headers = [ ("allow", allow_header allowed) ] }
 
+(* A drop-in [~on_error] that renders framework errors (404/405/500/503) as JSON instead of plain text
+   — for an API: [Paw.serve ~on_error:Server.json_on_error apps]. The 405 keeps its [Allow] header. paw
+   carries no JSON library (prod-lean), so we hand-roll; the bodies are framework constants, but a tiny
+   escaper keeps it correct if a message ever carries a quote. *)
+let json_escape s =
+  let buf = Buffer.create (String.length s + 2) in
+  String.iter (fun c -> match c with '"' -> Buffer.add_string buf {|\"|} | '\\' -> Buffer.add_string buf {|\\|} | '\n' -> Buffer.add_string buf {|\n|} | '\r' -> Buffer.add_string buf {|\r|} | '\t' -> Buffer.add_string buf {|\t|} | c when Char.code c < 0x20 -> Buffer.add_string buf (Printf.sprintf {|\u%04x|} (Char.code c)) | c -> Buffer.add_char buf c) s;
+  Buffer.contents buf
+
+let json_error ?(extra_headers = []) ~status msg =
+  { CH.status; headers = ("content-type", "application/json; charset=utf-8") :: extra_headers; body = Printf.sprintf {|{"error":"%s","status":%d}|} (json_escape msg) status }
+
+let json_on_error : request_error -> CH.response = function
+  | Handler_exception (exn, _) -> Printf.eprintf "fennec: handler error: %s\n%!" (Printexc.to_string exn); json_error ~status:500 "Internal Server Error"
+  | Handler_timeout _ -> json_error ~status:503 "Service Unavailable"
+  | No_route _ -> json_error ~status:404 "Not Found"
+  | Method_not_allowed (_, allowed) -> json_error ~status:405 "Method Not Allowed" ~extra_headers:[ ("allow", allow_header allowed) ]
+
+(* ──── json_on_error ──── *)
+
+let jreq_ = CH.make_request ~meth:CH.GET ~path:"/" ()
+let%test "json_escape: quote + backslash" = json_escape {|a"b\c|} = {|a\"b\\c|}
+let%test "json_on_error: 404 is JSON" =
+  let r = json_on_error (No_route jreq_) in
+  r.CH.status = 404 && contains r.CH.body {|"error":"Not Found"|} && contains r.CH.body {|"status":404|} && Headers.get r.CH.headers "content-type" = Some "application/json; charset=utf-8"
+let%test "json_on_error: 405 stays JSON and keeps Allow" =
+  let r = json_on_error (Method_not_allowed (jreq_, [ CH.GET ])) in
+  r.CH.status = 405 && Headers.get r.CH.headers "allow" = Some "GET, HEAD, OPTIONS" && contains r.CH.body {|"status":405|}
+
 (* No endpoint answered. [allowed] is the set of methods the path is declared for, unioned across every
    endpoint on the host (empty ⇒ the path doesn't exist). A non-empty set means the request used the
    WRONG method: an OPTIONS probe with no explicit handler gets an automatic 204 + Allow, anything else
