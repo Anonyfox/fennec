@@ -63,6 +63,13 @@ val decode : 'a t -> Bson.t -> ('a, error list) result
     never an exception. The fast path for decoding stored/wire documents. *)
 val decode_bytes : 'a t -> Bigstringaf.t -> ('a, error list) result
 
+(** Decode ONE top-level field of a BSON document buffer, by key, reading only that field's bytes —
+    the rest of the document is skipped by length prefix, never materialized. [None] when the field is
+    absent; [Some (Ok v)] / [Some (Error _)] when present (value decoded and its checks run; errors
+    path-tagged with the key). The projection primitive — route a raw document by its [_id] or a
+    variant discriminator, or pull a single value, without decoding the whole record. *)
+val peek : 'a t -> string -> Bigstringaf.t -> ('a, error list) result option
+
 (** Run every check against an in-memory value — the encode-side gate (writes validate), and the
     form-feedback primitive (same checks, synchronously, offline-capable). *)
 val validate : 'a t -> 'a -> (unit, error list) result

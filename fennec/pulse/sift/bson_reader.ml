@@ -326,3 +326,26 @@ let decode_value_bytes (shape : 'a shape) (buf : Cursor.buffer) : ('a, error lis
   match (try read_buf shape ~tag:tag_document (Cursor.make buf) with Cursor.Truncated _ -> Error [ mkerr ~code:"malformed" "malformed BSON: truncated or out of bounds" ] | Malformed m -> Error [ mkerr ~code:"malformed" m ] | Invalid_argument _ -> Error [ mkerr ~code:"malformed" "malformed BSON" ]) with
   | Error es -> Error es
   | Ok v -> ( match Engine.run_checks shape v with [] -> Ok v | es -> Error es)
+
+(* ---- projection: decode ONE top-level field, reading only its bytes ---------------------------- *)
+
+(* scan the buffer's top-level document for [key] and decode JUST that field's value with [shape] (its
+   checks run too) — the rest of the document is stepped over by length prefix, never materialized.
+   [None] when the field is absent; [Some (Ok v)] / [Some (Error _)] when present. The buffer analog of
+   the tree-side [Combinators.field_get] — for routing a raw document by a field (_id, a discriminant)
+   or pulling one value without decoding the whole record. Errors are path-tagged with [key], matching
+   [field_get]. A malformed buffer yields [Some (Error _)], never an escaping exception. *)
+let peek_field (shape : 'a shape) (key : string) (buf : Cursor.buffer) : ('a, error list) result option =
+  try
+    let c = Cursor.make buf in
+    let _ds, _de = doc_bounds c in
+    match scan_find c key with
+    | None -> None
+    | Some vtag ->
+        let r =
+          match read_buf shape ~tag:vtag c with
+          | Error es -> Error (List.map (at key) es)
+          | Ok v -> ( match Engine.run_checks shape v with [] -> Ok v | es -> Error (List.map (at key) es))
+        in
+        Some r
+  with Cursor.Truncated _ | Malformed _ | Invalid_argument _ -> Some (Error [ mkerr ~code:"malformed" ~path:[ key ] "malformed BSON" ])

@@ -18,6 +18,11 @@ include Combinators
    {!decode} (over an already-parsed {!Bson.t}) stays the tree entry. *)
 let decode_bytes (c : 'a t) (buf : Bigstringaf.t) : ('a, error list) result = Bson_reader.decode_value_bytes c.shape buf
 
+(* Decode ONE top-level field straight from a buffer, reading only its bytes (the rest of the document
+   is skipped, never materialized). [None] if absent. The projection primitive — route a raw document
+   by its _id or a variant discriminant, or pull a single value, without decoding the whole record. *)
+let peek (c : 'a t) (key : string) (buf : Bigstringaf.t) : ('a, error list) result option = Bson_reader.peek_field c.shape key buf
+
 (* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
 
 type view =

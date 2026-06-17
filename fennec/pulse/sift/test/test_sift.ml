@@ -370,4 +370,18 @@ let range_c =
 let%test "k2: cross-field invariant collects identically via decode_bytes" =
   same range_c (B.doc [ ("lo", B.int 1); ("hi", B.int 9) ]) && same range_c (B.doc [ ("lo", B.int 9); ("hi", B.int 3) ])
 
+(* peek: project ONE top-level field from a raw buffer, reading only it *)
+let%test "k2: peek extracts one field (present/absent/invalid), skipping the rest" =
+  let doc =
+    B.doc [ ("_id", B.oid "507f1f77bcf86cd799439011"); ("kind", B.str "circle"); ("count", B.int 5); ("bad", B.str "x") ]
+  in
+  let buf = buf_of_bson doc in
+  (match Sift.peek Sift.id "_id" buf with Some (Ok s) -> s = "507f1f77bcf86cd799439011" | _ -> false)
+  && (match Sift.peek Sift.string "kind" buf with Some (Ok "circle") -> true | _ -> false)
+  && (match Sift.peek Sift.int "count" buf with Some (Ok 5) -> true | _ -> false)
+  && (match Sift.peek Sift.string "missing" buf with None -> true | _ -> false) (* absent → None *)
+  && (match Sift.peek Sift.int "bad" buf with Some (Error [ e ]) -> e.Sift.path = [ "bad" ] && e.Sift.code = "type" | _ -> false)
+  && (* a checked field projects with its checks *)
+  (match Sift.peek Sift.(min_i 10 int) "count" buf with Some (Error [ e ]) -> e.Sift.code = "min" | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())
