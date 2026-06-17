@@ -59,6 +59,10 @@ Each is a `make` returning a `Paw.t`, so it drops into any `seq` or `Endpoint`:
 - **TLS termination** — `Paw.Tls_termination` loads a cert chain + key and selects per host via SNI; pass it to `Server.run ~tls`.
 - **Virtual hosts** — one `Host_router` table serves many apps on one port, selected by the `Host` header (exact, `*.`wildcard, or catch-all).
 
+## Performance
+
+Fast by design, measured honestly. In a same-machine, apples-to-apples shootout ([`benchmarks/`](../benchmarks)) against idiomatic Go (`net/http`), Rust (`actix-web`), Node (Fastify), and Elixir (Plug), **paw's request-processing throughput lands between Go and Rust — roughly 3× Go and Node, behind only Rust — while doing more per response than any of them** (a content ETag, conditional-request handling, and compression negotiation). The single hand-crafted C hot path — the zero-copy request-head parser — keeps per-header cost off the table; everything above it is idiomatic effect-based OCaml on Eio, sitting right on the runtime's IO floor with near-zero framework overhead.
+
 ## Dependencies
 
 Standard OCaml libraries only: `eio` · `tls` / `tls-eio` · `x509` · `digestif` · `base64` · `zarith` · `ptime` · `mirage-crypto-rng` · `zlib`. No database, no framework, no JSON library — the ACME client hand-rolls the handful of JSON reads it needs, so a production server stays lean.

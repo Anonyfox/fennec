@@ -96,6 +96,7 @@ Everything is **Eio-only**, by design.
 ## Design commitments
 
 - **Eio-only** — direct-style, structured concurrency, leak-free teardown under one switch. No Lwt, no cohttp.
+- **Genuinely fast** — in an apples-to-apples shootout against Go, Rust, Node, and Elixir ([`benchmarks/`](./benchmarks)), the HTTP layer's request-processing throughput lands between Go and Rust, while doing more per response than any of them.
 - **No npm / no React / no Melange** — the client is a self-contained js_of_ocaml bundle.
 - **dev ≈ prod** — the app binds the real port in dev exactly as in prod; no dev proxy. A dev build is bytecode for speed, release is native, and prod servers embed their assets into a single binary.
 - **Curated interfaces** — `.mli` firewalls on the load-bearing modules, colocated tests throughout, and doc-coverage gated by `fennec test docs`.
