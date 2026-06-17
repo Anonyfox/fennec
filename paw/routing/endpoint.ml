@@ -15,28 +15,36 @@
 module Conn = Conn
 module H = Http
 
+(* An endpoint's always-phase is a sequence of ITEMS in declaration order: opaque middleware paws
+   (use / app / static / a guard) and DESCRIBED routes (the verbs). Keeping routes described — not
+   pre-wrapped into opaque paws — lets {!handler} compile each contiguous run of them into one O(1)
+   {!Route_table} at serve, instead of a per-request linear scan, with no change to the verb DX. *)
+type item = Mw of Pipeline.t | Route of Route_table.route
+
 type t = {
   name : string;
   hosts : string list;
-  paws : Pipeline.t list; (* always-phase *)
-  matched : Pipeline.t list; (* matched-phase: only runs when an always paw answered *)
+  items : item list; (* always-phase, declaration order *)
+  matched : Pipeline.t list; (* matched-phase: only runs when an always-phase item answered *)
 }
 
-let make ~name ?(hosts = [ "*" ]) () : t = { name; hosts; paws = []; matched = [] }
+let make ~name ?(hosts = [ "*" ]) () : t = { name; hosts; items = []; matched = [] }
 
 let req_ ?(meth = H.GET) path = H.make_request ~meth ~path ()
 
 (* ---- always-phase (runs on every request) ---- *)
 
-let use (p : Pipeline.t) (t : t) : t = { t with paws = t.paws @ [ p ] }
+let use (p : Pipeline.t) (t : t) : t = { t with items = t.items @ [ Mw p ] }
 let pipe (paws : Pipeline.t list) (t : t) : t = List.fold_left (Fun.flip use) t paws
-let prepend (p : Pipeline.t) (t : t) : t = { t with paws = p :: t.paws }
+let prepend (p : Pipeline.t) (t : t) : t = { t with items = Mw p :: t.items }
 
-let get path h t = use (Pipeline.get path h) t
-let post path h t = use (Pipeline.post path h) t
-let put path h t = use (Pipeline.put path h) t
-let delete path h t = use (Pipeline.delete path h) t
-let patch path h t = use (Pipeline.patch path h) t
+(* a described route — recorded, not wrapped — so {!handler} can compile a run of them into a table *)
+let route meth path (h : Pipeline.t) (t : t) : t = { t with items = t.items @ [ Route { Route_table.meth; path; handler = h } ] }
+let get path h t = route H.GET path h t
+let post path h t = route H.POST path h t
+let put path h t = route H.PUT path h t
+let delete path h t = route H.DELETE path h t
+let patch path h t = route H.PATCH path h t
 
 (* mount a server-rendered FORM handler at [path] in one call: its [serve] dispatches GET (render the
    form) vs POST (validate -> redirect or re-render) internally, so a single registration covers both
@@ -52,19 +60,30 @@ let app ?(at = "/") (render : string -> string option) (t : t) : t =
 let use_matched (p : Pipeline.t) (t : t) : t = { t with matched = t.matched @ [ p ] }
 let pipe_matched (paws : Pipeline.t list) (t : t) : t = List.fold_left (Fun.flip use_matched) t paws
 
-(* ---- composition ---- *)
+(* ---- composition (compiled ONCE at serve, not per request) ---- *)
+
+(* Fold the items into a paw list, collapsing each MAXIMAL RUN of described routes into one compiled
+   {!Route_table} dispatch paw and leaving middleware paws in place. Ordering is preserved exactly —
+   middleware declared after a route still only runs on fall-through — while a run of routes
+   dispatches in O(1). The common shape (all middleware, then all routes) becomes [mw; …; one table]. *)
+let compile_items (items : item list) : Pipeline.t =
+  let paws = ref [] and run = ref [] in
+  let flush () = match !run with [] -> () | rs -> paws := Route_table.dispatch (Route_table.build (List.rev rs)) :: !paws; run := [] in
+  List.iter (function Route r -> run := r :: !run | Mw p -> flush (); paws := p :: !paws) items;
+  flush ();
+  Pipeline.seq (List.rev !paws)
+
+(* matched-phase paws run UNCONDITIONALLY (post-processing) on the already-answered conn — a plain
+   walk, NOT a short-circuiting seq (which would skip them). Top-level: no per-request closure. *)
+let rec run_all c = function [] -> c | p :: rest -> run_all (p c) rest
 
 let handler (t : t) : Pipeline.t =
-  let always = Pipeline.seq t.paws in
-  match t.matched with
-  | [] -> always (* no matched-phase paws: flat pipeline, zero overhead *)
-  | matched_paws ->
-    (* the matched phase runs UNCONDITIONALLY on the (already-answered) conn — it's
-       post-processing (auth checks, header stamps, logging), not route matching. We use a
-       plain fold, not Pipeline.seq (which short-circuits on answered and would skip them). *)
-    fun conn ->
-      let c = always conn in
-      if Conn.answered c then List.fold_left (fun c p -> p c) c matched_paws else c
+  let always = compile_items t.items in
+  match t.matched with [] -> always | matched_paws -> fun conn -> let c = always conn in if Conn.answered c then run_all c matched_paws else c
+
+(* duplicate (method, exact path) route declarations anywhere in the endpoint — for fail-at-boot
+   validation by {!Fennec.serve} / {!Paw.serve}; [] when the endpoint is clean *)
+let conflicts (t : t) : string list = Route_table.conflicts (List.filter_map (function Route r -> Some r | Mw _ -> None) t.items)
 
 let name (t : t) : string = t.name
 let hosts (t : t) : string list = t.hosts

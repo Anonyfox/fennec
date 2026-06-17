@@ -396,13 +396,14 @@ let%test_unit "sub-fibers cancelled at deadline" =
   Fennec_hunt_unit.check "returns at deadline, not after 10s" (Eio.Time.now clock -. t0 < 1.0);
   Fennec_hunt_unit.check "503" (status_of_ c = 503)
 
-(* Handle one connection. [resolve ~host] picks the endpoint for a request: in prod (and on the dev
-   gateway) it routes by Host pattern; on a dev convenience port it always returns that one endpoint.
+(* Handle one connection. [resolve ~host] returns the precompiled endpoint handler(s) to try for a
+   request: in prod (and on the dev gateway) it routes by Host pattern; on a dev convenience port it
+   always returns that one endpoint's handler. Handlers are compiled ONCE at serve, never per request.
    [scheme] is the transport scheme — "https" when {!run} terminated TLS in-process for this
    connection, else "http"; it becomes [Conn.scheme] so Secure cookies / force-https work over
    in-process HTTPS with no proxy. A paw pipeline may answer with an HTTP response OR a websocket
    upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(resolve : host:string -> Endpoint.t list) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(resolve : host:string -> Pipeline.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -437,8 +438,8 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(re
          a clean 500, never a dropped connection. *)
       let rec try_each = function
         | [] -> Conn.respond (Conn.make req) (on_error (No_route req))
-        | e :: rest ->
-          let c = run_handler ~clock ~timeout:request_timeout ~on_error (Endpoint.handler e) req in
+        | handler :: rest ->
+          let c = run_handler ~clock ~timeout:request_timeout ~on_error handler req in
           if Conn.answered c then c else try_each rest
       in
       let conn = try_each (resolve ~host) in
@@ -490,7 +491,7 @@ let%test "in-process TLS: real handshake + the handler sees scheme=https" =
   let cfg = Tls_termination.self_signed ~hosts:[ "localhost" ] () in
   (* an endpoint that simply echoes the request's scheme back as the body *)
   let ep = Endpoint.make ~name:"t" ~hosts:[ "*" ] () |> Endpoint.get "/" (fun c -> Conn.text c (Conn.scheme c)) in
-  let resolve ~host:_ = [ ep ] in
+  let resolve ~host:_ = [ Endpoint.handler ep ] in
   let sock = Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
   let port = match Eio.Net.listening_addr sock with `Tcp (_, p) -> p | _ -> 0 in
   Eio.Fiber.fork ~sw (fun () ->
@@ -570,9 +571,13 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   | Ok plan ->
   let exception Port_in_use of int in
   (try
-  (* the Host-routed resolver: every endpoint matching the Host, most-specific-first, with overlap
-     handled by the dispatch (first to answer wins). *)
-  let by_host ~(host : string) : Endpoint.t list = Host_router.route_all router ~host in
+  (* compile EVERY endpoint's handler ONCE here — the route tables are built at boot, never per
+     request — and look them up by physical identity (the same Endpoint.t objects the router returns). *)
+  let compiled = List.map (fun (en : Endpoint.t Host_router.entry) -> (en.Host_router.ep, Endpoint.handler en.Host_router.ep)) entries in
+  let handlers_for (eps : Endpoint.t list) : Pipeline.t list = List.filter_map (fun e -> List.assq_opt e compiled) eps in
+  (* the Host-routed resolver: the precompiled handlers of every endpoint matching the Host,
+     most-specific-first, with overlap handled by the dispatch (first to answer wins). *)
+  let by_host ~(host : string) : Pipeline.t list = handlers_for (Host_router.route_all router ~host) in
   (* a concrete host that matches an endpoint's first pattern, so its forced port can resolve EXACTLY
      as the gateway would for that host — including any same-domain overlap peers and the catch-all. *)
   let repr_host (e : Endpoint.t Host_router.entry) =
@@ -598,7 +603,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
         List.mapi
           (fun i (e : Endpoint.t Host_router.entry) ->
             let host = repr_host e in
-            (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> Host_router.route_all router ~host))
+            (Port_plan.endpoint_port plan ~index:i, fun ~host:(_ : string) -> handlers_for (Host_router.route_all router ~host)))
           entries
       in
       (Port_plan.gateway plan, by_host) :: forced

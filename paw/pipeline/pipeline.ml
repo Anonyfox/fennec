@@ -44,40 +44,19 @@ let run (p : t) (req : H.request) : H.response =
 
 (* ============================ constructors ================================== *)
 
-(* HEAD is matched as GET (the responder strips the body downstream) *)
-let meth_matches (want : H.meth) (got : H.meth) =
-  got = want || (want = H.GET && got = H.HEAD)
-
-(* path -> non-empty segments (a leading/trailing/double slash is ignored) *)
-let segments (s : string) : string list = String.split_on_char '/' s |> List.filter (fun x -> x <> "")
-
-(* match pre-split pattern segments against pre-split path segments, capturing [:name] (one segment)
-   and a trailing [*name] (the rest). Split out so a route can pre-split its pattern ONCE (see {!on}). *)
-let rec match_segments ps xs acc =
-  match (ps, xs) with
-  | [], [] -> Some (List.rev acc)
-  | [ p ], _ when String.length p > 0 && p.[0] = '*' ->
-    Some (List.rev ((String.sub p 1 (String.length p - 1), String.concat "/" xs) :: acc))
-  | p :: ps', x :: xs' ->
-    if String.length p > 0 && p.[0] = ':' then match_segments ps' xs' ((String.sub p 1 (String.length p - 1), x) :: acc)
-    else if p = x then match_segments ps' xs' acc
-    else None
-  | _ -> None
-
-let has_params (pattern : string) = String.contains pattern ':' || String.contains pattern '*'
-
 (* a method+path route; [h] is run when it matches. A pattern with [:name]/[*name] captures path
    params onto the conn (read with {!Conn.path_param}); a plain pattern is an exact string match.
-   The pattern's shape — whether it has params, and (if so) its segments — is computed ONCE here at
-   construction, never per request: dispatch is then a method check plus either one string compare
-   (static) or a segment match (dynamic), with no re-scan of the pattern on the hot path. *)
+   The matching rules live in {!Route_match} (shared with the compiled {!Route_table}); the pattern's
+   shape — whether it has params, and (if so) its segments — is computed ONCE here at construction,
+   never per request, so dispatch is a method check plus either one string compare (static) or a
+   segment match (dynamic), with no re-scan of the pattern on the hot path. *)
 let on (m : H.meth) (pattern : string) (h : t) : t =
-  if has_params pattern then
-    let pat_segs = segments pattern in
+  if Route_match.has_params pattern then
+    let pat_segs = Route_match.segments pattern in
     fun c ->
-      if not (meth_matches m (Conn.meth c)) then c
-      else match match_segments pat_segs (segments (Conn.path c)) [] with Some ps -> h (Conn.set_path_params c ps) | None -> c
-  else fun c -> if meth_matches m (Conn.meth c) && Conn.path c = pattern then h c else c
+      if not (Route_match.meth_matches m (Conn.meth c)) then c
+      else match Route_match.match_segments pat_segs (Route_match.segments (Conn.path c)) [] with Some ps -> h (Conn.set_path_params c ps) | None -> c
+  else fun c -> if Route_match.meth_matches m (Conn.meth c) && Conn.path c = pattern then h c else c
 
 let get path h = on H.GET path h
 let post path h = on H.POST path h

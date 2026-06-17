@@ -74,8 +74,14 @@ val pipe_matched : Pipeline.t list -> t -> t
 
 (** {1 Introspection} *)
 
-(** The composed handler paw (always-phase → [if answered] matched-phase). *)
+(** The composed handler paw (always-phase → [if answered] matched-phase). Compile-once: contiguous
+    runs of routes are compiled into an O(1) {!Route_table}, so call this at serve and reuse the
+    result per request (never recompile per request). *)
 val handler : t -> Pipeline.t
+
+(** Duplicate (method, exact path) route declarations anywhere in the endpoint, as human-readable
+    messages ([] when clean) — for fail-at-boot validation by {!Fennec.serve} / {!Paw.serve}. *)
+val conflicts : t -> string list
 
 (** The endpoint's stable name (as given to {!make}). *)
 val name : t -> string
