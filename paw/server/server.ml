@@ -396,8 +396,11 @@ let%test_unit "sub-fibers cancelled at deadline" =
 
 (* Handle one connection. [resolve ~host] picks the endpoint for a request: in prod (and on the dev
    gateway) it routes by Host pattern; on a dev convenience port it always returns that one endpoint.
-   A paw pipeline may answer with an HTTP response OR a websocket upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : host:string -> Endpoint.t list) flow addr =
+   [scheme] is the transport scheme — "https" when {!run} terminated TLS in-process for this
+   connection, else "http"; it becomes [Conn.scheme] so Secure cookies / force-https work over
+   in-process HTTPS with no proxy. A paw pipeline may answer with an HTTP response OR a websocket
+   upgrade (the ws is itself a paw). *)
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~(resolve : host:string -> Endpoint.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -419,10 +422,12 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~(resolve : 
     | Ok (Bad_request _) -> respond_and_close (CH.text ~status:400 "Bad Request")
     | Ok (Too_large _) -> respond_and_close (CH.text ~status:413 "Payload Too Large")
     | Ok (Req p) -> (
-      (* scheme is http at the transport (no in-process TLS); a force-https / proxy
-         a force-https paw can rewrite from X-Forwarded-Proto. host is the normalized Host header. *)
+      (* [scheme] is the real transport: "https" when we terminated TLS in-process, else "http" — so
+         Secure cookies / force-https Just Work over in-process HTTPS. Behind a TLS-terminating proxy
+         (plaintext transport here), a force-https / session paw still reads X-Forwarded-Proto, which
+         takes precedence. host is the normalized Host header. *)
       let host = Host_pattern.normalize (match header p.headers "host" with Some h -> h | None -> "") in
-      let req = to_request ~host ~scheme:"http" ~remote_ip p in
+      let req = to_request ~host ~scheme ~remote_ip p in
       (* the endpoints matching this Host, most-specific-first (overlap: several may match). Try each
          on a FRESH conn (run_handler makes one from [req]); the first to ANSWER wins, a declining one
          (no route matched — its auth/matched middleware never fired, its conn discarded) falls
@@ -582,7 +587,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
         try Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env) (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
         with Unix.Unix_error (Unix.EADDRINUSE, _, _) -> raise (Port_in_use port)
       in
-      let serve_conn flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~resolve flow addr in
+      let serve_conn ~scheme flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~resolve flow addr in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
         Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () ->
@@ -592,12 +597,13 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
             (* [tls] is a SOURCE read per connection (not a static config) so ACME renewal can swap
                the live cert with no restart; [None] (no TLS, or ACME hasn't issued yet) serves plain *)
             match (match tls with Some src -> src () | None -> None) with
-            | None -> serve_conn flow addr
+            | None -> serve_conn ~scheme:"http" flow addr
             | Some cfg -> (
               (* terminate TLS for this connection; a failed handshake (a non-TLS client, an SNI
-                 mismatch) drops the connection rather than erroring the whole server *)
+                 mismatch) drops the connection rather than erroring the whole server. The request
+                 scheme is "https" — we are the TLS terminator, so it is ground truth. *)
               match (try Some (Tls_eio.server_of_flow cfg flow) with _ -> None) with
-              | Some tls_flow -> serve_conn tls_flow addr
+              | Some tls_flow -> serve_conn ~scheme:"https" tls_flow addr
               | None -> ()))
       in
       let on_error e =
@@ -614,7 +620,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 30.0) ?(max_conns = 10_000) ?paral
   (* every port is now bound — announce ONLY here (a failed bind exit 98'd above). Each endpoint is
      announced at its own contiguous forced port (base+1+i); the gateway (base) is the supervisor's
      to show, since it owns the banner and knows the base. *)
-  let url p = Printf.sprintf "http://localhost:%d" p in
+  let url p = Printf.sprintf "%s://localhost:%d" (if tls <> None then "https" else "http") p in
   let named = List.mapi (fun i (e : Endpoint.t Host_router.entry) -> (e.Host_router.name, url (Port_plan.endpoint_port plan ~index:i))) entries in
   on_listen named;
   Ok ()
