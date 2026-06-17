@@ -5,9 +5,14 @@
 ; collection lib, OpenAPI later, the admin UI later) consume without this lib knowing them.
 ; Deps: bson + bson_json/json (the extended-JSON bridge, so one shape drives BOTH BSON and JSON) —
 ; all pure + jsoo-safe, shared verbatim by server and browser. Methods and collections are disjoint
-; consumers that WORK ON shapes; neither owns this. Unwrapped: userland says `Sift.string`.
+; consumers that WORK ON shapes; neither owns this.
+;
+; Split by concern so features/perf can grow without ballooning one file: shape.ml (the GADT
+; representation), engine.ml (the interpreters — perf hacks land here), codec.ml (the `t` value +
+; JSON), combinators.ml (the builder surface — features grow here). sift.ml is the thin facade that
+; re-exports them as one flat module. WRAPPED with `(name sift)` so consumers see only `Sift` (the
+; internals are private); userland says `Sift.string`.
 (library
- (name fennec_pulse_sift)
+ (name sift)
  (public_name fennec.pulse.sift)
- (wrapped false)
  (libraries fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.json))
