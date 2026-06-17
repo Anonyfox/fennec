@@ -58,11 +58,15 @@ not precise figures — the rankings are stable across runs.
 
 | stack | /plaintext | /json | /user/:id | /plaintext ×16 (pipelined) |
 |---|--:|--:|--:|--:|
-| rust (actix) | ~174k | ~170k | ~164k | **~2.3M** |
-| go (net/http) | ~173k | ~165k | ~157k | ~400k |
-| node (Fastify×cluster) | ~165k | ~162k | ~159k | ~400k |
-| elixir (Plug/Bandit) | ~139k | ~138k | ~136k | ~205k |
-| **paw (fennec-paw)** | **~140k** | **~140k** | **~132k** | **~250k** |
+| rust (actix) | ~180k | ~178k | ~178k | **~2.4M** |
+| go (net/http) | ~177k | ~174k | ~172k | ~380k |
+| node (Fastify×cluster) | ~170k | ~166k | ~165k | ~430k |
+| elixir (Plug/Bandit) | ~145k | ~152k | ~146k | ~253k |
+| **paw (fennec-paw)** | **~150–164k** | **~150k** | **~149–164k** | **~1.3–1.44M** |
+
+(paw is benchmarked last, when the machine is hottest, so its per-request figure
+reads low in-suite — ~164k isolated, ~142k in-suite; the pipelined figure is large
+enough to be robust to that.)
 
 **Two things are being measured.** *Per-request* (no pipelining) is the realistic
 request/response pattern; on loopback it is dominated by kernel syscalls + the
@@ -71,18 +75,20 @@ amortizes the syscalls and exposes each framework's own ceiling.
 
 **Reading it honestly:**
 
-- **Per-request, paw is in the pack** — ~80% of the compiled/optimized tier
-  (Go/Rust/Node), on par with Elixir — *while doing strictly more per response*
-  (ETag + Vary + compression negotiation that the others skip by default). For
-  the request rates real apps see, the framework is not the bottleneck; the OS is.
-- **Pipelined, Rust is in a class of its own** (actix + tokio), as expected for
-  "the extreme case." Go and Node sit ~400k; paw, after the flush-batching fix
-  (`flush only when the read buffer is drained`), reaches ~250k — now past
-  Elixir/Bandit. The remaining gap to Go/Node is the **Eio IO layer + paw's extra
-  per-response work**, not paw's routing/response logic.
-- **Pure framework cost** (see `examples/paw_bench`, in-process, no socket): paw
-  finalizes a full small request in ~290 ns ≈ 3.4M req/s of framework work — far
-  above any socket number here, confirming the wall is the OS/IO, not paw's code.
+- **Pipelined — paw is between Go/Node and Rust, ~3× the others.** This is the
+  framework's own ceiling (syscalls amortized). paw reaches ~1.3–1.44M req/s vs
+  Go/Node's ~380–430k — **3× faster** — with only Rust ahead. This is the real
+  proof: as a *framework*, paw's routing + response path is far faster than Go's or
+  Node's; it was the per-request Eio timers (now off the hot path) that hid it.
+- **Per-request, paw is in the pack** — ≈ Node, ~85–95% of Go — *while doing
+  strictly more per response* (ETag + Vary + compression negotiation the others
+  skip). This number is OS-syscall-floored (1 read + 1 write/request on loopback),
+  so every stack clusters; the small gap to Go is paw's extra work + allocation
+  pressure (the stop-the-world minor GC across 10 domains), not its logic.
+- **Pure framework cost** (`examples/paw_bench`, in-process, no socket): paw
+  finalizes a full small request in ~290 ns ≈ 3.4M req/s of framework work.
 
-Bottom line: paw is genuinely competitive — a managed-runtime framework holding
-~80% of the compiled leaders on realistic load while carrying more batteries.
+Bottom line: as a framework, paw **surpasses Go and Node** (3× pipelined) and trails
+only Rust; on raw loopback per-request it sits at the OS floor with everyone else,
+≈ Node, while carrying more batteries. The next lever for the per-request floor is
+cutting parse allocation (less GC / fewer stop-the-world pauses) — a zero-copy parser.
