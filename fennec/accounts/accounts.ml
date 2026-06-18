@@ -77,10 +77,10 @@ let session_paw = Accounts_session.session_paw
 module Methods = Accounts_methods.Methods
 
 (* the storage backends + the process-native singleton live in {!Accounts_native}; re-export the
-   public surface ([Store], [memory_store], [current], [native_paw], [boot]) unchanged. *)
+   public surface ([Store], [current], [native_paw], [boot]) unchanged. ([memory_store] is re-exported
+   under {!Advanced} — it is an examples/tests helper, not a daily driver.) *)
 module Store = Accounts_native.Store
 
-let memory_store = Accounts_native.memory_store
 let current = Accounts_native.current
 let start = Accounts_native.start
 
@@ -109,15 +109,121 @@ let require_role ?redirect role () : Paw.t = Accounts_base.require_role (current
 let require_permission ?redirect permission () : Paw.t = Accounts_base.require_permission (current ()) ?redirect permission ()
 let require_org ?redirect ?permission () : Paw.t = Accounts_base.require_org (current ()) ?redirect ?permission ()
 
-(* The advanced / internal surface, grouped behind one namespace so the newcomer's top-level
-   [Accounts.*] stays the ~40 daily-drivers. Everything here was — and through the deprecated shims
-   below still is — reachable; this only re-homes it for discoverability (filled out further in the
-   facade re-layer). The explicit-instance RBAC guards live here, deprecated: prefer the top-level
-   no-[t] forms, which bind [current ()] for you. *)
+(* ---- the advanced / internal surface, behind ONE namespace (Stage 3c facade re-layer) ------------
+
+   Newcomers meet the daily-drivers at the top level; the escape hatches, custom-layout building blocks,
+   and low-level engine entry points are grouped here. The ~25 [*_paw] route constructors — the biggest
+   newcomer-noise source — are RELOCATED here (gone from the top level: the umbrella [config] auto-mounts
+   the default routes, so the 95% app never names them); [memory_store] and the deprecated explicit-[t]
+   guards are relocated too. The remaining advanced families (the MFA [*_completion] branches, the
+   protocol identity resolvers + [external_identity] builders, identity-link admin, the passkey ceremony,
+   the lower-level challenge issue/consume) are MIRRORED — still reachable at the top level for
+   compatibility AND indexed here for discoverability — rather than relocated, to keep the cross-doc refs
+   and the diff sane. Nothing was removed from the library. The implementations stay flattened at the
+   [Accounts] top level (via [include Accounts_base]); accounts.mli is what scopes a name to [Advanced]. *)
 module Advanced = struct
+  (* explicit-instance RBAC guards — DEPRECATED: prefer the top-level no-[t] forms (they bind the
+     configured [current ()] for you, so a route can't be guarded against a different RBAC model). *)
   let require_role = Accounts_base.require_role
   let require_permission = Accounts_base.require_permission
   let require_org = Accounts_base.require_org
+
+  (* the low-level record-codec + backend-blind collection-store builders (the storage plumbing under
+     [Store]); apps build a [Store.t], not these directly. *)
+  module Codec = Accounts_codec
+  module Collection_store = Accounts_collection_store
+
+  (* the in-process memory store — examples/tests; the framework path uses [current ()]'s store. *)
+  let memory_store = Accounts_native.memory_store
+
+  (* the external-identity FACT builders: turn a provider's validated principal/assertion into the
+     canonical [external_identity] for [login_with_identity]. The provider [*_callback_paw] / the presets
+     drive these for you. *)
+  let external_identity = external_identity
+  let email_identity = email_identity
+  let oauth_identity = oauth_identity
+  let oidc_identity = oidc_identity
+  let saml_identity = saml_identity
+  let passkey_identity = passkey_identity
+  let scim_identity = scim_identity
+
+  (* identity-link administration (connect/disconnect/merge a provider on an existing user). *)
+  let linked_identities = linked_identities
+  let unlink_identity = unlink_identity
+  let merge_identities = merge_identities
+  let link_identity = link_identity
+  let link_current_identity = link_current_identity
+
+  (* the lower-level email-challenge issue/consume pair (the [send_*_email] daily verbs + the email
+     [*_paw] routes wrap these; reach for them to build a custom delivery / consume flow). *)
+  let issue_email_verification = issue_email_verification
+  let verify_email = verify_email
+  let issue_password_reset = issue_password_reset
+  let reset_password = reset_password
+  let issue_enrollment = issue_enrollment
+  let enroll_account = enroll_account
+
+  (* the MFA-aware login COMPLETIONS: the typed step-up branch of every login verb. The top level keeps
+     the plain verbs; reach for these only when the caller drives its own MFA ceremony. *)
+  let reset_password_completion = reset_password_completion
+  let verify_email_completion = verify_email_completion
+  let enroll_account_completion = enroll_account_completion
+  let login_with_password_completion = login_with_password_completion
+  let login_with_strategy_completion = login_with_strategy_completion
+  let login_with_identity_completion = login_with_identity_completion
+  let login_with_email_link_completion = login_with_email_link_completion
+  let login_with_email_otp_completion = login_with_email_otp_completion
+  let login_with_oidc_completion = login_with_oidc_completion
+  let login_with_saml_completion = login_with_saml_completion
+  let login_with_passkey_completion = login_with_passkey_completion
+  let login_with_passkey_assertion_completion = login_with_passkey_assertion_completion
+  let finish_passkey_assertion_completion = finish_passkey_assertion_completion
+
+  (* the lower-level identity-login resolvers (the [*_callback_paw] route helpers call these). *)
+  let login_with_identity = login_with_identity
+  let login_with_email_link = login_with_email_link
+  let login_with_email_otp = login_with_email_otp
+  let login_with_oidc = login_with_oidc
+  let login_with_saml = login_with_saml
+  let login_with_passkey = login_with_passkey
+  let login_with_passkey_assertion = login_with_passkey_assertion
+
+  (* the passkey ceremony primitives (begin/finish registration + assertion + credential persistence).
+     The passkey JSON [*_paw] routes — mounted by the config — wrap these. *)
+  let register_passkey_credential = register_passkey_credential
+  let begin_passkey_registration = begin_passkey_registration
+  let finish_passkey_registration = finish_passkey_registration
+  let begin_passkey_assertion = begin_passkey_assertion
+  let finish_passkey_assertion = finish_passkey_assertion
+
+  (* the HTTP route constructors for CUSTOM layouts. The config auto-wires the default URLs under
+     [routes.auth_prefix]; mount these by hand only for bespoke paths. ([native_paw] / [session_paw]
+     stay at the top level — they are the framework wiring + the common "/me" helper.) *)
+  let password_reset_request_paw = password_reset_request_paw
+  let password_reset_paw = password_reset_paw
+  let enrollment_paw = enrollment_paw
+  let email_verification_request_paw = email_verification_request_paw
+  let email_verification_paw = email_verification_paw
+  let email_login_link_request_paw = email_login_link_request_paw
+  let email_login_link_paw = email_login_link_paw
+  let email_otp_request_paw = email_otp_request_paw
+  let email_otp_paw = email_otp_paw
+  let mfa_totp_paw = mfa_totp_paw
+  let mfa_backup_code_paw = mfa_backup_code_paw
+  let passkey_registration_options_paw = passkey_registration_options_paw
+  let passkey_registration_finish_paw = passkey_registration_finish_paw
+  let passkey_assertion_options_paw = passkey_assertion_options_paw
+  let passkey_assertion_finish_paw = passkey_assertion_finish_paw
+  let mfa_passkey_assertion_options_paw = mfa_passkey_assertion_options_paw
+  let mfa_passkey_assertion_finish_paw = mfa_passkey_assertion_finish_paw
+  let scim_paw = scim_paw
+  let oauth_authorize_paw = oauth_authorize_paw
+  let oauth_callback_paw = oauth_callback_paw
+  let oauth_callback_popup_paw = oauth_callback_popup_paw
+  let oidc_authorize_paw = oidc_authorize_paw
+  let oidc_callback_paw = oidc_callback_paw
+  let saml_authorize_paw = saml_authorize_paw
+  let saml_callback_paw = saml_callback_paw
 end
 
 (* the OPTIONAL Sift-typed view of [user.profile] (Stage 3c). [user.profile] stays [Bson.t option];

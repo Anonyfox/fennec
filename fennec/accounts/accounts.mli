@@ -294,9 +294,8 @@ module Store : sig
   val ensure_indexes : t -> unit
 end
 
-(** A process-local, mutex-guarded store for tests, examples, and single-process prototypes.
-    Alias for {!Store.memory}. *)
-val memory_store : unit -> store
+(* [memory_store] (the process-local store for tests/examples, alias of {!Store.memory}) is now under
+   {!Advanced.memory_store} — it is not a daily driver. *)
 
 (** A login attempt passed to hooks. *)
 type login_attempt = {
@@ -1047,25 +1046,9 @@ val require_permission : ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
 
     One namespace for the symbols a 95%-of-apps newcomer never touches, so the top-level [Accounts.*]
     stays the ~40 daily-drivers. Nothing here is new and nothing was removed from the library — this is
-    a discoverability grouping. (The fuller re-homing of the engine entry points / [*_paw] / [Store] /
-    [Methods] / [boot] is layered in alongside; for now it carries the explicit-instance RBAC guards.) *)
-module Advanced : sig
-  (** Explicit-instance route guard by app-wide role. {b Deprecated}: prefer the top-level
-      {!require_role}, which binds [current ()] — the one configured instance — for you, so a route
-      cannot accidentally be guarded against a different RBAC model than the one authenticating the
-      request. This form remains for advanced multi-instance setups and the migration window. *)
-  val require_role : t -> ?redirect:string -> Roles.Role.t -> unit -> Paw.t
-    [@@deprecated "Use Accounts.require_role (no t arg — reads the configured current () instance)."]
-
-  (** Explicit-instance route guard by app-wide permission. {b Deprecated}: prefer the top-level
-      {!require_permission}. *)
-  val require_permission : t -> ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
-    [@@deprecated "Use Accounts.require_permission (no t arg — reads the configured current () instance)."]
-
-  (** Explicit-instance tenant route guard. {b Deprecated}: prefer the top-level {!require_org}. *)
-  val require_org : t -> ?redirect:string -> ?permission:string -> unit -> Paw.t
-    [@@deprecated "Use Accounts.require_org (no t arg — reads the configured current () instance)."]
-end
+    a discoverability grouping. The escape hatches, the custom-layout [*_paw] route constructors, the
+    MFA [*_completion] branches, the protocol identity resolvers/builders, the identity-link admin, and
+    the low-level codecs all live there — see {!Accounts.Advanced} at the bottom of this interface. *)
 
 (** Current request user, loaded from the store when a valid signed login cookie is present. This is
     a convenience for SSR/handlers that need the record; prefer {!user_id} when the id is enough. *)
@@ -1665,6 +1648,358 @@ val revoke_session : t -> user_id:user_id -> session_id:string -> (bool, error) 
     current session's id). Returns the number removed. *)
 val revoke_other_sessions : t -> user_id:user_id -> keep:string -> (int, error) result
 
+(** Register Meteor-shaped DDP/Pulse methods on a compatible reactive runtime:
+    ["createUser"], ["currentUser"], ["login"], ["logout"], ["logoutOtherClients"],
+    ["changePassword"], ["resetPassword"], ["verifyEmail"], ["enrollAccount"], and
+    ["completeLoginStepUp"]. ["currentUser"] returns the safe session payload shape used by
+    {!session_doc}; websocket-only context fields ([authContext], [assurance], [org]) are null.
+    Login-like success results are [{id, token}], password signup [createUser] returns
+    [{id, token, user}], MFA branches return [{mfaRequired, userId, mfaToken}], and
+    ["logoutOtherClients"] returns a replacement [{id, token}] for the current connection after
+    bumping [auth_epoch]. Browser clients that cannot receive a Set-Cookie on a websocket can still
+    resume explicitly. HTTP/browser cookie helpers remain the preferred same-origin browser story. *)
+module Methods (R : sig
+  type doc = Bson.t
+
+  type invocation = {
+    user_id : string option;
+    remote_ip : string option;
+    is_simulation : bool;
+    set_user_id : string option -> unit;
+  }
+
+  exception Error of { code : string; reason : string }
+
+  val methods : (string * (invocation -> doc list -> doc)) list -> unit
+end) : sig
+  type invocation = R.invocation
+
+  val register : t -> unit
+end
+
+
+(** {1 The advanced / internal surface — escape hatches, custom-layout building blocks, low-level
+    entry points}
+
+    The 95% app never opens this module: the umbrella {!config} (via {!Fennec.serve} [?accounts] /
+    {!start}) auto-wires the routes + methods, and the top-level [Accounts.*] carries the daily-drivers.
+    Everything here stays public — it is the same functions, only grouped out of the newcomer's way:
+
+    - the explicit-instance RBAC guards (deprecated — prefer the top-level no-[t] forms);
+    - the HTTP [*_paw] route constructors, for {b custom URL layouts} (the config mounts the defaults);
+    - the MFA-aware login [*_completion] branches + the lower-level protocol identity resolvers and the
+      {!external_identity} fact builders (the [*_callback_paw] helpers + the presets drive these);
+    - identity-link administration (connect / unlink / merge a provider on a user);
+    - the passkey ceremony primitives;
+    - the low-level record/collection codecs under {!Store}. *)
+module Advanced : sig
+  (** Explicit-instance route guard by app-wide role. {b Deprecated}: prefer the top-level
+      {!require_role}, which binds [current ()] — the one configured instance — for you, so a route
+      cannot accidentally be guarded against a different RBAC model than the one authenticating the
+      request. Kept for advanced multi-instance setups and the migration window. *)
+  val require_role : t -> ?redirect:string -> Roles.Role.t -> unit -> Paw.t
+    [@@deprecated "Use Accounts.require_role (no t arg — reads the configured current () instance)."]
+
+  (** Explicit-instance route guard by app-wide permission. {b Deprecated}: prefer {!require_permission}. *)
+  val require_permission : t -> ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
+    [@@deprecated "Use Accounts.require_permission (no t arg — reads the configured current () instance)."]
+
+  (** Explicit-instance tenant route guard. {b Deprecated}: prefer {!require_org}. *)
+  val require_org : t -> ?redirect:string -> ?permission:string -> unit -> Paw.t
+    [@@deprecated "Use Accounts.require_org (no t arg — reads the configured current () instance)."]
+
+  (** {2 Low-level storage codecs} (the plumbing under {!Store}; apps build a {!Store.t}, not these). *)
+
+  (** The record BSON codecs Accounts uses to (de)serialize its own documents. *)
+  module Codec = Accounts_codec
+
+  (** The backend-blind collection-store builder ({!Store} is built on this). *)
+  module Collection_store = Accounts_collection_store
+
+  (** In-process, mutex-guarded store for examples/tests. Alias of {!Store.memory}; the framework path
+      uses [current ()]'s store. *)
+  val memory_store : unit -> store
+
+  (** {2 external_identity fact builders} — turn a validated provider principal/assertion into the
+      canonical {!external_identity} for {!login_with_identity}. The provider [*_callback_paw] helpers
+      and the {!OAuth.github}-style presets build these for you. *)
+
+  val external_identity :
+    ?email:string ->
+    ?email_verified:bool ->
+    ?username:string ->
+    ?profile:Bson.t ->
+    ?service:string * Bson.t ->
+    Identity.key ->
+    external_identity
+
+  val email_identity :
+    ?username:string -> ?profile:Bson.t -> ?service:string * Bson.t -> Email.address -> external_identity
+
+  val oauth_identity :
+    ?email:string ->
+    ?email_verified:bool ->
+    ?username:string ->
+    ?profile:Bson.t ->
+    ?service:Bson.t ->
+    Accounts_oauth.provider ->
+    subject:string ->
+    (external_identity, error) result
+
+  val oidc_identity :
+    ?username:string -> ?profile:Bson.t -> ?service:Bson.t -> Accounts_oidc.principal -> external_identity
+
+  val saml_identity :
+    ?username:string -> ?profile:Bson.t -> ?service:Bson.t -> Accounts_saml.principal -> external_identity
+
+  val passkey_identity : ?service:Bson.t -> Passkey.assertion -> (external_identity, error) result
+
+  val scim_identity :
+    ?username:string ->
+    ?profile:Bson.t ->
+    ?service:Bson.t ->
+    Scim.connection ->
+    Scim.user ->
+    (external_identity, error) result
+
+  (** {2 Identity-link administration} (connect / unlink / merge a provider on an existing user). *)
+
+  val linked_identities : t -> user_id -> (Identity.link list, error) result
+
+  val unlink_identity : t -> ?allow_last:bool -> user_id -> Identity.key -> (Identity.link, error) result
+
+  val merge_identities :
+    t -> from_user_id:user_id -> into_user_id:user_id -> (Identity.merge_plan, error) result
+
+  val link_identity :
+    t -> ?now:(unit -> float) -> user_id -> external_identity -> (Identity.link option, error) result
+
+  val link_current_identity :
+    t -> ?now:(unit -> float) -> Conn.t -> external_identity -> (Identity.link option, error) result
+
+  (** {2 Lower-level challenge issue / consume} (the [send_*_email] verbs + the email [*_paw] routes
+      wrap these; reach for them to build a custom delivery / consume flow). *)
+
+  val issue_email_verification : t -> ?ttl:float -> user_id -> string -> (Email.issued, error) result
+  val verify_email : t -> Challenge.token -> (user, error) result
+  val issue_password_reset : t -> ?ttl:float -> string -> (password_reset option, error) result
+  val reset_password : t -> Challenge.token -> password:string -> (user * token, error) result
+  val issue_enrollment : t -> ?ttl:float -> user_id -> (enrollment, error) result
+  val enroll_account : t -> Challenge.token -> password:string -> (user * token, error) result
+
+  (** {2 MFA-aware login completions} — the typed step-up branch of every login verb (the top level
+      keeps the plain verbs). *)
+
+  val reset_password_completion : t -> Challenge.token -> password:string -> (login_completion, error) result
+  val verify_email_completion : t -> Challenge.token -> (login_completion, error) result
+  val enroll_account_completion : t -> Challenge.token -> password:string -> (login_completion, error) result
+  val login_with_password_completion : t -> selector -> password:string -> (login_completion, error) result
+  val login_with_strategy_completion : t -> string -> credentials:Bson.t -> (login_completion, error) result
+
+  (** {2 Protocol identity resolvers} — resolve a validated principal/assertion through the common
+      identity-login policy. The [*_callback_paw] helpers call these. *)
+
+  val login_with_identity :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    strategy:string ->
+    external_identity ->
+    (identity_login, error) result
+
+  val login_with_identity_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    strategy:string ->
+    external_identity ->
+    (identity_login_completion, error) result
+
+  val login_with_email_link :
+    t ->
+    ?identity_store:Identity.store ->
+    Email.t ->
+    ?expected:Email.address ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Challenge.token ->
+    (identity_login, error) result
+
+  val login_with_email_link_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    Email.t ->
+    ?expected:Email.address ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Challenge.token ->
+    (identity_login_completion, error) result
+
+  val login_with_email_otp :
+    t ->
+    ?identity_store:Identity.store ->
+    Email.t ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    token:Challenge.token ->
+    code:string ->
+    unit ->
+    (identity_login, error) result
+
+  val login_with_email_otp_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    Email.t ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    token:Challenge.token ->
+    code:string ->
+    unit ->
+    (identity_login_completion, error) result
+
+  val login_with_oidc :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Oidc.principal ->
+    (identity_login, error) result
+
+  val login_with_oidc_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Oidc.principal ->
+    (identity_login_completion, error) result
+
+  val login_with_saml :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Saml.principal ->
+    (identity_login, error) result
+
+  val login_with_saml_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Saml.principal ->
+    (identity_login_completion, error) result
+
+  val login_with_passkey :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Passkey.assertion ->
+    (identity_login, error) result
+
+  val login_with_passkey_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Passkey.assertion ->
+    (identity_login_completion, error) result
+
+  (** {2 Passkey ceremony primitives} (begin/finish registration + assertion + credential persistence).
+      The passkey JSON [*_paw] routes — mounted by the config — wrap these. *)
+
+  val register_passkey_credential : t -> Passkey.credential -> (Identity.link, error) result
+
+  val login_with_passkey_assertion :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Passkey.assertion ->
+    (identity_login, error) result
+
+  val login_with_passkey_assertion_completion :
+    t ->
+    ?identity_store:Identity.store ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    ?now:(unit -> float) ->
+    Passkey.assertion ->
+    (identity_login_completion, error) result
+
+  val begin_passkey_registration :
+    t -> Passkey.relying_party -> Passkey.user -> (passkey_registration_options, error) result
+
+  val finish_passkey_registration :
+    t ->
+    Passkey.relying_party ->
+    user_id:user_id ->
+    token:Challenge.token ->
+    Fennec_mongo_json.Json.t ->
+    (passkey_registration_finish, error) result
+
+  val begin_passkey_assertion :
+    t ->
+    ?user_id:user_id ->
+    ?allowed_credentials:string list ->
+    Passkey.relying_party ->
+    (passkey_assertion_options, error) result
+
+  val finish_passkey_assertion :
+    t ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    Passkey.relying_party ->
+    token:Challenge.token ->
+    Fennec_mongo_json.Json.t ->
+    (identity_login, error) result
+
+  val finish_passkey_assertion_completion :
+    t ->
+    ?current_user_id:user_id ->
+    ?allow_signup:bool ->
+    ?link_verified_email:bool ->
+    Passkey.relying_party ->
+    token:Challenge.token ->
+    Fennec_mongo_json.Json.t ->
+    (identity_login_completion, error) result
+
+  (** {2 HTTP route constructors for custom layouts.}
+
+      The umbrella {!config} auto-mounts the default URLs under [routes.auth_prefix]; reach for these
+      only to mount bespoke paths by hand. ([native_paw] / [session_paw] stay at the top level — they
+      are the framework wiring + the common "/me" helper.) *)
+
 (** POST route helper for requesting a password-reset email.
 
     Reads [email_param] (default ["email"]), calls {!issue_password_reset}, invokes [send] only when
@@ -1953,32 +2288,4 @@ val saml_callback_paw :
   trusted_keys:X509.Public_key.t list ->
   unit ->
   Paw.t
-
-(** Register Meteor-shaped DDP/Pulse methods on a compatible reactive runtime:
-    ["createUser"], ["currentUser"], ["login"], ["logout"], ["logoutOtherClients"],
-    ["changePassword"], ["resetPassword"], ["verifyEmail"], ["enrollAccount"], and
-    ["completeLoginStepUp"]. ["currentUser"] returns the safe session payload shape used by
-    {!session_doc}; websocket-only context fields ([authContext], [assurance], [org]) are null.
-    Login-like success results are [{id, token}], password signup [createUser] returns
-    [{id, token, user}], MFA branches return [{mfaRequired, userId, mfaToken}], and
-    ["logoutOtherClients"] returns a replacement [{id, token}] for the current connection after
-    bumping [auth_epoch]. Browser clients that cannot receive a Set-Cookie on a websocket can still
-    resume explicitly. HTTP/browser cookie helpers remain the preferred same-origin browser story. *)
-module Methods (R : sig
-  type doc = Bson.t
-
-  type invocation = {
-    user_id : string option;
-    remote_ip : string option;
-    is_simulation : bool;
-    set_user_id : string option -> unit;
-  }
-
-  exception Error of { code : string; reason : string }
-
-  val methods : (string * (invocation -> doc list -> doc)) list -> unit
-end) : sig
-  type invocation = R.invocation
-
-  val register : t -> unit
 end
