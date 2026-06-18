@@ -193,7 +193,7 @@ let i32_max = Int32.to_int Int32.max_int
 let in_i32 n = n >= i32_min && n <= i32_max
 let rec dec_len n = if n < 10 then 1 else 1 + dec_len (n / 10) (* decimal digits of a non-negative int (array indices), no alloc *)
 
-(* bytes to encode a {!Bson.t} value (NOT its tag/key) — for the [TDyn] escape hatch; mirrors emit_value *)
+(* bytes to encode a {!Bson.t} value (NOT its tag/key) — for the [TBson] escape hatch *)
 let rec bson_size (b : Bson.t) : int =
   match b with
   | Bson.Null | Bson.Min_key | Bson.Max_key -> 0

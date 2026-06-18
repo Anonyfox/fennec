@@ -1,6 +1,19 @@
-; Proves the standalone Sift ppx: ONLY fennec.pulse.sift + the sift.ppx driver, no collection/fur.
+; The sift.ppx DX proofs.
+;  - test_sift_ppx: [@@deriving model] through the standalone sift.ppx driver, linking ONLY
+;    fennec.pulse.sift (no mongo, no fur) — the model deriver stands alone.
+;  - test_collection_ppx: the deriver's GOLDEN test — a [@@deriving collection] record vs its
+;    hand-written twin (behavioural equality), driven through fur.ppx with the live-client runtime,
+;    proving the ppx owns no semantics.
 (test
  (name test_sift_ppx)
+ (modules test_sift_ppx)
  (libraries fennec.pulse.sift)
  (preprocess
   (pps fennec.pulse.sift.ppx)))
+
+(test
+ (name test_collection_ppx)
+ (modules test_collection_ppx)
+ (libraries fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live.client fennec-hunt.unit)
+ (preprocess
+  (pps fennec.fur.ppx)))

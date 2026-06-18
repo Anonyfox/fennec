@@ -6,7 +6,7 @@
     field is simply absent from [required]. Pure rendering — installation rides the backend boot
     path next to index-ensure.
 
-    {[ let validator = Schema.validator Task.codec
+    {[ let validator = Json_schema.validator Task.codec
        (* { "$jsonSchema": { bsonType: "object", required: [...], properties: {...} } } *)
        (* hand to mongod's create/collMod — minimongo enforces the same rule in-engine *) ]} *)
 

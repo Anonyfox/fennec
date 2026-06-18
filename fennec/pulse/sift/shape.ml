@@ -2,7 +2,7 @@
    Everything else derives from [shape]: the codec (decode collects path-tagged errors; encode is
    total), encode-side validation ([validate] / [encode_checked] — an invalid value cannot pass a
    write boundary), normalizers (run BEFORE checks, on both directions), derived pretty-printing
-   ([pp]/[show], nested), and the neutral [view] reflection downstream renderers consume
+   ([pp]/[show], nested), and the [view] reflection that downstream renderers consume
    ($jsonSchema, OpenAPI, admin) without this module knowing them.
 
    Refinements carry a [hint] — the machine-readable half a renderer can translate (min_len →
@@ -107,9 +107,8 @@ and 'r record_shape = {
 and 'a field = { key : string; item : 'a shape; needed : bool; fallback : 'a option }
 
 (* a pull source of a document's fields: given a [field] (key + shape), produce its decoded value (or
-   collected errors). Rank-2 — ONE reader decodes fields of every type. The tree path captures a kvs
-   index in the closure; the buffer path captures the scanned span-tape. This is what lets a record's
-   constructor be threaded once and fed from ANY format. *)
+   collected errors). Rank-2 — ONE reader decodes fields of every type; {!Bson_engine} builds one from a
+   document's kvs index, so a record's constructor is threaded once, fed straight from the document. *)
 and field_reader = { read_field : 'a. 'a field -> ('a, error list) result }
 
 and 'r bound_field =

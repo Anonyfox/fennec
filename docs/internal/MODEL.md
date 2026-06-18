@@ -1,415 +1,116 @@
-# MODEL — typed collections (design)
+# MODEL — typed collections (design rationale)
 
-**Naming (settled):** the decorator is `[@@fennec.collection]` — VERBATIM Meteor vocabulary, per the
-established house rule ("coming from Meteor, your daily words don't change — only the namespace";
-themed names are for fennec-original layers, literal names for the Meteor-compatible family:
-Collection / Method / publish / subscribe). The semantic nature of this layer is DECLARATIVE —
-"this is a task, it has this shape, and there is a collection of them" — and `collection` says
-exactly that. No themed umbrella: the deriver generates a per-model module, so userland writes
-`Task.insert` / `Task.find` and never names the machinery's library at all.
+> **Practical guide / current API:** see [`fennec/pulse/sift/README.md`](../../fennec/pulse/sift/README.md)
+> and the per-module `.mli` files. This doc is the *why* — the design reasoning behind the typed-collection
+> layer, kept for contributors. It is built and shipping.
 
-**Code organization (settled — by ontology, not colocation).** Four primitives, two runtime
-"works-on" arrows (methods → collections, publications → collections — app-code relationships,
-never library deps):
+The problem this layer closes: without it every userland touchpoint speaks `Bson.t` — field names as bare
+strings, per-component defensive matching, silent drift on rename. That was Meteor's forever-weak spot
+(simple-schema / collection2 / astronomy — three generations of runtime bolt-ons fighting the absence of
+types). We have what they never had: **a compiler on both sides of the wire.** The rule for the layer:
+*let OCaml play its strengths inside; keep the surface a beginner writes flat and obvious.*
 
-- `fennec.pulse.sift` (NEW sibling under pulse — Pulse IS the data brand, all data lives under
-  it): `Sift`, the shape language — ty, combinators, checks, field handles, derived pp,
-  introspection. Deps: bson only; jsoo-safe. Shapes describe VALUES and belong to no consumer
-  WITHIN pulse: methods use them, collections use them — and anything outside pulse (a paw
-  validating a request body) deps this one sub-lib without pulling the engine. (Sift moves OUT of
-  the method lib — it was born there by historical accident, not ontology.)
-- `fennec.pulse.method` slims to `Method` alone (its true subject). Deps: fennec.pulse.sift.
-- `fennec.pulse` (Reactive) — the dynamic engine and substrate. Unchanged.
-- `fennec.pulse.collection` (NEW, virtual — the Ddp_client pattern): the typed collection runtime.
-  `Filter`/`M`/`Index`/`Schema` live HERE (collection vocabulary, meaningless without one), plus the
-  typed verbs delegating to the substrate. Native impl → Reactive.Collection; browser impl → Live
-  reads + sim-writes (the decree preserved). $jsonSchema emission here; its INSTALL rides the
-  backend boot path next to index-ensure. Renderers live with their consumers — pulse.codec only
-  exposes introspection (a future OpenAPI renderer lives with the API surface, not in codec).
-- `fennec.pulse.collection.ppx` — the [@@fennec.collection] deriver targeting the above.
+## The keystone — one declaration drives everything
 
-**Named open design point (phase 4):** Reactive is a functor; the generated Task module is SHARED
-code and cannot reference the server's RData instance. The deriver output therefore splits: the
-pure part (codec/fields/name/schema) is shared and instance-free; the server ATTACHES it to an
-instance at boot (one line, next to publish); the browser binds to the concrete Live client. The
-attach seam gets designed deliberately in that phase, not improvised.
+`'a Sift.t` wraps a **GADT type representation** (`Shape`), so a field spec carries structure, not just a
+pair of opaque encode/decode functions. From that single description the framework derives:
 
-**The generated surface is the Meteor verb set, typed.** The 1:1 Meteor mapping ALREADY EXISTS on
-the dynamic substrate (`Reactive.Collection`: insert, find/cursor (fetch/map/for_each/count/observe),
-find_one, count, update ~multi ~upsert, remove, aggregate, distinct, transforms) — all direct-style
-Eio, returning plain values, no async/await anywhere. The deriver wraps exactly those verbs per
-model, so call sites read like Meteor with the plural dropped:
+1. **the codec** — encode/decode with field-named, path-tagged errors;
+2. **the mongod `$jsonSchema` validator** — the DATABASE rejects foreign writes that violate the shape
+   (`Json_schema.validator`; minimongo enforces the identical rule in-engine). Nobody has this from one
+   declaration — Prisma doesn't validate foreign writes, Mongoose validates only its own;
+3. **typed field handles** (`Fields.x`) powering `Filter` / `Update` / `Sort` / `Index` / `Projection`;
+4. **derived pretty-printing** (`Sift.show`), and later, for free, OpenAPI emission + a generic admin UI
+   (the Django-admin primitives are exactly field names + types + codecs).
 
-```ocaml
-let id = Task.insert { id = ""; title; done_ = false; tags = [] }   (* : string — no await *)
-let open_ = Task.find ~where:Filter.[ eq Fields.done_ false ] ()          (* typed cursor *)
-Task.update ~where:Filter.[ eq Fields.id id ] M.[ set Fields.done_ true ]
-let n = Task.count ()
-```
-
-Client side, the decree holds unchanged: typed READS everywhere (`Task.find` is the live typed
-query over the cache); WRITES go through methods — `Task.insert` exists server-side and inside
-optimistic stubs (the sim variant), never as a free client write (Meteor's client-side
-collection.insert was the allow/deny path we banned).
-
-Status: **phases 1–3, 5, 6 BUILT and proven** (fennec.pulse.sift GADT core · Schema · Filter/M/Index/Def
-+ Typed.Make server runtime · find_c/Sim.insert_t client boundary · the example converted — zero
-Bson.get in the component, full vertical through the browser e2e). Remaining: the [@@fennec.collection]
-deriver (P4 — generates the hand-written form the example now demonstrates) and the mongod
-validator/index INSTALL on the driver boot path (seam noted in Def.validator). Originally: The last untyped hole in the vertical: today every userland
-touchpoint speaks `Bson.t` — field names as bare strings, per-component defensive matching, silent
-drift on rename. This was Meteor's forever-weak spot (simple-schema / collection2 / astronomy: three
-generations of runtime bolt-ons fighting the absence of types, each wrapping writes and each with
-seams). We have what they never had: a compiler on both sides of the wire. The design rule for this
-layer: **let OCaml play its strengths inside; keep the surface a beginner writes flat and obvious.**
+Naming follows the house rule: Meteor-family words stay literal (`collection` / `Method` / `publish` /
+`subscribe`), themed names are for fennec-original layers. The decorator is `[@@deriving collection]`.
 
 ## What the dev writes (the entire surface)
 
-One model module, by convention, shared (compiles into server and browser bundle alike) — a PLAIN
-OCaml record plus one deriving attribute (the official surface):
+One model module — a plain OCaml record plus one attribute, compiled into both the server and the browser
+bundle:
 
 ```ocaml
-(* store/task.ml — the WHOLE model (common case: ZERO field annotations) *)
+(* store/task.ml — the WHOLE model, common case: zero field annotations *)
 type t = { id : string; title : string; done_ : bool; tags : string list }
 [@@deriving collection ~name:"tasks"]
-
-```
-The deriver also puts the reactive READ verbs straight on the model module — `Task.find` /
-`Task.project` (Meteor's collection object), ambient connection, no functor, no view binding. The
-model file is the record + attributes + `[%index]` and nothing else.
-
-**The day-to-day surface is Meteor's, in plain OCaml** (no React/wire clutter):
-```ocaml
-open Task                                  (* fields in scope + the Tasks view *)
-Pulse.connect ~path:"/ddp" ()              (* the one page connection — Meteor.connect *)
-let ready = Pulse.subscribe ~name:"tasks" ()                         (* Meteor.subscribe *)
-let live  = Task.find ~where:[%q done_ = false] ~sort:[%sort title asc] ()   (* Tasks.find(...) *)
-let cards = Task.project [%fields title] ()                           (* find(_, {fields}) *)
-ignore (Pulse.call add_task "buy milk")                              (* Meteor.call *)
 ```
 
-Convention over annotation — the deriver applies the rules a reader would guess:
+The deriver puts the reactive READ verbs straight on the module (`Task.find` / `Task.project` — Meteor's
+collection object), generates the `Fields` handles + the codec, and a `collection` declaration. Queries
+read as expressions via the DSLs (resolved against `Fields` in scope, so a wrong field/value is a compile
+error):
 
-- a field named `id`/`_id` maps to `"_id"` with ObjectId coercion (no [@id] needed);
-- a trailing underscore is ALWAYS an OCaml keyword escape (`done_`, `type_`, `end_` — `done` is a
-  reserved word, the underscore is the standard community convention, not ours), so the deriver
-  auto-strips it for the wire key: `done_` → `"done"`. House style: prefer non-colliding domain
-  words first (`completed` beats `done_`); escape only when the vocabulary genuinely collides;
-- `option` fields decode absent as `None`; `list` fields decode absent as `[]` (Mongo-idiomatic);
-- the collection name stays an EXPLICIT string — deriving it from the module name needs English
-  pluralization inflection, a Rails scar (surprising on person/status) we refuse to import.
-
-Validation is the inline attribute catalog (ONE model form — no hand-written builder needed):
-`[@non_empty] [@min_len n] [@max_len n] [@one_of [..]] [@matches "re"] [@email] [@url] [@slug]
-[@trim] [@lowercase] [@min n] [@max n] [@positive] [@check fun .. -> ..]`. `[@key "wire"]` overrides
-the wire key. Each wraps the field's codec; they stack and collect.
-
-**Queries read as expressions, not API calls.** Put `open Task` at the top of a file (the same
-`import`/`using` every language has — it brings the model's fields into scope), and queries are bare:
 ```ocaml
 open Task
-…
-~where:[%q status = "doing" && priority >= 2 && assignee.email = "ada@x.io"]
-~sort:[%sort priority desc, title asc]
-[%set status = "done"]
-```
-They expand to byte-identical typed `Filter`/`Sort`/`M` calls — a wrong field/value is still a compile
-error, only the `Filter.`/`Fields.`/`eq`/`dot`/list noise is gone. `[%q]` covers `= <> < <= > >=` and
-`&& ||` (bare ident = field, `a.b` = a dotted path into an embedded record); richer matchers
-(`in_`/`has`/`regex`) and modifiers (`inc`/`push`/…) use `Filter`/`M` directly. **Scope rule (the one
-thing to know):** the DSLs resolve field names against the model in scope; `open Task` is the idiom,
-and with two models in one file you qualify the secondary one with `Task.(…)` — exactly like
-resolving any name clash between two opened modules.
-
-One writing site, zero duplication, and the record stays 100% vanilla OCaml: dot access, pattern
-matching, merlin hover/completion all work natively (no synthetic types). The deriver — one small
-framework-owned ppxlib rewriter (the same machinery the jsoo ppx already links; fennec already owns
-syntax where it pays: mlx, [%%style]) — generates the `Fields` module of typed handles, the
-GADT-backed codec, and the `Model.define`. **The combinators remain the truth; the ppx is only the
-pen**: its expansion is documented, auditable, and hand-writable.
-
-The hand-written fallback (also what the ppx targets) is the record-builder form — linear, one line
-per field, no positional make/split tuples:
-
-```ocaml
-let model = Model.(
-  record (fun id title done_ tags -> { id; title; done_; tags })
-  |> field  "_id"   doc_id        (fun t -> t.id)
-  |> field  "title" string        (fun t -> t.title)
-  |> field  "done"  bool          (fun t -> t.done_)
-  |> fieldd "tags"  (list string) ~default:[] (fun t -> t.tags)
-  |> seal "tasks")
+let live  = Task.find ~where:[%q done_ = false] ~sort:[%sort title asc] ()
+let cards = Task.project [%fields title] ()
+let () = update tasks ~where:[%q id = tid] [%set done_ = true]   (* Update modifiers, typed *)
 ```
 
-Use it when the deriver doesn't fit (computed fields, exotic codecs); it is the same checked
-machinery, just written by hand. Meteor's SimpleSchema had one writing site and zero static
-checking; we get one writing site WITH the compiler — the trade they wanted and couldn't have.
+Convention over annotation — the deriver applies the rules a reader would guess: `id`/`_id` → `"_id"`
+(ObjectId-coerced); a trailing underscore is a keyword escape, stripped for the wire key (`done_` →
+`"done"`); `option` decodes absent as `None`, `list` as `[]`. `[@key "wire"]` overrides the key. The
+combinators remain the truth; **the ppx is only the pen** — its expansion is the hand-written builder
+form, golden-tested byte-for-byte (`test_collection_ppx`).
 
-Everything downstream of `define` is then typed:
+## Validation — opt-in, stackable, airtight by path
 
-```ocaml
-(* server *)
-let tid = Model.insert model { id = ""; title; done_ = false; tags = [] }  (* id minted when "" *)
-Model.publish model "tasks" (fun _ -> Model.cursor model ~where:Filter.[ eq done_ false ] ())
+Checks are opt-in (`[@check]` / the inline catalog) and STACK in declaration order, each with its own
+message; errors COLLECT (every failing field, not first-fail — forms need the full list). Two kinds:
 
-(* methods: the model's codec IS an argument codec — no second declaration *)
-let add_task = Method.define "addTask" ~args:(Sift.a1 (Model.codec model)) ~result:Sift.string ...
+- **Structured refinements** (`min_len`/`max_len`/`pattern`/`min`/`max`/`one_of`/…) carry their meaning in
+  the shape, so they ALSO translate into the mongod `$jsonSchema` (minLength, pattern, enum, …) — the
+  database enforces them against foreign writers.
+- **Arbitrary predicates** (`[@check fun v -> …]`) run at every app boundary but can't be pushed into
+  mongod — documented honestly as app-side-only.
 
-(* component — typed all the way into the view *)
-let tasks = Model.find client model ~where:Filter.[ eq done_ false ] () in
-(each (Fur.get tasks) (fun task -> <li key=task.id>(node task.title)</li>))
+**Airtight = every path a value travels is covered:** ① method args (decode + checks → 422 before the
+handler); ② server writes (`encode_checked` validates → an invalid value can't reach the DB through the
+typed layer); ③ optimistic stubs (same checks; `Sift.validate` for instant offline form feedback); ④
+foreign writers (structured refinements via the installed `$jsonSchema`); ⑤ reads of legacy/garbage docs
+(decode runs checks; failures surface under the skip-count-warn policy, never a silent mis-render).
 
-(* writes through field handles — a renamed field is a compile error everywhere *)
-Model.update model ~where:Filter.[ eq id tid ] M.[ set done_ true; push tags "urgent" ]
-```
-
-`task.title` instead of `match Bson.get doc "title" with Some (Bson.String s) -> s | _ -> ...` —
-that line is the whole pitch.
-
-## The keystone: a GADT runtime-type core, invisible from outside
-
-Today `Sift.t` is a pair of opaque functions — nothing can be derived from it. The redesign makes
-field specs carry **structure**: internally, `'a Sift.t` wraps a GADT type representation
-
-```ocaml
-type _ ty = String : string ty | Int : int ty | Bool : bool ty | Float : float ty
-          | List : 'a ty -> 'a list ty | Option : 'a ty -> 'a option ty
-          | Obj : ... (* field list *) | Check : ('a -> bool) * string * 'a ty -> 'a ty | ...
-```
-
-Userland never sees it — they write `Sift.string`, `Sift.req`, `obj4`, exactly as today. But from
-that one representation the framework derives, now and later:
-
-1. **The codec** (encode/decode with field-named errors) — as today.
-2. **The mongod `$jsonSchema` validator** — installed on the collection at boot (`Model.define` →
-   `collMod`/create with validator). The DATABASE now rejects foreign writes that violate the
-   declared structure; minimongo enforces the identical rule in-engine. This answers "Mongo can
-   hold anything": shape is enforced at the write boundary of every path, including paths that
-   aren't us. Nobody has this from one declaration — Prisma's schema doesn't validate foreign
-   writes, Mongoose validates only its own.
-3. **Typed field handles** (name + ty) powering `Filter.`/`M.`/`Index.`/projections.
-4. Later, for free: **OpenAPI emission** from method declarations, and the **admin UI** (a generic
-   live CRUD screen needs exactly: field names, types, and codecs — the Django-admin primitives).
-
-5. **Pretty-printing, derived by default**: the ty knows every field name and shape, so each model
-   gets `pp`/`show` for free — nested documents, lists, options, all indented. Userland logging is
-   `Log.info (Task.show task)`, no annotation, no Format incantations; `Bson.pp` gets the same
-   nested treatment for the dynamic layer, and `Decode_error.pp` renders validation failures
-   readably (the agent fastlane surfaces the same rendering).
-
-## Validation semantics — opt-in, stackable, airtight by path
-
-Checks are opt-in (`[@check]` / `Sift.check`) and STACK: multiple attributes (or nested combinator
-checks) compose in declaration order, each with its own message. Two kinds, deliberately:
-
-- **Structured refinements** — `min_len`/`max_len`/`pattern`/`min`/`max`/`one_of` — carry their
-  meaning in the ty, so they ALSO translate into the mongod `$jsonSchema` validator (minLength,
-  pattern, minimum, enum…): the database itself enforces them against foreign writers.
-- **Arbitrary predicates** — `check (fun v -> ...) ~msg` — run at every app boundary but cannot be
-  pushed into mongod (no lambdas in $jsonSchema). Documented honestly as app-side-only.
-
-Errors COLLECT: validation returns every failing field with its message(s), not first-fail — forms
-need the full list (`Decode_error.t` is a non-empty list of (field path, message)).
-
-Airtight means every path a value can travel is covered — enumerated:
-
-1. **Method args (client → server)**: codec decode runs all checks → a 400/422 naming each failing
-   field, before the handler runs. (Exists today for shape; checks ride the same gate.)
-2. **Server writes** (`Model.insert`/`update`): checks run on ENCODE too — a typed value whose
-   refinements fail raises `Model.Invalid` which the method layer translates to a 422 Result
-   automatically. An invalid value cannot reach the database through the typed layer, period.
-3. **Optimistic stubs**: a stub writing through the model runs the SAME checks — a failing stub is
-   contained by the existing stub-failure machinery (logged, simulation skipped, server decides).
-   For instant form feedback BEFORE calling: `Model.validate model v : (unit, Decode_error.t) result`
-   — the same checks, synchronously, offline-capable, zero duplicated logic.
-4. **Foreign writers** (other processes on the same mongod): structured refinements enforced by the
-   installed `$jsonSchema`; arbitrary predicates are not (named honestly above).
-5. **Reads of legacy/garbage docs**: decode runs checks; a doc that predates a tightened rule
-   surfaces under the skip-count-warn policy — visible in dev, never a silent mis-render.
-
-Ecto changesets without the second language — and unlike changesets, the same declaration validates
-on the client, in the stub, at the wire, in the handler, and (structurally) in the database.
-
-## The validation catalog — exhaustive, by type
-
-Every entry is a GADT node: composable, stackable, error-collecting, and translated into the mongod
-`$jsonSchema` where the column says so. Conveniences are named presets of the same nodes.
+### The catalog (each entry is a shape node; presets are named nodes)
 
 | need | surface | $jsonSchema |
 |---|---|---|
 | string length / emptiness | `[@min_len n]` `[@max_len n]` `[@non_empty]` | minLength/maxLength |
-| string shape | `[@pattern "^[a-z0-9-]+$"]`; presets `[@email]` `[@url]` `[@slug]` | pattern |
+| string shape | `[@matches "re"]`; presets `[@email]` `[@url]` `[@slug]` | pattern |
 | enumeration | `[@one_of ["draft";"live"]]` | enum |
-| normalization | `[@trim]` `[@lowercase]` — runs BEFORE checks, on decode and encode | — |
-| numeric bounds | `[@min n]` `[@max n]` `[@positive]` `[@non_negative]` `[@multiple_of n]` | minimum/maximum/multipleOf |
-| float sanity | nan/inf REJECTED BY DEFAULT (`[@allow_nonfinite]` to opt out) | bsonType double |
-| dates | `int64` ms via `Sift.date`; `[@min]`/`[@max]`, `[@past]`/`[@future]` presets | minimum/maximum |
+| normalization | `[@trim]` `[@lowercase]` — run BEFORE checks, both directions | — |
+| numeric bounds | `[@min n]` `[@max n]` `[@positive]` | minimum/maximum |
+| float sanity | nan/inf REJECTED by default | bsonType double |
 | list shape | `[@min_items n]` `[@max_items n]` `[@unique_items]` | minItems/maxItems/uniqueItems |
-| list elements | element ty carries its own checks — composes for free | items |
-| optional keys | `'a option` — absent OR null decodes `None`; `None` encodes as KEY OMITTED (Mongo-idiomatic); checks apply to `Some` | required omission |
-| dynamic-key maps | `string String_map.t` (Mongo subdocs as dicts); `[@values <check>]` per value | additionalProperties |
-| nested records | a `[@@fennec.record]` type used as a field — recursive, errors carry the full path ("address.zip: …") | properties (recursive) |
-| polymorphic docs | OCaml VARIANTS over a discriminator: `[@@fennec.variant ~tag:"kind"]` — exhaustive matching on doc kinds, the OCaml-strength move | oneOf per case |
-| cross-field rules | record-level `[@@check fun t -> pred, "msg"]` (stackable) | — |
-| anything else | `[@check fun v -> pred]` with `~msg` | — |
+| optional keys | `'a option` — absent/null → `None`; `None` omits the key | required omission |
+| dynamic-key maps | `Sift.str_map` (Mongo subdocs as dicts) | additionalProperties |
+| nested records | a field typed `M.t` where `M` also derives — paths nest (`address.zip: …`) | properties (recursive) |
+| polymorphic docs | OCaml variants over a discriminator (`Sift.variant ~tag`) | oneOf per case |
+| cross-field rules | record-level `checking (fun t -> pred) "msg"` | — |
+| anything else | `[@check fun v -> pred]` | — |
 
 Named NON-members (each has a better home): **uniqueness** → `Index.unique` (a DB guarantee, not a
-predicate); **foreign-key existence** → app logic in the handler (a codec check must stay pure —
-no IO); **authorization** → methods (the blessed path, METHODS.md).
+predicate); **foreign-key existence** → handler logic (a codec check must stay pure — no IO);
+**authorization** → methods (the blessed path, see METHODS.md).
 
-The one worked example using most of the catalog:
+## Taste decisions (each a Meteor scar avoided)
 
-```ocaml
-(* store/listing.ml *)
-type address = { street : string; zip : string [@pattern "^[0-9]{5}$"]; country : string }
-[@@fennec.record]                                  (* nested: codec + fields, no collection *)
-
-type pricing =
-  | Fixed   of { amount : float [@positive] }
-  | Auction of { floor : float [@positive]; min_step : float [@min 0.5] }
-[@@fennec.variant ~tag:"kind"]                     (* {"kind":"fixed","amount":9.99} on the wire *)
-
-type t = {
-  id : string;
-  title : string;                 [@trim] [@min_len 3] [@max_len 120]
-  slug : string;                  [@slug]
-  contact : string;               [@lowercase] [@email]
-  status : string;                [@one_of ["draft"; "live"; "sold"]]
-  price : pricing;
-  tags : string list;             [@max_items 10] [@unique_items]
-  description : string option;    (* the Mongo-over-time field: absent in old docs → None *)
-  address : address;
-  starts : int64;                 [@future]
-  ends : int64;
-}
-[@@fennec.model "listings"]
-[@@check fun t -> t.starts < t.ends, "starts must precede ends"]
-```
-
-What this buys, concretely: `Model.validate model v` returns EVERY violation with its path
-(`address.zip: must match ^[0-9]{5}$` · `tags: duplicate items` · `starts must precede ends`);
-the same list renders in the stub (instant offline form errors), at the method gate (422), and in
-the handler; mongod itself rejects a foreign write with a bad zip or an unknown status; and
-`Listing.show v` pretty-prints the whole nested thing for free. Matching on `price` is exhaustive:
-add a `Subscription` case and the compiler lists every site that must handle it.
-
-## Projections — Meteor's `{ fields: {…} }`, made a type-safe object (BUILT)
-
-The gap projections normally open — "the result is the full type but half its fields are absent →
-`undefined` in JS" — is closed with the one OCaml product that is structural, inferred, and needs
-no declaration: the **object**. `[%fields title; done_]` (the ppx, under the model's scope) expands
-to a `Proj.t` carrying, from one source: the Mongo projection document `{title:1, done:1}` (the
-wire/cursor trims by it) AND a decoder that builds `object method title = … method done_ = … end`.
-
-```ocaml
-let cards = Ddp_client.find_p client Task.collection Task.([%fields title]) () in
-each (Fur.get cards) (fun t -> <li>(node t#title)</li>)   (* t#body → COMPILE ERROR, not undefined *)
-```
-
-The result type is the inferred `< title : string > array` — the full record is NEVER constructed
-on this path, so a projected-away field is *unmentionable*. A field not on the model is an unbound
-`Fields.x` (compile error) right at the projection. The wire doc and the object decoder come from
-the SAME `Fields` handles, so what ships, what's cached, and what's typed cannot drift. Server-side
-`T.cursor ~project` / `T.find_p` trim identically. The tradeoff, stated honestly: projected access
-is `t#title` (object method) not `t.title`, and object types print verbosely in errors — confined
-to projected reads; full-document reads stay plain records. A shared/named projection is just a
-view-record (a second small model over the same collection); `[%fields]` is the zero-definition
-inline path.
-
-**Coverage (precise):** `[%fields]` covers **top-level inclusion**, **`$slice`**, and **dotted
-paths into embedded records** — all typed, all auto-trimming the wire (`_id:0` unless you project
-`id`):
-- `[%fields title; done_]` → `< title; done_ >`.
-- `[%fields slice tags 3]` / `[%fields slice tags 2 5]` → `$slice` on an array field, list type
-  unchanged (the array is trimmed server-side).
-- `[%fields author / name; author / email]` → **navigate, don't stringify**: the path goes through
-  the embedded model's re-exported `Fields`, the wire ships `"author.name"`/`"author.email"`, and
-  the result is the faithful nested object `< author : < name : _; email : _ > >` (`o#author#name`).
-  A wrong field at ANY depth is an unbound-handle compile error; `o#author#nope` / `o#body` are
-  unmentionable. This needs the embedded field typed `Author.t` where `Author` also derives
-  `collection` (the deriver emits `Sift.req "author" Author.codec` + a `Fields` submodule
-  re-export for navigation).
-
-Still NOT typed by `[%fields]` (raw escape covers them): **exclusion** (can't yield a precise type)
-and the positional `$` (unsupported engine-side). The full Mongo projection engine (dotted include/exclude,
-`$slice`, `$elemMatch`; `_id`-kept-unless-excluded) lives in `mongo/query/projection.ml` and is
-reachable via the **untyped escape**: `Ddp_client.find client "tasks" ~fields:(Bson.doc […]) ()`
-returns `Bson.t array` with the full engine — the honest pressure valve for exotic projections.
-Not typed by `[%fields]` (and why): **exclusion** can't yield a precise object type (the ppx can't
-enumerate the model's full field set, and object types can't be subtracted); **dotted paths** would
-need nested object synthesis. The positional `$` operator is unsupported engine-side too
-(documented). Transparent typed coverage of exclusion stays deferred (it can't produce a precise object type);
-everything else — inclusion, $slice, dotted-path nesting — is built.
-
-## Typed selectors & nested paths (Filter)
-
-Query selectors are typed against the field handles, same guarantee as projections and methods:
-`Filter.[ eq Fields.done_ false ]` — a wrong field name is an unbound `Fields.x` compile error, a wrong
-value type is a type error (`eq Fields.done_ "yes"` won't compile). Covered: `eq/ne/lt/lte/gt/gte/
-in_/nin/exists/has/contains_all/size/regex/not_`, composed with `all` (AND) / `any` (OR); niche
-operators ($elemMatch/$type/$mod/$near/$bits) ride `Filter.raw bson`.
-
-Modifiers (`M`) are the full common update set, typed: `set/unset/inc/inc_f/mul/mul_f/min/max/
-push/add_to_set/pull/pull_all/pop_first/pop_last/set_on_insert/rename` (+ `M.raw`). Sort is typed
-too — `Sort.by [ asc Fields.title; desc Fields.created ]`, no stringly key. And every verb takes
-the typed forms: `find/find_one/count/update/remove/upsert/distinct` over `Filter`+`Sort`+`M`
-(`update`/`upsert` thread the typed selector AND modifier; `distinct` decodes to the field's type).
-Aggregation pipelines stay raw `Bson list` (arbitrary stages — inherently untyped).
-`lt`/`gt` are polymorphic (Mongo orders every BSON type — faithful, not a hole). **Nested-path
-selectors** use `Sift.dot` — pure value-level, no ppx: `Filter.eq (Sift.dot Fields.author
-Author.Fields.name) "Ada"` joins the wire names to `"author.name"` and takes the LEAF's type, so
-both field names and the value type are compile-checked; it chains for deeper paths.
-
-## Taste decisions (each one a Meteor scar avoided)
-
-- **`Model` is the recommended path; `Collection` remains the dynamic substrate** and the escape
-  hatch (aggregations, migrations-by-hand, weird documents). Two named layers, no wrapping of one
-  by hidden monkey-patching (collection2's sin: it silently wrapped `insert` and broke composability).
-- **Selectors/modifiers are functions, not a parser**: `Filter.eq f v`, `Filter.all [...]`, `Filter.lt`, `M.set`,
-  `M.push`, `M.inc` — typed against each handle's `ty`, compiling down to the same Bson the engine
-  already executes. `Filter.raw bson` keeps the full Mongo operator surface reachable. No string DSL, no
-  magic comparison operators by default (an optional `Filter.O` for taste-holders).
-- **Projections are tuples, not phantom records**: `Model.project client model P.(f2 title done_)`
-  → `(string * bool) array signal`. Composable, no new type declarations, no partial-record lies.
-  Full `find` returns whole `t`s (the live cache holds whole docs anyway).
-- **`_id` is the author's choice**: include `Sift.doc_id` in the record (typed `string`, ObjectId
-  coerced — the RX6 lesson baked in) or omit it and use `(id, t)` pair reads. No forced wrapper
-  record, no `.v` hop.
-- **Malformed-doc policy is one deliberate default, not per-call-site choice**: typed reads SKIP
-  documents that fail decode, count them, and warn once per doc — the UI never crashes on foreign
-  garbage, the dev sees it immediately (and the agent fastlane surfaces the warning).
-  `Model.find_results` returns `('a, Decode_error.t) result` per doc for code that must care.
-  Writes never skip: an encode is total by construction.
-- **Evolution without migrations**: `opt` fields + defaults are forward-tolerant readers — the
-  Mongo-idiomatic discipline, documented with patterns (additive first, rename = add+backfill+drop,
-  version field for hard breaks). No migration framework; the validator is updated by deploy.
-- **The optimistic path is typed too**: `sim_writes` gains model-aware forms so a stub writes
-  `{ title; done_ = false }`, not hand-built Bson — the stub and the handler share the model value
-  the way they already share the method value.
+- **`Filter`/`Update`/`Sort` are functions, not a parser** — typed against each handle, compiling to the
+  same Bson the engine runs; `.raw` keeps the full Mongo surface reachable. No string DSL, no magic
+  operators.
+- **Projections are objects, not phantom records** — `[%fields title]` yields `< title : _ >`; the full
+  record is never built, so a projected-away field is *unmentionable*, not `undefined`. (See
+  `projection.mli`.)
+- **`_id` is the author's choice** — include `Sift.doc_id` in the record (typed `string`, ObjectId-coerced)
+  or omit it; no forced wrapper.
+- **Malformed-doc policy is one deliberate default** — typed reads SKIP docs that fail decode, count them,
+  warn once; the UI never crashes on foreign garbage. `find_results` exposes the per-doc verdict for code
+  that must care. Writes never skip (encode is total).
+- **Evolution without migrations** — `opt` fields + defaults are forward-tolerant readers (additive first;
+  rename = add+backfill+drop; the validator updates by deploy). No migration framework.
 
 ## What we deliberately do NOT build
 
-No ORM, no relations DSL (joins stay `$lookup` — already cross-collection on both sides), no
-lazy-loading proxies, no identity map, no migration framework, no deriving ppx. Each is a tar pit
-with a worse replacement already in the stack.
-
-## Phases (bottom-up, each provable)
-
-1. **Sift core rebuild on the GADT `ty`** — same public combinators, plus introspection;
-   field-named errors throughout; `check`; `doc_id`; the record-builder form (`record |> field
-   |> seal`). (Pure; heavy unit tests.)
-2. **The `[@@fennec.model]` deriver** — a small framework-owned ppxlib rewriter targeting the
-   record-builder; expansion golden-tested (ppx output = the hand-written form, byte-compared);
-   convention rules (id → "_id", trailing-underscore strip, option/list absent-tolerance) tested
-   alongside the deviation attributes ([@key] [@check] [@default]).
-3. **`$jsonSchema` derivation** (pure generation, golden tests) + minimongo write-validation hook
-   + driver `collMod` install at define-time.
-4. **`Model.define` + typed reads/writes server-side** over the existing Collection, `Filter`/`M`/
-   `Index` handles, index ensure at boot.
-5. **Client: typed live `find`/`project` + skip-count-warn policy + typed stub writes.**
-6. **Example app converts to a model module; TERRAIN/METHODS/README updates; the `Bson.get`
-   defensive dance deleted from the example.**
-
-The acceptance bar: the example component contains zero `Bson.get` calls, a field rename is a
-compile error in every file that touches it, and a foreign writer inserting garbage shows up as a
-counted skip in dev — not a silent "(untitled)".
+No ORM, no relations DSL (joins stay `$lookup`), no lazy-loading proxies, no identity map, no migration
+framework. Each is a tar pit with a worse replacement already in the stack.

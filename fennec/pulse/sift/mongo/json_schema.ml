@@ -1,4 +1,4 @@
-(* $jsonSchema, rendered from Sift's neutral [view] — the structural half of validation pushed
+(* $jsonSchema, rendered from a codec's {!Sift.view} — the structural half of validation pushed
    into the DATABASE: mongod rejects foreign writes that violate the declared shape, and minimongo
    enforces the identical rule in-engine. Renderable refinements ride their hints (min_len →
    minLength, pattern, enum, bounds, items…); arbitrary checks (H_none) are app-side-only, by

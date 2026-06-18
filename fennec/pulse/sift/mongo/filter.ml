@@ -5,13 +5,14 @@
 
 type t = (string * Bson.t) list
 
-let op name f op_ v = [ (Sift.field_name f, Bson.doc [ (op_, Sift.field_enc f v) ]) ] [@@inline] [@@warning "-27"]
+(* one comparison operator: [{ field: { $op: value } }] *)
+let op f op_ v = [ (Sift.field_name f, Bson.doc [ (op_, Sift.field_enc f v) ]) ] [@@inline]
 let eq f v = [ (Sift.field_name f, Sift.field_enc f v) ]
-let ne f v = op "ne" f "$ne" v
-let lt f v = op "lt" f "$lt" v
-let lte f v = op "lte" f "$lte" v
-let gt f v = op "gt" f "$gt" v
-let gte f v = op "gte" f "$gte" v
+let ne f v = op f "$ne" v
+let lt f v = op f "$lt" v
+let lte f v = op f "$lte" v
+let gt f v = op f "$gt" v
+let gte f v = op f "$gte" v
 let in_ f vs = [ (Sift.field_name f, Bson.doc [ ("$in", Bson.Array (List.map (Sift.field_enc f) vs)) ]) ]
 let nin f vs = [ (Sift.field_name f, Bson.doc [ ("$nin", Bson.Array (List.map (Sift.field_enc f) vs)) ]) ]
 let exists f b = [ (Sift.field_name f, Bson.doc [ ("$exists", Bson.Bool b) ]) ]

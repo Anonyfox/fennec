@@ -14,7 +14,7 @@
      {!Derived}     — free shape-derived equal / compare / hash / default / arbitrary
 
    The Mongo query vocabulary (Filter / Update / Sort / Index / Projection / Collection) lives in the
-   companion {!Sift_mongo} package and builds on the field helpers below; the [@@deriving] DX is the
+   companion [sift.mongo] library and builds on the field helpers below; the [@@deriving] DX is the
    {!Sift_ppx} package. Neither is needed to use a codec. *)
 
 include Shape (* errors + hints, the shape GADT, field / record_shape / bound_field / case *)

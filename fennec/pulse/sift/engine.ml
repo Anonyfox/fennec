@@ -82,7 +82,7 @@ and cases_need_checks : type a. a case list -> bool = function
   | [] -> false
   | Case c :: tl -> (match c.body.invariants with [] -> false | _ :: _ -> true) || members_need_checks c.body.members || cases_need_checks tl
 
-(* ---- derived pretty-printing — nested values, readable; the [TDyn] escape via {!Value} --------- *)
+(* ---- derived pretty-printing — nested values, all readable --------------------------------- *)
 
 let rec pretty : type a. a shape -> Format.formatter -> a -> unit =
  fun shape fmt v ->

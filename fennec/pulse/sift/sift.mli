@@ -3,8 +3,8 @@
     One GADT type representation inside; plain combinators outside. From one declaration the
     framework derives: the codec (validating decode with path-collected errors), encode-side
     validation ({!validate} / {!encode_checked} — an invalid value cannot pass a write boundary),
-    normalizers, derived pretty-printing ({!pp}/{!show}, nested), and the neutral {!view}
-    reflection downstream renderers consume ($jsonSchema, OpenAPI, the admin UI) without this
+    normalizers, derived pretty-printing ({!pp}/{!show}, nested), and the {!view} reflection that
+    downstream renderers consume ($jsonSchema, OpenAPI, the admin UI) without this
     module knowing them.
 
     Refinements carry a machine-readable {!hint} (what a schema renderer can translate); an
@@ -363,7 +363,7 @@ val obj8 :
   split:('r -> 'a * 'b * 'c * 'd * 'e * 'f * 'g * 'h) ->
   'r t
 
-(** {1 Introspection — the neutral reflection renderers consume}
+(** {1 Introspection — the reflection renderers consume}
 
     Pure data: a schema renderer (the collection lib's $jsonSchema), OpenAPI, or an admin UI walks
     this without the GADT ever crossing the library boundary. *)

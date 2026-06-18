@@ -1,6 +1,0 @@
-; The deriver's GOLDEN test: a derived record vs its hand-written twin — behavioral equality
-; (round-trips, conventions, view reflection), proving the ppx owns no semantics.
-(test
- (name test_collection_ppx)
- (libraries fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live.client fennec-hunt.unit)
- (preprocess (pps fennec.fur.ppx)))

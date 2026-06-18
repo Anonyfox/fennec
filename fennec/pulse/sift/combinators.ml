@@ -113,8 +113,8 @@ let unique_items c =
 
 (* ---- records: the builder (the deriver's target) ------------------------------------ *)
 
-(* [type 'a field] now lives in {!Shape} (so {!Shape.record_shape} can carry a format-agnostic
-   {!Shape.field_reader} that pulls fields of every type). The constructors stay here. *)
+(* [type 'a field] lives in {!Shape} (so {!Shape.record_shape} can carry a {!Shape.field_reader} that
+   pulls fields of every type). The constructors stay here. *)
 
 let req name c = { key = name; item = c.shape; needed = true; fallback = None }
 let opt name c = { key = name; item = (option c).shape; needed = false; fallback = Some None }
@@ -288,6 +288,4 @@ let obj8 fa fb fc fd fe ff fg fh ~make ~split =
       | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f, Ok g, Ok h -> Ok (make a b c d e f g h)
       | r1, r2, r3, r4, r5, r6, r7, r8 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6 @ errs r7 @ errs r8))
     [ bound fa (fun r -> let a, _, _, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _, _, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f, _, _ = split r in f); bound fg (fun r -> let _, _, _, _, _, _, g, _ = split r in g); bound fh (fun r -> let _, _, _, _, _, _, _, h = split r in h) ]
-
-(* ---- introspection: the neutral reflection renderers consume --------------------------- *)
 
