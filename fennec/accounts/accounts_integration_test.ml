@@ -2036,6 +2036,49 @@ let%test "oauth route helpers redirect to provider then resolve callback" =
     in
     r.H.status = 302 && location_ r = Some "/" && Paw.Headers.mem r.H.headers "set-cookie"
 
+(* a provider role_map that yields an INVALID role string must not silently vanish: the login still
+   completes (the session is already valid), but the dropped role-map failure is surfaced as a
+   Role_change / Failure audit event (the D3 observability fix). *)
+let%test "oauth callback role_map failure is surfaced to the audit log, login still succeeds" =
+  let store = Store.minimongo () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher () in
+  let provider = oauth_provider_ () in
+  let authorize = oauth_authorize_paw a provider ~path:"/oauth/start" ~error:"/oauth/error" () in
+  let start = Paw.run authorize (req_ "/oauth/start") in
+  match Option.bind (location_ start) (fun url -> query_param_ url "state") with
+  | None -> false
+  | Some state ->
+    let key = match Identity.oauth ~provider:"github" ~subject:"ada" with Ok key -> key | Error _ -> assert false in
+    let callback =
+      oauth_callback_paw a provider ~path:"/oauth/callback" ~success:"/" ~error:"/oauth/error"
+        ~role_map:(fun _facts -> [ "not a valid role!" ])
+        ~exchange:(fun (_state : OAuth.state) ~code ->
+          if code = "ok" then Ok (external_identity key ~email:"ada@example.com" ~email_verified:true)
+          else Error (Login_rejected "bad_code"))
+        ()
+    in
+    let r =
+      Paw.run callback
+        (H.make_request ~meth:H.GET ~path:"/oauth/callback"
+           ~query_string:("code=ok&state=" ^ H.percent_encode state) ())
+    in
+    (* login still succeeds — the role-map failure is non-fatal *)
+    r.H.status = 302
+    && location_ r = Some "/"
+    && Paw.Headers.mem r.H.headers "set-cookie"
+    &&
+    (* …and a Role_change / Failure audit event was recorded for the new user *)
+    match (Store.users store).find_user_by_email "ada@example.com" with
+    | Ok (Some user) -> (
+      match Audit.list ~target_user_id:user.id ~kind:Audit.Role_change (Store.audit store) with
+      | [ event ] ->
+        (match event.outcome with Audit.Failure _ -> true | _ -> false)
+        && event.actor = Audit.System "sso-role-map"
+        && List.assoc_opt "action" event.metadata = Some "sso_role_map"
+        && List.assoc_opt "roles" event.metadata = Some "not a valid role!"
+      | _ -> false)
+    | _ -> false
+
 let%test "oauth credential handshake: issue then consume binds the user, single-use, secret-checked" =
   let a = test_accounts () in
   match create_user a ~username:"ada" ~password:"pw" () with

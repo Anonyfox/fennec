@@ -521,7 +521,13 @@ type mail_config = {
 (** Passkeys / WebAuthn. Setting [config.passkeys] mounts the passkey registration/assertion JSON routes. *)
 type passkeys_config = { relying_party : Passkey.relying_party }
 
-(** Organizations. When [scim_prefix] is set, the SCIM 2.0 provisioning battery mounts at that prefix. *)
+(** Organization-level wiring. The {b only} thing it currently controls is SCIM: when [scim_prefix] is
+    [Some p] the SCIM 2.0 provisioning battery mounts at [p], otherwise no SCIM routes are mounted.
+
+    It does {e not} gate org functionality itself — {!create_org} / {!add_org_member} /
+    {!issue_org_invite} / {!require_org} and the rest of the org surface are always available against
+    the store regardless of this field (and regardless of whether [orgs] is [Some] at all). The record
+    shape is the forward-looking home for any future org-level knobs. *)
 type orgs_config = { scim_prefix : string option }
 
 (** Where the auto-derived routes live. *)
@@ -581,7 +587,9 @@ type config = {
   password : password_config;
   mail : mail_config option;  (** [Some] ⇒ the password/email routes are wired *)
   passkeys : passkeys_config option;  (** [Some] ⇒ the passkey routes are wired *)
-  orgs : orgs_config option;  (** [orgs.scim_prefix = Some p] ⇒ the SCIM battery at [p] *)
+  orgs : orgs_config option;
+      (** SCIM wiring only: [orgs.scim_prefix = Some p] ⇒ the SCIM battery at [p]. Org operations
+          themselves are always available via the store — see {!orgs_config}. *)
   rbac : Roles.policy option;  (** the app's role→permission map; [None] ⇒ the empty policy *)
   routes : routes_config;
   providers : external_identity provider list;

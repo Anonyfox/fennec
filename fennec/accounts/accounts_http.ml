@@ -542,13 +542,22 @@ let oauth_authorize_paw t ?(redirect_param = "redirect") ~path ~error provider (
       | Ok issued -> Conn.redirect c issued.OAuth.url)
 
 (* Apply a provider's optional role-map to a freshly-logged-in user. The mapped role strings are
-   persisted through the same audited path as admin/SCIM role changes; a role-map failure is
-   non-fatal to the login (the session is already valid) but is surfaced via the audit log inside
-   set_roles_from_strings. [None] is inert. *)
+   persisted through the same audited path as admin/SCIM role changes (a successful change emits its
+   own [Role_change] audit event). A role-map failure — an invalid role name, or a store error — is
+   non-fatal to the login (the session is already valid) but must not vanish: on [Error] we record a
+   [Role_change] / [Failure] audit event with the reason + the attempted role strings, so a misconfig
+   shows up in the audit trail instead of being silently dropped. [None] is inert. *)
 let apply_role_map t role_map principal user_id =
   match role_map with
   | None -> ()
-  | Some f -> ignore (set_roles_from_strings t user_id (f principal))
+  | Some f -> (
+    let roles = f principal in
+    match set_roles_from_strings t user_id roles with
+    | Ok _ -> ()
+    | Error e ->
+      record_audit ~target_user_id:user_id ~mechanism:(Audit.Custom_mechanism "roles")
+        ~metadata:[ ("action", "sso_role_map"); ("roles", String.concat "," roles); ("error", string_of_error e) ]
+        t Audit.Role_change (Audit.System "sso-role-map") (Audit.Failure (string_of_error e)))
 
 let oauth_callback_paw t ?(link_verified_email = true) ?role_map ~path ~success ~error provider ~exchange () =
   Paw.Route.get path (fun c ->
