@@ -167,14 +167,28 @@ struct
         | Some password -> (
           match create_user t ?username ?email ~password ?profile () with
           | Error e -> forbidden (string_of_error e)
-          | Ok u -> (
-            match finish_login t ~strategy:"createUser" u with
-            | Error e -> forbidden (string_of_error e)
-            | Ok (_, token) ->
-              inv.R.set_user_id (Some u.id);
-              (* Meteor's Accounts.config({sendVerificationEmail}) — best-effort, never blocks signup *)
-              if t.config.auto_send_verification_email then ignore (send_verification_email t u.id);
-              Bson.doc [ ("id", Bson.str u.id); ("token", Bson.str token); ("user", user_doc u) ])))
+          | Ok u ->
+            (* With require_verified_email, a brand-new user has no verified email, so [finish_login]
+               would reject ("Email not verified") → a 403 that orphans the just-created row AND skips
+               the verification send. Detect that case up front: send the verification email (so the
+               address CAN be verified) and return a no-token "verify first" outcome — the row exists,
+               but no session is minted and the invocation stays anonymous. *)
+            if t.config.require_verified_email && not (List.exists (fun e -> e.verified) u.emails) then (
+              ignore (send_verification_email t u.id);
+              Bson.doc
+                [
+                  ("id", Bson.str u.id);
+                  ("user", user_doc u);
+                  ("verificationRequired", Bson.Bool true);
+                ])
+            else (
+              match finish_login t ~strategy:"createUser" u with
+              | Error e -> forbidden (string_of_error e)
+              | Ok (_, token) ->
+                inv.R.set_user_id (Some u.id);
+                (* Meteor's Accounts.config({sendVerificationEmail}) — best-effort, never blocks signup *)
+                if t.config.auto_send_verification_email then ignore (send_verification_email t u.id);
+                Bson.doc [ ("id", Bson.str u.id); ("token", Bson.str token); ("user", user_doc u) ])))
       | _ -> bad_request "createUser expects one document argument"
     in
     let login_method inv = function
@@ -686,6 +700,45 @@ let%test "methods: createUser is rejected (403) when config.forbid_client_accoun
   match find_registered_ "createUser" inv [ Bson.doc [ ("username", Bson.str "ada"); ("password", Bson.str "pw") ] ] with
   | _ -> false
   | exception Test_methods_runtime.Error { code = "403"; _ } -> Result.is_ok (create_user a ~username:"ada" ~password:"pw" ())
+  | exception Test_methods_runtime.Error _ -> false
+
+(* With require_verified_email, a brand-new user has no verified email, so [finish_login] cannot issue a
+   session. The pre-fix createUser still tried it and turned the 403 into the client error — AND the
+   verification email (queued AFTER the success branch) never fired: an unverifiable, unloginnable
+   orphan with no email out. createUser must instead create the row, SEND the verification email, and
+   return a no-token "verify first" outcome. This guard captures the mailer + asserts all three: the
+   row exists, exactly one verification mail went out, and the result is {id, user, verificationRequired}
+   with NO token and NO 403. It FAILS on the pre-fix method (403 raised, zero mail). *)
+let%test "methods: createUser under require_verified_email sends verification + returns a no-token outcome" =
+  Test_methods_runtime.registered := [];
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = make ~secret:"accounts-test-secret-cuve" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  configure a { default_config with require_verified_email = true };
+  set_email_templates a (Mailer.default ~site_name:"Acme" ~from:(Fennec_mail.Address.v "no-reply@acme.test") ());
+  Test_methods.register a;
+  let rebound = ref None in
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun u -> rebound := u) } in
+  match
+    find_registered_ "createUser" inv
+      [ Bson.doc [ ("username", Bson.str "ada"); ("email", Bson.str "ada@example.com"); ("password", Bson.str "pw") ] ]
+  with
+  | Bson.Document kvs ->
+    (* the row exists (server-side); the client did NOT get a session token, but DID get a clear signal *)
+    let user_exists = match find_by_selector a (By_email "ada@example.com") with Ok (Some _) -> true | _ -> false in
+    let no_token = List.assoc_opt "token" kvs = None in
+    let verify_flag = List.assoc_opt "verificationRequired" kvs = Some (Bson.Bool true) in
+    let has_id = match List.assoc_opt "id" kvs with Some (Bson.String _) -> true | _ -> false in
+    (* not logged in: the invocation user_id is NOT rebound to a live session *)
+    let not_session_bound = !rebound = None in
+    (* exactly one verification email was delivered to the address *)
+    let mailed =
+      match sent () with
+      | [ m ] -> List.exists (fun (ad : Fennec_mail.Address.t) -> ad.email = "ada@example.com") m.Fennec_mail.to_
+      | _ -> false
+    in
+    user_exists && no_token && verify_flag && has_id && not_session_bound && mailed
+  | _ -> false
   | exception Test_methods_runtime.Error _ -> false
 
 (* a brute-force throttle wired with a frozen clock: the default 5/10 s limit refills 0 tokens, so
