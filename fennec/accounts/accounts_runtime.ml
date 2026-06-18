@@ -25,6 +25,7 @@ let make ~secret ~store ?password_hasher ?password_policy ?(policy = Roles.polic
     lifetime;
     validate_every_request;
     config;
+    settings = defaults;
     email_templates = None;
     validate_login_hooks = [];
     create_user_hooks = [];

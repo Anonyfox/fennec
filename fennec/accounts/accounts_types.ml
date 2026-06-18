@@ -240,10 +240,11 @@ type session = {
   factors : Mfa.factor list;
 }
 
-(* Central authentication policy — the typed twin of Meteor's [Accounts.config({...})]. [default_config]
-   is SECURE-by-default (enumeration resistance on, sane token lifetimes); an app tunes it via [make
-   ~config] or {!configure}. *)
-type config = {
+(* Central password/email authentication policy — the typed twin of Meteor's [Accounts.config({...})].
+   [defaults.password] is SECURE-by-default (enumeration resistance on, sane token lifetimes); an app
+   tunes it via [start ~config] / {!configure}. This is the [password] sub-record of the umbrella
+   {!config}; the older name {!default_config} aliases [defaults.password]. *)
+type password_config = {
   require_verified_email : bool;
       (* a user must have at least one verified email before any session is issued (every strategy) *)
   forbid_client_account_creation : bool;
@@ -265,7 +266,7 @@ type config = {
       (* email-verification token TTL in seconds; default 3 days *)
 }
 
-let default_config =
+let default_password_config =
   {
     require_verified_email = false;
     forbid_client_account_creation = false;
@@ -276,6 +277,113 @@ let default_config =
     verify_token_lifetime = 3. *. 86_400.;
   }
 
+(* ---- the umbrella declarative config: one record an app fills from [defaults] ---------------------
+
+   Every field is optional via [defaults]; a dev writes [{ defaults with mail = Some {…} }] and nothing
+   else. The sub-records each carry their own defaults so a partial override stays a one-liner. This is
+   DATA — the {!Accounts_http.Wiring} seam folds it into a route table + a method gate. Omitting it (the
+   {!defaults} value) reproduces today's behaviour exactly: every feature/method on, [defaults.password]
+   password settings, routes mounted under [/auth]. *)
+
+(* signed-cookie session shape (the framework's [make] knobs): cookie name, path scope, login-token
+   lifetime (seconds), and whether to re-check the token store / [auth_epoch] on every request. *)
+type session_config = {
+  cookie : string;  (* the login cookie name; default ["_fennec_login"] *)
+  path : string;  (* cookie path scope; default ["/"] *)
+  lifetime : float;  (* login-token TTL in seconds; default one day *)
+  validate_every_request : bool;
+      (* re-check the token row + [auth_epoch] against the store on every request (immediate revocation
+         at a per-request store-read cost). Off by default — the zero-read signed-cookie fast path. *)
+}
+
+let default_session_config = { cookie = "_fennec_login"; path = "/"; lifetime = 86_400.; validate_every_request = false }
+
+(* transactional account email (Meteor's Accounts.emailTemplates): the [from] address, the site name
+   rendered into the default templates, and optional per-flow template overrides. Present ([mail = Some
+   …]) turns on the password/email HTTP routes in {!Accounts_http.Wiring}. *)
+type mail_config = {
+  from : string;  (* the [From:] address for all account email *)
+  site_name : string option;  (* the product name rendered into the default templates *)
+  templates : Accounts_mailer.templates option;  (* full template override; [None] ⇒ the defaults for [from]/[site_name] *)
+}
+
+(* passkeys / WebAuthn: the relying party (RP id + name + allowed origins). Present ([passkeys = Some …])
+   mounts the passkey registration/assertion JSON routes. *)
+type passkeys_config = { relying_party : Passkey.relying_party }
+
+(* organizations: when [scim_prefix] is set, the SCIM 2.0 provisioning battery mounts at that prefix. *)
+type orgs_config = { scim_prefix : string option }
+
+(* where the auto-derived routes live. [auth_prefix] (default ["/auth"]) roots the password / email /
+   passkey / provider routes; [me_path], when set, mounts [GET <me_path>] returning the session doc. *)
+type routes_config = {
+  auth_prefix : string;  (* route prefix for the derived auth endpoints; default ["/auth"] *)
+  me_path : string option;  (* mount [GET <me_path>] (the JSON session doc) when set *)
+}
+
+let default_routes_config = { auth_prefix = "/auth"; me_path = None }
+
+(* One configured SSO/identity provider in [config.providers]. Each variant bundles the EXISTING typed
+   provider value with the token-exchange recipe the matching [*_callback_paw] already needs (OAuth/OIDC)
+   or the trusted signing keys (SAML). {!Accounts_http.Wiring} mounts the authorize + callback routes
+   per provider under [auth_prefix]. The preset constructors that synthesize the exchange (Accounts.OAuth.
+   github &c.) are a later pass; today an app supplies the provider + its exchange explicitly. *)
+type 'a provider =
+  | OAuth_provider of {
+      provider : OAuth.provider;
+      exchange : OAuth.state -> code:string -> (external_identity, error) result;
+      link_verified_email : bool;
+      success : string;
+      error : string;
+    }
+  | Oidc_provider of {
+      connection : Oidc.connection;
+      exchange : Oidc.state -> code:string -> (Oidc.principal, error) result;
+      link_verified_email : bool;
+      success : string;
+      error : string;
+    }
+  | Saml_provider of {
+      connection : Saml.connection;
+      trusted_keys : X509.Public_key.t list;
+      signing_key : X509.Private_key.t option;
+      success : string;
+      error : string;
+    }
+  constraint 'a = external_identity
+(* the [constraint] pins the phantom so [provider] is a concrete (non-parametric-at-use) type once
+   {!external_identity} is in scope; callers write [Accounts.provider]. *)
+
+type config = {
+  session : session_config;
+  password : password_config;
+  mail : mail_config option;  (* Some ⇒ password/email routes are wired *)
+  passkeys : passkeys_config option;  (* Some ⇒ passkey routes are wired *)
+  orgs : orgs_config option;  (* orgs.scim_prefix = Some p ⇒ SCIM battery at p *)
+  rbac : Roles.policy option;  (* the app's role→permission map; None ⇒ the empty policy *)
+  routes : routes_config;
+  providers : external_identity provider list;  (* SSO providers to wire authorize+callback routes for *)
+}
+
+(* [defaults] — the zero-config umbrella: today's behaviour exactly. Every optional feature off (None),
+   secure password defaults, the framework session/route defaults, no extra providers. A dev overrides
+   one field at a time: [{ defaults with mail = Some { from; site_name = Some "Acme"; templates = None } }]. *)
+let defaults =
+  {
+    session = default_session_config;
+    password = default_password_config;
+    mail = None;
+    passkeys = None;
+    orgs = None;
+    rbac = None;
+    routes = default_routes_config;
+    providers = [];
+  }
+
+(* DEPRECATED alias kept for source compatibility: the old top-level [default_config] is now
+   [defaults.password]. Same value, same type ([password_config]). *)
+let default_config = defaults.password
+
 type t = {
   secret : string;
   store : store;
@@ -285,7 +393,14 @@ type t = {
       (* the app's role→permission map — code-declared, immutable, held once. [can]/[require_permission]
          read it directly so callers never thread a [~policy] argument. The single RBAC policy: org
          permission checks (see [can_in]) resolve against it too. *)
-  mutable config : config;
+  mutable config : password_config;
+      (* the password/email policy (the [password] sub-record). Engine code reads it directly as
+         [t.config.forbid_client_account_creation] &c.; {!configure} / [start ~config] set it. *)
+  mutable settings : config;
+      (* the full umbrella config applied via [start]. Defaults to {!defaults} (today's behaviour):
+         every optional feature off, all methods on, routes under [/auth]. {!Accounts_http.Wiring}
+         reads it to derive the route table + the DDP method gate. Engine paths that predate the
+         umbrella keep reading the [config]/[cookie]/[path]/… fields, so the default path is unchanged. *)
   mutable email_templates : Accounts_mailer.templates option;
   cookie : string;
   path : string;

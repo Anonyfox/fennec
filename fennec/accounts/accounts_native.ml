@@ -417,16 +417,19 @@ module Store = struct
      as Burrow / native mongod); the framework reaches the engines by MONGO_URL via {!native_store}. *)
   let minimongo () = backend ~open_collection:(fun _ -> Backend_dyn.mem (Minimongo.create ())) ()
 
-  let users t = t.users
-  let tokens t = t.tokens
-  let identities t = t.identities
-  let challenges t = t.challenges
-  let passkeys t = t.passkeys
-  let orgs t = t.orgs
-  let mfa t = t.mfa
-  let scim t = t.scim
-  let audit t = t.audit
-  let ensure_indexes t = t.ensure_indexes ()
+  (* annotate [t : store]: the umbrella {!Accounts_types.config} now also carries [orgs]/[passkeys]
+     labels, so the projections below must be pinned to the [store] record (the last-defined wins
+     otherwise). *)
+  let users (t : store) = t.users
+  let tokens (t : store) = t.tokens
+  let identities (t : store) = t.identities
+  let challenges (t : store) = t.challenges
+  let passkeys (t : store) = t.passkeys
+  let orgs (t : store) = t.orgs
+  let mfa (t : store) = t.mfa
+  let scim (t : store) = t.scim
+  let audit (t : store) = t.audit
+  let ensure_indexes (t : store) = t.ensure_indexes ()
 end
 
 let native_secret () =
@@ -446,8 +449,40 @@ let native_store () =
     Store.ensure_indexes store;
     store
 
+(* The umbrella config the native singleton is built from. [start] sets it BEFORE [boot] forces
+   [current ()] (that is the order {!Fennec.serve} uses), so the singleton picks up the configured
+   cookie/path/lifetime/policy/password settings — fields that are immutable on [t] and so cannot be
+   retrofitted after construction. Default is {!defaults} (today's behaviour: every feature off, all
+   methods on). *)
+let pending_config : config Atomic.t = Atomic.make defaults
+
+(* Install the parts of the umbrella config that the singleton's MUTABLE state can carry after it is
+   built: the password/email policy, the umbrella [settings] (read by {!Accounts_http.Wiring} for the
+   route table + method gate), and — when [mail] is set — the email templates the password/email verbs
+   and routes need. The immutable session/policy fields are applied at construction in [make_native]. *)
+let apply_settings t (cfg : config) =
+  t.config <- cfg.password;
+  t.settings <- cfg;
+  match cfg.mail with
+  | None -> ()
+  | Some m ->
+    let tpls =
+      match m.templates with
+      | Some tpls -> tpls
+      | None -> Mailer.default ?site_name:m.site_name ~from:(Fennec_mail.Address.of_string m.from) ()
+    in
+    set_email_templates t tpls
+
 let make_native () =
-  make ~secret:(native_secret ()) ~store:(native_store ()) ~password_hasher:(password_hasher ()) ()
+  let cfg = Atomic.get pending_config in
+  let s = cfg.session in
+  let t =
+    make ~secret:(native_secret ()) ~store:(native_store ()) ~password_hasher:(password_hasher ())
+      ?policy:cfg.rbac ~cookie:s.cookie ~path:s.path ~lifetime:s.lifetime
+      ~validate_every_request:s.validate_every_request ~config:cfg.password ()
+  in
+  apply_settings t cfg;
+  t
 
 let current () =
   match Atomic.get native with
@@ -455,6 +490,14 @@ let current () =
   | None ->
     let t = make_native () in
     if Atomic.compare_and_set native None (Some t) then t else Option.get (Atomic.get native)
+
+(* Apply the umbrella config to the process-native instance and auto-wire what it implies. Sets the
+   pending config so a not-yet-built singleton is constructed from it; if the singleton is ALREADY
+   built, applies the mutable parts in place (cookie/path/lifetime/policy can no longer change — those
+   are construction-time). With the default {!defaults} this is a no-op over today's behaviour. *)
+let start ?(config = defaults) () =
+  Atomic.set pending_config config;
+  match Atomic.get native with Some t -> apply_settings t config | None -> ()
 
 let native_paw () : Paw.t =
  fun c -> paw (current ()) () c

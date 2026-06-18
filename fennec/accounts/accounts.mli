@@ -486,8 +486,10 @@ type t
     enforcement. [rate_limit] throttles the [login] and [createUser] DDP methods against brute force
     (default: {!Accounts_rate_limit.make} — 5 attempts / 10 s per client IP and per account, à la
     Meteor); pass a custom limiter to retune or a disabled one to turn it off. *)
-(** Central authentication policy — the typed twin of Meteor's [Accounts.config({...})]. *)
-type config = {
+(** Central password/email authentication policy — the typed twin of Meteor's [Accounts.config({...})].
+    This is the [password] sub-record of the umbrella {!config}; {!default_config} aliases
+    [defaults.password]. *)
+type password_config = {
   require_verified_email : bool;
       (** require at least one verified email before any session is issued (every strategy) *)
   forbid_client_account_creation : bool;
@@ -506,8 +508,101 @@ type config = {
   verify_token_lifetime : float;  (** email-verification token TTL in seconds; default 3 days *)
 }
 
-(** Secure defaults: enumeration resistance on, reset 3 d / enroll 30 d / verify 3 d token lifetimes. *)
-val default_config : config
+(** {1 The declarative config — one record, every field optional via {!defaults}}
+
+    A userland app configures the whole Accounts subsystem from a single value: start from {!defaults}
+    and override one field at a time ([{ Accounts.defaults with mail = Some { from; site_name = Some
+    "Acme"; templates = None } }]). The umbrella is {b data}: {!Fennec.serve} hands it to {!start},
+    which applies it to the process-native instance and auto-wires the routes + DDP methods it implies.
+
+    {b Omitting it reproduces today's behaviour exactly} — every optional feature off, all methods on,
+    [defaults.password] password settings, routes under [/auth]. The config only turns optional features
+    (SSO / passkeys / SCIM / the password-email routes) {e on}; it never weakens a default security
+    posture (the enumeration guard, throttle, and verified-email gate always apply). *)
+
+(** The signed-cookie session shape — the framework's session knobs. *)
+type session_config = {
+  cookie : string;  (** the login cookie name; default ["_fennec_login"] *)
+  path : string;  (** cookie path scope; default ["/"] *)
+  lifetime : float;  (** login-token TTL in seconds; default one day *)
+  validate_every_request : bool;
+      (** re-check the token row + [auth_epoch] against the store on every request (immediate revocation
+          at a per-request store read). Off by default — the zero-read signed-cookie fast path. *)
+}
+
+(** Transactional account email (Meteor's [Accounts.emailTemplates]). Setting [config.mail] turns on the
+    password/email HTTP routes in the auto-wiring. *)
+type mail_config = {
+  from : string;  (** the [From:] address for all account email *)
+  site_name : string option;  (** the product name rendered into the default templates *)
+  templates : Accounts_mailer.templates option;
+      (** full template override; [None] uses the defaults for [from] / [site_name] *)
+}
+
+(** Passkeys / WebAuthn. Setting [config.passkeys] mounts the passkey registration/assertion JSON routes. *)
+type passkeys_config = { relying_party : Passkey.relying_party }
+
+(** Organizations. When [scim_prefix] is set, the SCIM 2.0 provisioning battery mounts at that prefix. *)
+type orgs_config = { scim_prefix : string option }
+
+(** Where the auto-derived routes live. *)
+type routes_config = {
+  auth_prefix : string;  (** route prefix for the derived auth endpoints; default ["/auth"] *)
+  me_path : string option;  (** mount [GET <me_path>] (the JSON session doc) when set *)
+}
+
+(** One configured SSO/identity provider for [config.providers].
+
+    Each variant bundles the {b existing} typed provider value with the token-exchange recipe its
+    matching callback route already needs (OAuth/OIDC) or the trusted signing keys (SAML); the
+    auto-wiring mounts its authorize + callback routes under [routes.auth_prefix]. The preset
+    constructors that {e synthesize} the exchange (e.g. [Accounts.OAuth.github]) are a later pass — for
+    now an app supplies the provider and its exchange explicitly (the same [~exchange] the [*_paw]
+    constructors take). The [external_identity] phantom keeps the type concrete at use sites. *)
+type 'a provider =
+  | OAuth_provider of {
+      provider : OAuth.provider;
+      exchange : OAuth.state -> code:string -> (external_identity, error) result;
+      link_verified_email : bool;
+      success : string;
+      error : string;
+    }
+  | Oidc_provider of {
+      connection : Oidc.connection;
+      exchange : Oidc.state -> code:string -> (Oidc.principal, error) result;
+      link_verified_email : bool;
+      success : string;
+      error : string;
+    }
+  | Saml_provider of {
+      connection : Saml.connection;
+      trusted_keys : X509.Public_key.t list;
+      signing_key : X509.Private_key.t option;
+      success : string;
+      error : string;
+    }
+  constraint 'a = external_identity
+
+(** The umbrella declarative config. Build one from {!defaults}. *)
+type config = {
+  session : session_config;
+  password : password_config;
+  mail : mail_config option;  (** [Some] ⇒ the password/email routes are wired *)
+  passkeys : passkeys_config option;  (** [Some] ⇒ the passkey routes are wired *)
+  orgs : orgs_config option;  (** [orgs.scim_prefix = Some p] ⇒ the SCIM battery at [p] *)
+  rbac : Roles.policy option;  (** the app's role→permission map; [None] ⇒ the empty policy *)
+  routes : routes_config;
+  providers : external_identity provider list;
+      (** SSO providers; the auto-wiring mounts authorize + callback routes per provider *)
+}
+
+(** The zero-config umbrella — today's behaviour exactly. Every optional feature off, secure password
+    defaults, the framework session/route defaults, no extra providers. Override one field at a time. *)
+val defaults : config
+
+(** Secure password defaults: enumeration resistance on, reset 3 d / enroll 30 d / verify 3 d token
+    lifetimes. Alias of [defaults.password]. *)
+val default_config : password_config
 
 val make :
   secret:string ->
@@ -519,15 +614,24 @@ val make :
   ?path:string ->
   ?lifetime:float ->
   ?validate_every_request:bool ->
-  ?config:config ->
+  ?config:password_config ->
   ?rate_limit:Accounts_rate_limit.t ->
   unit ->
   t
 
-(** Set the authentication policy after construction — the mutable twin of Meteor's [Accounts.config]. An
+(** Set the password/email policy after construction — the mutable twin of Meteor's [Accounts.config]. An
     app configures the framework-native instance ([current ()]) once in startup, e.g.
-    [Accounts.configure (Accounts.current ()) { Accounts.default_config with require_verified_email = true }]. *)
-val configure : t -> config -> unit
+    [Accounts.configure (Accounts.current ()) { Accounts.default_config with require_verified_email = true }].
+    For the full umbrella config (routes, providers, …) prefer {!start}. *)
+val configure : t -> password_config -> unit
+
+(** Apply the umbrella {!config} to the process-native instance (the same one {!current} returns) and
+    auto-wire the routes + DDP methods it implies. Idempotent-ish: the last call wins. Called by
+    {!Fennec.serve} when [?accounts] is given; an app may also call it directly in startup.
+
+    With no config (the default {!defaults}), this is a no-op over today's behaviour — Accounts stays
+    hard-wired, anonymous identity is [None], and the full route/method set is present. *)
+val start : ?config:config -> unit -> unit
 
 (** {1 Transactional account emails} — Meteor's [Accounts.sendVerificationEmail] family, delivered through
     {!Fennec_mail} (the [MAIL_URL] transport; with it unset, mail is logged to stdout). *)

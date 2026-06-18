@@ -34,5 +34,6 @@ module Store = Accounts_native.Store
 
 let memory_store = Accounts_native.memory_store
 let current = Accounts_native.current
+let start = Accounts_native.start
 let native_paw = Accounts_native.native_paw
 let boot = Accounts_native.boot
