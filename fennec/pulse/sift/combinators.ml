@@ -127,6 +127,37 @@ let opt name c = { key = name; item = (option c).shape; needed = false; fallback
 let opt_list name c = { key = name; item = (list c).shape; needed = false; fallback = Some [] }
 let dft name c v = { key = name; item = c.shape; needed = false; fallback = Some v }
 
+(* the wire-omission rule, Bson-FREE: reproduce {!Engine.write}'s Null / empty-array production without
+   building any Bson — a non-required field is dropped when it would encode to Null (an absent option /
+   unit / null dyn, through any wrapper) or to the matching empty array (an opt_list default). *)
+let rec writes_null : type a. a shape -> a -> bool =
+ fun shape v ->
+  match shape with
+  | TUnit -> true
+  | TDyn -> ( match v with Value.Null -> true | _ -> false)
+  | TOption el -> ( match v with None -> true | Some x -> writes_null el x)
+  | TNorm (f, inner) -> writes_null inner (f v)
+  | TConv (inj, _, inner) -> writes_null inner (inj v)
+  | TCheck (_, _, _, inner) -> writes_null inner v
+  | TCoerce inner -> writes_null inner v
+  | TLazy l -> writes_null (Lazy.force l) v
+  | _ -> false
+
+let rec writes_empty_array : type a. a shape -> a -> bool =
+ fun shape v ->
+  match shape with
+  | TList _ -> ( match v with [] -> true | _ -> false)
+  | TOption el -> ( match v with None -> false | Some x -> writes_empty_array el x)
+  | TNorm (f, inner) -> writes_empty_array inner (f v)
+  | TConv (inj, _, inner) -> writes_empty_array inner (inj v)
+  | TCheck (_, _, _, inner) -> writes_empty_array inner v
+  | TCoerce inner -> writes_empty_array inner v
+  | TLazy l -> writes_empty_array (Lazy.force l) v
+  | _ -> false
+
+let omit_of (f : 'a field) : 'a -> bool =
+ fun v -> (not f.needed) && (writes_null f.item v || (writes_empty_array f.item v && f.fallback = Some v))
+
 let decode_named (f : 'a field) kvs : ('a, error list) result =
   match List.assoc_opt f.key kvs with
   | Some v -> ( match read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
@@ -164,10 +195,7 @@ let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k
           shape = f.item;
           get;
           required = f.needed;
-          (* the wire-omission rule: a required field never omits (so [not f.needed] short-circuits
-             before any [write]); an optional/opt_list field omits when its value encodes to Null / the
-             matching empty array. (Still uses [write] — Bson-coupled; teased out in the lib split.) *)
-          omit = (fun v -> (not f.needed) && (match write f.item v with Bson.Null -> true | Bson.Array [] -> f.fallback = Some v | _ -> false));
+          omit = omit_of f;
         }
       :: b.acc_members;
     acc_invariants = b.acc_invariants;
@@ -237,7 +265,7 @@ let errs : type a. (a, error list) result -> error list = function Ok _ -> [] | 
 
 (* a member with the standard wire-omission predicate (mirrors {!field}) *)
 let bound (f : 'a field) (get : 'r -> 'a) : 'r bound_field =
-  Bound_field { name = f.key; shape = f.item; get; required = f.needed; omit = (fun v -> (not f.needed) && (match write f.item v with Bson.Null -> true | Bson.Array [] -> f.fallback = Some v | _ -> false)) }
+  Bound_field { name = f.key; shape = f.item; get; required = f.needed; omit = omit_of f }
 
 let direct (decode_src : field_reader -> ('r, error list) result) (members : 'r bound_field list) : 'r t =
   of_shape (TObj { decode_src; members; invariants = [] })
