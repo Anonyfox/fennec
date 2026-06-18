@@ -1,8 +1,8 @@
-; The standalone Sift ppx — for libraries that DON'T use the fur/MLX ppx. Registers the shared rules
-; from fennec.pulse.sift.ppx.rules so [@@deriving sift] / [@@deriving model] work. Libraries on
-; (pps fennec.fur.ppx) get them for free (fur.ppx links the same rules), so they don't list this.
+; The standalone Sift ppx — the whole DX ([@@deriving model], [@@deriving collection], and the
+; [%q]/[%fields]/[%sort]/[%set]/[%index] query DSL) in ONE ppx pass, for libraries that DON'T use the
+; fur/MLX ppx. Libraries on (pps fennec.fur.ppx) get it for free (fur.ppx links the same rules).
 (library
  (name sift_ppx)
  (public_name fennec.pulse.sift.ppx)
  (kind ppx_rewriter)
- (libraries sift_ppx_rules ppxlib))
+ (libraries fennec.pulse.sift.ppx.rules ppxlib))

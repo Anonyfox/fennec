@@ -208,15 +208,10 @@ let expand_model ~ctxt (_rec : rec_flag) (tds : type_declaration list) : structu
   | [ { ptype_kind = Ptype_record labels; ptype_name; _ } ] when ptype_name.txt = "t" -> model_core ~loc labels
   | _ -> Location.raise_errorf ~loc "fennec.model: expects a single record type named t"
 
-(* [@@deriving sift] (alias [@@deriving model]) — generates [Fields] + [codec] from a record: the pure
-   serde DX, referencing ONLY Sift, reusable in ANY ppx pipeline. Fennec's [collection] deriver reuses
-   {!model_core} and adds the Mongo/store tail. Registered globally on module load. *)
-let deriver_sift =
-  Deriving.add "sift" ~str_type_decl:(Deriving.Generator.V2.make Deriving.Args.empty (fun ~ctxt (rf, tds) -> expand_model ~ctxt rf tds))
-
+(* [@@deriving model] — generates [Fields] + [codec] from a record: the DB-agnostic typed model (forms,
+   JSON APIs, method args). Fennec's [collection] deriver ({!Collection_deriver}) reuses {!model_core}
+   and adds the Mongo/store tail. Registered globally on module load. *)
 let deriver_model =
   Deriving.add "model" ~str_type_decl:(Deriving.Generator.V2.make Deriving.Args.empty (fun ~ctxt (rf, tds) -> expand_model ~ctxt rf tds))
 
-let () =
-  ignore deriver_sift;
-  ignore deriver_model
+let () = ignore deriver_model

@@ -1,8 +1,0 @@
-; The standalone sift.mongo ppx — the query DSL ([%q]/[%fields]/[%sort]/[%set]/[%index]) plus the
-; [@@deriving sift] codec deriver. For non-fur libraries that use the sift.mongo toolkit. Libraries on
-; (pps fennec.fur.ppx) get all of it for free, so they don't list this.
-(library
- (name sift_mongo_ppx)
- (public_name fennec.pulse.sift.mongo.ppx)
- (kind ppx_rewriter)
- (libraries sift_mongo_ppx_rules sift_ppx_rules ppxlib))

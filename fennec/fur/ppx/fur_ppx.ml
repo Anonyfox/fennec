@@ -310,9 +310,10 @@ let impl str =
 (* ONE driver for the whole component pipeline: MLX/JSX sugar (impl) + inline tests (hunt rules) +
    the typed-collection deriver & [%fields] projections (collection rules). [(pps fennec.fur.ppx)]
    alone gives all of it — no extra pps entry, no extra ppx subprocess. *)
-(* force the [collection] deriver to register (it auto-registers on load; referencing it also loads
-   Sift_ppx_rules for the [sift]/[model] derivers, which the collection rules reuse via model_core) *)
-let () = ignore Fennec_pulse_collection_ppx_rules.deriver
+(* force the [model] + [collection] derivers to register (they auto-register on load) — all three sift
+   DX modules live in fennec.pulse.sift.ppx.rules now *)
+let () = ignore Sift_ppx_rules.deriver_model
+let () = ignore Collection_deriver.deriver
 
 let () = Driver.register_transformation "iso_jsx" ~impl
     ~rules:(Fennec_hunt_ppx_rules.rules @ Sift_mongo_ppx_rules.rules)

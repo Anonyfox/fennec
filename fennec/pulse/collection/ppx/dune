@@ -1,8 +1,0 @@
-; The standalone collection ppx — for libraries that DON'T use the fur/MLX ppx. Registers the shared
-; rules from fennec.pulse.collection.ppx.rules. Libraries on (pps fennec.fur.ppx) get them for free
-; (fur.ppx registers the same rules), so they don't list this.
-(library
- (name fennec_pulse_collection_ppx)
- (public_name fennec.pulse.collection.ppx)
- (kind ppx_rewriter)
- (libraries fennec_pulse_collection_ppx_rules sift_mongo_ppx_rules ppxlib))

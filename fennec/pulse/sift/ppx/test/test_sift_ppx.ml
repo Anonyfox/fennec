@@ -1,8 +1,8 @@
-(* Proves [@@deriving sift] is STANDALONE: this test links ONLY fennec.pulse.sift + the standalone
-   sift.ppx driver — NO collection, NO Mongo, NO fur. A neutral record → a working codec + Fields. *)
+(* Proves [@@deriving model] works through the standalone sift.ppx driver, linking ONLY
+   fennec.pulse.sift — NO collection, NO Mongo, NO fur. A plain record → a working codec + Fields. *)
 
 type t = { id : string; title : string; tags : string list; note : string option }
-[@@deriving sift]
+[@@deriving model]
 
 let () =
   let v = { id = "507f1f77bcf86cd799439011"; title = "hi"; tags = [ "a"; "b" ]; note = Some "n" } in
@@ -15,7 +15,7 @@ let () =
     && Sift.field_required Fields.id (* a field named id ⇒ doc_id (required) *)
     && not (Sift.field_required Fields.note) (* an option field ⇒ opt (not required) *)
   in
-  if ok then print_endline "deriving sift: standalone codec + Fields OK"
+  if ok then print_endline "deriving model: standalone codec + Fields OK"
   else (
-    prerr_endline "deriving sift: FAILED";
+    prerr_endline "deriving model: FAILED";
     exit 1)

@@ -1,10 +1,14 @@
-; Sift's REUSABLE ppx rules (the [@@deriving sift] / [@@deriving model] codec + Fields deriver) as a
-; plain library — NOT a ppx_rewriter. Any driver links it to register the rule in its single ppx pass:
-; fennec's fur.ppx and the standalone fennec.pulse.sift.ppx both do, and a downstream user can too. Owns
-; no runtime; generates Sift.* code. Ships with the Sift package.
+; The Sift DX ppx RULES — three small modules, ONE plain library (NOT a ppx_rewriter):
+;   Sift_ppx_rules       — the [@@deriving model] codec + Fields deriver (and the shared model_core)
+;   Sift_mongo_ppx_rules — the Mongo query DSL: [%q] [%fields] [%sort] [%set] [%index]
+;   Collection_deriver   — the [@@deriving collection] deriver (the store/reactive tail)
+; A driver links this and registers them in its ONE ppx pass: fennec's fur.ppx does (so every .mlx/.ml
+; on (pps fennec.fur.ppx) gets the whole DX), as does the standalone fennec.pulse.sift.ppx. Unwrapped,
+; so a driver references the three modules directly.
 (library
- (name sift_ppx_rules)
+ (name fennec_pulse_sift_ppx_rules)
  (public_name fennec.pulse.sift.ppx.rules)
+ (wrapped false)
  (libraries ppxlib)
  (preprocess
   (pps ppxlib.metaquot)))
