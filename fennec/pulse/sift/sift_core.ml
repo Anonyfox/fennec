@@ -3,16 +3,15 @@
    dependency — usable standalone. The BSON format (decode/to_bson/to_json + the zero-copy byte codecs)
    is the [sift.bson] plugin; the public {!Sift} facade adds it back so fennec's call sites are unchanged.
 
-   The internal modules are re-exported below so the plugin can interpret shapes (it needs the GADT
-   constructors); the public {!Sift} mli keeps the representation abstract. *)
+   The representation modules the BSON plugin needs to interpret shapes (it reads the GADT
+   constructors) are re-exported below; the public {!Sift} mli keeps them abstract. The pure-internal
+   format machinery — {!Serde}, {!Value_format}, {!Value_json}, {!Json_writer} — stays UN-re-exported:
+   the flat JSON/value API above is its only door, so a standalone [sift.core] user sees a tight
+   surface, not the serde plumbing. *)
 
 module Shape = Shape
 module Value = Value
 module Engine = Engine
-module Serde = Serde
-module Value_format = Value_format
-module Value_json = Value_json
-module Json_writer = Json_writer
 module Derived = Derived
 module Codec = Codec
 module Combinators = Combinators

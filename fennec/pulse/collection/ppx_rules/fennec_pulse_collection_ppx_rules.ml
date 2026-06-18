@@ -1,12 +1,12 @@
-(* The fennec-SPECIFIC collection ppx RULES (NOT a ppx_rewriter): the [@@deriving collection] deriver
-   and the Mongo query DSL extensions ([%q] [%fields] [%sort] [%set] [%index]). Both fur.ppx and the
-   standalone fennec.pulse.collection.ppx link this and register the same rules in their own driver, so
-   downstream pays ONE ppx process. Exposes [rules] (the extensions) + the global [collection] deriver.
-
-   The neutral codec/Fields generation lives in {!Sift_ppx_rules} (shipped with Sift, [@@deriving sift]);
-   [@@deriving collection ~name:"t"] reuses {!Sift_ppx_rules.model_core} and adds the runtime tail:
+(* The fennec-SPECIFIC collection ppx RULES (NOT a ppx_rewriter): just the [@@deriving collection]
+   deriver — the reactive-store tail. The neutral codec/Fields generation is {!Sift_ppx_rules} (shipped
+   with Sift, [@@deriving sift]); the Mongo query DSL ([%q] [%fields] [%sort] [%set] [%index]) is
+   {!Sift_mongo_ppx_rules} (shipped with sift.mongo). [@@deriving collection ~name:"t"] reuses
+   {!Sift_ppx_rules.model_core} and adds the runtime tail:
      let collection = Def.v "name" codec     (* the collection declaration (sift.mongo) *)
-     let find / project = Ddp_client.…       (* the reactive store verbs — fennec runtime *) *)
+     let find / project = Ddp_client.…       (* the reactive store verbs — fennec runtime *)
+   It auto-registers globally on load (forced via the exported [deriver]); fur.ppx and the standalone
+   fennec.pulse.collection.ppx fold it into their single ppx pass alongside the sift + sift.mongo rules. *)
 
 open Ppxlib
 open Sift_ppx_rules
