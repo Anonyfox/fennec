@@ -338,6 +338,10 @@ let validate_assertion ?(now = Unix.gettimeofday) ?(leeway = 60.) (connection : 
   else if option_exists (( <> ) connection.acs_url) assertion.destination then Error (Assertion_mismatch "destination")
   else if assertion.in_response_to <> Some state.request_id then Error (Assertion_mismatch "in_response_to")
   else if option_exists (fun not_before -> not_before -. leeway > current) assertion.not_before then Error (Assertion_mismatch "not_before")
+  (* a MISSING NotOnOrAfter (in both the bearer SubjectConfirmationData and the Conditions) would make
+     this freshness gate vacuously pass — an unbounded assertion lifetime. Treat absence as a failure:
+     a bearer assertion must declare its expiry. *)
+  else if assertion.not_on_or_after = None then Error (Assertion_mismatch "not_on_or_after")
   else if option_exists (fun not_on_or_after -> not_on_or_after +. leeway <= current) assertion.not_on_or_after then Error (Assertion_mismatch "not_on_or_after")
   else if not (domain_allowed connection assertion) then Error (Assertion_mismatch "domain")
   else
@@ -749,13 +753,19 @@ let extract_assertion (connection : connection) root signed =
         let name_id =
           Option.bind subject (fun s -> child_named "NameID" s)
         in
-        let bearer_data =
-          Option.bind subject (fun s ->
-              children_named "SubjectConfirmation" s
-              |> List.find_map (fun sc ->
-                     if attr "Method" sc = Some "urn:oasis:names:tc:SAML:2.0:cm:bearer" then child_named "SubjectConfirmationData" sc
-                     else None))
+        let bearer_confirmations =
+          match subject with
+          | None -> []
+          | Some s ->
+            children_named "SubjectConfirmation" s
+            |> List.filter (fun sc -> attr "Method" sc = Some "urn:oasis:names:tc:SAML:2.0:cm:bearer")
         in
+        (* SAML 2.0 Web Browser SSO profile: the assertion MUST carry at least one bearer
+           SubjectConfirmation. Without it there is no proof this assertion was delivered to us (vs
+           replayed from elsewhere) — refuse rather than fall back to the looser response-level fields. *)
+        if bearer_confirmations = [] then Error (Assertion_mismatch "subject_confirmation")
+        else
+        let bearer_data = List.find_map (fun sc -> child_named "SubjectConfirmationData" sc) bearer_confirmations in
         let audience =
           Option.bind conditions (fun c -> Option.bind (child_named "AudienceRestriction" c) (fun ar -> text_child "Audience" ar))
           |> Option.value ~default:""
@@ -1015,25 +1025,37 @@ let signature_xml ~key ~target_xml ~target_id =
     {|<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">%s<ds:SignatureValue>%s</ds:SignatureValue></ds:Signature>|}
     signed_info signature
 
-let assertion_xml ?(signature = "") ~id ~request_id () =
+let assertion_xml ?(signature = "") ?(omit_bearer = false) ?(omit_not_on_or_after = false) ~id ~request_id () =
+  (* the bearer SubjectConfirmation (carrying InResponseTo/Recipient/NotOnOrAfter). [omit_bearer] drops
+     the whole confirmation; [omit_not_on_or_after] keeps it but strips the freshness bound on BOTH the
+     confirmation data and the Conditions — the two FIX-6 negative cases. *)
+  let noa_attr = if omit_not_on_or_after then "" else {| NotOnOrAfter="1970-01-01T00:20:00Z"|} in
+  let subject_confirmation =
+    if omit_bearer then ""
+    else
+      Printf.sprintf
+        {|<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData InResponseTo="%s" Recipient="https://app.test/saml/acs"%s></saml:SubjectConfirmationData></saml:SubjectConfirmation>|}
+        (xml_escape_attr request_id) noa_attr
+  in
+  let conditions_noa = if omit_not_on_or_after then "" else {| NotOnOrAfter="1970-01-01T00:20:00Z"|} in
   Printf.sprintf
-    {|<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0"><saml:Issuer>https://idp.example/saml</saml:Issuer>%s<saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">ada@example.com</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData InResponseTo="%s" Recipient="https://app.test/saml/acs" NotOnOrAfter="1970-01-01T00:20:00Z"></saml:SubjectConfirmationData></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="1970-01-01T00:10:00Z" NotOnOrAfter="1970-01-01T00:20:00Z"><saml:AudienceRestriction><saml:Audience>https://app.test/saml/metadata</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement SessionIndex="sess"></saml:AuthnStatement><saml:AttributeStatement><saml:Attribute Name="email"><saml:AttributeValue>ada@example.com</saml:AttributeValue></saml:Attribute><saml:Attribute Name="employee_id"><saml:AttributeValue>emp-1</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>|}
-    id signature (xml_escape_attr request_id)
+    {|<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0"><saml:Issuer>https://idp.example/saml</saml:Issuer>%s<saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">ada@example.com</saml:NameID>%s</saml:Subject><saml:Conditions NotBefore="1970-01-01T00:10:00Z"%s><saml:AudienceRestriction><saml:Audience>https://app.test/saml/metadata</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement SessionIndex="sess"></saml:AuthnStatement><saml:AttributeStatement><saml:Attribute Name="email"><saml:AttributeValue>ada@example.com</saml:AttributeValue></saml:Attribute><saml:Attribute Name="employee_id"><saml:AttributeValue>emp-1</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>|}
+    id signature subject_confirmation conditions_noa
 
 let response_xml ?(id = "resp1") ?(status = "urn:oasis:names:tc:SAML:2.0:status:Success") ~assertion ~request_id () =
   Printf.sprintf
     {|<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="%s" Version="2.0" Destination="https://app.test/saml/acs" InResponseTo="%s"><samlp:Issuer>https://idp.example/saml</samlp:Issuer><samlp:Status><samlp:StatusCode Value="%s"></samlp:StatusCode></samlp:Status>%s</samlp:Response>|}
     (xml_escape_attr id) (xml_escape_attr request_id) (xml_escape_attr status) assertion
 
-let signed_response_xml ?(tamper = false) ?response_id ?response_status ~key ~state () =
-  let unsigned_assertion = assertion_xml ~id:"assert1" ~request_id:state.request_id () in
+let signed_response_xml ?(tamper = false) ?(omit_bearer = false) ?(omit_not_on_or_after = false) ?response_id ?response_status ~key ~state () =
+  let unsigned_assertion = assertion_xml ~omit_bearer ~omit_not_on_or_after ~id:"assert1" ~request_id:state.request_id () in
   let signature = signature_xml ~key ~target_xml:unsigned_assertion ~target_id:"assert1" in
-  let assertion = assertion_xml ~signature ~id:"assert1" ~request_id:state.request_id () in
+  let assertion = assertion_xml ~signature ~omit_bearer ~omit_not_on_or_after ~id:"assert1" ~request_id:state.request_id () in
   let xml = response_xml ?id:response_id ?status:response_status ~assertion ~request_id:state.request_id () in
   if tamper then String.map (function 'e' -> 'E' | c -> c) xml else xml
 
-let signed_response ?tamper ?response_id ?response_status ~key ~state () =
-  Base64.encode_string (signed_response_xml ?tamper ?response_id ?response_status ~key ~state ())
+let signed_response ?tamper ?omit_bearer ?omit_not_on_or_after ?response_id ?response_status ~key ~state () =
+  Base64.encode_string (signed_response_xml ?tamper ?omit_bearer ?omit_not_on_or_after ?response_id ?response_status ~key ~state ())
 
 let replace_first ~needle ~replacement s =
   let needle_len = String.length needle in
@@ -1110,6 +1132,29 @@ let%test "verify_response rejects tampered signed assertion" =
   Result.is_error
     (verify_response ~now:(fun () -> 1_000.) c state ~trusted_keys:[ X509.Private_key.public key ]
        ~saml_response:(signed_response ~key ~state ~tamper:true ()))
+
+(* FIX 6: a (validly SIGNED) assertion that omits the bearer SubjectConfirmation must be rejected — a
+   bearer SubjectConfirmation is mandatory for the Web Browser SSO profile. The variant is signed over
+   the modified assertion, so it is NOT a signature failure: the rejection is the new subject-confirmation
+   gate. Pre-fix this assertion validated. *)
+let%test "verify_response rejects an assertion with no bearer SubjectConfirmation" =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = X509.Private_key.generate ~bits:2048 `RSA in
+  let c, state = valid_state () in
+  verify_response ~now:(fun () -> 1_000.) c state ~trusted_keys:[ X509.Private_key.public key ]
+    ~saml_response:(signed_response ~omit_bearer:true ~key ~state ())
+  = Error (Assertion_mismatch "subject_confirmation")
+
+(* FIX 6: a (validly SIGNED) assertion with NO NotOnOrAfter on either the bearer confirmation data or
+   the Conditions must be rejected — an absent expiry would make the freshness check vacuously pass
+   (unbounded assertion lifetime). Pre-fix this assertion validated. *)
+let%test "verify_response rejects a bearer assertion with no NotOnOrAfter (unbounded lifetime)" =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = X509.Private_key.generate ~bits:2048 `RSA in
+  let c, state = valid_state () in
+  verify_response ~now:(fun () -> 1_000.) c state ~trusted_keys:[ X509.Private_key.public key ]
+    ~saml_response:(signed_response ~omit_not_on_or_after:true ~key ~state ())
+  = Error (Assertion_mismatch "not_on_or_after")
 
 let%test "verify_response rejects wrong signing key" =
   Mirage_crypto_rng_unix.use_default ();
