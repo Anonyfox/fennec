@@ -599,6 +599,126 @@ let%test "login_with_token observes auth epoch revocation even on the zero-read 
       && verify_token a token = Ok u.id
       && login_with_token a token = Error Invalid_token)
 
+(* A password write is a security action: it must TERMINATE every pre-existing session, not merely bump
+   the epoch. The epoch is invisible to the ROW-checking surfaces that are zero-EPOCH by design — the
+   bearer/DDP-resume path ([verify_token]) and [list_sessions]/[login_with_token] — when
+   [validate_every_request=false]: a live token row keeps authenticating there past a reset (proven by
+   the [:584] guard above). Pruning the token rows closes that. These guards run on a
+   [validate_every_request=false] instance — exactly where the OLD behaviour leaked — and assert the
+   pre-existing token is now dead on [verify_token] and that [list_sessions] is empty (the ROW is gone).
+   They FAIL on the pre-fix engine (the row stays live ⇒ [verify_token] = [Ok], list non-empty).
+
+   The cookie [paw] path is separately asserted on a [validate_every_request=true] instance (the only
+   mode in which that path consults the store at all): the full stack rejects a reset session there. *)
+let cookie_user_id_ a token =
+  let c = paw a () (Conn.make (req_ ~headers:[ ("Cookie", a.cookie ^ "=" ^ token) ] "/")) in
+  user_id c
+
+let%test "reset_password prunes the session rows: verify_token + list_sessions die (zero-read leak closed)" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  match create_user a ~username:"ada" ~email:"ada@example.com" ~password:"old" () with
+  | Error _ -> false
+  | Ok u -> (
+    match (login_with_password a (By_username "ada") ~password:"old", issue_password_reset a "ada@example.com") with
+    | Ok (_, token), Ok (Some reset) ->
+      (* before the reset the live token authenticates on the zero-read bearer path *)
+      verify_token a token = Ok u.id
+      && Result.is_ok (reset_password_user a reset.token ~password:"new")
+      (* after the reset the pre-existing session is gone — not just on [login_with_token] *)
+      && verify_token a token = Error Invalid_token
+      && login_with_token a token = Error Invalid_token
+      && (match list_sessions a u.id with Ok [] -> true | _ -> false)
+    | _ -> false)
+
+let%test "set_password prunes the session rows: verify_token + list_sessions die (zero-read leak closed)" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  match create_user a ~username:"ada" ~password:"old" () with
+  | Error _ -> false
+  | Ok u -> (
+    match login_with_password a (By_username "ada") ~password:"old" with
+    | Error _ -> false
+    | Ok (_, token) ->
+      verify_token a token = Ok u.id
+      && set_password a u.id ~password:"new" = Ok ()
+      && verify_token a token = Error Invalid_token
+      && (match list_sessions a u.id with Ok [] -> true | _ -> false))
+
+let%test "enroll_account prunes the session rows: verify_token + list_sessions die (zero-read leak closed)" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  (* enrollment is for a password-LESS user (issue_enrollment refuses if a password exists). Such a
+     user can still hold a live session (e.g. a prior passwordless / external login). Mint one directly
+     via [finish_login], then enroll: the enrollment sets the first password and must revoke the row. *)
+  match create_user a ~username:"ada" ~email:"ada@example.com" () with
+  | Error _ -> false
+  | Ok u -> (
+    match (finish_login a ~strategy:"test" u, issue_enrollment a u.id) with
+    | Ok (_, token), Ok en ->
+      verify_token a token = Ok u.id
+      && Result.is_ok (enroll_account_user a en.token ~password:"fresh")
+      && verify_token a token = Error Invalid_token
+      && (match list_sessions a u.id with Ok [] -> true | _ -> false)
+    | _ -> false)
+
+let%test "change_password revokes OTHER sessions but keeps the calling session (sid in scope)" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  match create_user a ~username:"ada" ~password:"old" () with
+  | Error _ -> false
+  | Ok u -> (
+    (* two devices: [other] is a stale session that must die; [current] is the device performing the
+       change and must survive (Meteor's changePassword keeps the caller logged in). *)
+    match
+      (login_with_password a (By_username "ada") ~password:"old", login_with_password a (By_username "ada") ~password:"old")
+    with
+    | Ok (_, other_token), Ok (_, current_token) -> (
+      (* the change runs in the context of [current_token]'s session — resolve its sid and pass it *)
+      match verify_session a current_token with
+      | Error _ -> false
+      | Ok current ->
+        verify_token a other_token = Ok u.id
+        && change_password a ~current_sid:current.sid u.id ~old_password:"old" ~new_password:"new" = Ok ()
+        (* the OTHER session is terminated on the bearer path *)
+        && verify_token a other_token = Error Invalid_token
+        (* the calling session is preserved: its row survives, so it still authenticates *)
+        && verify_token a current_token = Ok u.id
+        && (match list_sessions a u.id with Ok [ s ] -> s.session_id = current.sid | _ -> false))
+    | _ -> false)
+
+let%test "change_password with no current_sid revokes ALL sessions (security-first default)" =
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  match create_user a ~username:"ada" ~password:"old" () with
+  | Error _ -> false
+  | Ok u -> (
+    match login_with_password a (By_username "ada") ~password:"old" with
+    | Error _ -> false
+    | Ok (_, token) ->
+      verify_token a token = Ok u.id
+      (* default arg (no sid in scope, e.g. the DDP path) ⇒ every session dies *)
+      && change_password a u.id ~old_password:"old" ~new_password:"new" = Ok ()
+      && verify_token a token = Error Invalid_token
+      && (match list_sessions a u.id with Ok [] -> true | _ -> false))
+
+let%test "reset_password also kills the cookie paw path end-to-end (validate_every_request=true)" =
+  (* the cookie path only consults the store when validate_every_request is on; there the pruned row +
+     bumped epoch make a reset session anonymous through [paw], closing the full stack (not just the
+     bearer path). *)
+  let store = memory_store () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:true () in
+  match create_user a ~username:"ada" ~email:"ada@example.com" ~password:"old" () with
+  | Error _ -> false
+  | Ok u -> (
+    match (login_with_password a (By_username "ada") ~password:"old", issue_password_reset a "ada@example.com") with
+    | Ok (_, token), Ok (Some reset) ->
+      cookie_user_id_ a token = Some u.id
+      && Result.is_ok (reset_password_user a reset.token ~password:"new")
+      && cookie_user_id_ a token = None
+      && verify_token a token = Error Invalid_token
+    | _ -> false)
+
 let%test "list_sessions returns one entry per live session with configurable-expiry metadata" =
   let store = memory_store () in
   let lifetime = 3600. in

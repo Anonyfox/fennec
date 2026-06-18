@@ -386,6 +386,14 @@ let disable_user t uid = set_user_status t uid Disabled
 let restore_user t uid = set_user_status t uid Active
 let delete_user t uid = set_user_status t uid Deleted
 
+(* A password write bumps the epoch, which only invalidates live sessions on the epoch-GATED paths
+   ([validate_every_request], [login_with_token]). The zero-read bearer ([verify_token]) path and
+   [list_sessions] are epoch-blind for a token row that is still present, so the bump alone lets a
+   stolen token outlive a reset. Pruning the token ROWS closes that: revoke every (or every-but-one)
+   live session so a pre-existing token is dead on those paths too. Best-effort — the password hash is
+   the source of truth and is already committed; a revoke failure must not undo a successful reset. *)
+let revoke_all_sessions t uid = ignore (t.store.tokens.revoke_user uid ())
+
 let set_password t uid ~password =
   match t.password_hasher with
   | None -> Error Password_not_configured
@@ -400,10 +408,12 @@ let set_password t uid ~password =
           Result.map
             (fun _ ->
               ensure_password_identity t user;
+              (* administrative/recovery reset: terminate every existing session *)
+              revoke_all_sessions t uid;
               ())
             (t.store.users.set_password_hash_and_bump uid (hasher.hash ~password)))
 
-let change_password t uid ~old_password ~new_password =
+let change_password t ?current_sid uid ~old_password ~new_password =
   match t.password_hasher with
   | None -> Error Password_not_configured
   | Some hasher ->
@@ -423,6 +433,10 @@ let change_password t uid ~old_password ~new_password =
             Result.map
               (fun _ ->
                 ensure_password_identity t user;
+                (* authenticated self-service: revoke the OTHER sessions, keeping the caller's when its
+                   [current_sid] is in scope (mirrors [logout_other_clients]); without a sid every
+                   session is revoked — security-first, a re-login is acceptable. *)
+                ignore (t.store.tokens.revoke_user uid ?keep:current_sid ());
                 record_audit ~target_user_id:uid ~mechanism:Audit.Password t Audit.Password_change
                   (Audit.User uid) Audit.Success;
                 ())
@@ -768,6 +782,8 @@ let reset_password_user t token ~password =
               Result.bind (t.store.users.set_password_hash_and_bump uid (hasher.hash ~password)) (fun _ ->
                 Result.bind (find_required_user t uid) (fun user ->
                     ensure_password_identity t user;
+                    (* a reset is a security action: terminate every pre-existing session *)
+                    revoke_all_sessions t uid;
                     record_audit ~target_user_id:uid ~mechanism:Audit.Password t Audit.Password_reset
                       (Audit.User uid) Audit.Success;
                     Ok user)))
@@ -896,6 +912,8 @@ let enroll_account_user t token ~password =
                 Result.bind (t.store.users.set_password_hash_and_bump uid (hasher.hash ~password)) (fun _ ->
                     Result.bind (find_required_user t uid) (fun user ->
                         ensure_password_identity t user;
+                        (* enrollment sets the first password: terminate any pre-existing session *)
+                        revoke_all_sessions t uid;
                         record_audit ~target_user_id:uid ~mechanism:Audit.Password t
                           (Audit.Custom "enrollment") (Audit.User uid) Audit.Success;
                         Ok user)))))

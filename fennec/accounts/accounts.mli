@@ -1171,13 +1171,18 @@ val restore_user : t -> user_id -> (user, error) result
 (** Mark an account deleted without removing its record or audit trail. *)
 val delete_user : t -> user_id -> (user, error) result
 
-(** Set a user's password and bump the revocation epoch in one store operation. Existing signed
-    sessions become invalid when epoch validation is used; newly issued logins use the new hash. *)
+(** Set a user's password and bump the revocation epoch in one store operation, then revoke ALL of the
+    user's live session rows. This is an administrative/recovery reset, so every existing session is
+    terminated unconditionally — on both the epoch-gated and the zero-read ([verify_token] / cookie)
+    paths — and the user must re-authenticate. Newly issued logins use the new hash. *)
 val set_password : t -> user_id -> password:string -> (unit, error) result
 
-(** Change a password after proving the current password. This does not issue a new login token; it
-    only rotates the password hash and bumps the revocation epoch. *)
-val change_password : t -> user_id -> old_password:string -> new_password:string -> (unit, error) result
+(** Change a password after proving the current password. Rotates the hash, bumps the revocation epoch,
+    and revokes the user's OTHER live sessions, keeping the calling one when [current_sid] names a
+    session still in scope (mirrors {!logout_other_clients}); without [current_sid] every session is
+    revoked (security-first — a re-login is acceptable). Does not issue a new login token. *)
+val change_password :
+  t -> ?current_sid:string -> user_id -> old_password:string -> new_password:string -> (unit, error) result
 
 (** Issue an email-verification challenge for an address already present on the user.
 
