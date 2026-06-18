@@ -1,0 +1,18 @@
+; The pure leaves of accounts — crypto/data primitives with NO cross-module dependencies:
+;   identity   — external-identity keys (oauth/oidc/saml/passkey/scim subjects) + the link store
+;   challenge  — single-use tokens/codes/state (HMAC-verified, TTL'd, replay-safe)
+;   password   — PBKDF2-HMAC-SHA256 hashing + policy (constant-time verify)
+;   rate_limit — the token-bucket brute-force throttle
+;   roles      — role → permission declarations
+;   audit      — the redacting audit log
+; Each is standalone (own types + memory store); the features and the engine build ON these.
+; Inline unit tests are colocated (the house pattern) and run against in-memory stores.
+(library
+ (name fennec_accounts_primitives)
+ (public_name fennec.accounts.primitives)
+ (wrapped false)
+ (libraries fennec-mongo.bson base64 digestif unix fennec-hunt.unit fennec-hunt.prop)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

@@ -12,6 +12,7 @@
  ; handling for passkeys / OIDC / SAML. zlib + bigstringaf: SAML deflate. fennec.mail +
  ; fennec.fur: the templated verification / reset emails.
  (libraries
+  fennec.accounts.primitives
   fennec-paw
   fennec-mongo.bson
   fennec-mongo.bson_json
