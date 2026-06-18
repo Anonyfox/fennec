@@ -31,7 +31,7 @@ module type READER = sig
   val to_string : src -> string option
   val to_id : src -> string option (* an id leaf — String, or a format's native id (BSON ObjectId) *)
   val to_date : src -> int64 option (* a date leaf — ms since epoch *)
-  val to_bson : src -> Bson.t (* the [TBson] escape; lossless only where [src] is itself BSON *)
+  val to_dyn : src -> Value.t (* the [TDyn] escape — read any source value as a neutral Value *)
   val to_list : src -> src list option
   val to_assoc : src -> (string * src) list option
 
@@ -53,7 +53,7 @@ module type WRITER = sig
   val string : string -> out
   val id : string -> out
   val date : int64 -> out
-  val bson : Bson.t -> out (* the [TBson] escape *)
+  val dyn : Value.t -> out (* the [TDyn] escape *)
   val list : out list -> out
   val assoc : (string * out) list -> out
 end
@@ -73,7 +73,7 @@ let rec read : type a s. (module READER with type src = s) -> a shape -> s -> (a
   | TBool -> ( match R.to_bool src with Some x -> Ok x | None -> bad "bool")
   | TDate -> ( match R.to_date src with Some x -> Ok x | None -> bad "date")
   | TId -> ( match R.to_id src with Some x -> Ok x | None -> bad "id (string or objectid)")
-  | TBson -> Ok (R.to_bson src)
+  | TDyn -> Ok (R.to_dyn src)
   | TUnit -> if R.is_null src then Ok () else bad "null"
   | TList el -> ( match R.to_list src with Some xs -> read_list m el xs | None -> bad "array")
   | TOption el -> if R.is_null src then Ok None else ( match read m el src with Ok x -> Ok (Some x) | Error e -> Error e)
@@ -146,7 +146,7 @@ let rec write : type a o. (module WRITER with type out = o) -> a shape -> a -> o
   | TBool -> W.bool v
   | TDate -> W.date v
   | TId -> W.id v
-  | TBson -> W.bson v
+  | TDyn -> W.dyn v
   | TUnit -> W.null
   | TList el -> W.list (List.map (write m el) v)
   | TOption el -> ( match v with Some x -> write m el x | None -> W.null)

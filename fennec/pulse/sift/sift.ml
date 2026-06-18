@@ -87,7 +87,7 @@ let rec reflect : type a. a shape -> view = function
   | TBool -> V_bool
   | TDate -> V_date
   | TId -> V_id
-  | TBson -> V_bson
+  | TDyn -> V_bson
   | TUnit -> V_unit
   | TList el -> V_list (reflect el)
   | TOption el -> V_option (reflect el)

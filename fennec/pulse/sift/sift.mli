@@ -265,7 +265,15 @@ val id : string t
 (** An [_id] value: accepts [String] or [ObjectId] (surfaced as the hex string); encodes as
     [ObjectId] when the value looks like one (24 hex chars), [String] otherwise. *)
 
-val bson : Bson.t t (* the dynamic escape hatch *)
+(** The NEUTRAL dynamic escape — an arbitrary {!Value.t} (any shape, untyped), with no Bson. This is
+    the format-agnostic "any value" leaf: it round-trips losslessly through every format the rich
+    {!Value} model covers. Prefer this to {!bson} for new code that isn't BSON-specific. *)
+val dyn : Value.t t
+
+(** The dynamic escape typed as a raw {!Bson.t} — kept for BSON-specific code and the deriver's
+    [Bson.t]-field emit. Now a LOSSLESS conv over {!dyn} (the rich {!Value} mirrors BSON 1:1). *)
+val bson : Bson.t t
+
 val unit : unit t
 val list : 'a t -> 'a list t
 val option : 'a t -> 'a option t

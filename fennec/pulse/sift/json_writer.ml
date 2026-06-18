@@ -29,26 +29,25 @@ let escape_string (b : Buffer.t) (s : string) : unit =
 
 let float_str f = if Float.is_finite f then Printf.sprintf "%.17g" f else "null"
 
-(* relaxed JSON for the [TBson] escape hatch *)
-let rec bson_json (b : Buffer.t) (v : Bson.t) : unit =
+(* relaxed JSON for the [TDyn] escape hatch — straight from the neutral {!Value}, no Bson *)
+let rec value_json (b : Buffer.t) (v : Value.t) : unit =
   match v with
-  | Bson.Null | Bson.Min_key | Bson.Max_key -> Buffer.add_string b "null"
-  | Bson.Bool x -> Buffer.add_string b (if x then "true" else "false")
-  | Bson.Int n -> Buffer.add_string b (string_of_int n)
-  | Bson.Int64 n -> Buffer.add_string b (Int64.to_string n)
-  | Bson.Float f -> Buffer.add_string b (float_str f)
-  | Bson.Date ms -> Buffer.add_string b (Int64.to_string ms)
-  | Bson.String s | Bson.Code s | Bson.Symbol s | Bson.Object_id s | Bson.Decimal128 s -> escape_string b s
-  | Bson.Document kvs -> bson_obj b kvs
-  | Bson.Array xs -> Buffer.add_char b '['; List.iteri (fun i x -> if i > 0 then Buffer.add_char b ','; bson_json b x) xs; Buffer.add_char b ']'
-  | Bson.Binary { base64; _ } -> escape_string b base64
-  | Bson.Regex { pattern; _ } -> escape_string b pattern
-  | Bson.Timestamp _ -> Buffer.add_string b "0"
-  | Bson.Code_with_scope (c, _) -> escape_string b c
+  | Value.Null | Value.Min | Value.Max -> Buffer.add_string b "null"
+  | Value.Bool x -> Buffer.add_string b (if x then "true" else "false")
+  | Value.Int n -> Buffer.add_string b (string_of_int n)
+  | Value.Int64 n -> Buffer.add_string b (Int64.to_string n)
+  | Value.Float f -> Buffer.add_string b (float_str f)
+  | Value.Date ms -> Buffer.add_string b (Int64.to_string ms)
+  | Value.String s | Value.Code s | Value.Symbol s | Value.Id s | Value.Decimal s -> escape_string b s
+  | Value.Bytes raw -> escape_string b (Base64.encode_string raw)
+  | Value.Assoc kvs -> value_obj b kvs
+  | Value.List xs -> Buffer.add_char b '['; List.iteri (fun i x -> if i > 0 then Buffer.add_char b ','; value_json b x) xs; Buffer.add_char b ']'
+  | Value.Regex (pattern, _) -> escape_string b pattern
+  | Value.Timestamp _ -> Buffer.add_string b "0"
 
-and bson_obj b kvs =
+and value_obj b kvs =
   Buffer.add_char b '{';
-  List.iteri (fun i (k, v) -> if i > 0 then Buffer.add_char b ','; escape_string b k; Buffer.add_char b ':'; bson_json b v) kvs;
+  List.iteri (fun i (k, v) -> if i > 0 then Buffer.add_char b ','; escape_string b k; Buffer.add_char b ':'; value_json b v) kvs;
   Buffer.add_char b '}'
 
 let rec write_json : type a. a shape -> a -> Buffer.t -> unit =
@@ -60,7 +59,7 @@ let rec write_json : type a. a shape -> a -> Buffer.t -> unit =
   | TBool -> Buffer.add_string b (if v then "true" else "false")
   | TDate -> Buffer.add_string b (Int64.to_string v)
   | TId -> escape_string b v
-  | TBson -> bson_json b v
+  | TDyn -> value_json b v
   | TUnit -> Buffer.add_string b "null"
   | TList el -> Buffer.add_char b '['; write_list el v b 0; Buffer.add_char b ']'
   | TOption el -> ( match v with Some x -> write_json el x b | None -> Buffer.add_string b "null")

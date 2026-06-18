@@ -80,7 +80,7 @@ type _ shape =
   | TBool : bool shape
   | TDate : int64 shape (* Bson.Date, ms since epoch *)
   | TId : string shape (* "_id" values: String or ObjectId, surfaced as string *)
-  | TBson : Bson.t shape (* the dynamic escape hatch *)
+  | TDyn : Value.t shape (* the dynamic escape hatch — a neutral {!Value}, no Bson *)
   | TUnit : unit shape
   | TList : 'a shape -> 'a list shape
   | TOption : 'a shape -> 'a option shape

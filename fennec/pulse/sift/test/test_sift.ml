@@ -712,4 +712,11 @@ let%test "serde: one codec → Bson-tree / Bson-bytes / neutral Value / native J
   && rt4 opt_c (Some "x", [ 1; 2; 3 ])
   && rt4 opt_c (None, [])
 
+let%test "dyn: the neutral escape (Value.t) round-trips an arbitrary rich value (Bson tree/bytes/Value)" =
+  let dyn_c = Sift.(seal (record (fun v -> v) |> field (req "v" dyn) (fun v -> v))) in
+  let v = Sift.Value.(Assoc [ ("n", Int 5); ("d", Date 99L); ("id", Id "507f1f77bcf86cd799439011"); ("xs", List [ Bool true; String "x" ]) ]) in
+  (match Sift.decode dyn_c (Sift.to_bson dyn_c v) with Ok v' -> Sift.equal dyn_c v v' | _ -> false)
+  && (match Sift.decode_bytes dyn_c (Sift.encode_bytes dyn_c v) with Ok v' -> Sift.equal dyn_c v v' | _ -> false)
+  && (match Sift.of_value dyn_c (Sift.to_value dyn_c v) with Ok v' -> Sift.equal dyn_c v v' | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

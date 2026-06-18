@@ -102,7 +102,7 @@ let rec enc_tag : type a. a shape -> a -> int =
   | TBool -> 0x08
   | TDate -> 0x09
   | TId -> if Engine.looks_like_oid v then 0x07 else 0x02
-  | TBson -> bson_tag_of v
+  | TDyn -> bson_tag_of (Value_bson.to_bson v)
   | TUnit -> 0x0A
   | TList _ -> 0x04
   | TOption el -> ( match v with Some x -> enc_tag el x | None -> 0x0A)
@@ -124,7 +124,7 @@ let rec write_value : type a. a shape -> a -> w -> unit =
   | TBool -> u8 w (if v then 1 else 0)
   | TDate -> i64 w v
   | TId -> if Engine.looks_like_oid v then write_oid w v else bson_string w v
-  | TBson -> write_bson w v
+  | TDyn -> write_bson w (Value_bson.to_bson v)
   | TUnit -> () (* Null: no value bytes *)
   | TList el -> write_array el v w
   | TOption el -> ( match v with Some x -> write_value el x w | None -> ())

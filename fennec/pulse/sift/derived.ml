@@ -17,7 +17,7 @@ let rec equal : type a. a shape -> a -> a -> bool =
   | TBool -> Bool.equal x y
   | TDate -> Int64.equal x y
   | TId -> String.equal x y
-  | TBson -> Bson.equal x y
+  | TDyn -> Value.equal x y
   | TUnit -> true
   | TList el -> ( try List.for_all2 (equal el) x y with Invalid_argument _ -> false)
   | TOption el -> ( match (x, y) with None, None -> true | Some a, Some b -> equal el a b | _ -> false)
@@ -50,7 +50,7 @@ let rec compare : type a. a shape -> a -> a -> int =
   | TBool -> Bool.compare x y
   | TDate -> Int64.compare x y
   | TId -> String.compare x y
-  | TBson -> Stdlib.compare x y
+  | TDyn -> Value.compare x y
   | TUnit -> 0
   | TList el -> compare_list el x y
   | TOption el -> ( match (x, y) with None, None -> 0 | None, Some _ -> -1 | Some _, None -> 1 | Some a, Some b -> compare el a b)
@@ -105,7 +105,7 @@ let rec hash : type a. a shape -> a -> int =
   | TBool -> if v then 1 else 0
   | TDate -> Hashtbl.hash v
   | TId -> Hashtbl.hash v
-  | TBson -> Hashtbl.hash v
+  | TDyn -> Hashtbl.hash v
   | TUnit -> 0
   | TList el -> List.fold_left (fun acc x -> combine acc (hash el x)) 7 v
   | TOption el -> ( match v with None -> 0 | Some x -> combine 1 (hash el x))
@@ -139,7 +139,7 @@ let rec default : type a. a shape -> a =
   | TBool -> false
   | TDate -> 0L
   | TId -> ""
-  | TBson -> Bson.Null
+  | TDyn -> Value.Null
   | TUnit -> ()
   | TList _ -> []
   | TOption _ -> None
@@ -237,7 +237,7 @@ let rec gen : type a. a shape -> Random.State.t -> int -> a =
   | TBool -> Random.State.bool st
   | TDate -> Random.State.int64 st 1_700_000_000_000L
   | TId -> rand_hex24 st
-  | TBson -> Bson.Int (Random.State.int st 1000)
+  | TDyn -> Value.Int (Random.State.int st 1000)
   | TUnit -> ()
   | TList el -> let n = if fuel <= 0 then 0 else Random.State.int st (min 6 (fuel + 1)) in List.init n (fun _ -> gen el st (fuel - 1))
   | TOption el -> if fuel > 0 && Random.State.bool st then Some (gen el st (fuel - 1)) else None

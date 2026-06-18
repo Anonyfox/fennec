@@ -43,7 +43,7 @@ module Reader : Serde.READER with type src = Value.t = struct
     | Value.Float f when Float.is_integer f -> Some (Int64.of_float f)
     | _ -> None
 
-  let to_bson v = Value_bson.to_bson v
+  let to_dyn v = v (* the escape is already a neutral Value — identity, no Bson *)
   let to_list = function Value.List xs -> Some xs | _ -> None
   let to_assoc = function Value.Assoc kvs -> Some kvs | _ -> None
 
@@ -61,7 +61,7 @@ module Writer : Serde.WRITER with type out = Value.t = struct
   let string s = Value.String s
   let id s = Value.Id s
   let date d = Value.Date d
-  let bson b = Value_bson.of_bson b
+  let dyn b = b (* the escape is already a neutral Value — identity, no Bson *)
   let list xs = Value.List xs
   let assoc kvs = Value.Assoc kvs
 end

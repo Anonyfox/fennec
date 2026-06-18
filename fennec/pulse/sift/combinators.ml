@@ -12,12 +12,17 @@ let float_nonfinite = of_shape (TFloat { allow_nonfinite = true })
 let bool = of_shape TBool
 let date = of_shape TDate
 let id = of_shape TId
-let bson = of_shape TBson
+let dyn = of_shape TDyn
 let unit = of_shape TUnit
 let list c = of_shape (TList c.shape)
 let option c = of_shape (TOption c.shape)
 let str_map c = of_shape (TMap c.shape)
 let conv proj inj c = of_shape (TConv (inj, proj, c.shape))
+
+(* the dynamic escape, typed as a raw {!Bson.t} — rebuilt LOSSLESSLY as a conv over the neutral {!dyn}
+   (the rich Value mirrors Bson 1:1). Keeps the [Sift.bson] surface + the deriver's [Sift.bson] emit
+   working; when Sift goes dependency-free this binding moves to the [sift.bson] plugin. *)
+let bson = conv (fun v -> Ok (Value_bson.to_bson v)) Value_bson.of_bson dyn
 let make ~enc ~dec = conv dec enc bson
 
 (* a total, two-way transform — [conv] without the fallible decode side (the common case) *)

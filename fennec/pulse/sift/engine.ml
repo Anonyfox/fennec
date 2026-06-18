@@ -67,7 +67,7 @@ let rec read : type a. a shape -> Bson.t -> (a, error list) result =
       | Bson.String s -> Ok s
       | Bson.Object_id s -> Ok s
       | v -> expected "id (string or objectid)" v)
-  | TBson -> Ok b
+  | TDyn -> Ok (Value_bson.of_bson b)
   | TUnit -> ( match b with Bson.Null -> Ok () | v -> expected "null" v)
   | TList el -> (
       match b with
@@ -132,7 +132,7 @@ let rec write : type a. a shape -> a -> Bson.t =
   | TBool -> Bson.Bool v
   | TDate -> Bson.Date v
   | TId -> if looks_like_oid v then Bson.Object_id v else Bson.String v
-  | TBson -> v
+  | TDyn -> Value_bson.to_bson v
   | TUnit -> Bson.Null
   | TList el -> Bson.Array (List.map (write el) v)
   | TOption el -> ( match v with Some x -> write el x | None -> Bson.Null)
@@ -168,7 +168,7 @@ let rec normalize : type a. a shape -> a -> a =
 let rec run_checks : type a. a shape -> a -> error list =
  fun shape v ->
   match shape with
-  | TString | TInt | TBool | TDate | TId | TBson | TUnit -> []
+  | TString | TInt | TBool | TDate | TId | TDyn | TUnit -> []
   | TFloat { allow_nonfinite } ->
       if (not allow_nonfinite) && not (Float.is_finite v) then [ mkerr ~code:"finite" "non-finite float" ] else []
   | TList el -> List.concat (List.mapi (fun i x -> List.map (at (string_of_int i)) (run_checks el x)) v)
@@ -210,7 +210,7 @@ let rec run_checks : type a. a shape -> a -> error list =
 let rec needs_checks : type a. a shape -> bool =
  fun shape ->
   match shape with
-  | TString | TInt | TBool | TDate | TId | TBson | TUnit -> false
+  | TString | TInt | TBool | TDate | TId | TDyn | TUnit -> false
   | TFloat { allow_nonfinite } -> not allow_nonfinite
   | TList el -> needs_checks el
   | TOption el -> needs_checks el
@@ -269,7 +269,7 @@ let rec size : type a. a shape -> a -> int =
   | TBool -> 1
   | TDate -> 8
   | TId -> if looks_like_oid v then 12 else 4 + String.length v + 1
-  | TBson -> bson_size v
+  | TDyn -> bson_size (Value_bson.to_bson v)
   | TUnit -> 0
   | TList el -> list_size el 0 4 v + 1
   | TOption el -> ( match v with Some x -> size el x | None -> 0)
@@ -308,7 +308,7 @@ let rec pretty : type a. a shape -> Format.formatter -> a -> unit =
   | TBool -> Format.fprintf fmt "%b" v
   | TDate -> Format.fprintf fmt "date(%Ld)" v
   | TId -> Format.fprintf fmt "#%s" v
-  | TBson -> Format.fprintf fmt "%s" (Bson.to_string v)
+  | TDyn -> Format.fprintf fmt "%s" (Value.to_string v)
   | TUnit -> Format.fprintf fmt "()"
   | TList el ->
       Format.fprintf fmt "@[<hv 1>[%a]@]"

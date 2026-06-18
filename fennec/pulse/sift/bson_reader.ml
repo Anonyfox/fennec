@@ -239,7 +239,7 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
       if tag = tag_string then Ok (read_bson_string c)
       else if tag = tag_oid then Ok (read_oid_hex c)
       else expected_tag "id (string or objectid)" tag
-  | TBson -> Ok (materialize c tag)
+  | TDyn -> Ok (Value_bson.of_bson (materialize c tag))
   | TUnit -> if tag = tag_null then Ok () else expected_tag "null" tag
   | TList el ->
       if tag <> tag_array then expected_tag "array" tag
@@ -505,7 +505,7 @@ let rec check_bz : type a. a shape -> int -> Cursor.buffer -> int -> int -> erro
       else if tag = 0x01 then (if Float.is_integer (sv_double b len pos) then [] else terr "date" tag)
       else terr "date" tag
   | TId -> if tag = 0x02 || tag = 0x07 then [] else terr "id (string or objectid)" tag
-  | TBson -> []
+  | TDyn -> []
   | TUnit -> if tag = 0x0a then [] else terr "null" tag
   | TList el -> if tag <> 0x04 then terr "array" tag else check_seq_bz el b len pos
   | TOption el -> if tag = 0x0a then [] else check_bz el tag b len pos
