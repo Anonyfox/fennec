@@ -139,7 +139,7 @@ let field_handle ~loc segs =
   let rec chain modp = function
     | [ s ] -> B.pexp_ident ~loc { txt = Ldot (modp, s); loc }
     | s :: rest -> [%expr Sift.dot [%e B.pexp_ident ~loc { txt = Ldot (modp, s); loc }] [%e chain (Ldot (modp, String.capitalize_ascii s)) rest]]
-    | [] -> assert false
+    | [] -> assert false (* unreachable: segs_of_field always yields ≥ 1 segment *)
   in
   chain (Lident "Fields") segs
 
