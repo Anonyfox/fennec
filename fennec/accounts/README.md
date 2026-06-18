@@ -84,14 +84,20 @@ let accounts =
 
 A provider preset bundles the authorize/token/userinfo endpoints plus the default token-exchange
 HTTP, so a provider is a single call. The presets return a `result` (endpoint config can be
-malformed), so unwrap it into the list:
+malformed — a bad `redirect_uri`, an empty `client_id`), so unwrap it into the list. Prefer a *loud*
+unwrap over a bare `Result.get_ok`: at boot a misconfig should fail with **why**, not a context-free
+`Invalid_argument "Option.get"`. Each protocol module renders its own error, so pass the matching
+`string_of_error` to a small helper:
 
 ```ocaml
+(* fail loudly at startup with the actual reason; the renderer is per-protocol *)
+let or_die to_s = function Ok v -> v | Error e -> failwith (to_s e)
+
 let github =
   Accounts.OAuth.github
     ~redirect_uri:"https://app.acme.test/auth/github/callback"
     ~client_id:"…" ~client_secret:"…" ()
-  |> Result.get_ok
+  |> or_die Accounts.OAuth.string_of_error
 
 let accounts = { Accounts.defaults with providers = [ github ] }
 ```
@@ -114,7 +120,7 @@ let google =
         | Some e when Filename.check_suffix e "@acme.test" -> [ "admin" ]
         | _ -> [])
     ()
-  |> Result.get_ok
+  |> or_die Accounts.Oidc.string_of_error   (* same helper as Step 2, OIDC renderer *)
 
 let accounts = { Accounts.defaults with providers = [ google ] }
 ```
@@ -131,7 +137,8 @@ Setting `passkeys` mounts the registration/assertion JSON routes:
 
 ```ocaml
 let rp =
-  Accounts.Passkey.relying_party ~id:"app.acme.test" ~name:"Acme" () |> Result.get_ok
+  Accounts.Passkey.relying_party ~id:"app.acme.test" ~name:"Acme" ()
+  |> or_die Accounts.Passkey.string_of_error
 
 let accounts = { Accounts.defaults with passkeys = Some { relying_party = rp } }
 ```
@@ -184,6 +191,70 @@ let () = Fennec.serve ~accounts [ web; admin ]
 `Fennec.serve` hands the config to `Accounts.start`, which applies it to the process-native instance
 (`Accounts.current ()`) and folds it through `Accounts.Wiring` into a route table + a method gate.
 You can also call `Accounts.start ~config ()` directly outside `serve`.
+
+### Configuration ordering
+
+The umbrella `config` is applied to the process-native singleton on the **first** access — `Fennec.serve
+~accounts` / `Accounts.start ~config` must run **before** the first `Accounts.current ()`. The
+singleton's session fields (`cookie` / `path` / `lifetime` / `validate_every_request`) and its `policy`
+are construction-time: they are frozen when the instance is first built, so a later `start` cannot
+change them on an already-materialised singleton. Hooks (below) and the mutable password policy
+(`Accounts.configure`) can be set afterwards; the session shape and RBAC policy cannot. In practice:
+configure once, at startup, before any route handler or hook registration runs.
+
+---
+
+## Hooks
+
+Meteor-style extensibility points, registered on the process-native instance (`Accounts.current ()`)
+in startup. They are observe/veto callbacks, not config fields, so register them after `start` /
+`Fennec.serve ~accounts` (see ordering, above).
+
+```ocaml
+let accounts = Accounts.current ()
+
+(* Veto or observe a credential login AFTER the credentials verify, BEFORE a session is issued.
+   Returning Error rejects the login (password / passwordless paths). *)
+let () =
+  Accounts.validate_login_attempt accounts (fun (attempt : Accounts.login_attempt) ->
+      match attempt.user with
+      | Some u when List.exists (fun (e : Accounts.email) -> e.address = "banned@acme.test") u.emails ->
+        Error "account disabled"
+      | _ -> Ok ())
+
+(* Observe a successful login (metrics, last-seen, welcome side effects). *)
+let () = Accounts.on_login accounts (fun (u : Accounts.user) -> Printf.printf "login: %s\n" u.id)
+
+(* Observe a FAILED login — unknown account / wrong password / inactive / a validate veto.
+   The attempt carries allowed = false and a reason tag; the reactable twin of the audit log. *)
+let () =
+  Accounts.on_login_failure accounts (fun (attempt : Accounts.login_attempt) ->
+      Printf.printf "login failure (%s): %s\n" attempt.strategy
+        (Option.value attempt.reason ~default:"?"))
+
+(* Veto an EXTERNAL (OAuth / OIDC / SAML / identity) login just before it mints a session —
+   Meteor's beforeExternalLogin. Any hook returning false aborts. This is the SSO-deny gate:
+   a provider `role_map` only ENRICHES roles after login, it cannot reject; deny here instead. *)
+let () =
+  Accounts.before_external_login accounts (fun ~strategy:_ ~identity ~user:_ ->
+      match identity.email with
+      | Some e -> Filename.check_suffix e "@acme.test"   (* only this domain may SSO in *)
+      | None -> false)
+```
+
+Other hooks: `Accounts.on_create_user` (reject/alter a new user before insertion, `user -> (user,
+string) result`), `Accounts.on_logout` (`user_id option -> unit`), and `Accounts.register_strategy`
+(register/replace a custom login strategy).
+
+---
+
+## Environment variables
+
+| Variable | Purpose | Default / prod requirement |
+| --- | --- | --- |
+| `FENNEC_ACCOUNTS_SECRET` | The stable secret that signs session cookies/tokens (HMAC). | Optional in dev: unset ⇒ a fresh **ephemeral** per-process secret is minted, so every restart invalidates all sessions and multiple instances cannot share one. **Required in prod** (≥ 16 bytes) for durable, horizontally-shared sessions. Set-but-shorter-than-16-bytes is a hard startup error. |
+| `FENNEC_URL` | Base URL for the email action links (`verify-email` / `reset-password` / `enroll-account` / login-code). | Defaults to `http://localhost`. Set it to your public origin in prod, or pass a per-call `~link` to the `send_*_email` verbs. |
+| `MONGO_URL` | Selects the data backend the Accounts store rides (shared with the rest of the framework). | Unset ⇒ the store is **unavailable** (anonymous identity is `None`; DB-backed ops fail with a clear `Store_error`). `:memory:` ⇒ minimongo (tests); `burrow://<path>` ⇒ the embedded engine; a `mongodb://…` URL ⇒ `mongod`. |
 
 ---
 
@@ -286,6 +357,10 @@ Match the code, not the marketing — these are the actual guarantees (`accounts
   unknown-account vs wrong-password by default (`password.ambiguous_error_messages`; the hooks and
   audit log still see the real reason). `issue_password_reset` / `send_reset_password_email` return
   success even for addresses with no account, so the UX cannot be used as an account oracle.
+  *Deliberate trade-off:* signup is **not** non-enumerating — `create_user` / the `createUser` method
+  return a distinct `Duplicate_email` / `Duplicate_username` so the form can say "that's taken"
+  (Meteor parity; a usable-signup-UX vs strict-enumeration-resistance call). Front a public signup with
+  the throttle (already on) and, if you need it, a CAPTCHA.
 
 - **Brute-force throttle.** A token-bucket limiter (`Accounts_rate_limit.make`) guards the `login`
   and `createUser` DDP methods — **5 attempts / 10 s** by default (Meteor's `DDPRateLimiter`),
@@ -298,7 +373,10 @@ Match the code, not the marketing — these are the actual guarantees (`accounts
   signature + iss/aud/exp/nonce** before trusting a principal; OAuth/OIDC carry PKCE + state; SAML
   verifies the XML signature against pinned `trusted_keys`. Email is trusted as verified only when
   the provider attests it (`email_verified`). `before_external_login` is the per-login veto for
-  domain/org allow-lists.
+  domain/org allow-lists. *Note:* a provider `role_map` is post-login **enrichment** — it maps the
+  verified principal to app roles *after* the session is minted, so it can never **deny** a login (and
+  a failure to apply it is non-fatal, surfaced to the audit log as a `Role_change` / `Failure` event).
+  To gate who may SSO in at all, return `false` from `before_external_login`.
 
 The crypto in `Accounts_secrets` and `Accounts_password` was carried **verbatim** through the
 refactor — the enumeration / replay / seal guarantees did not move.
@@ -328,6 +406,6 @@ Run the suite:
 dune runtest fennec/accounts
 ```
 
-which covers the engine integration suite (1205 tests) plus `fennec/accounts/features` (947),
+which covers the engine integration suite (1221 tests) plus `fennec/accounts/features` (950),
 `fennec/accounts/primitives` (78), and the burrow parity exe. `dune build @check` and
 `dune build @all` cover the whole workspace.
