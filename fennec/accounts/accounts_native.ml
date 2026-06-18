@@ -528,19 +528,25 @@ module Wiring = struct
     let p sub = join r.auth_prefix sub in
     let success = "/" and error = join r.auth_prefix "error" in
     let mfa_required = join r.auth_prefix "mfa" in
+    (* the emailed action links MUST target the same paths the consume routes are mounted on (under
+       [auth_prefix]); the default [send_*_email] link points at the standalone defaults (/reset-password,
+       /verify-email, /enroll-account), which are NOT mounted here — so the link would 404. Build each
+       [~link] from the mount path instead. *)
+    let reset_link = default_link (p "password/reset") in
+    let verify_link = default_link (p "email/verify") in
     [
       (* request a password-reset email (non-enumerating: always redirects to success) *)
       Paw.Route.post (p "password/reset-request") (fun c ->
           match Conn.param c "email" with
           | None -> Conn.redirect c error
-          | Some email -> ignore (send_reset_password_email t email); Conn.redirect c success);
+          | Some email -> ignore (send_reset_password_email t ~link:reset_link email); Conn.redirect c success);
       password_reset_paw t ~mfa_required ~path:(p "password/reset") ~success ~error ();
       enrollment_paw t ~mfa_required ~path:(p "password/enroll") ~success ~error ();
       (* request an email-verification email for the current user *)
       Paw.Route.post (p "email/verify-request") (fun c ->
           match user_id c with
           | None -> Conn.redirect c error
-          | Some uid -> ignore (send_verification_email t uid); Conn.redirect c success);
+          | Some uid -> ignore (send_verification_email t ~link:verify_link uid); Conn.redirect c success);
       email_verification_paw t ~mfa_required ~path:(p "email/verify") ~success ~error ();
       (* request a magic login link / an OTP code (both naturally non-enumerating) *)
       Paw.Route.post (p "email/login-link-request") (fun c ->
@@ -954,6 +960,73 @@ let%test "Wiring: mail config mounts the password/email routes and nothing else"
   && (not (route_mounted_ a passkey_probe_))
   && (not (route_mounted_ a scim_probe_))
   && (not (route_mounted_ a oauth_authorize_probe_))
+
+(* The auto-wired email routes must build links that point at the SAME path Wiring mounts the consume
+   route on. Pre-fix, [mail_routes] called the send verbs WITHOUT [~link], so the email pointed at the
+   DEFAULT path (e.g. /reset-password) while the consume route is mounted under <auth_prefix>
+   (/auth/password/reset) — the link 404'd. These guards drive the request routes end-to-end, pull the
+   action URL out of the delivered email, and assert its path is exactly the mounted consume route (and
+   that the route table actually answers there). They FAIL on the pre-fix wiring (default path ≠ mount).
+
+   The link extractor reads the URL from the rendered text body and strips the query. *)
+let wired_with_mail_ () =
+  let a = make ~secret:"accounts-test-secret-wiring-mail" ~store:(memory_store ()) ~password_hasher:test_hasher () in
+  a.settings <- { defaults with mail = Some { from = "no-reply@acme.test"; site_name = Some "Acme"; templates = None } };
+  set_email_templates a (Mailer.default ~site_name:"Acme" ~from:(Fennec_mail.Address.v "no-reply@acme.test") ());
+  a
+
+let link_path_in_ (m : Fennec_mail.t) =
+  (* find the first http(s) URL in the body and return its path component (no scheme/host, no query) *)
+  let body = Option.value m.Fennec_mail.text ~default:"" in
+  let n = String.length body in
+  let rec find_http i = if i + 4 > n then None else if String.sub body i 4 = "http" then Some i else find_http (i + 1) in
+  match find_http 0 with
+  | None -> None
+  | Some start ->
+    let stop = ref start in
+    while !stop < n && (match body.[!stop] with ' ' | '\n' | '\r' | '\t' | '"' | '<' | '>' -> false | _ -> true) do incr stop done;
+    let url = String.sub body start (!stop - start) in
+    (* strip scheme://host *)
+    let after_scheme = match String.index_opt url ':' with Some i when i + 3 <= String.length url -> i + 3 | _ -> 0 in
+    let path_start = match String.index_from_opt url after_scheme '/' with Some i -> i | None -> String.length url in
+    let path_and_query = String.sub url path_start (String.length url - path_start) in
+    Some (match String.index_opt path_and_query '?' with Some i -> String.sub path_and_query 0 i | None -> path_and_query)
+
+let%test "Wiring: the password-reset email links to the MOUNTED consume route, not the default path" =
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = wired_with_mail_ () in
+  let _ = create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () in
+  let _ = Paw.run (Wiring.routes a) (post_form_ "/auth/password/reset-request" "email=ada@example.com") in
+  match sent () with
+  | [ m ] -> (
+    match link_path_in_ m with
+    | Some path -> path = "/auth/password/reset" && route_mounted_ a (post_ path)
+    | None -> false)
+  | _ -> false
+
+let%test "Wiring: the email-verification email links to the MOUNTED consume route, not the default path" =
+  let tr, sent = Fennec_mail.capture () in
+  Fennec_mail.set_transport tr;
+  let a = wired_with_mail_ () in
+  match create_user a ~username:"ada" ~email:"ada@example.com" ~password:"pw" () with
+  | Error _ -> false
+  | Ok _ ->
+    (* the verify-request route reads [user_id c], so run it behind the identity paw with the user's
+       login cookie attached (exactly the native_paw composition: [paw a (); Wiring.routes a]). *)
+    let token = match login_with_password a (By_username "ada") ~password:"pw" with Ok (_, t) -> t | Error _ -> "" in
+    let req =
+      H.make_request ~meth:H.POST ~path:"/auth/email/verify-request"
+        ~headers:[ ("content-type", "application/x-www-form-urlencoded"); ("Cookie", a.cookie ^ "=" ^ token) ]
+        ~body:"" ()
+    in
+    let _ = Paw.run (Paw.seq [ paw a (); Wiring.routes a ]) req in
+    (match sent () with
+    | [ m ] -> (
+      match link_path_in_ m with
+      | Some path -> path = "/auth/email/verify" && route_mounted_ a (get_ path)
+      | None -> false)
+    | _ -> false)
 
 let%test "Wiring: passkeys config mounts the passkey routes and not the mail routes" =
   let a = wired_ { defaults with passkeys = Some { relying_party = passkey_rp_ () } } in
