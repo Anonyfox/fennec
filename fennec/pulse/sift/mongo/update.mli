@@ -2,7 +2,7 @@
     Combine with {!all} (grouped by operator); {!raw} keeps the full surface reachable.
 
     {[ let _ = T.update tasks ~where:[%q id = x] [%set status = "done"]   (* the [%set] DSL *)
-       let _ = M.(all [ set Fields.status "done"; inc Fields.n 1; push Fields.tags "t" ]) ]}
+       let _ = Update.(all [ set Fields.status "done"; inc Fields.n 1; push Fields.tags "t" ]) ]}
 *)
 
 type t

@@ -100,7 +100,7 @@ let find_c t (def : 'a Def.t) ?(where = []) ?sort ?skip ?limit () : 'a array Fur
 
 (* the PROJECTED typed live read: the projection's object type, decoded from the cache slice;
    malformed rows skipped + warned once (same policy as find_c). [name] is the collection. *)
-let find_p t (name : string) (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit () : 'o array Fur.signal =
+let find_p t (name : string) (p : 'o Projection.t) ?(where = []) ?sort ?skip ?limit () : 'o array Fur.signal =
   let selector = match Filter.all where with [] -> None | q -> Some (Filter.to_bson q) in
   let sort = Option.map Sort.to_bson sort in
   let v = version_signal t name in
@@ -108,7 +108,7 @@ let find_p t (name : string) (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit ()
     Merge_store.fetch t.store name ?selector ?sort ?skip ?limit ()
     |> Array.to_seq
     |> Seq.filter_map (fun d ->
-           match Proj.decode p d with
+           match Projection.decode p d with
            | Ok x -> Some x
            | Error es ->
                let key = name ^ ":" ^ (match Bson.get d "_id" with Some (Bson.String s) -> s | _ -> "?") in

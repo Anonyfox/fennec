@@ -8,7 +8,7 @@
        let tasks = T.attach Task.collection backend          (* boot, next to publish *)
        let id = T.insert tasks { id = ""; title; done_ = false }
        let open_ = T.find tasks ~where:Filter.[ eq Task.Fields.done_ false ] ()
-       T.update tasks ~where:Filter.[ eq Task.Fields.id id ] M.[ set Task.Fields.done_ true ] ]} *)
+       T.update tasks ~where:Filter.[ eq Task.Fields.id id ] Update.[ set Task.Fields.done_ true ] ]} *)
 
 module Make (R : Reactive.REACTIVE) : sig
   (** Raised by a write whose value fails the shape's checks — the collected violations. *)
@@ -46,14 +46,14 @@ module Make (R : Reactive.REACTIVE) : sig
   val insert : 'a t -> 'a -> string
 
   (** The substrate's reactive cursor (sorted/windowed) — plugs into [publish] unchanged.
-      [?project] trims to a {!Proj.t}'s fields on the wire (the publication ships only those). *)
+      [?project] trims to a {!Projection.t}'s fields on the wire (the publication ships only those). *)
   val cursor :
-    'a t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> ?project:_ Proj.t -> unit -> R.Collection.cursor
+    'a t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> ?project:_ Projection.t -> unit -> R.Collection.cursor
 
   (** A PROJECTED read: only the projection's fields cross the boundary, decoded into its object
       type (the full record is never built); malformed rows skipped. *)
   val find_p :
-    'a t -> 'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o list
+    'a t -> 'o Projection.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o list
 
   (** Typed read; documents that fail decode are SKIPPED (the malformed-doc policy). *)
   val find : 'a t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'a list
@@ -66,13 +66,13 @@ module Make (R : Reactive.REACTIVE) : sig
   val count : 'a t -> ?where:Filter.t list -> unit -> int
 
   (** Typed modifier update over a typed selector ([multi] defaults to [true]). *)
-  val update : 'a t -> ?multi:bool -> where:Filter.t list -> M.t -> int
+  val update : 'a t -> ?multi:bool -> where:Filter.t list -> Update.t -> int
 
   val remove : 'a t -> where:Filter.t list -> int
 
   (** Typed upsert: update if matched, insert otherwise ([$setOnInsert] covers insert-only fields).
       Returns (number affected, newly-minted id if it inserted). *)
-  val upsert : 'a t -> ?multi:bool -> where:Filter.t list -> M.t -> int * string option
+  val upsert : 'a t -> ?multi:bool -> where:Filter.t list -> Update.t -> int * string option
 
   (** Distinct values of one field across matching docs, decoded to the field's type (undecodable
       values skipped). *)

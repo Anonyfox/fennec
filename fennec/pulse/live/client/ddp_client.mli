@@ -106,7 +106,7 @@ val find_c :
     projected object exposes ONLY the chosen fields (a projected-away field is a compile error, not
     [undefined]); the server ships only those fields too. *)
 val find_p :
-  t -> 'a Def.t -> 'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+  t -> 'a Def.t -> 'o Projection.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 
 (** The ambient page connection recorded by {!connect} — the per-model {!Collection} views read
     through it so day-to-day code threads no [client]. Raises if [connect] hasn't run. *)
@@ -125,7 +125,7 @@ end) : sig
   val find :
     ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
   val project :
-    'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+    'o Projection.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 end
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents

@@ -18,7 +18,7 @@ let codec =
       |> field (opt "note" string) (fun x -> x.note)))
 
 let%test "schema: object with properties; required omits opt/opt_list; stacked hints merge" =
-  let s = Schema.json_schema (Sift.view codec) in
+  let s = Json_schema.json_schema (Sift.view codec) in
   (match get s "required" with
   | Some (B.Array req) ->
       let names = List.filter_map (function B.String x -> Some x | _ -> None) req in
@@ -45,7 +45,7 @@ let p_codec =
         case "free" (record Free) ~inj:Fun.id ~proj:(function Free -> Some Free | _ -> None) ])
 
 let%test "schema: variants render as oneOf with the tag pinned per case; numeric hints translate" =
-  match get (Schema.json_schema (Sift.view p_codec)) "oneOf" with
+  match get (Json_schema.json_schema (Sift.view p_codec)) "oneOf" with
   | Some (B.Array [ fixed; free ]) ->
       (let tagf = getd (getd fixed "properties") "kind" in
        get tagf "enum" = Some (B.Array [ B.str "fixed" ]))
@@ -55,12 +55,12 @@ let%test "schema: variants render as oneOf with the tag pinned per case; numeric
   | _ -> false
 
 let%test "schema: the validator wraps as { $jsonSchema: … }; maps render additionalProperties" =
-  (match Schema.validator codec with
+  (match Json_schema.validator codec with
   | B.Document [ ("$jsonSchema", B.Document _) ] -> true
   | _ -> false)
   &&
   let mc = Sift.(seal (record (fun m -> m) |> field (req "i18n" (str_map (non_empty string))) (fun m -> m))) in
-  let s = Schema.json_schema (Sift.view mc) in
+  let s = Json_schema.json_schema (Sift.view mc) in
   let i18n = getd (getd s "properties") "i18n" in
   get i18n "bsonType" = Some (B.String "object")
   && (match get (getd i18n "additionalProperties") "minLength" with Some (B.Int 1) -> true | _ -> false)

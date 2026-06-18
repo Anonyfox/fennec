@@ -9,7 +9,7 @@ let v ?(indexes = []) name codec = { name; codec; indexes }
 let name d = d.name
 let codec d = d.codec
 let indexes d = d.indexes
-let validator d = Schema.validator d.codec
+let validator d = Json_schema.validator d.codec
 
 (* declare this collection's indexes (co-located with the model); registered for boot reconcile *)
 let index d ixs = Index.register d.name ixs

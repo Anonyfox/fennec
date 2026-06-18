@@ -39,7 +39,7 @@ val find_c :
 (** The PROJECTED typed live read — the projection's inferred object type, decoded from the cache
     slice (malformed rows skipped, warned once). [name] is the collection (use [Def.name def]). *)
 val find_p :
-  t -> string -> 'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+  t -> string -> 'o Projection.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;

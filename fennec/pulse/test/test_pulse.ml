@@ -459,7 +459,7 @@ let%test "typed: insert validates (Invalid collects); find round-trips; Filter/M
      | _ -> false)
   && (match T.find h ~where:[ Filter.has f_tags "errand" ] () with [ t ] -> t.id = id1 | _ -> false)
   && T.count h () = 2
-  && (T.update h ~where:Filter.[ eq f_id id1 ] M.(all [ set f_done true; push f_tags "today" ]) = 1
+  && (T.update h ~where:Filter.[ eq f_id id1 ] Update.(all [ set f_done true; push f_tags "today" ]) = 1
      && match T.find_one h ~where:Filter.[ eq f_id id1 ] () with
         | Some t -> t.done_ && t.tags = [ "errand"; "today" ]
         | None -> false)
@@ -503,7 +503,7 @@ let%test "typed: validator is MODERATE — a doc that was already invalid stays 
   let bad_id = Minimongo.insert backend (B.doc [ ("title", B.int 99) ]) in (* legacy garbage, pre-validator *)
   let h = T.attach task_def backend in
   (* moderate validationLevel: an update to a doc that did not satisfy the schema is NOT re-validated *)
-  match T.update h ~where:Filter.[ eq f_id bad_id ] M.(all [ set f_done true ]) with
+  match T.update h ~where:Filter.[ eq f_id bad_id ] Update.(all [ set f_done true ]) with
   | n -> n = 1
   | exception Minimongo.Validation_error _ -> false
 
@@ -531,10 +531,10 @@ let%test "extended typed surface: Filter matchers, M modifiers, Sort, upsert, di
   (* Sort: typed keys *)
   let sorted = List.map (fun t -> t.title) (T.find h ~sort:Sort.(by [ asc f_title ]) ()) = [ "Apple"; "Banana" ] in
   (* M: pop / pull_all / set; typed selector *)
-  let _ = T.update h ~where:[ Filter.eq f_title "Apple" ] M.(all [ set f_done true; pop_last f_tags ]) in
+  let _ = T.update h ~where:[ Filter.eq f_title "Apple" ] Update.(all [ set f_done true; pop_last f_tags ]) in
   let popped = match T.find_one h ~where:[ Filter.eq f_title "Apple" ] () with Some t -> t.tags = [ "fruit" ] && t.done_ | None -> false in
   (* upsert: matched path updates; a fresh selector inserts *)
-  let n1, ins1 = T.upsert h ~where:[ Filter.eq f_title "Cherry" ] M.(all [ set f_done false; set_on_insert f_title "Cherry" ]) in
+  let n1, ins1 = T.upsert h ~where:[ Filter.eq f_title "Cherry" ] Update.(all [ set f_done false; set_on_insert f_title "Cherry" ]) in
   let inserted = n1 = 1 && ins1 <> None && T.count h () = 3 in
   (* distinct: typed values of a field *)
   let titles = List.sort compare (T.distinct h f_title ()) in

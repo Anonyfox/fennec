@@ -50,46 +50,46 @@ let%test "golden: [@check] enforces (same battery as the server); view reflectio
   | Ok _ -> false)
   && Sift.view codec = Sift.view twin
   && Def.name collection = "gtasks"
-  && B.equal (Def.validator collection) (Schema.validator twin)
+  && B.equal (Def.validator collection) (Json_schema.validator twin)
 
 (* ── projections: [%fields …] — Meteor's { fields: {…} } made a type-safe object ── *)
 let%test "projection: [%fields] yields the wire doc AND an object of exactly those fields" =
   let card = [%fields title; done_] in
   (* the Mongo projection document — Meteor's { title: 1, done: 1 } *)
-  (match Proj.project_doc card with
+  (match Projection.project_doc card with
   | B.Document [ ("_id", B.Int 0); ("title", B.Int 1); ("done", B.Int 1) ] -> true (* _id auto-trimmed *)
   | _ -> false)
   &&
   (* decode a full stored doc into the PROJECTED object — only title/done survive, typed *)
   let stored = B.doc [ ("_id", B.str "z"); ("title", B.str "Hello"); ("done", B.Bool true); ("remark", B.str "x"); ("tags", B.array []) ] in
-  match Proj.decode card stored with
+  match Projection.decode card stored with
   | Ok o -> o#title = "Hello" && o#done_ = true (* o#remark would be a COMPILE error: no method *)
   | Error _ -> false
 
 let%test "projection: id is shipped only when explicitly projected (else _id:0 trims the wire)" =
-  (match Proj.project_doc [%fields id; title] with
+  (match Projection.project_doc [%fields id; title] with
   | B.Document [ ("_id", B.Int 1); ("title", B.Int 1) ] -> true (* asked for id → no _id:0, _id:1 *)
   | _ -> false)
   &&
-  let o = match Proj.decode [%fields id; title] (B.doc [ ("_id", B.str "k"); ("title", B.str "Title") ]) with Ok o -> o | Error _ -> assert false in
+  let o = match Projection.decode [%fields id; title] (B.doc [ ("_id", B.str "k"); ("title", B.str "Title") ]) with Ok o -> o | Error _ -> assert false in
   o#id = "k" && o#title = "Title"
 
 let%test "projection: $slice on an array field — wire carries {$slice}, the list type is unchanged" =
-  (match Proj.project_doc [%fields title; slice tags 3] with
+  (match Projection.project_doc [%fields title; slice tags 3] with
   | B.Document [ ("_id", B.Int 0); ("title", B.Int 1); ("tags", B.Document [ ("$slice", B.Int 3) ]) ] -> true
   | _ -> false)
-  && (match Proj.project_doc [%fields slice tags 2 5] with
+  && (match Projection.project_doc [%fields slice tags 2 5] with
      | B.Document [ ("_id", B.Int 0); ("tags", B.Document [ ("$slice", B.Array [ B.Int 2; B.Int 5 ]) ]) ] -> true
      | _ -> false)
   &&
   (* the object still decodes tags as a string list (the slice trimmed the array, not the type) *)
-  let o = match Proj.decode [%fields slice tags 2] (B.doc [ ("tags", B.array [ B.str "a"; B.str "b" ]) ]) with
+  let o = match Projection.decode [%fields slice tags 2] (B.doc [ ("tags", B.array [ B.str "a"; B.str "b" ]) ]) with
     | Ok o -> o | Error _ -> assert false in
   o#tags = [ "a"; "b" ]
 
 let%test "projection: a missing projected field surfaces as a decode error (skip-policy fodder)" =
   let card = [%fields title; done_] in
-  match Proj.decode card (B.doc [ ("title", B.str "only") ]) with Error _ -> true | Ok _ -> false
+  match Projection.decode card (B.doc [ ("title", B.str "only") ]) with Error _ -> true | Ok _ -> false
 
 (* ── embedded records + dotted-path projections (nested object) ── *)
 module Author = struct
@@ -111,25 +111,25 @@ let%test "embedded record: the deriver nests the codec; the doc round-trips thro
 
 let%test "dotted projection: author/name yields wire author.name AND a nested object" =
   let proj = Post.([%fields title; author / name]) in
-  (match Proj.project_doc proj with
+  (match Projection.project_doc proj with
   | B.Document [ ("_id", B.Int 0); ("title", B.Int 1); ("author.name", B.Int 1) ] -> true
   | _ -> false)
   &&
   (* decode a full stored post → the projected nested object; o#author#name typed, o#author#email a COMPILE error *)
   let stored = B.doc [ ("_id", B.str "p1"); ("title", B.str "Hi");
                        ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "a@x.io") ]) ] in
-  match Proj.decode proj stored with
+  match Projection.decode proj stored with
   | Ok o -> o#title = "Hi" && o#author#name = "Ada"
   | Error _ -> false
 
 let%test "dotted projection: siblings under one head merge into one nested object" =
   let proj = Post.([%fields author / name; author / email]) in
-  (match Proj.project_doc proj with
+  (match Projection.project_doc proj with
   | B.Document [ ("_id", B.Int 0); ("author.name", B.Int 1); ("author.email", B.Int 1) ] -> true
   | _ -> false)
   &&
   let stored = B.doc [ ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "a@x.io") ]) ] in
-  match Proj.decode proj stored with Ok o -> o#author#name = "Ada" && o#author#email = "a@x.io" | Error _ -> false
+  match Projection.decode proj stored with Ok o -> o#author#name = "Ada" && o#author#email = "a@x.io" | Error _ -> false
 
 (* ── typed dotted-path SELECTORS (Sift.dot) — symmetric to dotted projections ── *)
 let%test "Filter.eq over Sift.dot: nested selector compiles to the dotted wire key, value type checked" =
@@ -179,7 +179,7 @@ let%test "[%q] / [%sort] / [%set]: expressions expand to the typed Filter/Sort/M
   && Filter.to_bson (Filter.all q) = Filter.to_bson (Filter.all Filter.[ eq Fields.status "doing"; gte Fields.priority 2 ])
   && Sort.to_bson [%sort priority desc, title asc]
      = Sort.to_bson Sort.(by [ desc Fields.priority; asc Fields.title ])
-  && M.to_bson [%set status = "done"] = M.to_bson M.(all [ set Fields.status "done" ])
+  && Update.to_bson [%set status = "done"] = Update.to_bson Update.(all [ set Fields.status "done" ])
 
 (* ── [%index] DSL — Meteor's Tasks.createIndex, typed, no Def/Index/asc/Fields tokens ── *)
 module Indexed = struct

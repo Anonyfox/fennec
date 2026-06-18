@@ -20,7 +20,7 @@ val name : 'a t -> string
 val codec : 'a t -> 'a Sift.t
 val indexes : 'a t -> Index.t list
 
-(** The mongod validator document derived from the shape ({!Schema.validator}). *)
+(** The mongod validator document derived from the shape ({!Json_schema.validator}). *)
 val validator : 'a t -> Bson.t
 
 (** [index collection [ … ]] declares the collection's indexes, co-located with the model:

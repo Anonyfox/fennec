@@ -83,14 +83,14 @@ module Make (R : Reactive.REACTIVE) = struct
   let srt = Option.map Sort.to_bson
 
   let cursor t ?(where = []) ?sort ?skip ?limit ?project () =
-    let fields = Option.map Proj.project_doc project in
+    let fields = Option.map Projection.project_doc project in
     R.Collection.find t.coll ?selector:(sel where) ?sort:(srt sort) ?skip ?limit ?fields ()
 
   (* a PROJECTED read: only the projection's fields cross the boundary, decoded into its object
      type; malformed rows skipped (the same policy as [find]) *)
-  let find_p t (p : 'o Proj.t) ?(where = []) ?sort ?skip ?limit () : 'o list =
+  let find_p t (p : 'o Projection.t) ?(where = []) ?sort ?skip ?limit () : 'o list =
     R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ~project:p ())
-    |> List.filter_map (fun d -> match Proj.decode p d with Ok v -> Some v | Error _ -> None)
+    |> List.filter_map (fun d -> match Projection.decode p d with Ok v -> Some v | Error _ -> None)
 
   let find t ?(where = []) ?sort ?skip ?limit () : 'a list =
     R.Collection.fetch (cursor t ~where ?sort ?skip ?limit ())
@@ -107,12 +107,12 @@ module Make (R : Reactive.REACTIVE) = struct
   let count t ?(where = []) () = R.Collection.count t.coll ?selector:(sel where) ()
 
   let update t ?(multi = true) ~where m =
-    R.Collection.update t.coll ~multi (Filter.to_bson (Filter.all where)) (M.to_bson m)
+    R.Collection.update t.coll ~multi (Filter.to_bson (Filter.all where)) (Update.to_bson m)
 
   (* typed upsert: the modifier runs whether it matched or inserted ($setOnInsert covers
      insert-only fields). Returns the engine's affected count + any newly-minted id. *)
   let upsert t ?(multi = false) ~where m =
-    let r = R.Collection.upsert t.coll ~multi (Filter.to_bson (Filter.all where)) (M.to_bson m) in
+    let r = R.Collection.upsert t.coll ~multi (Filter.to_bson (Filter.all where)) (Update.to_bson m) in
     (r.R.Collection.number_affected, r.R.Collection.inserted_id)
 
   let remove t ~where = R.Collection.remove t.coll (Filter.to_bson (Filter.all where))

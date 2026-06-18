@@ -36,5 +36,5 @@ module Collection (M : sig
 end) : sig
   val find : ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> M.doc array Fur.signal
   val project :
-    'o Proj.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
+    'o Projection.t -> ?where:Filter.t list -> ?sort:Sort.t -> ?skip:int -> ?limit:int -> unit -> 'o array Fur.signal
 end

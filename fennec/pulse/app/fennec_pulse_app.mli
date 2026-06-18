@@ -55,8 +55,8 @@ val insert : 'a Def.t -> 'a -> string
 (** Insert many (seed/bootstrap) — [List.iter insert]. *)
 val seed : 'a Def.t -> 'a list -> unit
 
-val update : 'a Def.t -> ?multi:bool -> where:Filter.t list -> M.t -> int
-val upsert : 'a Def.t -> ?multi:bool -> where:Filter.t list -> M.t -> int * string option
+val update : 'a Def.t -> ?multi:bool -> where:Filter.t list -> Update.t -> int
+val upsert : 'a Def.t -> ?multi:bool -> where:Filter.t list -> Update.t -> int * string option
 val remove : 'a Def.t -> where:Filter.t list -> int
 
 (** {1 Publications and methods} *)

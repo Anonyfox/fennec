@@ -2,9 +2,9 @@
    toolkit (opt-in). Each expands, under a model's scope (so its [Fields] resolve), to a sift.mongo
    artifact:
      [%q status = "doing" && age > 18]   -> Filter.t  (a Bson selector)
-     [%fields a; b; author / name]        -> Proj.t    (a typed projection)
+     [%fields a; b; author / name]        -> Projection.t    (a typed projection)
      [%sort age desc; name]               -> Sort.t
-     [%set status = "done"]               -> M.t       (an update modifier)
+     [%set status = "done"]               -> Update.t  (an update modifier)
      [%index unique [ asc email ]]        -> declares an index
    Pure AST -> sift.mongo references, resolved at the consumer (which links fennec.pulse.sift.mongo). Any
    driver links {!rules} into its single ppx pass; fennec's fur.ppx does, and so can a downstream user. *)
@@ -12,7 +12,7 @@
 open Ppxlib
 
 (* ---- the [%fields a; b; …] projection extension ---------------------------------------------
-   Expands, under the model's scope (so [Fields] resolves), to a Proj.t whose decoder builds an
+   Expands, under the model's scope (so [Fields] resolves), to a Projection.t whose decoder builds an
    OBJECT from the model's field handles — existence + type pulled from the handles (a non-model
    field is an unbound [Fields.x] error right here). Meteor's [{ a: 1, b: 1 }].
 
@@ -116,7 +116,7 @@ let fields_expander =
       in
       let decode_body = build [] [%expr __d] 0 paths
       in
-      [%expr Proj.v ~fields:[%e fields_list] ~decode:(fun __d -> [%e decode_body])])
+      [%expr Projection.v ~fields:[%e fields_list] ~decode:(fun __d -> [%e decode_body])])
 
 (* ---- [%q …] / [%sort …] / [%set …] — write queries as expressions, not API calls -------------
    Resolved against the model's [Fields] in scope (open Task, or Task.(…)). A bare ident is a field
@@ -218,11 +218,11 @@ let set_expander =
       let one e =
         match e.pexp_desc with
         | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "="; _ }; _ }, [ (_, l); (_, r) ]) ->
-            [%expr M.set [%e field_handle ~loc (segs_of_field l)] [%e r]]
-        | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%set: each clause is `field = value`; for inc/push/… use M"
+            [%expr Update.set [%e field_handle ~loc (segs_of_field l)] [%e r]]
+        | _ -> Location.raise_errorf ~loc:e.pexp_loc "%%set: each clause is `field = value`; for inc/push/… use Update"
       in
       let rec assigns e = match e.pexp_desc with Pexp_sequence (a, b) -> assigns a @ assigns b | _ -> [ one e ] in
-      [%expr M.all [%e Ast_builder.Default.elist ~loc (assigns e)]])
+      [%expr Update.all [%e Ast_builder.Default.elist ~loc (assigns e)]])
 
 (* exposed for composition into a SINGLE driver: fur.ppx (mlx components) and the thin standalone
    both fold these into their own [register_transformation ~rules], so a file pays ONE ppx process
