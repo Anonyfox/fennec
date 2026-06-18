@@ -661,3 +661,85 @@ let%test "Store.minimongo scim facet persists connection users and groups" =
   && scim.find_connection "corp" = Some connection
   && scim.find_user ~connection_id:"corp" ~external_id:"u1" = Some user
   && scim.find_group ~connection_id:"corp" ~external_id:"g1" = Some group
+
+(* ---- shared HTTP / provider test fixtures (used by the methods + integration suites) ---- *)
+
+let test_passkey_credential ?(id = "cred-1") user_id =
+  Mirage_crypto_rng_unix.use_default ();
+  {
+    Passkey.id;
+    user_id;
+    user_handle = "handle-" ^ user_id;
+    public_key = X509.Private_key.public (X509.Private_key.generate `P256);
+    sign_count = 1l;
+    backup_eligible = false;
+    backed_up = false;
+    transports = [ "internal" ];
+    created_at = 1_000.;
+    last_used_at = None;
+  }
+let same_passkey_credential (a : Passkey.credential) (b : Passkey.credential) =
+  a.id = b.id && a.user_id = b.user_id && a.user_handle = b.user_handle
+  && X509.Public_key.encode_pem a.public_key = X509.Public_key.encode_pem b.public_key
+  && a.sign_count = b.sign_count
+  && a.backup_eligible = b.backup_eligible
+  && a.backed_up = b.backed_up
+  && a.transports = b.transports
+  && a.created_at = b.created_at
+  && a.last_used_at = b.last_used_at
+let test_email_helper () =
+  let challenge =
+    Challenge.make ~secret:"accounts-email-challenge-secret" ~store:(Challenge.memory_store ()) ()
+  in
+  Email.make ~secret:"accounts-email-helper-secret" ~challenge
+let req_ ?(headers = []) path = H.make_request ~meth:H.GET ~path ~headers ()
+let post_form_ path body =
+  H.make_request ~meth:H.POST ~path ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body ()
+let finalize_ c = Conn.apply_before_send c (Option.get (Conn.resp c))
+let cookie_kv_ set_cookie =
+  match String.index_opt set_cookie ';' with Some i -> String.sub set_cookie 0 i | None -> set_cookie
+let location_ r = Paw.Headers.get r.H.headers "location"
+let url_path_ url =
+  match String.index_opt url '?' with
+  | None -> url
+  | Some i -> String.sub url 0 i
+let url_query_ url =
+  match String.index_opt url '?' with
+  | None -> []
+  | Some i -> H.parse_query (String.sub url (i + 1) (String.length url - i - 1))
+let mfa_redirect_ok_ a user_id r =
+  match location_ r with
+  | None -> false
+  | Some url -> (
+    let params = url_query_ url in
+    url_path_ url = "/mfa"
+    && List.assoc_opt "userId" params = Some user_id
+    &&
+    match List.assoc_opt "mfaToken" params with
+    | None -> false
+    | Some token ->
+      Result.is_ok (Mfa.consume_step_up (mfa_service a) ~expected_user:user_id (Challenge.token_of_string token)))
+let passkey_rp_ () =
+  match Passkey.relying_party ~id:"app.test" ~name:"App" ~origins:[ "https://app.test" ] () with
+  | Ok rp -> rp
+  | Error e -> failwith (Passkey.string_of_error e)
+let query_param_ url name =
+  match String.index_opt url '?' with
+  | None -> None
+  | Some i ->
+    let query = String.sub url (i + 1) (String.length url - i - 1) in
+    List.assoc_opt name (H.parse_query query)
+let oauth_provider_ () =
+  match
+    OAuth.provider ~name:"github" ~authorize_url:"https://github.test/authorize" ~client_id:"client"
+      ~redirect_uri:"https://app.test/oauth/callback" ()
+  with
+  | Ok provider -> provider
+  | Error e -> failwith (OAuth.string_of_error e)
+let oidc_connection_ () =
+  match
+    Oidc.connection ~id:"main" ~issuer:"https://idp.test" ~authorize_url:"https://idp.test/auth"
+      ~client_id:"client" ~redirect_uri:"https://app.test/oidc/callback" ~allow_jit:true ()
+  with
+  | Ok connection -> connection
+  | Error e -> failwith (Oidc.string_of_error e)
