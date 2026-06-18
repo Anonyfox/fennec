@@ -31,11 +31,11 @@ let prefers_json (conn : Conn.t) : bool =
 let bson ?(status = 200) (conn : Conn.t) (b : Bson.t) : Conn.t = Conn.json ~status conn (Bson_json.to_string b)
 
 (* answer with ONE model value, encoded through its codec *)
-let model ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (v : 'a) : Conn.t = bson ~status conn (c.Sift.enc v)
+let model ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (v : 'a) : Conn.t = bson ~status conn (Sift.to_bson c v)
 
 (* answer with a LIST of model values *)
 let models ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (vs : 'a list) : Conn.t =
-  bson ~status conn (Bson.array (List.map (fun v -> c.Sift.enc v) vs))
+  bson ~status conn (Bson.array (List.map (Sift.to_bson c) vs))
 
 (* the JSON error envelope — the canonical {!Form.summary} shape:
    [{ form_errors: [..], field_errors: { field: [..] } }] *)

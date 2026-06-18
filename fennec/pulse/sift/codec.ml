@@ -51,4 +51,8 @@ let of_value c (value : Value.t) =
   | Error _ as e -> e
   | Ok v -> if not (needs_checks c.shape) then Ok v else ( match run_checks c.shape v with [] -> Ok v | es -> Error es)
 
+(* TOTAL BSON encode (mirrors {!to_value}/{!to_json}) — a typed value always serializes; the encode-side
+   refinement gate is {!validate}/{!encode_checked}. The function form of the (now-sealed) [enc] field. *)
+let to_bson c v : Bson.t = c.enc v
+
 (* ---- primitives ------------------------------------------------------------------ *)

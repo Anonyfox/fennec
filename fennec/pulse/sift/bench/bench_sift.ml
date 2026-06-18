@@ -131,7 +131,7 @@ let fixture title ~iters (codec : 'a Sift.t) (doc : B.t) =
   match Sift.decode codec parsed with
   | Error _ -> ()
   | Ok value ->
-      bench "tree encode" ~iters (fun () -> keep (W.encode (codec.Sift.enc value)));
+      bench "tree encode" ~iters (fun () -> keep (W.encode (Sift.to_bson codec value)));
       bench "zerocopy encode" ~iters (fun () -> keep (Sift.encode_bytes codec value));
       bench "size only" ~iters (fun () -> keep (Sift.size codec value))
 

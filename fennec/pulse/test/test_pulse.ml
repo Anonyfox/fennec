@@ -132,11 +132,11 @@ let%test "typed methods: handle decodes args + encodes result; a malformed call 
 
 let%test "codec: roundtrips, EJSON float-ints, decode errors carry the shape" =
   let open Sift in
-  (match (list int).dec ((list int).enc [ 1; 2; 3 ]) with Ok [ 1; 2; 3 ] -> true | _ -> false)
-  && (match (option string).dec Bson.Null with Ok None -> true | _ -> false)
-  && (match int.dec (Bson.Float 7.0) with Ok 7 -> true | _ -> false)
-  && (match string.dec (Bson.Int 3) with Error e -> e = "expected string, got int" | Ok _ -> false)
-  && (match (a2 int bool).dec_args [ B.int 1 ] with Error _ -> true | Ok _ -> false)
+  (match decode (list int) (to_bson (list int) [ 1; 2; 3 ]) with Ok [ 1; 2; 3 ] -> true | _ -> false)
+  && (match decode (option string) Bson.Null with Ok None -> true | _ -> false)
+  && (match decode int (Bson.Float 7.0) with Ok 7 -> true | _ -> false)
+  && (match decode string (Bson.Int 3) with Error es -> errors_to_string es = "expected string, got int" | Ok _ -> false)
+  && (match decode_args (a2 int bool) [ B.int 1 ] with Error _ -> true | Ok _ -> false)
 
 let%test "codec: record codecs (obj2 + req/opt) roundtrip; errors name the field; None omits the key" =
   let c =
@@ -145,11 +145,11 @@ let%test "codec: record codecs (obj2 + req/opt) roundtrip; errors name the field
         ~make:(fun title note -> (title, note))
         ~split:Fun.id)
   in
-  (match c.Sift.dec (c.Sift.enc ("a", Some "n")) with Ok ("a", Some "n") -> true | _ -> false)
-  && (match c.Sift.enc ("a", None) with Bson.Document [ ("title", _) ] -> true | _ -> false)
-  && (match c.Sift.dec (B.doc [ ("title", B.str "x") ]) with Ok ("x", None) -> true | _ -> false)
-  && (match c.Sift.dec (B.doc [ ("note", B.str "n") ]) with
-     | Error e -> e = "title: is required"
+  (match Sift.decode c (Sift.to_bson c ("a", Some "n")) with Ok ("a", Some "n") -> true | _ -> false)
+  && (match Sift.to_bson c ("a", None) with Bson.Document [ ("title", _) ] -> true | _ -> false)
+  && (match Sift.decode c (B.doc [ ("title", B.str "x") ]) with Ok ("x", None) -> true | _ -> false)
+  && (match Sift.decode c (B.doc [ ("note", B.str "n") ]) with
+     | Error es -> Sift.errors_to_string es = "title: is required"
      | Ok _ -> false)
 
 let%test "seed streams: same (seed, scope) mints the SAME ids both sides; another scope diverges" =

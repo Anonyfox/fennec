@@ -141,6 +141,10 @@ let arbitrary (c : 'a t) (st : Random.State.t) : 'a = Derived.arbitrary c.shape 
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }
 
+(* function forms of the (now-sealed) [args] fields — the method layer marshals params through these *)
+let encode_args (a : 'a args) (v : 'a) : Bson.t list = a.enc_args v
+let decode_args (a : 'a args) (params : Bson.t list) : ('a, string) result = a.dec_args params
+
 let a0 = { enc_args = (fun () -> []); dec_args = (function [] -> Ok () | _ -> Error "expected no arguments") }
 
 let a1 c =

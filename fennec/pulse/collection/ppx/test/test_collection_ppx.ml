@@ -28,13 +28,13 @@ let twin =
 let sample = { id = "a1"; title = "Hello"; done_ = true; tags = [ "x" ]; note = "n" }
 
 let%test "golden: derived enc/dec ≡ hand-written (round-trip + identical wire bytes)" =
-  let d1 = codec.Sift.enc sample and d2 = twin.Sift.enc sample in
+  let d1 = Sift.to_bson codec sample and d2 = Sift.to_bson twin sample in
   B.equal d1 d2
   && (match Sift.decode codec d2 with Ok v -> v = sample | Error _ -> false)
   && (match Sift.decode twin d1 with Ok v -> v = sample | Error _ -> false)
 
 let%test "golden: conventions — done_ keys as \"done\"; [@key] honored; id is _id; absent list = []" =
-  (match codec.Sift.enc sample with
+  (match Sift.to_bson codec sample with
   | B.Document kvs ->
       List.mem_assoc "done" kvs && List.mem_assoc "remark" kvs && List.mem_assoc "_id" kvs
       && not (List.mem_assoc "done_" kvs) && not (List.mem_assoc "note" kvs)
@@ -103,8 +103,8 @@ end
 
 let%test "embedded record: the deriver nests the codec; the doc round-trips through Author.codec" =
   let p = { Post.id = "p1"; title = "Hi"; author = { Author.name = "Ada"; email = "a@x.io" } } in
-  match Sift.decode Post.codec (Post.codec.Sift.enc p) with
-  | Ok q -> q = p && (match Post.codec.Sift.enc p with
+  match Sift.decode Post.codec (Sift.to_bson Post.codec p) with
+  | Ok q -> q = p && (match Sift.to_bson Post.codec p with
                       | B.Document kvs -> (match List.assoc_opt "author" kvs with Some (B.Document _) -> true | _ -> false)
                       | _ -> false)
   | Error _ -> false

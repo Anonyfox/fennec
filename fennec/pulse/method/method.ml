@@ -33,7 +33,7 @@ let define ?stub name ~args ~result =
   Hashtbl.replace _registry name
     (Option.map
        (fun s (params : Bson.t list) (sim : sim_writes) ->
-         match args.Sift.dec_args params with Ok a -> s sim a | Error _ -> ())
+         match Sift.decode_args args params with Ok a -> s sim a | Error _ -> ())
        stub);
   Mutex.unlock _reg_lock;
   { name; args; result; stub }

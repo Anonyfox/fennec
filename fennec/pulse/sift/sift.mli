@@ -47,10 +47,11 @@ val errors_to_string : error list -> string
 (** The type representation — abstract here; reflect with {!view}. *)
 type 'a shape
 
-(** A codec: the representation plus the precompiled encode/decode. [dec]'s error is the RENDERED
-    collected errors (back-compat); use {!decode} for the structured list. [enc] is total — a typed
-    value always serializes; refinement checking on the write side is {!validate}/{!encode_checked}. *)
-type 'a t = { shape : 'a shape; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string) result }
+(** A codec — ABSTRACT: a shape and its derived operations, with no format welded into the type. The
+    codec IS the shape; per-format encode/decode are functions over it ({!to_bson}/{!decode},
+    {!to_value}/{!of_value}, {!to_json}/{!decode_json}, …), so a value never has to expose [Bson.t] to
+    be a codec. Reflect the representation with {!view}. *)
+type 'a t
 
 (** Structured decode: every violation, each with its field path. *)
 val decode : 'a t -> Bson.t -> ('a, error list) result
@@ -227,6 +228,10 @@ val to_value : 'a t -> 'a -> Value.t
 
 (** Read + validate a value back from a {!Value.t} (same path-collected errors as {!decode}). *)
 val of_value : 'a t -> Value.t -> ('a, error list) result
+
+(** TOTAL BSON encode (mirrors {!to_value}/{!to_json}) — a typed value always serializes. The
+    encode-side refinement gate is {!validate}/{!encode_checked}; decode is {!decode}. *)
+val to_bson : 'a t -> 'a -> Bson.t
 
 (** {1 Primitives} *)
 
@@ -481,7 +486,15 @@ val field_required : 'a field -> bool
 
 (** {1 Positional parameter lists (DDP method params)} *)
 
-type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }
+(** A positional parameter list's wire codec — ABSTRACT (build with {!a0}/{!a1}/{!a2}/{!a3}); the
+    method layer marshals through {!encode_args}/{!decode_args}. *)
+type 'a args
+
+(** Encode a parameter tuple to the BSON wire list (the call side). *)
+val encode_args : 'a args -> 'a -> Bson.t list
+
+(** Decode a BSON wire param list back to the parameter tuple (the handler side); error is rendered. *)
+val decode_args : 'a args -> Bson.t list -> ('a, string) result
 
 val a0 : unit args
 val a1 : 'a t -> 'a args

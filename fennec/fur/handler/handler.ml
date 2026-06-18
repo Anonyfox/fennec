@@ -41,7 +41,7 @@ type 'p outcome =
    / [json codec v] (data) / … — one [view]/[payload], negotiated into the representation the caller asked for *)
 let render (p : 'p) : 'p outcome = Render p
 let html (p : 'p) : 'p outcome = Html p
-let json (codec : 'a Sift.t) (value : 'a) : 'p outcome = Json (Bson_json.to_string (codec.Sift.enc value))
+let json (codec : 'a Sift.t) (value : 'a) : 'p outcome = Json (Sift.to_json_string codec value)
 let text (s : string) : 'p outcome = Text s
 let redirect (url : string) : 'p outcome = Redirect url
 let not_found : 'p outcome = Not_found
@@ -81,7 +81,7 @@ let default_template (bundle : string) (ctx : Fur.Doc.ctx) : Fur.vnode =
    HTML document string. The ppx-generated [serve] runs [load], then calls this on [render]. *)
 let render_doc ~key ~(codec : 'p Sift.t) ~bundle ?(styles = "") ?template (value : 'p) (view : 'p -> Fur.vnode) : string =
   Fur.Data.clear_seed ();
-  Fur.Data.put_seed key (Bson_json.to_string (codec.Sift.enc value));
+  Fur.Data.put_seed key (Sift.to_json_string codec value);
   let body = Fur.to_html (view value) in
   let ctx = { Fur.Doc.head = Fur.Head.to_ssr (); data = Fur.Data.to_script (); body; styles; client_js = "" } in
   Fur.document ((Option.value template ~default:(default_template bundle)) ctx)

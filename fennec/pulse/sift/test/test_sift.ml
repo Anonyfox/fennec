@@ -25,7 +25,7 @@ let%test "normalizers run before checks, both directions" =
   && (match Sift.validate c "   " with
      | Error [ e ] -> e.Sift.path = [] && e.Sift.msg = "must not be empty" && e.Sift.code = "min_len"
      | _ -> false)
-  && (match (Sift.lowercase Sift.string).Sift.enc "AbC" with B.String "abc" -> true | _ -> false)
+  && (match Sift.to_bson (Sift.lowercase Sift.string) "AbC" with B.String "abc" -> true | _ -> false)
 
 let%test "numeric refinements + float sanity (nan rejected by default, opt-out works)" =
   err (Sift.decode Sift.float (B.Float Float.nan))
@@ -58,7 +58,7 @@ let%test "option: absent and null decode None; None omits the key; checks apply 
   (match Sift.decode c (B.doc []) with Ok None -> true | _ -> false)
   && (match Sift.decode c (B.doc [ ("note", B.Null) ]) with Ok None -> true | _ -> false)
   && err (Sift.decode c (B.doc [ ("note", B.str "x") ]))
-  && (match c.Sift.enc None with B.Document [] -> true | _ -> false)
+  && (match Sift.to_bson c None with B.Document [] -> true | _ -> false)
 
 let%test "opt_list tolerates absence; dft fills; str_map checks each value with its key in the path" =
   let c =
@@ -79,8 +79,8 @@ let%test "opt_list tolerates absence; dft fills; str_map checks each value with 
 let%test "id: accepts String and ObjectId; re-encodes oid-looking strings as ObjectId" =
   let oid = String.make 24 'a' in
   (match Sift.decode Sift.id (B.Object_id oid) with Ok s -> s = oid | _ -> false)
-  && (match Sift.id.Sift.enc oid with B.Object_id _ -> true | _ -> false)
-  && (match Sift.id.Sift.enc "plain" with B.String "plain" -> true | _ -> false)
+  && (match Sift.to_bson Sift.id oid with B.Object_id _ -> true | _ -> false)
+  && (match Sift.to_bson Sift.id "plain" with B.String "plain" -> true | _ -> false)
 
 (* ── nested records, cross-field checks, error paths ── *)
 type addr = { zip : string }
@@ -135,8 +135,8 @@ let price_c =
       ])
 
 let%test "variants: tag dispatch round-trips; unknown tags and bad payloads error; checks apply per case" =
-  (match Sift.decode price_c (price_c.Sift.enc (Auction (5.0, 1.0))) with Ok (Auction (5.0, 1.0)) -> true | _ -> false)
-  && (match price_c.Sift.enc (Fixed 2.0) with
+  (match Sift.decode price_c (Sift.to_bson price_c (Auction (5.0, 1.0))) with Ok (Auction (5.0, 1.0)) -> true | _ -> false)
+  && (match Sift.to_bson price_c (Fixed 2.0) with
      | B.Document (("kind", B.String "fixed") :: _) -> true
      | _ -> false)
   && err (Sift.decode price_c (B.doc [ ("kind", B.str "rental") ]))
@@ -201,7 +201,7 @@ let tree_codec =
 
 let%test "fix: a recursive tree round-trips at depth" =
   let t = { v = "root"; kids = [ { v = "a"; kids = [] }; { v = "b"; kids = [ { v = "b1"; kids = [] } ] } ] } in
-  match Sift.decode tree_codec (tree_codec.Sift.enc t) with Ok t' -> t' = t | Error _ -> false
+  match Sift.decode tree_codec (Sift.to_bson tree_codec t) with Ok t' -> t' = t | Error _ -> false
 let%test "fix: a nested decode error is still path-tagged" =
   ( match Sift.decode tree_codec (B.doc [ ("v", B.str "r"); ("kids", B.array [ B.doc [ ("v", B.int 5) ] ]) ]) with Error (e :: _) -> e.Sift.path <> [] | _ -> false)
 
@@ -215,12 +215,12 @@ let%test "from_string: native OR stringly number, then the inner checks run" =
 let%test "from_string: bool/float coercions" =
   (match Sift.decode Sift.(from_string bool) (B.str "true") with Ok true -> true | _ -> false) && (match Sift.decode Sift.(from_string float) (B.str "2.5") with Ok 2.5 -> true | _ -> false)
 let%test "from_string: encode stays native, reflects as the inner type" =
-  (match (Sift.from_string Sift.int).Sift.enc 7 with B.Int 7 -> true | _ -> false) && Sift.view Sift.(from_string int) = Sift.V_int
+  (match Sift.to_bson (Sift.from_string Sift.int) 7 with B.Int 7 -> true | _ -> false) && Sift.view Sift.(from_string int) = Sift.V_int
 
 (* ── map: total two-way transform ── *)
 let%test "map: round-trips through a transform both ways" =
   let c = Sift.(map (fun s -> `Tag s) (function `Tag s -> s) string) in
-  (match Sift.decode c (B.str "x") with Ok (`Tag "x") -> true | _ -> false) && (match c.Sift.enc (`Tag "y") with B.String "y" -> true | _ -> false)
+  (match Sift.decode c (B.str "x") with Ok (`Tag "x") -> true | _ -> false) && (match Sift.to_bson c (`Tag "y") with B.String "y" -> true | _ -> false)
 
 (* ── JSON I/O: one shape drives BOTH BSON and JSON ── *)
 let json_c =
@@ -448,7 +448,7 @@ let%test "t1: valid_bytes rejects a malformed buffer structurally (no exception)
 (* ── SIFT-K3: encode mirror. [size] must equal the EXACT byte length the codec's BSON encodes to,
    including the optional/opt_list omission and the int32-vs-int64 / oid-vs-string choices. ── *)
 
-let size_matches (c : 'a Sift.t) (v : 'a) : bool = Sift.size c v = String.length (W.encode (c.Sift.enc v))
+let size_matches (c : 'a Sift.t) (v : 'a) : bool = Sift.size c v = String.length (W.encode (Sift.to_bson c v))
 
 let%test "k3: size == encoded length — scalars, ids, large ints" =
   size_matches bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
@@ -471,7 +471,7 @@ let%test "k3: size == encoded length — nested records and variants" =
   && size_matches coerce_c 5
 
 (* encode_bytes must be byte-identical to the tree path [Bson_wire.encode (codec.enc v)] *)
-let encode_matches (c : 'a Sift.t) (v : 'a) : bool = Bigstringaf.to_string (Sift.encode_bytes c v) = W.encode (c.Sift.enc v)
+let encode_matches (c : 'a Sift.t) (v : 'a) : bool = Bigstringaf.to_string (Sift.encode_bytes c v) = W.encode (Sift.to_bson c v)
 
 (* and the whole loop must be the identity: encode_bytes |> decode_bytes = the value *)
 let roundtrips (c : 'a Sift.t) (v : 'a) : bool = match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> v' = v | Error _ -> false
@@ -594,7 +594,7 @@ let%test "axisA: encode_json — relaxed (plain) JSON, round-trips, escapes, no 
 
 let%test "axisA: fold_bytes — streams a sequence of concatenated documents" =
   let docs = [ ("a", 1, 1.0, true, 1L, "x"); ("bb", 2, 2.5, false, 2L, "507f1f77bcf86cd799439011"); ("ccc", 3, 3.5, true, 3L, "z") ] in
-  let wire = String.concat "" (List.map (fun v -> W.encode (bag_c.Sift.enc v)) docs) in
+  let wire = String.concat "" (List.map (fun v -> W.encode (Sift.to_bson bag_c v)) docs) in
   let buf = Bigstringaf.of_string ~off:0 ~len:(String.length wire) wire in
   let decoded = List.rev (Sift.fold_bytes bag_c buf [] (fun acc r -> r :: acc)) in
   List.length decoded = 3 && List.for_all2 (fun v r -> match r with Ok v' -> Sift.equal bag_c v v' | _ -> false) docs decoded
@@ -607,7 +607,7 @@ let viabuilder = Sift.(seal (record (fun s n note -> (s, n, note)) |> field (req
 
 let%test "k4: objN decoder == applicative builder (decode verdict+errors, encode, size)" =
   let same_decode b = Sift.decode viaobj b = Sift.decode viabuilder b in
-  let same_enc v = viaobj.Sift.enc v = viabuilder.Sift.enc v && Sift.size viaobj v = Sift.size viabuilder v in
+  let same_enc v = Sift.to_bson viaobj v = Sift.to_bson viabuilder v && Sift.size viaobj v = Sift.size viabuilder v in
   same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ]) (* ok *)
   && same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5) ]) (* note absent → None *)
   && same_decode (B.doc [ ("s", B.int 1); ("n", B.int 0) ]) (* TWO errors: s type + n<min — must collect in same order *)
