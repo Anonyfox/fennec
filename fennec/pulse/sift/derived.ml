@@ -186,13 +186,13 @@ and diff_members : type r. r bound_field list -> r -> r -> delta =
         let ov = f.get old and nv = f.get new_ in
         if equal f.shape ov nv then go set unset rest
         else if f.omit nv then go set (f.name :: unset) rest
-        else go ((f.name, Engine.write f.shape nv) :: set) unset rest
+        else go ((f.name, Bson_engine.write f.shape nv) :: set) unset rest
   in
   go [] [] members
 
 and diff_map : type a. a shape -> (string * a) list -> (string * a) list -> delta =
  fun el old new_ ->
-  let set = List.filter_map (fun (k, nv) -> match List.assoc_opt k old with Some ov when equal el ov nv -> None | _ -> Some (k, Engine.write el nv)) new_ in
+  let set = List.filter_map (fun (k, nv) -> match List.assoc_opt k old with Some ov when equal el ov nv -> None | _ -> Some (k, Bson_engine.write el nv)) new_ in
   let unset = List.filter_map (fun (k, _) -> if List.mem_assoc k new_ then None else Some k) old in
   { set; unset }
 
@@ -208,10 +208,10 @@ and diff_variant : type r. r shape -> string -> r case list -> r -> r -> delta =
   go cases
 
 (* the case changed: $set the whole new document (tag + new body fields), $unset the old fields that the
-   new case no longer has. Only this rare path materialises old/new via {!Engine.write}. *)
+   new case no longer has. Only this rare path materialises old/new via {!Bson_engine.write}. *)
 and full_replace : type a. a shape -> a -> a -> delta =
  fun shape old new_ ->
-  let fields v = match Engine.write shape v with Bson.Document kvs -> kvs | _ -> [] in
+  let fields v = match Bson_engine.write shape v with Bson.Document kvs -> kvs | _ -> [] in
   let new_fields = fields new_ in
   let new_names = List.map fst new_fields in
   { set = new_fields; unset = List.filter_map (fun (n, _) -> if List.mem n new_names then None else Some n) (fields old) }

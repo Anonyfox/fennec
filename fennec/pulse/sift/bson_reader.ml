@@ -1,6 +1,6 @@
 (* bson_reader.ml — the zero-copy, schema-directed BSON decode path (SIFT-K2).
 
-   Today's decode is [Bson_wire.decode buf |> Engine.read shape]: parse the WHOLE buffer into a
+   Today's decode is [Bson_wire.decode buf |> Bson_engine.read shape]: parse the WHOLE buffer into a
    {!Bson.t} tree (every field, every nested doc, the kvs lists), then walk that tree matching it to
    the shape. The tree is pure overhead — Sift already KNOWS the shape.
 
@@ -12,8 +12,8 @@
    buffer bytes to the field name in place — never copied. Strings are copied only when an owned OCaml
    string is the demanded result (T2 owned materialization).
 
-   CORRECTNESS BAR: every value and every collected error matches [Bson_wire.decode |> Engine.read]
-   byte-for-byte — {!read_buf} mirrors {!Engine.read}'s coercions exactly (e.g. an [int] accepts a
+   CORRECTNESS BAR: every value and every collected error matches [Bson_wire.decode |> Bson_engine.read]
+   byte-for-byte — {!read_buf} mirrors {!Bson_engine.read}'s coercions exactly (e.g. an [int] accepts a
    wire int32 / integral double but NOT an int64; a [date] accepts a wire datetime / int32 / integral
    double), and the refinement phase is the SAME {!Engine.run_checks} the tree path runs. The shared
    record constructor is threaded through {!Shape.field_reader} (see {!Combinators}); this module just
@@ -50,7 +50,7 @@ let tag_decimal128 = 0x13
 let tag_min_key = 0xFF
 let tag_max_key = 0x7F
 
-(* the name a tag decodes to, EXACTLY as {!Engine.type_name} names the corresponding {!Bson.t} — so a
+(* the name a tag decodes to, EXACTLY as {!Bson_engine.type_name} names the corresponding {!Bson.t} — so a
    type-mismatch error reports the same "got X" as the tree path (anything Engine doesn't name → "value":
    that is how a stored int64 reports "got value" when an [int] field rejects it, matching Engine) *)
 let type_name_of_tag tag =
@@ -311,7 +311,7 @@ let rec read_buf : type a. a shape -> tag:int -> Cursor.t -> (a, error list) res
         r)
   | TLazy l -> read_buf (Lazy.force l) ~tag c
   | TCoerce inner ->
-      if tag = tag_string then (let s = read_bson_string c in Engine.read inner (Engine.coerce_string inner s))
+      if tag = tag_string then (let s = read_bson_string c in Bson_engine.read inner (Bson_engine.coerce_string inner s))
       else read_buf inner ~tag c
 
 (* the {!Shape.field_reader} for the document spanning [ds, …]: rewind the shared cursor to [ds] and

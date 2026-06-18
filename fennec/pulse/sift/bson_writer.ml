@@ -2,17 +2,17 @@
 
    Today's encode is [write shape v : Bson.t] (builds the WHOLE tree) then [Bson_wire.encode : string]
    (serialises it). The tree is the overhead. Here we emit the BSON wire bytes STRAIGHT into a buffer
-   in a single pass, no tree: {!Engine.size} computes the exact total once, we allocate one buffer, and
+   in a single pass, no tree: {!Bson_engine.size} computes the exact total once, we allocate one buffer, and
    write into it — each document's int32 length is written as a placeholder then BACKPATCHED once its
    end is known (Bigstringaf is mutable), so nesting needs no per-doc size pass.
 
-   CORRECTNESS BAR: [encode_bytes shape v] is byte-identical to [Bson_wire.encode (Engine.write shape v)]
+   CORRECTNESS BAR: [encode_bytes shape v] is byte-identical to [Bson_wire.encode (Bson_engine.write shape v)]
    — tag choices (int32 vs int64 by range, oid vs string for an id) and the optional/opt_list omission
-   mirror {!Engine.write}/{!Shape.bound_field}'s [omit] exactly. Differential-tested. *)
+   mirror {!Bson_engine.write}/{!Shape.bound_field}'s [omit] exactly. Differential-tested. *)
 
 open Shape
 
-(* a write head over a buffer sized EXACTLY by {!Engine.size}; the setters bounds-check, so a size/write
+(* a write head over a buffer sized EXACTLY by {!Bson_engine.size}; the setters bounds-check, so a size/write
    divergence raises rather than corrupting (and {!encode_bytes} asserts the end position equals size) *)
 type w = { buf : Bigstringaf.t; mutable pos : int }
 
@@ -50,7 +50,7 @@ let bson_tag_of : Bson.t -> int = function
   | Bson.Code _ -> 0x0D
   | Bson.Symbol _ -> 0x0E
   | Bson.Code_with_scope _ -> 0x0F
-  | Bson.Int n -> if Engine.in_i32 n then 0x10 else 0x12
+  | Bson.Int n -> if Bson_engine.in_i32 n then 0x10 else 0x12
   | Bson.Timestamp _ -> 0x11
   | Bson.Int64 _ -> 0x12
   | Bson.Decimal128 _ -> 0x13
@@ -79,7 +79,7 @@ let rec write_bson w (b : Bson.t) : unit =
       bson_string w code;
       write_bson_doc w scope;
       backpatch w slot
-  | Bson.Int n -> if Engine.in_i32 n then i32 w n else i64 w (Int64.of_int n)
+  | Bson.Int n -> if Bson_engine.in_i32 n then i32 w n else i64 w (Int64.of_int n)
   | Bson.Int64 n -> i64 w n
   | Bson.Timestamp { t; i } -> i32 w i; i32 w t (* two u32s; Int32.of_int truncates to the low 32 bits *)
   | Bson.Decimal128 _ -> invalid_arg "Sift.encode_bytes: Decimal128 not supported"
@@ -97,11 +97,11 @@ let rec enc_tag : type a. a shape -> a -> int =
  fun shape v ->
   match shape with
   | TString -> 0x02
-  | TInt -> if Engine.in_i32 v then 0x10 else 0x12
+  | TInt -> if Bson_engine.in_i32 v then 0x10 else 0x12
   | TFloat _ -> 0x01
   | TBool -> 0x08
   | TDate -> 0x09
-  | TId -> if Engine.looks_like_oid v then 0x07 else 0x02
+  | TId -> if Bson_engine.looks_like_oid v then 0x07 else 0x02
   | TDyn -> bson_tag_of (Value_bson.to_bson v)
   | TUnit -> 0x0A
   | TList _ -> 0x04
@@ -119,11 +119,11 @@ let rec write_value : type a. a shape -> a -> w -> unit =
  fun shape v w ->
   match shape with
   | TString -> bson_string w v
-  | TInt -> if Engine.in_i32 v then i32 w v else i64 w (Int64.of_int v)
+  | TInt -> if Bson_engine.in_i32 v then i32 w v else i64 w (Int64.of_int v)
   | TFloat _ -> i64 w (Int64.bits_of_float v)
   | TBool -> u8 w (if v then 1 else 0)
   | TDate -> i64 w v
-  | TId -> if Engine.looks_like_oid v then write_oid w v else bson_string w v
+  | TId -> if Bson_engine.looks_like_oid v then write_oid w v else bson_string w v
   | TDyn -> write_bson w (Value_bson.to_bson v)
   | TUnit -> () (* Null: no value bytes *)
   | TList el -> write_array el v w
@@ -183,7 +183,7 @@ and write_variant : type r. string -> r case list -> r -> w -> unit =
 (* ---- entry: encode a value straight into a freshly-sized buffer -------------------------------- *)
 
 let encode_value_bytes (shape : 'a shape) (v : 'a) : Bigstringaf.t =
-  let n = Engine.size shape v in
+  let n = Bson_engine.size shape v in
   let buf = Bigstringaf.create n in
   let w = { buf; pos = 0 } in
   write_value shape v w;

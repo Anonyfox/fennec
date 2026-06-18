@@ -3,6 +3,7 @@
 
 open Shape
 open Engine
+open Bson_engine
 open Codec
 
 let string = of_shape TString

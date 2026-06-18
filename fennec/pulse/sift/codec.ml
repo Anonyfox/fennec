@@ -3,6 +3,7 @@
 
 open Shape
 open Engine
+open Bson_engine
 
 (* The codec IS the shape — nothing more. Per-format encode/decode are functions over it (below and
    in the facade), so no format is welded into the value; [enc]/[dec] used to be cached fields but were
