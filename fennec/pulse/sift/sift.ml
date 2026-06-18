@@ -128,7 +128,7 @@ let diff (c : 'a t) (old : 'a) (new_ : 'a) : delta = Derived.diff c.shape old ne
 (* apply a {!delta} to a value — the inverse of {!diff}: [$set] replaces/adds fields, [$unset] removes
    them, then the merged document is decoded (and validated). [patch c old (diff c old new) = Ok new]. *)
 let patch (c : 'a t) (old : 'a) (d : delta) : ('a, error list) result =
-  let kvs = match c.enc old with Bson.Document kvs -> kvs | _ -> [] in
+  let kvs = match enc c old with Bson.Document kvs -> kvs | _ -> [] in
   let touched = d.unset @ List.map fst d.set in
   let kept = List.filter (fun (k, _) -> not (List.mem k touched)) kvs in
   decode c (Bson.Document (kept @ d.set))
@@ -148,22 +148,22 @@ let decode_args (a : 'a args) (params : Bson.t list) : ('a, string) result = a.d
 let a0 = { enc_args = (fun () -> []); dec_args = (function [] -> Ok () | _ -> Error "expected no arguments") }
 
 let a1 c =
-  { enc_args = (fun a -> [ c.enc a ]);
-    dec_args = (function [ x ] -> c.dec x | l -> Error (Printf.sprintf "expected 1 argument, got %d" (List.length l))) }
+  { enc_args = (fun a -> [ enc c a ]);
+    dec_args = (function [ x ] -> dec c x | l -> Error (Printf.sprintf "expected 1 argument, got %d" (List.length l))) }
 
 let a2 c1 c2 =
-  { enc_args = (fun (a, b) -> [ c1.enc a; c2.enc b ]);
+  { enc_args = (fun (a, b) -> [ enc c1 a; enc c2 b ]);
     dec_args =
       (function
-      | [ x; y ] -> ( match (c1.dec x, c2.dec y) with Ok a, Ok b -> Ok (a, b) | Error e, _ | _, Error e -> Error e)
+      | [ x; y ] -> ( match (dec c1 x, dec c2 y) with Ok a, Ok b -> Ok (a, b) | Error e, _ | _, Error e -> Error e)
       | l -> Error (Printf.sprintf "expected 2 arguments, got %d" (List.length l))) }
 
 let a3 c1 c2 c3 =
-  { enc_args = (fun (a, b, c) -> [ c1.enc a; c2.enc b; c3.enc c ]);
+  { enc_args = (fun (a, b, c) -> [ enc c1 a; enc c2 b; enc c3 c ]);
     dec_args =
       (function
       | [ x; y; z ] -> (
-          match (c1.dec x, c2.dec y, c3.dec z) with
+          match (dec c1 x, dec c2 y, dec c3 z) with
           | Ok a, Ok b, Ok c -> Ok (a, b, c)
           | Error e, _, _ | _, Error e, _ | _, _, Error e -> Error e)
       | l -> Error (Printf.sprintf "expected 3 arguments, got %d" (List.length l))) }

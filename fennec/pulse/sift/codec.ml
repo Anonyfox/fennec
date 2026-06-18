@@ -4,7 +4,10 @@
 open Shape
 open Engine
 
-type 'a t = { shape : 'a shape; enc : 'a -> Bson.t; dec : Bson.t -> ('a, string) result }
+(* The codec IS the shape — nothing more. Per-format encode/decode are functions over it (below and
+   in the facade), so no format is welded into the value; [enc]/[dec] used to be cached fields but were
+   pure shape-derived, so collapsing them removes the Bson type from the record entirely. *)
+type 'a t = { shape : 'a shape }
 
 (* decode = RAW shape decode, then the check phase — so refinement violations COLLECT across
    stacked checks, sibling fields, and record-level rules instead of short-circuiting *)
@@ -13,14 +16,15 @@ let decode_value shape b =
   | Error es -> Error es
   | Ok v -> if not (needs_checks shape) then Ok v else ( match run_checks shape v with [] -> Ok v | es -> Error es)
 
-let of_shape shape =
-  { shape;
-    enc = write shape;
-    dec = (fun b -> match decode_value shape b with Ok v -> Ok v | Error es -> Error (errors_to_string es)) }
+let of_shape shape = { shape }
+
+(* the BSON encode/decode, derived from the shape (the function forms of the old cached fields) *)
+let enc c v = write c.shape v
+let dec c b = match decode_value c.shape b with Ok v -> Ok v | Error es -> Error (errors_to_string es)
 
 let decode c b = decode_value c.shape b
 let validate c v = match run_checks c.shape v with [] -> Ok () | es -> Error es
-let encode_checked c v = match run_checks c.shape v with [] -> Ok (c.enc v) | es -> Error es
+let encode_checked c v = match run_checks c.shape v with [] -> Ok (enc c v) | es -> Error es
 let pp c fmt v = pretty c.shape fmt v
 let show c v = Format.asprintf "%a" (pp c) v
 
@@ -31,9 +35,9 @@ let show c v = Format.asprintf "%a" (pp c) v
 module Json = Fennec_mongo_json.Json
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 
-let to_json c v = Bson_json.to_json (c.enc v)
+let to_json c v = Bson_json.to_json (enc c v)
 let of_json c j = decode_value c.shape (Bson_json.of_json j)
-let to_json_string c v = Bson_json.to_string (c.enc v)
+let to_json_string c v = Bson_json.to_string (enc c v)
 
 let of_json_string c s =
   match Bson_json.of_string_opt s with Some b -> decode_value c.shape b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
@@ -52,7 +56,7 @@ let of_value c (value : Value.t) =
   | Ok v -> if not (needs_checks c.shape) then Ok v else ( match run_checks c.shape v with [] -> Ok v | es -> Error es)
 
 (* TOTAL BSON encode (mirrors {!to_value}/{!to_json}) — a typed value always serializes; the encode-side
-   refinement gate is {!validate}/{!encode_checked}. The function form of the (now-sealed) [enc] field. *)
-let to_bson c v : Bson.t = c.enc v
+   refinement gate is {!validate}/{!encode_checked}. *)
+let to_bson c v : Bson.t = enc c v
 
 (* ---- primitives ------------------------------------------------------------------ *)
