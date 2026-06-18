@@ -1,0 +1,333 @@
+# `fennec.accounts`
+
+Meteor-style accounts, hard-wired into Fennec: passwords, signed-cookie sessions, email
+verification / magic-links / OTP, MFA (TOTP + backup codes), passkeys (WebAuthn), OAuth, OIDC,
+SAML, SCIM provisioning, organizations, and code-declared RBAC — all over one Mongo-shaped store
+(`minimongo` / embedded `burrow://` / `mongod`, behind one backend-blind handle).
+
+Accounts is not a pluggable adapter; it is the framework's identity substrate. `Fennec.serve`
+prepends the identity paw to every endpoint and registers the built-in DDP methods automatically,
+so a handler just reads the request user:
+
+```ocaml
+let handler conn =
+  match Fennec.Accounts.user_id conn with
+  | Some uid -> Fennec.Conn.text conn ("hello " ^ uid)
+  | None     -> Fennec.Conn.redirect conn "/login"
+```
+
+The substrate is always present but inert until you turn features on: with no `MONGO_URL` and no
+config, every request resolves to `Accounts.user_id conn = None`, database-backed operations fail
+with a clear `Store_error`, and the full route/method set is still there (just unused). Turning a
+feature on never weakens the default posture — the enumeration guard, the login throttle, and the
+verified-email gate always apply.
+
+The full public interface is `accounts.mli` (every value below is declared there); the per-module
+deep-dives live under [`docs/`](docs/README.md).
+
+---
+
+## The DX: one declarative config object
+
+A whole app is configured from a single value. Start at `Accounts.defaults` and override one field
+at a time; hand it to `Fennec.serve ~accounts`. `defaults` reproduces today's behaviour exactly —
+every optional feature off, secure password defaults, framework session/route defaults, no
+providers — so the config only ever turns features *on*.
+
+The umbrella record (`accounts.mli`, `type config`):
+
+```ocaml
+type config = {
+  session   : session_config;
+  password  : password_config;
+  mail      : mail_config option;          (* Some ⇒ the password/email routes are wired *)
+  passkeys  : passkeys_config option;      (* Some ⇒ the passkey routes are wired *)
+  orgs      : orgs_config option;          (* orgs.scim_prefix = Some p ⇒ the SCIM battery at p *)
+  rbac      : Roles.policy option;         (* the app's role→permission map; None ⇒ empty policy *)
+  routes    : routes_config;               (* { auth_prefix; me_path } *)
+  providers : external_identity provider list;   (* SSO; each mounts authorize + callback routes *)
+}
+```
+
+### Step 0 — zero config
+
+Accounts is on, anonymous identity is `None`, password login + sessions work, the DDP methods are
+registered. Nothing to write — just don't pass `~accounts`.
+
+```ocaml
+let () = Fennec.serve [ web ]
+```
+
+### Step 1 — require a verified email before any session
+
+```ocaml
+let accounts =
+  { Accounts.defaults with
+    password = { Accounts.defaults.password with require_verified_email = true } }
+
+let () = Fennec.serve ~accounts [ web ]
+```
+
+To actually send the verification / reset / enrollment emails, set `mail` — this also mounts the
+password/email HTTP routes under `routes.auth_prefix`:
+
+```ocaml
+let accounts =
+  { Accounts.defaults with
+    mail = Some { from = "no-reply@acme.test"; site_name = Some "Acme"; templates = None } }
+```
+
+(`templates = None` uses the built-in Fur templates keyed off `from` / `site_name`; supply
+`Accounts.Mailer.default ~from ()` to override.)
+
+### Step 2 — add one OAuth provider (a one-liner)
+
+A provider preset bundles the authorize/token/userinfo endpoints plus the default token-exchange
+HTTP, so a provider is a single call. The presets return a `result` (endpoint config can be
+malformed), so unwrap it into the list:
+
+```ocaml
+let github =
+  Accounts.OAuth.github
+    ~redirect_uri:"https://app.acme.test/auth/github/callback"
+    ~client_id:"…" ~client_secret:"…" ()
+  |> Result.get_ok
+
+let accounts = { Accounts.defaults with providers = [ github ] }
+```
+
+The auto-wiring mounts `GET <auth_prefix>/github` (authorize) and
+`GET <auth_prefix>/github/callback` for you.
+
+### Step 3 — OIDC SSO, optionally mapping claims to app roles
+
+`?role_map` turns the verified principal into app-wide role strings, applied after the login
+succeeds (it is inert when omitted):
+
+```ocaml
+let google =
+  Accounts.Oidc.google
+    ~redirect_uri:"https://app.acme.test/auth/main/callback"
+    ~client_id:"…" ~client_secret:"…"
+    ~role_map:(fun principal ->
+        match principal.email with
+        | Some e when Filename.check_suffix e "@acme.test" -> [ "admin" ]
+        | _ -> [])
+    ()
+  |> Result.get_ok
+
+let accounts = { Accounts.defaults with providers = [ google ] }
+```
+
+Other OIDC presets: `Oidc.microsoft ~tenant_id`, `Oidc.okta ~domain`, `Oidc.auth0 ~domain`,
+`Oidc.keycloak ~base_url ~realm`. SAML: `Saml.okta ~issuer ~sso_url ~entity_id ~acs_url
+~trusted_keys` (the IdP POSTs a signed assertion to the ACS route — no token-exchange HTTP).
+Escape hatches keep the exchange app-owned: `OAuth.custom ~exchange`, `Oidc.from_connection`,
+`Saml.from_connection`.
+
+### Step 4 — passkeys (WebAuthn)
+
+Setting `passkeys` mounts the registration/assertion JSON routes:
+
+```ocaml
+let rp =
+  Accounts.Passkey.relying_party ~id:"app.acme.test" ~name:"Acme" () |> Result.get_ok
+
+let accounts = { Accounts.defaults with passkeys = Some { relying_party = rp } }
+```
+
+### Step 5 — orgs + RBAC
+
+`rbac` declares the one role→permission policy the whole app evaluates against (route guards, `can`,
+org-scoped checks — all read it). `orgs.scim_prefix` mounts the SCIM 2.0 provisioning battery:
+
+```ocaml
+let policy =
+  Accounts.Roles.policy
+    [ Accounts.Roles.role Accounts.Roles.Role.admin
+        [ Accounts.Roles.Permission.v_exn "billing.write" ] ]
+
+let accounts =
+  { Accounts.defaults with
+    rbac = Some policy;
+    orgs = Some { scim_prefix = Some "/scim/v2" } }
+```
+
+Then guard routes with the no-argument forms (they read the configured singleton — see RBAC below):
+
+```ocaml
+let admin =
+  Fennec.Endpoint.make ~name:"admin" ()
+  |> Fennec.Endpoint.pipe_matched
+       [ Accounts.require_user ();
+         Accounts.require_permission (Accounts.Roles.Permission.v_exn "billing.write") () ]
+```
+
+### The whole thing, stacked
+
+Each step is additive — the final config is just every override on one record:
+
+```ocaml
+let accounts =
+  { Accounts.defaults with
+    password  = { Accounts.defaults.password with require_verified_email = true };
+    mail      = Some { from = "no-reply@acme.test"; site_name = Some "Acme"; templates = None };
+    passkeys  = Some { relying_party = rp };
+    orgs      = Some { scim_prefix = Some "/scim/v2" };
+    rbac      = Some policy;
+    routes    = { auth_prefix = "/auth"; me_path = Some "/me" };
+    providers = [ github; google ] }
+
+let () = Fennec.serve ~accounts [ web; admin ]
+```
+
+`Fennec.serve` hands the config to `Accounts.start`, which applies it to the process-native instance
+(`Accounts.current ()`) and folds it through `Accounts.Wiring` into a route table + a method gate.
+You can also call `Accounts.start ~config ()` directly outside `serve`.
+
+---
+
+## Architecture
+
+The library is layered bottom-up; each layer opens only the ones below it. Two leaf sub-libraries
+(`fennec.accounts.primitives`, `fennec.accounts.features`) hold the pure, HTTP-free,
+storage-free logic; the engine, store, HTTP, and facade sit in `fennec.accounts` itself.
+
+### `fennec.accounts.primitives` — the pure leaves (no cross-module deps)
+
+| Module | Responsibility |
+| --- | --- |
+| `Accounts_identity` | external-identity keys (oauth/oidc/saml/passkey/scim subjects) + the link store |
+| `Accounts_challenge` | single-use HMAC-verified, TTL'd, replay-safe tokens / codes / state / nonces |
+| `Accounts_password` | PBKDF2-HMAC-SHA256 hashing + policy, constant-time verify |
+| `Accounts_rate_limit` | the token-bucket brute-force throttle |
+| `Accounts_roles` | typed `Role` / `Permission` + the `policy` (role → permission map) |
+| `Accounts_audit` | the redacting append-only audit log |
+
+### `fennec.accounts.features` — per-protocol auth, on top of the primitives (no HTTP, no store)
+
+| Module | Responsibility |
+| --- | --- |
+| `Accounts_email` | email ownership, verification, magic-link, OTP |
+| `Accounts_mfa` | TOTP + backup codes + step-up factors + assurance |
+| `Accounts_org` | organizations, memberships, invites, domains, tenant auth policy |
+| `Accounts_oauth` | OAuth2 + PKCE |
+| `Accounts_oidc` | OpenID Connect (RS256 ID-token verification, over `oauth`) |
+| `Accounts_passkey` | WebAuthn registration / assertion |
+| `Accounts_saml` | SAML 2.0 request/response + XML signature |
+| `Accounts_scim` | SCIM 2.0 provisioning (over `identity` + `org`) |
+
+### The engine — `accounts_base.ml` (a thin glue: `include`s the modules below, in dep order)
+
+| Module | Responsibility |
+| --- | --- |
+| `Accounts_types` | the data model (`user`, `email`, `token`, `auth_context`, the `provider` variant), aliases, helpers |
+| `Accounts_secrets` | CSPRNG/hashing/constant-eq, the signed-session codec + revocation gate, the MFA-secret seal (touch with care) |
+| `Accounts_identity_bridge` | `external_identity` + per-provider identity glue + service factories |
+| `Accounts_runtime` | `make` / `configure` / hooks / audit + the strategy→audit/mechanism maps (breaks the lifecycle↔login cycle) |
+| `Accounts_request` | the cookie-verifying paw + the `require_*` guards + `can` / `can_in` |
+| `Accounts_lifecycle` | user / password / email / role / MFA-enrollment / org / identity-link writes |
+| `Accounts_login` | session issue + the `login_with_*` family + step-up + the session store verbs |
+| `Accounts_http` | the `*_paw` route constructors + SCIM provisioning + the JSON/BSON helpers |
+
+### Store, HTTP, methods, config, facade
+
+| Module | Responsibility |
+| --- | --- |
+| `Accounts_codec` | the record↔BSON codecs (the plumbing under `Store`) |
+| `Accounts_collection_store` | the backend-blind collection-store builder |
+| `Accounts_native` | the `Store` over any runtime-selected backend, the process-native singleton (`current` / `boot` / `start`), and `Wiring` (config → route table + method gate) |
+| `Accounts_methods` | the Meteor-shaped DDP `Methods` functor (`createUser` / `login` / `logout` / …) |
+| `Accounts_session` | the HTTP session-view serializers (`session_doc` / `session_paw`) for SSR/`/me` |
+| `Accounts_provider_presets` | the one-liner provider constructors (`OAuth.github`, `Oidc.google`, `Saml.okta`, …) |
+| `Accounts_http_client` | the ambient fail-closed outbound-HTTPS transport the presets call (installed by `Fennec.serve`) |
+| `Accounts_profile` | the optional Sift-typed view of `user.profile` (`profile_codec` / `typed_profile` / `set_typed_profile`) |
+| `Accounts_mailer` | the transactional email templates (rendered with Fur, delivered through `fennec.mail`) |
+| `accounts.ml` | the public facade: a 38-line glue that re-exports the engine + satellites to satisfy `accounts.mli` |
+
+### The two public faces
+
+The top-level `Accounts.*` namespace carries the ~40 daily-drivers: `user_id`, `create_user`,
+`login_with_password`, `logout`, `require_user` / `require_role` / `require_permission`,
+`verify_token`, `list_sessions` / `revoke_session`, the `send_*_email` verbs, and the config
+(`defaults` / `start` / `Wiring`). Everything a 95%-of-apps newcomer never touches —
+the `*_paw` route constructors (for custom URL layouts; the config mounts the defaults), the
+MFA-aware `*_completion` login branches, the protocol identity resolvers + `external_identity`
+builders, identity-link administration, the passkey ceremony primitives, the low-level codecs, and
+the deprecated explicit-instance guard shims — is grouped under **`Accounts.Advanced`**. Nothing was
+removed from the library; `Advanced` is a discoverability grouping in `accounts.mli`.
+
+---
+
+## Security model
+
+Match the code, not the marketing — these are the actual guarantees (`accounts_secrets.ml`,
+`primitives/accounts_password.ml`, `primitives/accounts_rate_limit.ml`).
+
+- **Password hashing.** PBKDF2-HMAC-SHA256, **600 000 iterations** by default (the OWASP-2023
+  floor), random per-user salt, stored as `pbkdf2-sha256$<iters>$<salt>$<derived>`. Verification is
+  **constant-time** (`constant_eq` accumulates a difference over the full length).
+
+- **Sessions.** The browser session is a **signed cookie** carrying only non-secret identity
+  metadata (HMAC-SHA256 over the encoded session). Normal request authentication is stateless and
+  horizontal — zero store reads on the fast path. The token store keeps only **hashed** tokens
+  keyed by a non-secret `session_id`; it is the source of truth for **per-session revocation**.
+  `verify_token` (and resume) **always** consult that row, so `revoke_session` / `logout` /
+  `logout_other_clients` take effect immediately on those paths; `validate_every_request` (off by
+  default) additionally re-checks the row + the `auth_epoch` on *every* request. Recording a session
+  is **fail-closed**: if the row cannot be persisted, the login fails atomically.
+
+- **MFA-secret seal.** TOTP secrets are written through `seal_mfa_secret` — an authenticated
+  HMAC-keystream seal (versioned `v1`, MAC verified constant-time) keyed by the instance secret.
+  Unsealing is **fail-closed**: any value that is not a valid `v1` seal reads as absent, never as
+  plaintext, so a tampered or unsealed stored value can't defeat the seal.
+
+- **Enumeration resistance.** Password login returns one indistinguishable error for
+  unknown-account vs wrong-password by default (`password.ambiguous_error_messages`; the hooks and
+  audit log still see the real reason). `issue_password_reset` / `send_reset_password_email` return
+  success even for addresses with no account, so the UX cannot be used as an account oracle.
+
+- **Brute-force throttle.** A token-bucket limiter (`Accounts_rate_limit.make`) guards the `login`
+  and `createUser` DDP methods — **5 attempts / 10 s** by default (Meteor's `DDPRateLimiter`),
+  keyed on **both** the client IP and the login selector, so neither a single IP nor a single
+  account can be hammered. A throttled attempt spends nothing; retune or disable via the limiter.
+
+- **SSO transport.** The provider presets' default token-exchange runs over the framework's
+  prod-safe outbound HTTPS client (tls-eio + x509 + ca-certs, peer **verified against the OS trust
+  store, never downgraded**), captured once at boot. OIDC presets verify the **RS256 ID-token
+  signature + iss/aud/exp/nonce** before trusting a principal; OAuth/OIDC carry PKCE + state; SAML
+  verifies the XML signature against pinned `trusted_keys`. Email is trusted as verified only when
+  the provider attests it (`email_verified`). `before_external_login` is the per-login veto for
+  domain/org allow-lists.
+
+The crypto in `Accounts_secrets` and `Accounts_password` was carried **verbatim** through the
+refactor — the enumeration / replay / seal guarantees did not move.
+
+---
+
+## Testing
+
+The house pattern is **inline `let%test` colocated** with the code it exercises (the `fennec-hunt`
+runner), run against in-memory stores (minimongo). The leaves and features test themselves; the
+engine-level integration + HTTP/DDP-system suite lives in **`accounts_integration_test.ml`** — a
+dedicated test module rather than inline, because its shared in-memory fixture sits at the
+`Accounts_native` (`Store`) layer, *above* the whole engine, so it cannot be pushed down into the
+engine leaves. Two system tests live under [`test/`](test/):
+
+- `test/accounts_backends_test.ml` — drives the **public** Accounts API over the embedded
+  `burrow://` engine (a temp dir, no `mongod`) and asserts backend parity: password login + token +
+  username login, case-insensitive unique email/username, sparse username indexes, per-session
+  revocation, and RBAC-guard equivalence. Runs under `dune runtest`; fails the build if accounts
+  ever breaks on burrow.
+- `test/acme_pebble_test.ml` — an end-to-end ACME proof against a local pebble server, gated on
+  `FENNEC_ACME_TEST_DIR` (skips otherwise); run manually / in CI with pebble up.
+
+Run the suite:
+
+```sh
+dune runtest fennec/accounts
+```
+
+which covers the engine integration suite (1205 tests) plus `fennec/accounts/features` (947),
+`fennec/accounts/primitives` (78), and the burrow parity exe. `dune build @check` and
+`dune build @all` cover the whole workspace.
