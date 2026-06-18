@@ -1,8 +1,20 @@
-; The accounts subsystem: users, sessions, passwords/MFA/passkeys, OAuth/OIDC/SAML/SCIM,
-; orgs + RBAC. Persistence rides the fennec-mongo backends (minimongo / Burrow / mongod);
-; the HTTP surface (DDP methods, OAuth/SAML endpoints, session cookies) is built on fennec-paw.
-; The native I/O shell, middleware battery, websockets, TLS/ACME and host routing now live in
-; the standalone fennec-paw library.
+; The accounts subsystem: Meteor-style identity hard-wired into Fennec — users, signed-cookie
+; sessions, passwords/email/MFA/passkeys, OAuth/OIDC/SAML/SCIM, orgs + RBAC. Persistence rides the
+; fennec-mongo backends (minimongo / Burrow / mongod, one backend-blind store); the HTTP surface
+; (DDP methods, OAuth/SAML endpoints, session cookies) is built on fennec-paw. The native I/O shell,
+; middleware battery, websockets, TLS/ACME and host routing live in the standalone fennec-paw library.
+; Contributor entry point + the declarative-config DX: ./README.md.
+;
+; This library is the engine + store + HTTP + facade; the pure, HTTP-free / store-free logic lives in
+; two leaf sub-libs (fennec.accounts.primitives, fennec.accounts.features). [accounts.ml] is a thin
+; facade satisfying [accounts.mli]; [accounts_base.ml] glues the engine in dependency order:
+;   types → secrets (crypto VERBATIM) → identity_bridge → runtime (make/hooks/audit) → request (the
+;   cookie paw + RBAC guards) → lifecycle (writes) → login (sessions/login flows) → http (*_paw routes)
+; then: native (Store + the process singleton + Wiring), methods (the DDP Methods functor), session
+; (the HTTP session-view), provider_presets (the OAuth/OIDC/SAML one-liners), profile (typed profile),
+; codec/collection_store (the storage plumbing), mailer (the templated emails).
+; Inline let%test ride with each module; the engine-integration + HTTP/DDP-system suite is the dedicated
+; accounts_integration_test.ml (its fixture sits at the store layer, above the engine leaves).
 
 (library
  (name fennec_accounts)

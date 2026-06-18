@@ -1,5 +1,31 @@
 # Accounts
 
+> **Start here, then come back.** The contributor entry point is now
+> [`fennec/accounts/README.md`](../../fennec/accounts/README.md): the one declarative `Accounts.config`
+> ladder (zero-config → SSO → passkeys → orgs/RBAC), the layered module map, the security model, and
+> how to run the tests. This document is the deeper **design/behavior reference** — the session model,
+> identity-flow, RBAC, and security rationale below are current — but read it knowing two things that
+> postdate most of its prose:
+>
+> 1. **The core is no longer one file.** "`accounts.{mli,ml}` owns the core" was true before the June
+>    2026 refactor; `accounts.mli` is still the single public contract, but `accounts.ml` is now a
+>    38-line facade over carved single-responsibility modules. Two pure leaf sub-libraries hold the
+>    HTTP-free / store-free logic — `fennec.accounts.primitives` (`identity`, `challenge`, `password`,
+>    `rate_limit`, `roles`, `audit`) and `fennec.accounts.features` (`email`, `mfa`, `org`, `oauth`,
+>    `oidc`, `passkey`, `saml`, `scim`) — and the engine itself is `accounts_base.ml` glue over
+>    `accounts_types` → `accounts_secrets` → `accounts_identity_bridge` → `accounts_runtime` →
+>    `accounts_request` → `accounts_lifecycle` → `accounts_login` → `accounts_http`, with the store +
+>    process-native singleton + `Wiring` in `accounts_native`, the DDP `Methods` functor in
+>    `accounts_methods`, the HTTP session-view in `accounts_session`, and the provider one-liners in
+>    `accounts_provider_presets`. See the README's architecture table for the per-module map.
+> 2. **There is now a declarative DX layer** the body below predates: one `Accounts.config` (every key
+>    optional via `Accounts.defaults`), `Accounts.start ?config` / `Fennec.serve ~accounts`, the
+>    config→routes+method-gate `Accounts.Wiring` seam, the provider preset constructors
+>    (`Accounts.OAuth.github` / `Oidc.google` / `Saml.okta`, with optional `?role_map`), an optional
+>    Sift-typed `user.profile`, and the `Accounts.Advanced` namespace that groups the power-user surface
+>    (the `*_paw` route constructors, the MFA `*_completion` branches, the identity resolvers/builders,
+>    the deprecated explicit-instance guards) out of the newcomer's way.
+
 Accounts is Fennec's native identity layer: signed-cookie browser sessions, typed HTTP/SSR access to
 `user_id`, Pulse/DDP method identity, and pluggable login strategies. The public words intentionally
 track the useful Meteor vocabulary (`userId`, `setUserId`, `createUser`, `login`,
