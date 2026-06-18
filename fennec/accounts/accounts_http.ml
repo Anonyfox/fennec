@@ -9,6 +9,7 @@
 open Accounts_types
 open Accounts_secrets
 open Accounts_identity_bridge
+open Accounts_runtime
 open Accounts_request
 open Accounts_lifecycle
 open Accounts_login
@@ -238,10 +239,10 @@ let passkey_registration_options_paw t relying_party ~path () =
                 (fun e -> Login_rejected (Passkey.string_of_error e))
                 (passkey_user_of_account user))
         with
-        | Error e -> json_error c (string_of_error e)
+        | Error e -> json_error c (client_message e)
         | Ok user -> (
           match begin_passkey_registration t relying_party user with
-          | Error e -> json_error c (string_of_error e)
+          | Error e -> json_error c (client_message e)
           | Ok options -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c options.json)))
 
 let passkey_registration_finish_paw t relying_party ~path () =
@@ -255,7 +256,7 @@ let passkey_registration_finish_paw t relying_party ~path () =
         | None -> json_error c "Missing passkey token"
         | Some token -> (
           match finish_passkey_registration t relying_party ~user_id:uid ~token json with
-          | Error e -> json_error c (string_of_error e)
+          | Error e -> json_error c (client_message e)
           | Ok finished ->
             json_ok c
               [
@@ -274,7 +275,7 @@ let passkey_assertion_options_paw t relying_party ~path () =
           user_id
       in
       match begin_passkey_assertion t ?user_id ?allowed_credentials relying_party with
-      | Error e -> json_error c (string_of_error e)
+      | Error e -> json_error c (client_message e)
       | Ok options -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c options.json)
 
 let passkey_assertion_finish_paw t relying_party ~path () =
@@ -287,7 +288,7 @@ let passkey_assertion_finish_paw t relying_party ~path () =
         | None -> json_error c "Missing passkey token"
         | Some token -> (
           match finish_passkey_assertion_completion t ?current_user_id:(user_id c) relying_party ~token json with
-          | Error e -> json_error c (string_of_error e)
+          | Error e -> json_error c (client_message e)
           | Ok (Identity_step_up_required user) -> json_mfa_required c user
           | Ok (Complete_identity_login login) ->
             let c = set_login_cookie t c login.token in
@@ -310,7 +311,7 @@ let mfa_passkey_assertion_options_paw t relying_party ~path () =
           user_id
       in
       match begin_passkey_assertion t ?user_id ?allowed_credentials relying_party with
-      | Error e -> json_error c (string_of_error e)
+      | Error e -> json_error c (client_message e)
       | Ok options -> Conn.json ~headers:[ ("Cache-Control", "no-store") ] c options.json)
 
 let mfa_passkey_assertion_finish_paw t relying_party ~path () =
@@ -327,7 +328,7 @@ let mfa_passkey_assertion_finish_paw t relying_party ~path () =
         | _, None -> json_error c "Missing passkey token"
         | Some mfa_token, Some token -> (
           match Result.bind (verify_passkey_factor t relying_party ~token json) (complete_login_step_up t mfa_token) with
-          | Error e -> json_error ~status:403 c (string_of_error e)
+          | Error e -> json_error ~status:403 c (client_message e)
           | Ok (user, session) ->
             let c = set_login_cookie t c session in
             json_ok c [ json_string "id" user.id; json_string "token" session ])))
@@ -440,7 +441,7 @@ let scim_paw t ~prefix () : Paw.t =
   | Some `Schemas -> Conn.json c (Json.to_string Scim.scim_schemas_json)
   | Some resource -> (
     match scim_connection_for_request t c with
-    | Error e -> json_error ~status:401 c (string_of_error e)
+    | Error e -> json_error ~status:401 c (client_message e)
     | Ok connection -> (
       match (Conn.meth c, resource, req_body_json c) with
       | H.GET, `Users None, _ ->
@@ -461,7 +462,7 @@ let scim_paw t ~prefix () : Paw.t =
             (Scim.scim_user_of_json json |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
             (apply_scim_user t connection)
         with
-        | Error e -> json_error c (string_of_error e)
+        | Error e -> json_error c (client_message e)
         | Ok user -> Conn.json ~status:201 c (Json.to_string (Scim.scim_user_json user)))
       | H.PATCH, `Users (Some external_id), Some json -> (
         match t.store.scim.Scim.find_user ~connection_id:connection.id ~external_id with
@@ -474,12 +475,12 @@ let scim_paw t ~prefix () : Paw.t =
                 Scim.apply_user_patch user ops
                 |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
           with
-          | Error e -> json_error c (string_of_error e)
+          | Error e -> json_error c (client_message e)
           | Ok patched when patched.Scim.external_id <> external_id ->
             json_error c "SCIM PATCH cannot change externalId"
           | Ok patched -> (
             match apply_scim_user t connection patched with
-            | Error e -> json_error c (string_of_error e)
+            | Error e -> json_error c (client_message e)
             | Ok user -> Conn.json c (Json.to_string (Scim.scim_user_json user)))))
       | H.DELETE, `Users (Some external_id), _ ->
         (* a SCIM DELETE is a hard deprovision: offboard the Fennec account (disable + revoke sessions)
@@ -519,7 +520,7 @@ let scim_paw t ~prefix () : Paw.t =
                 Scim.apply_group_patch group ops
                 |> Result.map_error (fun e -> Login_rejected (Scim.string_of_error e)))
           with
-          | Error e -> json_error c (string_of_error e)
+          | Error e -> json_error c (client_message e)
           | Ok patched when patched.Scim.external_id <> external_id ->
             json_error c "SCIM PATCH cannot change externalId"
           | Ok patched -> (

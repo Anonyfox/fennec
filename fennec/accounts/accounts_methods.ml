@@ -127,13 +127,13 @@ struct
         ]
     in
     let login_doc inv = function
-      | Error e -> forbidden (string_of_error e)
+      | Error e -> forbidden (client_message e)
       | Ok (u, token) ->
         inv.R.set_user_id (Some u.id);
         Bson.doc [ ("id", Bson.str u.id); ("token", Bson.str token) ]
     in
     let login_completion_doc inv = function
-      | Error e -> forbidden (string_of_error e)
+      | Error e -> forbidden (client_message e)
       | Ok (Complete_login (u, token)) ->
         inv.R.set_user_id (Some u.id);
         Bson.doc [ ("id", Bson.str u.id); ("token", Bson.str token) ]
@@ -141,7 +141,7 @@ struct
     in
     let complete_step_up_doc inv mfa_token verification =
       match Result.bind verification (complete_login_step_up t (Challenge.token_of_string mfa_token)) with
-      | Error e -> forbidden (string_of_error e)
+      | Error e -> forbidden (client_message e)
       | Ok (user, token) ->
         inv.R.set_user_id (Some user.id);
         Bson.doc [ ("id", Bson.str user.id); ("token", Bson.str token) ]
@@ -150,7 +150,7 @@ struct
       | [] -> (
         match ddp_session_doc t inv.R.user_id with
         | Ok doc -> doc
-        | Error e -> forbidden (string_of_error e))
+        | Error e -> forbidden (client_message e))
       | _ -> bad_request "currentUser expects no arguments"
     in
     let create_user_method inv = function
@@ -166,7 +166,7 @@ struct
         | None -> bad_request "createUser expects a password"
         | Some password -> (
           match create_user t ?username ?email ~password ?profile () with
-          | Error e -> forbidden (string_of_error e)
+          | Error e -> forbidden (client_message e)
           | Ok u ->
             (* With require_verified_email, a brand-new user has no verified email, so [finish_login]
                would reject ("Email not verified") → a 403 that orphans the just-created row AND skips
@@ -183,7 +183,7 @@ struct
                 ])
             else (
               match finish_login t ~strategy:"createUser" u with
-              | Error e -> forbidden (string_of_error e)
+              | Error e -> forbidden (client_message e)
               | Ok (_, token) ->
                 inv.R.set_user_id (Some u.id);
                 (* Meteor's Accounts.config({sendVerificationEmail}) — best-effort, never blocks signup *)
@@ -227,7 +227,7 @@ struct
                     login_with_email_otp t (email_service t ()) ~allow_signup:true
                       ~token:(Challenge.token_of_string token) ~code ()
                   with
-                  | Error e -> forbidden (string_of_error e)
+                  | Error e -> forbidden (client_message e)
                   | Ok login ->
                     inv.R.set_user_id (Some login.user.id);
                     Bson.doc [ ("id", Bson.str login.user.id); ("token", Bson.str login.token) ] ) )
@@ -239,10 +239,10 @@ struct
                     (* OAuth-over-DDP popup handshake: replay the single-use credential issued by the
                        popup callback, then mint the session here (MFA step-up still applies). *)
                     match consume_oauth_credential t ~credential_token ~credential_secret with
-                    | Error e -> forbidden (string_of_error e)
+                    | Error e -> forbidden (client_message e)
                     | Ok (user_id, provider) -> (
                       match find_required_user t user_id with
-                      | Error e -> forbidden (string_of_error e)
+                      | Error e -> forbidden (client_message e)
                       | Ok user ->
                         let strategy = match provider with Some p -> "oauth:" ^ p | None -> "oauth" in
                         login_completion_doc inv (complete_login_unless_mfa t ~strategy user)))
@@ -271,7 +271,7 @@ struct
           | Ok (user, token) ->
             inv.R.set_user_id (Some user.id);
             login_doc inv (Ok (user, token))
-          | Error e -> forbidden (string_of_error e)))
+          | Error e -> forbidden (client_message e)))
       | _ -> bad_request "logoutOtherClients expects no arguments"
     in
     let change_password_method inv = function
@@ -281,7 +281,7 @@ struct
         | Some uid -> (
           match change_password t uid ~old_password ~new_password with
           | Ok () -> Bson.bool true
-          | Error e -> forbidden (string_of_error e)))
+          | Error e -> forbidden (client_message e)))
       | _ -> bad_request "changePassword expects old and new password strings"
     in
     let reset_password_method inv = function
@@ -289,7 +289,7 @@ struct
         match reset_password_completion t (Challenge.token_of_string token) ~password with
         | Ok (Complete_login (user, token)) -> login_doc inv (Ok (user, token))
         | Ok (Step_up_required step_up) -> mfa_doc step_up
-        | Error e -> forbidden (string_of_error e))
+        | Error e -> forbidden (client_message e))
       | _ -> bad_request "resetPassword expects token and password strings"
     in
     let verify_email_method inv = function
@@ -297,7 +297,7 @@ struct
         match verify_email_completion t (Challenge.token_of_string token) with
         | Ok (Complete_login (user, token)) -> login_doc inv (Ok (user, token))
         | Ok (Step_up_required step_up) -> mfa_doc step_up
-        | Error e -> forbidden (string_of_error e))
+        | Error e -> forbidden (client_message e))
       | _ -> bad_request "verifyEmail expects one token string"
     in
     let enroll_account_method inv = function
@@ -305,7 +305,7 @@ struct
         match enroll_account_completion t (Challenge.token_of_string token) ~password with
         | Ok (Complete_login (user, token)) -> login_doc inv (Ok (user, token))
         | Ok (Step_up_required step_up) -> mfa_doc step_up
-        | Error e -> forbidden (string_of_error e))
+        | Error e -> forbidden (client_message e))
       | _ -> bad_request "enrollAccount expects token and password strings"
     in
     let complete_login_step_up_method inv = function
@@ -700,6 +700,27 @@ let%test "methods: createUser is rejected (403) when config.forbid_client_accoun
   match find_registered_ "createUser" inv [ Bson.doc [ ("username", Bson.str "ada"); ("password", Bson.str "pw") ] ] with
   | _ -> false
   | exception Test_methods_runtime.Error { code = "403"; _ } -> Result.is_ok (create_user a ~username:"ada" ~password:"pw" ())
+  | exception Test_methods_runtime.Error _ -> false
+
+(* A Store_error carries raw driver text (Printexc.to_string of a Mongo/Burrow exception). That detail
+   must NOT cross to a DDP client — it is mapped to a fixed generic message at the method boundary while
+   the detail is logged server-side. This forces a store error with a recognizable secret payload and
+   asserts the client sees "internal error", never the payload. Red pre-fix (raw text forwarded). *)
+let%test "methods: a Store_error is redacted to a generic message at the DDP boundary" =
+  Test_methods_runtime.registered := [];
+  let secret = "RAW-DRIVER-SECRET-LEAK-mongodb://user:pw@host" in
+  let a = make ~secret:"accounts-test-redact" ~store:(Store.unavailable ~message:secret ()) ~password_hasher:test_hasher () in
+  Test_methods.register a;
+  let inv = { Test_methods_runtime.user_id = None; remote_ip = None; is_simulation = false; set_user_id = (fun _ -> ()) } in
+  (* createUser hits the (unavailable) store, which returns Store_error secret *)
+  match find_registered_ "createUser" inv [ Bson.doc [ ("username", Bson.str "ada"); ("password", Bson.str "pw") ] ] with
+  | _ -> false
+  | exception Test_methods_runtime.Error { code = "403"; reason } ->
+    reason = "internal error"
+    && not
+         (let n = String.length secret and m = String.length reason in
+          let rec contains i = i + n <= m && (String.sub reason i n = secret || contains (i + 1)) in
+          contains 0)
   | exception Test_methods_runtime.Error _ -> false
 
 (* With require_verified_email, a brand-new user has no verified email, so [finish_login] cannot issue a

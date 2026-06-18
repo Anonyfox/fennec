@@ -44,6 +44,19 @@ let native : t option Atomic.t = Atomic.make None
    app configures the framework-native instance ([current ()]) once in its startup. *)
 let configure t cfg = t.config <- cfg
 
+(* The CLIENT-FACING rendering of an engine error. Identical to {!string_of_error} EXCEPT for
+   [Store_error], whose payload is raw driver text ([Printexc.to_string] of a Mongo/Burrow exception):
+   that detail is for operators, not clients, so it is logged to stderr and the wire sees a fixed generic
+   message. Every other error stays verbose (they are app-meaningful: bad password, duplicate email, …).
+   The internal [error] value is unchanged — server-side code, hooks, and the audit log still see the real
+   reason via {!string_of_error}; this redaction applies only where the message crosses to a DDP/HTTP
+   client. *)
+let client_message = function
+  | Store_error detail ->
+    Printf.eprintf "[accounts] store error (redacted from client): %s\n%!" detail;
+    "internal error"
+  | e -> string_of_error e
+
 (* The account-email templates (Meteor's Accounts.emailTemplates), used by the [send_*_email] verbs. None
    until {!set_email_templates}; the verbs then need only a [from] + [site_name] to deliver via the ambient
    {!Fennec_mail} transport. *)
