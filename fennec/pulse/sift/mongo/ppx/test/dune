@@ -1,0 +1,6 @@
+; Proves the standalone sift.mongo DX: ONLY sift + sift.mongo + the sift.mongo.ppx driver, no fennec.
+(test
+ (name test_sift_mongo_ppx)
+ (libraries fennec.pulse.sift fennec.pulse.sift.mongo)
+ (preprocess
+  (pps fennec.pulse.sift.mongo.ppx)))

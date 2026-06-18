@@ -5,4 +5,4 @@
  (name fennec_pulse_collection_ppx)
  (public_name fennec.pulse.collection.ppx)
  (kind ppx_rewriter)
- (libraries fennec_pulse_collection_ppx_rules ppxlib))
+ (libraries fennec_pulse_collection_ppx_rules sift_mongo_ppx_rules ppxlib))
