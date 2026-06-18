@@ -19,7 +19,8 @@ let mfa_level_to_string = function
   | Multi_factor -> "multi_factor"
   | Phishing_resistant_multi_factor -> "phishing_resistant_multi_factor"
 
-let opt_bson = function None -> Bson.null | Some value -> value
+(* [opt_bson] (None -> Bson.null) is defined once in Accounts_types and reaches here via
+   [open Accounts_base]. *)
 
 let public_user_to_doc (user : user) =
   let fields =

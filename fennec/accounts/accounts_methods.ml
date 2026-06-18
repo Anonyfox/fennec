@@ -7,9 +7,9 @@
    [R] parameter signature, so the server compiles untouched.
 
    The small DDP-shaped (de)serialization helpers the handlers need — [selector_of_bson],
-   [selector_rate_key], [user_doc], [ddp_session_doc] (and the trivial [opt_bson]) — live here too:
-   they are method support, distinct from the richer HTTP [session_doc] / [public_user_to_doc] that
-   stay in the facade.
+   [selector_rate_key], [user_doc], [ddp_session_doc] — live here too: they are method support,
+   distinct from the richer HTTP [session_doc] / [public_user_to_doc] that stay in the facade. (The
+   trivial [opt_bson] is shared from {!Accounts_types}, reached via [open Accounts_base].)
 
    The inline [let%test] blocks exercising these handlers ride along (the house rule): they drive the
    functor through [Test_methods = Methods(Test_methods_runtime)] and so are colocated with it. The
@@ -19,7 +19,8 @@
 open Accounts_base
 open Accounts_native
 
-let opt_bson = function None -> Bson.null | Some value -> value
+(* [opt_bson] (None -> Bson.null) is defined once in Accounts_types and reaches here via
+   [open Accounts_base]. *)
 
 let selector_of_bson = function
   | Bson.String s when String.trim s <> "" -> Ok (By_username s)

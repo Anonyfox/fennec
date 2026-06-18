@@ -57,6 +57,10 @@ type token = string
 let token_of_string s = s
 let token_to_string t = t
 
+(* a missing optional BSON value renders as an explicit BSON null. Shared by the session-view + DDP
+   document serializers (both reach it via [open Accounts_base]). *)
+let opt_bson = function None -> Bson.null | Some value -> value
+
 type auth_context = {
   user_id : user_id;
   session_id : string;
