@@ -19,6 +19,10 @@ include Accounts_base
 module Codec = Accounts_codec
 module Collection_store = Accounts_collection_store
 
+(* the typed-BSON shape language, re-exported so apps can build a {!profile_codec} for the optional
+   typed [user.profile] without depending on fennec.pulse.sift by its own name. *)
+module Sift = Sift
+
 (* the config-level provider PRESETS (Stage 3b): one-liner constructors that return the closed
    [external_identity provider] variant with the token-exchange recipe bundled. They live in
    {!Accounts_provider_presets} (above the engine, below this facade) because the variant + the
@@ -115,3 +119,14 @@ module Advanced = struct
   let require_permission = Accounts_base.require_permission
   let require_org = Accounts_base.require_org
 end
+
+(* the OPTIONAL Sift-typed view of [user.profile] (Stage 3c). [user.profile] stays [Bson.t option];
+   these are a thin convenience for apps that describe the profile shape as a ['p Sift.t]. Live in
+   {!Accounts_profile}; re-export onto the facade. *)
+type 'p profile_codec = 'p Accounts_profile.profile_codec
+
+let profile_codec = Accounts_profile.profile_codec
+let typed_profile = Accounts_profile.typed_profile
+let typed_profile_result = Accounts_profile.typed_profile_result
+let set_typed_profile = Accounts_profile.set_typed_profile
+let clear_profile = Accounts_profile.clear_profile

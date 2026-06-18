@@ -17,6 +17,10 @@
   fennec-paw
   fennec-mongo.bson
   fennec-mongo.bson_json
+  ; fennec.pulse.sift: the typed-BSON codec ['p Sift.t] behind the OPTIONAL typed [user.profile]
+  ; (Accounts.profile_codec / typed_profile / set_typed_profile). Pure + jsoo-safe, bson-only — it
+  ; adds no heavy / non-prod-lean dep (only the bson/json trees accounts already links).
+  fennec.pulse.sift
   fennec-mongo.minimongo
   fennec-mongo.driver
   fennec-mongo.backend
