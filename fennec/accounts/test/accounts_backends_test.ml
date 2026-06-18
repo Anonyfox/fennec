@@ -23,6 +23,12 @@ let () =
   Unix.putenv "FENNEC_ACCOUNTS_SECRET" "accounts-burrow-parity-secret-0123456789";
   (* the data layer opens collections by name on this switch; accounts builds its store eagerly *)
   Fennec_mongo_dynamic.Dynamic.set_switch sw;
+  (* declare the RBAC policy ONCE on the umbrella config BEFORE boot forces current () — the policy is
+     construction-frozen on the instance, so it must be set before the singleton is built. This is what
+     lets the no-[t] guards (Stage 3c) resolve against current ()'s policy. *)
+  let guard_permission = A.Roles.Permission.v_exn "admin.access" in
+  let guard_policy = A.Roles.policy [ A.Roles.role A.Roles.Role.admin [ guard_permission ] ] in
+  A.start ~config:{ A.defaults with rbac = Some guard_policy } ();
   A.boot ();
   let a = A.current () in
 
@@ -71,7 +77,37 @@ let () =
   | Ok other -> failf "expected one live session after per-session revoke, got %d" (List.length other)
   | Error _ -> failf "list_sessions failed after revoke");
 
+  (* 5. RBAC GUARD EQUIVALENCE (Stage 3c). The no-[t] guards [A.require_role] / [A.require_permission]
+        read the policy + instance from current () — the SAME singleton (with [guard_policy] above) that
+        authenticates every request. Prove they decide identically to the deprecated explicit-[t] forms
+        ([A.Advanced.*] given current ()): one configured policy, one decision. *)
+  let module H = Paw.Http in
+  let req path headers = Paw.Conn.make (H.make_request ~meth:H.GET ~path ~headers ()) in
+  let status_of c = match A.Conn.resp c with Some (r : H.response) -> Some r.status | None -> None in
+  let dave = ok "create_user(dave)" (A.create_user a ~username:"dave" ~password:"pw" ()) in
+  let _ = ok "grant_role(dave, admin)" (A.grant_role a dave.A.id A.Roles.Role.admin) in
+  let _, dtok = ok "dave login" (A.login_with_password a (A.By_username "dave") ~password:"pw") in
+  (* current () was built from { defaults with rbac = … }, so its cookie name is defaults.session.cookie *)
+  let cookie_name = A.defaults.A.session.A.cookie in
+  let authed () = req "/admin" [ ("Cookie", cookie_name ^ "=" ^ A.token_to_string dtok) ] |> A.paw a () in
+  let anon () = req "/admin" [] in
+  (* the no-[t] daily-driver forms, bound to current () *)
+  let role_authed = status_of (A.require_role A.Roles.Role.admin () (authed ())) in
+  let role_anon = status_of (A.require_role A.Roles.Role.admin () (anon ())) in
+  let perm_authed = status_of (A.require_permission guard_permission () (authed ())) in
+  let perm_anon = status_of (A.require_permission guard_permission () (anon ())) in
+  (* the deprecated explicit-instance shims, given the SAME current () instance *)
+  let dep_role_authed = status_of ((A.Advanced.require_role [@alert "-deprecated"]) a A.Roles.Role.admin () (authed ())) in
+  let dep_perm_anon = status_of ((A.Advanced.require_permission [@alert "-deprecated"]) a guard_permission () (anon ())) in
+  if not (role_authed = None) then failf "no-t require_role denied an admin (got %s)" (match role_authed with Some s -> string_of_int s | None -> "pass");
+  if not (perm_authed = None) then failf "no-t require_permission denied a granted admin";
+  if not (role_anon = Some 403) then failf "no-t require_role did not 403 an anonymous request";
+  if not (perm_anon = Some 403) then failf "no-t require_permission did not 403 an anonymous request";
+  (* equivalence: the no-[t] form and the explicit-[t] shim resolve to the same decision *)
+  if role_authed <> dep_role_authed then failf "no-t and explicit-t require_role disagree on an admin";
+  if perm_anon <> dep_perm_anon then failf "no-t and explicit-t require_permission disagree on anonymous";
+
   Unix.putenv "MONGO_URL" "";
   print_endline
     "accounts/burrow parity: OK (password login + token + username login + unique email + sparse usernames + \
-     per-session revocation)"
+     per-session revocation + RBAC guard equivalence)"

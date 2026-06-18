@@ -985,10 +985,13 @@ val membership : Conn.t -> Org.membership option
     {!validate_login_attempt} hooks or provider callback code after routing the user's tenant. *)
 val require_org_strategy : Org.org -> Org.strategy -> (unit, error) result
 
-(** Guard a tenant route. An assigned active org is enough when [permission] is absent; a permission
-    check requires an active membership whose role grants it under the held {!policy} — the SAME
-    code-declared policy as {!can}/{!require_permission} (no separate org RBAC). *)
-val require_org : t -> ?redirect:string -> ?permission:string -> unit -> Paw.t
+(** Guard a tenant route against the process-native instance ([current ()]). An assigned active org is
+    enough when [permission] is absent; a permission check requires an active membership whose role
+    grants it under the configured {!policy} — the SAME code-declared policy as {!can}/{!require_permission}
+    (no separate org RBAC). No [t] argument: the policy + instance come from the one configured singleton,
+    so a route can never be guarded against a different RBAC model than the one authenticating it. For
+    an explicit instance use the deprecated {!Advanced.require_org}. *)
+val require_org : ?redirect:string -> ?permission:string -> unit -> Paw.t
 
 (** Replace a user's app-wide roles. Incoming roles may come from userland declarations, SSO claim
     mapping, SCIM mapping, or admin forms; storage uses canonical role names on the user document.
@@ -1025,11 +1028,40 @@ type scope = Global | Org of string
     same code-declared {!policy} resolves org-scoped permissions, so there is no second RBAC model. *)
 val can_in : t -> user_id -> scope:scope -> Roles.Permission.t -> (bool, error) result
 
-(** Guard a route by app-wide role. The check is server-side and reads the current user record. *)
-val require_role : t -> ?redirect:string -> Roles.Role.t -> unit -> Paw.t
+(** Guard a route by app-wide role, against the process-native instance ([current ()]). The check is
+    server-side and reads the current request user record. No [t] argument: the instance is the one
+    configured singleton — see {!require_org} for the rationale. Explicit-instance form: the deprecated
+    {!Advanced.require_role}. *)
+val require_role : ?redirect:string -> Roles.Role.t -> unit -> Paw.t
 
-(** Guard a route by app-wide permission under the held {!policy}. Server-side; reads the current user. *)
-val require_permission : t -> ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
+(** Guard a route by app-wide permission under the configured {!policy}, against the process-native
+    instance ([current ()]). Server-side; reads the current request user. No [t] argument (see
+    {!require_org}). Explicit-instance form: the deprecated {!Advanced.require_permission}. *)
+val require_permission : ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
+
+(** {1 The advanced / internal surface}
+
+    One namespace for the symbols a 95%-of-apps newcomer never touches, so the top-level [Accounts.*]
+    stays the ~40 daily-drivers. Nothing here is new and nothing was removed from the library — this is
+    a discoverability grouping. (The fuller re-homing of the engine entry points / [*_paw] / [Store] /
+    [Methods] / [boot] is layered in alongside; for now it carries the explicit-instance RBAC guards.) *)
+module Advanced : sig
+  (** Explicit-instance route guard by app-wide role. {b Deprecated}: prefer the top-level
+      {!require_role}, which binds [current ()] — the one configured instance — for you, so a route
+      cannot accidentally be guarded against a different RBAC model than the one authenticating the
+      request. This form remains for advanced multi-instance setups and the migration window. *)
+  val require_role : t -> ?redirect:string -> Roles.Role.t -> unit -> Paw.t
+    [@@deprecated "Use Accounts.require_role (no t arg — reads the configured current () instance)."]
+
+  (** Explicit-instance route guard by app-wide permission. {b Deprecated}: prefer the top-level
+      {!require_permission}. *)
+  val require_permission : t -> ?redirect:string -> Roles.Permission.t -> unit -> Paw.t
+    [@@deprecated "Use Accounts.require_permission (no t arg — reads the configured current () instance)."]
+
+  (** Explicit-instance tenant route guard. {b Deprecated}: prefer the top-level {!require_org}. *)
+  val require_org : t -> ?redirect:string -> ?permission:string -> unit -> Paw.t
+    [@@deprecated "Use Accounts.require_org (no t arg — reads the configured current () instance)."]
+end
 
 (** Current request user, loaded from the store when a valid signed login cookie is present. This is
     a convenience for SSR/handlers that need the record; prefer {!user_id} when the id is enough. *)

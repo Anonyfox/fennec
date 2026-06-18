@@ -86,3 +86,32 @@ module Wiring = Accounts_native.Wiring
 
 let native_paw = Accounts_native.native_paw
 let boot = Accounts_native.boot
+
+(* ---- the RBAC route guards: ONE policy, ONE instance (Stage 3c) ---------------------------------
+
+   The daily-driver guards [require_role] / [require_permission] / [require_org] now read the policy
+   AND the instance from the process-native singleton ([current ()]) — the SAME configured instance
+   the app's routes, methods, and [native_paw] already run against. That kills the old footgun where a
+   guard took an explicit [t] (and once a [~policy]): a route could be guarded against a DIFFERENT
+   Accounts instance / a different policy than the one actually authenticating the request — two RBAC
+   models in one app. There is now exactly one: the policy on [current ()], code-declared once via
+   [start ~config:{ defaults with rbac = Some policy }] (or [Fennec.serve ?accounts]).
+
+   The explicit-[t] forms are NOT gone — they move to {!Advanced} as [@@deprecated] shims for one
+   release (advanced multi-instance setups + the migration window). [require_user] and
+   [require_assurance] never took a [t]/policy, so they are unchanged at the top level. *)
+
+let require_role ?redirect role () : Paw.t = Accounts_base.require_role (current ()) ?redirect role ()
+let require_permission ?redirect permission () : Paw.t = Accounts_base.require_permission (current ()) ?redirect permission ()
+let require_org ?redirect ?permission () : Paw.t = Accounts_base.require_org (current ()) ?redirect ?permission ()
+
+(* The advanced / internal surface, grouped behind one namespace so the newcomer's top-level
+   [Accounts.*] stays the ~40 daily-drivers. Everything here was — and through the deprecated shims
+   below still is — reachable; this only re-homes it for discoverability (filled out further in the
+   facade re-layer). The explicit-instance RBAC guards live here, deprecated: prefer the top-level
+   no-[t] forms, which bind [current ()] for you. *)
+module Advanced = struct
+  let require_role = Accounts_base.require_role
+  let require_permission = Accounts_base.require_permission
+  let require_org = Accounts_base.require_org
+end
