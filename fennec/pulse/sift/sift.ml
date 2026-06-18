@@ -1,18 +1,33 @@
-(* Sift — the public facade: the bson-free {!Sift_core} PLUS the BSON format (the [sift.bson] plugin —
-   the BSON-tree codec, the zero-copy byte codecs, the extended-JSON bridge, the Mongo query-vocabulary
-   field helpers). The full [Sift.*] API fennec uses; standalone users can depend on {!Sift_core} alone
-   (no bson). *)
+(* Sift — fennec's typed-data toolkit: ONE shape language ['a Sift.t] that says what a value IS, and
+   from that single description drives everything fennec needs of a document — BSON encode/decode,
+   validation, plain + extended JSON I/O, structural diff for reactive sync, DDP method arguments, and
+   reflection for $jsonSchema. Built ON {!Bson.t} (the tree the storage layer already speaks), pure and
+   jsoo-safe so the SAME codec runs on the server and in the browser.
 
-include Sift_core
+   This module is the FLAT public surface; the pieces live in small internal modules:
+     {!Shape}       — the GADT type representation + the error/refinement-hint types
+     {!Combinators} — the builder DSL (string/int/req/opt/obj/seal/check/the validators/variants)
+     {!Codec}       — the codec value ['a t], encode-side [validate], pretty-printing
+     {!Engine}      — normalization, the refinement-check phase, [needs_checks], pretty
+     {!Bson_engine} — the shape-directed {!Bson.t} read / write / size
+     {!Json_writer} / {!Json_reader} — plain relaxed JSON (the HTTP wire form)
+     {!Derived}     — free shape-derived equal / compare / hash / default / arbitrary
 
-(** Extended-JSON AST (re-exported), for composing with other JSON code. *)
+   The Mongo query vocabulary (Filter / Update / Sort / Index / Projection / Collection) lives in the
+   companion {!Sift_mongo} package and builds on the field helpers below; the [@@deriving] DX is the
+   {!Sift_ppx} package. Neither is needed to use a codec. *)
+
+include Shape (* errors + hints, the shape GADT, field / record_shape / bound_field / case *)
+include Codec (* the codec value ['a t], [validate], [pp] / [show] *)
+include Combinators (* the builder DSL + the [bson] dynamic-escape codec *)
+
+(** Extended-JSON AST + bridge (re-exported), for composing with other JSON code / mongosh interchange. *)
 module Json = Fennec_mongo_json.Json
 
 module Bson_json = Fennec_mongo_bson_json.Bson_json
 
-(* ---- the BSON-tree codec ------------------------------------------------------------------ *)
-
-(* decode = RAW shape decode (the BSON-tree read), then the gated check phase — refinement violations
+(* ---- BSON encode / decode (the shape-directed {!Bson.t} tree codec) ------------------------------
+   decode = RAW shape decode (missing/type errors), then the gated check phase — refinement violations
    COLLECT across stacked checks, sibling fields, and record-level rules. *)
 let decode_value shape b =
   match Bson_engine.read shape b with
@@ -25,7 +40,19 @@ let decode c b = decode_value c.shape b
 let encode_checked c v = match Engine.run_checks c.shape v with [] -> Ok (enc c v) | es -> Error es
 let to_bson c v : Bson.t = enc c v
 
-(* ---- extended-JSON I/O (the Bson_json bridge — $oid/$date, lossless for mongosh interchange) ---- *)
+(* the EXACT wire byte length of encoding [v], without building the bytes (sizing before a write) *)
+let size (c : 'a t) (v : 'a) : int = Bson_engine.size c.shape v
+
+(* ---- JSON I/O ----------------------------------------------------------------------------------
+   PLAIN relaxed JSON ({!Json_writer} / {!Json_reader}) — strings, numbers, [], {} — the wire form an
+   HTTP API / browser speaks. EXTENDED JSON ({!Bson_json} bridge — $oid / $date) is for mongosh / BSON
+   interchange. [decode_json] parses plain JSON to a {!Bson.t} tree, then the same shape decode + checks
+   as a wire read (an id arrives as a string, a date as a number, which the decode coercions accept). *)
+let encode_json c v = Json_writer.encode_json c.shape v
+
+let decode_json c s =
+  match Json_reader.of_string s with Ok b -> decode_value c.shape b | Error m -> Error [ mkerr ~code:"json" m ]
+
 let to_json c v = Bson_json.to_json (enc c v)
 let of_json c j = decode_value c.shape (Bson_json.of_json j)
 let to_json_string c v = Bson_json.to_string (enc c v)
@@ -33,11 +60,7 @@ let to_json_string c v = Bson_json.to_string (enc c v)
 let of_json_string c s =
   match Bson_json.of_string_opt s with Some b -> decode_value c.shape b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
 
-(* ---- the dynamic BSON escape + the Mongo query-vocabulary field helpers ------------------- *)
-
-(* the dynamic escape typed as a raw {!Bson.t} — a LOSSLESS conv over the neutral {!dyn} (the rich
-   Value mirrors Bson 1:1); keeps the deriver's [Sift.bson]-for-Bson.t-field emit working *)
-let bson = conv (fun v -> Ok (Value_bson.to_bson v)) Value_bson.of_bson dyn
+(* ---- dynamic-Bson field helpers (the Mongo query vocabulary builds selectors/modifiers on these) -- *)
 
 let make ~enc ~dec = conv dec enc bson
 let field_enc f v = Bson_engine.write f.item v
@@ -58,17 +81,62 @@ let field_get (f : 'a field) (doc : Bson.t) : ('a, error list) result =
       match raw with Error es -> Error es | Ok v -> ( match Engine.run_checks f.item v with [] -> Ok v | es -> Error (List.map (at f.key) es)))
   | _ -> Error [ mkerr ~code:"type" ~path:[ f.key ] "expected document" ]
 
-(* ---- zero-copy BSON byte codecs ----------------------------------------------------------- *)
+(* ---- reflection: the machine-readable [view] the $jsonSchema / OpenAPI / admin renderers consume --- *)
 
-let decode_bytes (c : 'a t) (buf : Bigstringaf.t) : ('a, error list) result = Bson_reader.decode_value_bytes c.shape buf
-let fold_bytes (c : 'a t) (buf : Bigstringaf.t) (init : 'b) (f : 'b -> ('a, error list) result -> 'b) : 'b = Bson_reader.fold_value_bytes c.shape buf init f
-let peek (c : 'a t) (key : string) (buf : Bigstringaf.t) : ('a, error list) result option = Bson_reader.peek_field c.shape key buf
-let valid_bytes (c : 'a t) (buf : Bigstringaf.t) : (unit, error list) result = Bson_reader.valid_value_bytes c.shape buf
-let scan_valid (buf : Bigstringaf.t) : bool = Bson_reader.scan_valid buf
-let size (c : 'a t) (v : 'a) : int = Bson_engine.size c.shape v
-let encode_bytes (c : 'a t) (v : 'a) : Bigstringaf.t = Bson_writer.encode_value_bytes c.shape v
+type view =
+  | V_string
+  | V_int
+  | V_float
+  | V_bool
+  | V_date
+  | V_id
+  | V_bson
+  | V_unit
+  | V_list of view
+  | V_option of view
+  | V_map of view
+  | V_check of hint * view
+  | V_obj of (string * bool (* required *) * view) list
+  | V_variant of string * (string * (string * bool * view) list) list
 
-(* ---- structural diff / patch (Mongo-style $set/$unset; the reactive-sync primitive) ------- *)
+let rec reflect : type a. a shape -> view = function
+  | TString -> V_string
+  | TInt -> V_int
+  | TFloat _ -> V_float
+  | TBool -> V_bool
+  | TDate -> V_date
+  | TId -> V_id
+  | TBson -> V_bson
+  | TUnit -> V_unit
+  | TList el -> V_list (reflect el)
+  | TOption el -> V_option (reflect el)
+  | TMap el -> V_map (reflect el)
+  | TCheck (_, _, h, inner) -> V_check (h, reflect inner)
+  | TNorm (_, inner) -> reflect inner
+  | TConv (_, _, inner) -> reflect inner
+  | TObj o -> V_obj (List.map (fun (Bound_field p) -> (p.name, p.required, reflect p.shape)) o.members)
+  | TVariant { tag; cases } ->
+      V_variant
+        (tag,
+         List.map
+           (fun (Case c) -> (c.name, List.map (fun (Bound_field p) -> (p.name, p.required, reflect p.shape)) c.body.members))
+           cases)
+  | TCoerce inner -> reflect inner (* transparent: a coerced leaf reflects as its inner type *)
+  | TLazy _ -> V_bson (* recursion: opaque to schema reflection (a finite view can't unfold a cycle) *)
+
+let view c = reflect c.shape
+let field_view (f : 'a field) : view = reflect f.item
+let field_required (f : 'a field) : bool = f.needed
+
+(* ---- derived operations: equal / compare / hash / default / arbitrary — free from the shape ------ *)
+
+let equal (c : 'a t) (x : 'a) (y : 'a) : bool = Derived.equal c.shape x y
+let compare (c : 'a t) (x : 'a) (y : 'a) : int = Derived.compare c.shape x y
+let hash (c : 'a t) (v : 'a) : int = Derived.hash c.shape v
+let default (c : 'a t) : 'a = Derived.default c.shape
+let arbitrary (c : 'a t) (st : Random.State.t) : 'a = Derived.arbitrary c.shape st
+
+(* ---- structural diff / patch (Mongo-style $set/$unset; the reactive-sync primitive) ------------- *)
 
 type delta = { set : (string * Bson.t) list; unset : string list }
 
@@ -131,7 +199,7 @@ let patch (c : 'a t) (old : 'a) (d : delta) : ('a, error list) result =
   let kept = List.filter (fun (k, _) -> not (List.mem k touched)) kvs in
   decode c (Bson.Document (kept @ d.set))
 
-(* ---- positional parameter lists (DDP method params) ----------------------------------------- *)
+(* ---- positional parameter lists (DDP method params) --------------------------------------------- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }
 

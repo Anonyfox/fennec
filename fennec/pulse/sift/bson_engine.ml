@@ -4,7 +4,7 @@
    the [sift.bson] plugin; the format-AGNOSTIC interpreters (checks, normalize, pretty) stay in {!Engine}
    (the bson-free core). *)
 
-open Sift_core
+open Shape
 
 let looks_like_oid s =
   String.length s = 24
@@ -76,7 +76,7 @@ let rec read : type a. a shape -> Bson.t -> (a, error list) result =
       | Bson.String s -> Ok s
       | Bson.Object_id s -> Ok s
       | v -> expected "id (string or objectid)" v)
-  | TDyn -> Ok (Value_bson.of_bson b)
+  | TBson -> Ok b
   | TUnit -> ( match b with Bson.Null -> Ok () | v -> expected "null" v)
   | TList el -> (
       match b with
@@ -156,7 +156,7 @@ let rec write : type a. a shape -> a -> Bson.t =
   | TBool -> Bson.Bool v
   | TDate -> Bson.Date v
   | TId -> if looks_like_oid v then Bson.Object_id v else Bson.String v
-  | TDyn -> Value_bson.to_bson v
+  | TBson -> v
   | TUnit -> Bson.Null
   | TList el -> Bson.Array (List.map (write el) v)
   | TOption el -> ( match v with Some x -> write el x | None -> Bson.Null)
@@ -220,7 +220,7 @@ let rec size : type a. a shape -> a -> int =
   | TBool -> 1
   | TDate -> 8
   | TId -> if looks_like_oid v then 12 else 4 + String.length v + 1
-  | TDyn -> bson_size (Value_bson.to_bson v)
+  | TBson -> bson_size v
   | TUnit -> 0
   | TList el -> list_size el 0 4 v + 1
   | TOption el -> ( match v with Some x -> size el x | None -> 0)

@@ -12,7 +12,7 @@ let float_nonfinite = of_shape (TFloat { allow_nonfinite = true })
 let bool = of_shape TBool
 let date = of_shape TDate
 let id = of_shape TId
-let dyn = of_shape TDyn
+let bson = of_shape TBson
 let unit = of_shape TUnit
 let list c = of_shape (TList c.shape)
 let option c = of_shape (TOption c.shape)
@@ -128,7 +128,7 @@ let rec writes_null : type a. a shape -> a -> bool =
  fun shape v ->
   match shape with
   | TUnit -> true
-  | TDyn -> ( match v with Value.Null -> true | _ -> false)
+  | TBson -> ( match v with Bson.Null -> true | _ -> false)
   | TOption el -> ( match v with None -> true | Some x -> writes_null el x)
   | TNorm (f, inner) -> writes_null inner (f v)
   | TConv (inj, _, inner) -> writes_null inner (inj v)

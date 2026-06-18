@@ -20,7 +20,7 @@ let rec normalize : type a. a shape -> a -> a =
 let rec run_checks : type a. a shape -> a -> error list =
  fun shape v ->
   match shape with
-  | TString | TInt | TBool | TDate | TId | TDyn | TUnit -> []
+  | TString | TInt | TBool | TDate | TId | TBson | TUnit -> []
   | TFloat { allow_nonfinite } ->
       if (not allow_nonfinite) && not (Float.is_finite v) then [ mkerr ~code:"finite" "non-finite float" ] else []
   | TList el -> List.concat (List.mapi (fun i x -> List.map (at (string_of_int i)) (run_checks el x)) v)
@@ -62,7 +62,7 @@ let rec run_checks : type a. a shape -> a -> error list =
 let rec needs_checks : type a. a shape -> bool =
  fun shape ->
   match shape with
-  | TString | TInt | TBool | TDate | TId | TDyn | TUnit -> false
+  | TString | TInt | TBool | TDate | TId | TBson | TUnit -> false
   | TFloat { allow_nonfinite } -> not allow_nonfinite
   | TList el -> needs_checks el
   | TOption el -> needs_checks el
@@ -94,7 +94,7 @@ let rec pretty : type a. a shape -> Format.formatter -> a -> unit =
   | TBool -> Format.fprintf fmt "%b" v
   | TDate -> Format.fprintf fmt "date(%Ld)" v
   | TId -> Format.fprintf fmt "#%s" v
-  | TDyn -> Format.fprintf fmt "%s" (Value.to_string v)
+  | TBson -> Bson.pp fmt v
   | TUnit -> Format.fprintf fmt "()"
   | TList el ->
       Format.fprintf fmt "@[<hv 1>[%a]@]"

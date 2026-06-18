@@ -1,6 +1,8 @@
 (* The shape language: every catalog entry proven — refinements (stacking, collection, hints),
-   normalizers, options/absence, maps, nested records with error paths, variants, cross-field
-   checks, encode-side validation, pp, and the view reflection. *)
+   normalizers, options/absence, maps, nested records with error paths, variants, cross-field checks,
+   encode-side validation, pp, view reflection, the staged objN decoder, plain JSON I/O, and the
+   shape-derived operations (equal/compare/hash/default/arbitrary/diff/patch). All over the Bson.t tree
+   codec — the one path fennec actually runs. *)
 
 module B = Bson
 
@@ -222,7 +224,7 @@ let%test "map: round-trips through a transform both ways" =
   let c = Sift.(map (fun s -> `Tag s) (function `Tag s -> s) string) in
   (match Sift.decode c (B.str "x") with Ok (`Tag "x") -> true | _ -> false) && (match Sift.to_bson c (`Tag "y") with B.String "y" -> true | _ -> false)
 
-(* ── JSON I/O: one shape drives BOTH BSON and JSON ── *)
+(* ── extended-JSON I/O ($oid/$date via the bson_json bridge): one shape drives BOTH BSON and JSON ── *)
 let json_c =
   Sift.(seal (record (fun id n tags -> (id, n, tags)) |> field (req "id" string) (fun (i, _, _) -> i) |> field (req "n" (min_i 1 int)) (fun (_, n, _) -> n) |> field (opt_list "tags" string) (fun (_, _, t) -> t)))
 
@@ -233,23 +235,11 @@ let%test "json decode validates with the same path-collected errors as BSON deco
   err (Sift.of_json_string json_c {|{"id":"x","n":0}|}) (* n=0 fails min_i 1 *)
   && (match Sift.of_json_string json_c "not json at all" with Error [ e ] -> e.Sift.code = "json" | _ -> false)
 
-(* ── SIFT-K2: the zero-copy buffer decode [decode_bytes] must match the tree decode of the SAME wire
-   bytes — value-for-value AND error-for-error (paths/codes/params), schema-directed + single-pass.
-   The oracle decodes one identical byte buffer through BOTH paths and compares: agreement with the
-   established tree path IS the correctness claim. ── *)
-
+(* ── fixtures exercised by the encode-size, staged-decoder, derived-ops, diff/patch and plain-JSON
+   tests below — a scalar bag covering every leaf, options, lists, maps, nested, variants, the dynamic
+   [bson] escape, a from_string field, and a cross-field invariant ── *)
 module W = Mongo_wire.Bson_wire
 
-let buf_of_bson (b : B.t) : Bigstringaf.t =
-  let s = W.encode b in
-  Bigstringaf.of_string ~off:0 ~len:(String.length s) s
-
-let same (c : 'a Sift.t) (b : B.t) : bool =
-  let s = W.encode b in
-  let buf = Bigstringaf.of_string ~off:0 ~len:(String.length s) s in
-  Sift.decode_bytes c buf = Sift.decode c (W.decode s)
-
-(* a 6-scalar record exercising every leaf kind (string/int/float/bool/date/id) *)
 let bag_c =
   Sift.(
     seal
@@ -261,76 +251,16 @@ let bag_c =
       |> field (req "d" date) (fun (_, _, _, _, d, _) -> d)
       |> field (req "i" id) (fun (_, _, _, _, _, i) -> i)))
 
-let%test "k2: scalar bag round-trips, and matches the tree path byte-for-byte" =
-  same bag_c (B.doc [ ("s", B.str "hi"); ("n", B.int 42); ("f", B.Float 3.5); ("b", B.bool true); ("d", B.date 1700000000000L); ("i", B.oid "507f1f77bcf86cd799439011") ])
-
-let%test "k2: decode_bytes yields the RIGHT value directly (oracle is not vacuous)" =
-  match
-    Sift.decode_bytes bag_c
-      (buf_of_bson (B.doc [ ("s", B.str "hi"); ("n", B.Float 3.0); ("f", B.int 2); ("b", B.bool true); ("d", B.int 10); ("i", B.str "id") ]))
-  with
-  | Ok ("hi", 3, 2.0, true, 10L, "id") -> true
-  | _ -> false
-
-let%test "k2: numeric coercions agree (int<-integral double, date<-int/double, float<-int, id<-string)" =
-  same bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.0); ("f", B.int 5); ("b", B.bool false); ("d", B.int 1234); ("i", B.str "abc") ])
-  && same bag_c (B.doc [ ("s", B.str "x"); ("n", B.int 7); ("f", B.Float 5.5); ("b", B.bool false); ("d", B.Float 2.0); ("i", B.oid "507f1f77bcf86cd799439011") ])
-
-let%test "k2: type mismatches + missing-required COLLECT identically (same paths/codes/order)" =
-  same bag_c (B.doc [ ("s", B.int 1); ("n", B.str "no"); ("f", B.bool true); ("b", B.int 0); ("d", B.str "x"); ("i", B.int 9) ])
-  && same bag_c (B.doc [ ("s", B.str "x") ])
-  && same bag_c (B.doc [])
-
-let%test "k2: non-integral double, and int64, for an int field both error like the tree path" =
-  same bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.5); ("f", B.int 1); ("b", B.bool true); ("d", B.int 0); ("i", B.str "z") ])
-  && same bag_c (B.doc [ ("s", B.str "x"); ("n", B.Int64 5L); ("f", B.int 1); ("b", B.bool true); ("d", B.int 0); ("i", B.str "z") ])
-
-(* field ORDER independence + skipping UNWANTED fields of every sizing class (doc/array/binary/oid/
-   int64/date) — value_size must step over each correctly to reach the wanted ones *)
-let%test "k2: shuffled field order + ignored extras of every type decode identically" =
-  same bag_c
-    (B.doc
-       [ ("extra_i64", B.Int64 99L); ("i", B.str "zz"); ("extra_doc", B.doc [ ("q", B.int 1); ("r", B.str "y") ]);
-         ("d", B.date 5L); ("extra_arr", B.array [ B.int 1; B.str "two"; B.bool false ]); ("b", B.bool true);
-         ("extra_bin", B.Binary { subtype = "00"; base64 = "aGVsbG8=" }); ("f", B.Float 1.5);
-         ("extra_oid", B.oid "507f1f77bcf86cd799439011"); ("n", B.int 3); ("s", B.str "ok") ])
-
-(* options: present / absent / null *)
 let opt_c = Sift.(seal (record (fun a b -> (a, b)) |> field (opt "a" string) fst |> field (opt_list "b" int) snd))
-
-let%test "k2: optional fields — present, absent, explicit null — agree" =
-  same opt_c (B.doc [ ("a", B.str "x"); ("b", B.array [ B.int 1; B.int 2 ]) ])
-  && same opt_c (B.doc [])
-  && same opt_c (B.doc [ ("a", B.Null); ("b", B.Null) ])
-
-(* lists with per-element errors carrying the index path *)
 let list_c = Sift.(seal (record (fun xs -> xs) |> field (req "xs" (list (non_empty string))) (fun xs -> xs)))
-
-let%test "k2: list element errors carry the same index path" =
-  same list_c (B.doc [ ("xs", B.array [ B.str "a"; B.str ""; B.str "c"; B.int 7 ]) ])
-  && same list_c (B.doc [ ("xs", B.array []) ])
-  && same list_c (B.doc [ ("xs", B.str "not an array") ])
-
-(* string-keyed maps *)
 let map_c = Sift.(seal (record (fun m -> m) |> field (req "m" (str_map int)) (fun m -> m)))
 
-let%test "k2: maps decode (keys + per-key error paths) identically" =
-  same map_c (B.doc [ ("m", B.doc [ ("x", B.int 1); ("y", B.int 2) ]) ])
-  && same map_c (B.doc [ ("m", B.doc [ ("x", B.int 1); ("y", B.str "no") ]) ])
-
-(* nested records: refinement error paths nest (author.email) *)
 let nested_c =
   let author =
     Sift.(seal (record (fun n e -> (n, e)) |> field (req "name" (non_empty string)) fst |> field (req "email" (email string)) snd))
   in
   Sift.(seal (record (fun t a -> (t, a)) |> field (req "title" (max_len 5 string)) fst |> field (req "author" author) snd))
 
-let%test "k2: nested record + nested refinement paths agree" =
-  same nested_c (B.doc [ ("title", B.str "ok"); ("author", B.doc [ ("name", B.str "Ada"); ("email", B.str "ada@x.io") ]) ])
-  && same nested_c (B.doc [ ("title", B.str "toolong"); ("author", B.doc [ ("name", B.str ""); ("email", B.str "nope") ]) ])
-  && same nested_c (B.doc [ ("title", B.str "ok"); ("author", B.int 7) ])
-
-(* variants: good tag, unknown tag, missing/non-string tag, tag not first *)
 type figure = Circle of float | Rect of (float * float)
 
 let figure_c =
@@ -339,123 +269,20 @@ let figure_c =
       [ case "circle" (record (fun r -> r) |> field (req "r" float) (fun r -> r)) ~inj:(fun r -> Circle r) ~proj:(function Circle r -> Some r | _ -> None);
         case "rect" (record (fun w h -> (w, h)) |> field (req "w" float) fst |> field (req "h" float) snd) ~inj:(fun (w, h) -> Rect (w, h)) ~proj:(function Rect (w, h) -> Some (w, h) | _ -> None) ])
 
-let%test "k2: variants — dispatch, unknown tag, missing tag, body errors, tag-not-first — all agree" =
-  same figure_c (B.doc [ ("kind", B.str "circle"); ("r", B.Float 2.0) ])
-  && same figure_c (B.doc [ ("kind", B.str "rect"); ("w", B.Float 3.0); ("h", B.int 4) ])
-  && same figure_c (B.doc [ ("kind", B.str "triangle"); ("r", B.Float 1.0) ])
-  && same figure_c (B.doc [ ("r", B.Float 1.0) ])
-  && same figure_c (B.doc [ ("kind", B.int 1) ])
-  && same figure_c (B.doc [ ("kind", B.str "rect"); ("w", B.str "no") ])
-  && same figure_c (B.doc [ ("r", B.Float 2.0); ("kind", B.str "circle") ])
-
-(* from_string (TCoerce): native value OR stringly value through a field *)
 let coerce_c = Sift.(seal (record (fun n -> n) |> field (req "n" (from_string (min_i 1 int))) (fun n -> n)))
-
-let%test "k2: from_string field — native, stringly, and the inner check all agree" =
-  same coerce_c (B.doc [ ("n", B.int 5) ])
-  && same coerce_c (B.doc [ ("n", B.str "5") ])
-  && same coerce_c (B.doc [ ("n", B.str "0") ])
-  && same coerce_c (B.doc [ ("n", B.str "abc") ])
-
-(* TBson escape hatch: a rich nested value round-trips through materialize *)
 let bson_c = Sift.(seal (record (fun v -> v) |> field (req "v" bson) (fun v -> v)))
+let range_c = Sift.(seal (record (fun lo hi -> (lo, hi)) |> field (req "lo" int) fst |> field (req "hi" int) snd |> checking (fun (lo, hi) -> lo <= hi) "lo must be <= hi"))
 
-let%test "k2: TBson field materializes a rich nested value identically" =
-  same bson_c (B.doc [ ("v", B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("o", B.oid "507f1f77bcf86cd799439011"); ("d", B.date 99L); ("big", B.Int64 9000000000L) ]) ])
-
-(* cross-field invariant runs through decode_bytes' shared check phase *)
-let range_c =
-  Sift.(seal (record (fun lo hi -> (lo, hi)) |> field (req "lo" int) fst |> field (req "hi" int) snd |> checking (fun (lo, hi) -> lo <= hi) "lo must be <= hi"))
-
-let%test "k2: cross-field invariant collects identically via decode_bytes" =
-  same range_c (B.doc [ ("lo", B.int 1); ("hi", B.int 9) ]) && same range_c (B.doc [ ("lo", B.int 9); ("hi", B.int 3) ])
-
-(* peek: project ONE top-level field from a raw buffer, reading only it *)
-let%test "k2: peek extracts one field (present/absent/invalid), skipping the rest" =
-  let doc =
-    B.doc [ ("_id", B.oid "507f1f77bcf86cd799439011"); ("kind", B.str "circle"); ("count", B.int 5); ("bad", B.str "x") ]
-  in
-  let buf = buf_of_bson doc in
-  (match Sift.peek Sift.id "_id" buf with Some (Ok s) -> s = "507f1f77bcf86cd799439011" | _ -> false)
-  && (match Sift.peek Sift.string "kind" buf with Some (Ok "circle") -> true | _ -> false)
-  && (match Sift.peek Sift.int "count" buf with Some (Ok 5) -> true | _ -> false)
-  && (match Sift.peek Sift.string "missing" buf with None -> true | _ -> false) (* absent → None *)
-  && (match Sift.peek Sift.int "bad" buf with Some (Error [ e ]) -> e.Sift.path = [ "bad" ] && e.Sift.code = "type" | _ -> false)
-  && (* a checked field projects with its checks *)
-  (match Sift.peek Sift.(min_i 10 int) "count" buf with Some (Error [ e ]) -> e.Sift.code = "min" | _ -> false)
-
-(* ── SIFT-T1: alloc-free validation. [valid_bytes] must give the SAME Ok/Error verdict AND the same
-   errors as [decode_bytes] — for check-free shapes via the alloc-free check_type, for checked shapes via
-   the decode fallback. [scan_valid] is structural BSON well-formedness. ── *)
-
-let valid_matches (c : 'a Sift.t) (b : B.t) : bool =
-  let buf = buf_of_bson b in
-  match (Sift.valid_bytes c buf, Sift.decode_bytes c buf) with
-  | Ok (), Ok _ -> true
-  | Error e1, Error e2 -> e1 = e2
-  | _ -> false
-
-let%test "t1: valid_bytes == decode_bytes verdict+errors — check-free scalar bag (alloc-free check_type)" =
-  valid_matches bag_c (B.doc [ ("s", B.str "x"); ("n", B.int 1); ("f", B.Float 1.5); ("b", B.bool true); ("d", B.date 1L); ("i", B.str "id") ])
-  && valid_matches bag_c (B.doc [ ("s", B.int 1); ("n", B.str "no"); ("f", B.bool true); ("b", B.int 0); ("d", B.str "x"); ("i", B.int 9) ])
-  && valid_matches bag_c (B.doc [ ("s", B.str "x") ])
-  && valid_matches bag_c (B.doc [])
-  && valid_matches bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.0); ("f", B.int 5); ("b", B.bool false); ("d", B.int 1234); ("i", B.oid "507f1f77bcf86cd799439011") ])
-  && valid_matches bag_c (B.doc [ ("s", B.str "x"); ("n", B.Float 7.5); ("f", B.int 1); ("b", B.bool true); ("d", B.int 0); ("i", B.str "z") ])
-
-let%test "t1: valid_bytes == decode_bytes — options / maps / variants (check-free)" =
-  valid_matches opt_c (B.doc [ ("a", B.str "x"); ("b", B.array [ B.int 1 ]) ])
-  && valid_matches opt_c (B.doc [])
-  && valid_matches opt_c (B.doc [ ("a", B.Null); ("b", B.Null) ])
-  && valid_matches map_c (B.doc [ ("m", B.doc [ ("x", B.int 1); ("y", B.str "no") ]) ])
-  && valid_matches figure_c (B.doc [ ("kind", B.str "circle"); ("r", B.Float 2.0) ])
-  && valid_matches figure_c (B.doc [ ("kind", B.str "triangle") ])
-  && valid_matches figure_c (B.doc [ ("r", B.Float 1.0) ])
-  && valid_matches figure_c (B.doc [ ("kind", B.str "rect"); ("w", B.str "no"); ("h", B.int 1) ])
-  && valid_matches figure_c (B.doc [ ("r", B.Float 2.0); ("kind", B.str "circle") ]) (* tag not first *)
-
-let%test "t1: valid_bytes == decode_bytes — checked shapes fall back (verdict+errors match)" =
-  valid_matches nested_c (B.doc [ ("title", B.str "ok"); ("author", B.doc [ ("name", B.str "A"); ("email", B.str "a@b.io") ]) ])
-  && valid_matches nested_c (B.doc [ ("title", B.str "toolong"); ("author", B.doc [ ("name", B.str ""); ("email", B.str "no") ]) ])
-  && valid_matches range_c (B.doc [ ("lo", B.int 9); ("hi", B.int 3) ])
-  && valid_matches list_c (B.doc [ ("xs", B.array [ B.str "a"; B.str "" ]) ])
-
-(* check-free nested record + list-of-records — exercises check_bz's NESTED TObj path (nested_c above
-   has checks, so it falls back to decode and never hits check_bz's recursion) *)
-let crow = Sift.(seal (record (fun id n -> (id, n)) |> field (req "id" int) fst |> field (req "n" string) snd))
-let crows_c = Sift.(seal (record (fun rows -> rows) |> field (req "rows" (list crow)) (fun rows -> rows)))
-let cinner = Sift.(seal (record (fun a b -> (a, b)) |> field (req "x" int) fst |> field (req "y" string) snd))
-let couter_c = Sift.(seal (record (fun t inner -> (t, inner)) |> field (req "t" string) fst |> field (req "inner" cinner) snd))
-
-let%test "t1: valid_bytes — check-free nested record + list-of-records match decode_bytes" =
-  valid_matches crows_c (B.doc [ ("rows", B.array [ B.doc [ ("id", B.int 1); ("n", B.str "a") ]; B.doc [ ("id", B.int 2); ("n", B.str "b") ] ]) ])
-  && valid_matches crows_c (B.doc [ ("rows", B.array [ B.doc [ ("id", B.str "no"); ("n", B.str "a") ] ]) ])
-  && valid_matches couter_c (B.doc [ ("t", B.str "x"); ("inner", B.doc [ ("x", B.int 1); ("y", B.str "z") ]) ])
-  && valid_matches couter_c (B.doc [ ("t", B.str "x"); ("inner", B.doc [ ("x", B.int 1) ]) ])
-
-let%test "t1: scan_valid — well-formed true; truncated / bogus-length false" =
-  let good = buf_of_bson (B.doc [ ("a", B.int 1); ("b", B.doc [ ("c", B.str "x") ]); ("d", B.array [ B.int 1; B.int 2 ]) ]) in
-  Sift.scan_valid good
-  && (let s = W.encode (B.doc [ ("a", B.int 1); ("title", B.str "hello") ]) in
-      not (Sift.scan_valid (Bigstringaf.of_string ~off:0 ~len:(String.length s - 3) s)))
-  && not (Sift.scan_valid (Bigstringaf.of_string ~off:0 ~len:4 "\255\255\255\255"))
-
-let%test "t1: valid_bytes rejects a malformed buffer structurally (no exception)" =
-  let s = W.encode (B.doc [ ("s", B.str "x"); ("n", B.int 1); ("f", B.Float 1.0); ("b", B.bool true); ("d", B.date 1L); ("i", B.str "id") ]) in
-  let truncated = Bigstringaf.of_string ~off:0 ~len:(String.length s - 4) s in
-  match Sift.valid_bytes bag_c truncated with Error [ e ] -> e.Sift.code = "malformed" | _ -> false
-
-(* ── SIFT-K3: encode mirror. [size] must equal the EXACT byte length the codec's BSON encodes to,
-   including the optional/opt_list omission and the int32-vs-int64 / oid-vs-string choices. ── *)
-
+(* ── encode mirror: [size] equals the EXACT byte length the codec's BSON encodes to (optional/opt_list
+   omission, int32-vs-int64 / oid-vs-string choices) ── *)
 let size_matches (c : 'a Sift.t) (v : 'a) : bool = Sift.size c v = String.length (W.encode (Sift.to_bson c v))
 
-let%test "k3: size == encoded length — scalars, ids, large ints" =
+let%test "size == encoded length — scalars, ids, large ints" =
   size_matches bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
   && size_matches bag_c ("", 0, 0.0, false, 0L, "plain")
   && size_matches bag_c ("unicode → ✓", 5_000_000_000, -2.5, true, -1L, "507f1f77bcf86cd799439011")
 
-let%test "k3: size == encoded length — options (present + omitted), lists, maps" =
+let%test "size == encoded length — options (present + omitted), lists, maps" =
   size_matches opt_c (Some "x", [ 1; 2; 3 ])
   && size_matches opt_c (None, [])
   && size_matches opt_c (Some "", [])
@@ -463,46 +290,30 @@ let%test "k3: size == encoded length — options (present + omitted), lists, map
   && size_matches list_c []
   && size_matches map_c [ ("x", 1); ("y", 22); ("z", 333) ]
 
-let%test "k3: size == encoded length — nested records and variants" =
+let%test "size == encoded length — nested records and variants" =
   size_matches nested_c ("ok", ("Ada Lovelace", "ada@x.io"))
   && size_matches figure_c (Circle 2.5)
   && size_matches figure_c (Rect (3.0, 4.0))
   && size_matches range_c (1, 9)
   && size_matches coerce_c 5
 
-(* encode_bytes must be byte-identical to the tree path [Bson_wire.encode (codec.enc v)] *)
-let encode_matches (c : 'a Sift.t) (v : 'a) : bool = Bigstringaf.to_string (Sift.encode_bytes c v) = W.encode (Sift.to_bson c v)
+(* ── the staged objN decoder is byte-identical to the applicative builder ── *)
+let viaobj = Sift.(obj3 (req "s" string) (req "n" (min_i 1 int)) (opt "note" string) ~make:(fun s n note -> (s, n, note)) ~split:(fun (s, n, note) -> (s, n, note)))
+let viabuilder = Sift.(seal (record (fun s n note -> (s, n, note)) |> field (req "s" string) (fun (s, _, _) -> s) |> field (req "n" (min_i 1 int)) (fun (_, n, _) -> n) |> field (opt "note" string) (fun (_, _, x) -> x)))
 
-(* and the whole loop must be the identity: encode_bytes |> decode_bytes = the value *)
-let roundtrips (c : 'a Sift.t) (v : 'a) : bool = match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> v' = v | Error _ -> false
+let%test "objN decoder == applicative builder (decode verdict+errors, encode, size)" =
+  let same_decode b = Sift.decode viaobj b = Sift.decode viabuilder b in
+  let same_enc v = Sift.to_bson viaobj v = Sift.to_bson viabuilder v && Sift.size viaobj v = Sift.size viabuilder v in
+  same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ]) (* ok *)
+  && same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5) ]) (* note absent → None *)
+  && same_decode (B.doc [ ("s", B.int 1); ("n", B.int 0) ]) (* TWO errors: s type + n<min — must collect in same order *)
+  && same_decode (B.doc []) (* required s, n missing *)
+  && same_enc ("a", 7, Some "z")
+  && same_enc ("a", 7, None) (* None omits the key, both ways *)
+  && (match Sift.decode viaobj (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ]) with Ok ("x", 5, Some "hi") -> true | _ -> false)
 
-let%test "k3: encode_bytes is byte-identical to the tree path (scalars/ids/large ints/options/lists/maps)" =
-  encode_matches bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
-  && encode_matches bag_c ("unicode → ✓", 5_000_000_000, -2.5, false, -1L, "plain")
-  && encode_matches opt_c (Some "x", [ 1; 2; 3 ])
-  && encode_matches opt_c (None, [])
-  && encode_matches opt_c (Some "", [])
-  && encode_matches list_c [ "a"; "bb"; "ccc"; "" ]
-  && encode_matches map_c [ ("x", 1); ("y", 22); ("z", 333) ]
-
-let%test "k3: encode_bytes byte-identical — nested, variants, TBson" =
-  encode_matches nested_c ("ok", ("Ada", "ada@x.io"))
-  && encode_matches figure_c (Circle 2.5)
-  && encode_matches figure_c (Rect (3.0, 4.0))
-  && encode_matches bson_c (B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("o", B.oid "507f1f77bcf86cd799439011"); ("d", B.date 99L); ("big", B.Int64 9000000000L) ])
-
-let%test "k3: encode_bytes |> decode_bytes round-trips to the value" =
-  roundtrips bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
-  && roundtrips opt_c (Some "x", [ 1; 2; 3 ])
-  && roundtrips opt_c (None, [])
-  && roundtrips list_c [ "a"; "b"; "c" ]
-  && roundtrips map_c [ ("x", 1); ("y", 2) ]
-  && roundtrips nested_c ("ok", ("Ada", "ada@x.io"))
-  && roundtrips figure_c (Rect (3.0, 4.0))
-
-(* ── SIFT-K6: derived ops — equal / compare / hash / default, shape-derived ── *)
-
-let%test "k6: equal — reflexive, distinguishes fields, variant cases" =
+(* ── derived ops: equal / compare / hash / default, shape-derived ── *)
+let%test "equal — reflexive, distinguishes fields, variant cases" =
   let v = ("hi", 42, 3.5, true, 1L, "id") in
   Sift.equal bag_c v v
   && (not (Sift.equal bag_c v ("hi", 43, 3.5, true, 1L, "id")))
@@ -514,27 +325,27 @@ let%test "k6: equal — reflexive, distinguishes fields, variant cases" =
   && (not (Sift.equal list_c [ "a"; "b" ] [ "a"; "c" ]))
   && not (Sift.equal list_c [ "a" ] [ "a"; "b" ])
 
-let%test "k6: compare — total order, consistent with equal, sorts correctly" =
+let%test "compare — total order, consistent with equal, sorts correctly" =
   Sift.compare bag_c ("a", 1, 0., true, 0L, "x") ("a", 1, 0., true, 0L, "x") = 0
   && Sift.compare bag_c ("a", 1, 0., true, 0L, "x") ("a", 2, 0., true, 0L, "x") < 0
   && Sift.compare figure_c (Circle 1.0) (Rect (1., 1.)) < 0 (* Circle declared before Rect *)
   && (let sorted = List.sort (Sift.compare range_c) [ (3, 9); (1, 2); (2, 5); (1, 1) ] in sorted = [ (1, 1); (1, 2); (2, 5); (3, 9) ])
 
-let%test "k6: hash — equal values hash equal" =
+let%test "hash — equal values hash equal" =
   Sift.hash bag_c ("hi", 42, 3.5, true, 1L, "id") = Sift.hash bag_c ("hi", 42, 3.5, true, 1L, "id")
   && Sift.hash figure_c (Circle 2.0) = Sift.hash figure_c (Circle 2.0)
   && Sift.hash opt_c (None, []) = Sift.hash opt_c (None, [])
 
-let%test "k6: default — sensible zeros; round-trips through encode/decode" =
+let%test "default — sensible zeros; round-trips through encode/decode" =
   Sift.default bag_c = ("", 0, 0.0, false, 0L, "")
   && Sift.default opt_c = (None, [])
   && Sift.default list_c = []
   && (match Sift.default figure_c with Circle 0.0 -> true | _ -> false)
   && Sift.default nested_c = ("", ("", "")) (* nested record built from leaf defaults *)
   && Sift.default coerce_c = 0 (* structural zero — note 0 would fail this shape's [min_i 1] on validation *)
-  && (match Sift.decode_bytes bag_c (Sift.encode_bytes bag_c (Sift.default bag_c)) with Ok ("", 0, 0.0, false, 0L, "") -> true | _ -> false)
+  && (match Sift.decode bag_c (Sift.to_bson bag_c (Sift.default bag_c)) with Ok ("", 0, 0.0, false, 0L, "") -> true | _ -> false)
 
-let%test "k6: diff — no change, field change, optional set/unset" =
+let%test "diff — no change, field change, optional set/unset" =
   let v = ("a", 1, 0.0, true, 0L, "x") in
   Sift.diff bag_c v v = { Sift.set = []; unset = [] }
   && (match Sift.diff bag_c v ("a", 2, 0.0, true, 0L, "x") with { Sift.set = [ ("n", B.Int 2) ]; unset = [] } -> true | _ -> false)
@@ -544,24 +355,24 @@ let%test "k6: diff — no change, field change, optional set/unset" =
 
 let bare_map_c = Sift.(str_map int) (* a top-level dynamic-key map (not a record wrapping one) *)
 
-let%test "k6: diff — maps (changed/added/removed keys), variants (body + case change)" =
+let%test "diff — maps (changed/added/removed keys), variants (body + case change)" =
   (match Sift.diff bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1); ("y", 9); ("z", 3) ] with { Sift.set = [ ("y", B.Int 9); ("z", B.Int 3) ]; unset = [] } -> true | _ -> false)
   && (match Sift.diff bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1) ] with { Sift.set = []; unset = [ "y" ] } -> true | _ -> false)
   && (match Sift.diff figure_c (Rect (1., 2.)) (Rect (1., 9.)) with { Sift.set = [ ("h", B.Float 9.) ]; unset = [] } -> true | _ -> false)
   && (let d = Sift.diff figure_c (Circle 1.) (Rect (3., 4.)) in List.mem "kind" (List.map fst d.Sift.set) && List.mem "w" (List.map fst d.Sift.set) && d.Sift.unset = [ "r" ])
 
-let%test "k6: arbitrary — random values round-trip through encode/decode (and equal themselves)" =
+let%test "arbitrary — random values round-trip through encode/decode (and equal themselves)" =
   let st = Random.State.make [| 1; 2; 3 |] in
   let survives : 'a. 'a Sift.t -> bool =
    fun c ->
-    let rec loop i = i = 0 || (let v = Sift.arbitrary c st in (match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> Sift.equal c v v' | Error _ -> false) && loop (i - 1)) in
+    let rec loop i = i = 0 || (let v = Sift.arbitrary c st in (match Sift.decode c (Sift.to_bson c v) with Ok v' -> Sift.equal c v v' | Error _ -> false) && loop (i - 1)) in
     loop 200
   in
   (* shapes whose refinements rejection CAN meet (length/non-empty); a [pattern] like email or a
      cross-field invariant is the documented best-effort limit, so not exercised here *)
   survives bag_c && survives opt_c && survives list_c && survives figure_c
 
-let%test "k6: patch — the inverse of diff (patch old (diff old new) = new)" =
+let%test "patch — the inverse of diff (patch old (diff old new) = new)" =
   let rt : 'a. 'a Sift.t -> 'a -> 'a -> bool =
    fun c old new_ -> match Sift.patch c old (Sift.diff c old new_) with Ok v -> Sift.equal c v new_ | Error _ -> false
   in
@@ -573,11 +384,11 @@ let%test "k6: patch — the inverse of diff (patch old (diff old new) = new)" =
   && rt figure_c (Rect (1., 2.)) (Rect (1., 9.)) (* same-case body change *)
   && rt bare_map_c [ ("x", 1); ("y", 2) ] [ ("x", 1); ("y", 9); ("z", 3) ]
 
-(* ── axis A: relaxed JSON encode — plain JSON that round-trips via of_json_string ── *)
+(* ── plain/relaxed JSON (encode_json / decode_json) — the HTTP wire form, no $oid/$date wrapping ── *)
 
-let%test "axisA: encode_json — relaxed (plain) JSON, round-trips, escapes, no extended wrapping" =
+let%test "encode_json — relaxed (plain) JSON, round-trips, escapes, no extended wrapping" =
   let rt : 'a. 'a Sift.t -> 'a -> bool =
-   fun c v -> match Sift.of_json_string c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | Error _ -> false
+   fun c v -> match Sift.decode_json c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | Error _ -> false
   in
   let contains hay sub =
     let hl = String.length hay and sl = String.length sub in
@@ -592,101 +403,7 @@ let%test "axisA: encode_json — relaxed (plain) JSON, round-trips, escapes, no 
   && rt nested_c ("ok", ("Ada", "ada@x.io"))
   && (let j = Sift.encode_json bag_c ("x", 42, 1.0, true, 0L, "abc") in contains j "42" && contains j "\"abc\"" && not (contains j "$number") && not (contains j "$oid"))
 
-let%test "axisA: fold_bytes — streams a sequence of concatenated documents" =
-  let docs = [ ("a", 1, 1.0, true, 1L, "x"); ("bb", 2, 2.5, false, 2L, "507f1f77bcf86cd799439011"); ("ccc", 3, 3.5, true, 3L, "z") ] in
-  let wire = String.concat "" (List.map (fun v -> W.encode (Sift.to_bson bag_c v)) docs) in
-  let buf = Bigstringaf.of_string ~off:0 ~len:(String.length wire) wire in
-  let decoded = List.rev (Sift.fold_bytes bag_c buf [] (fun acc r -> r :: acc)) in
-  List.length decoded = 3 && List.for_all2 (fun v r -> match r with Ok v' -> Sift.equal bag_c v v' | _ -> false) docs decoded
-
-(* ── K4: the staged objN decoder is byte-identical to the applicative builder ── *)
-
-(* the SAME 3-field record, built both ways *)
-let viaobj = Sift.(obj3 (req "s" string) (req "n" (min_i 1 int)) (opt "note" string) ~make:(fun s n note -> (s, n, note)) ~split:(fun (s, n, note) -> (s, n, note)))
-let viabuilder = Sift.(seal (record (fun s n note -> (s, n, note)) |> field (req "s" string) (fun (s, _, _) -> s) |> field (req "n" (min_i 1 int)) (fun (_, n, _) -> n) |> field (opt "note" string) (fun (_, _, x) -> x)))
-
-let%test "k4: objN decoder == applicative builder (decode verdict+errors, encode, size)" =
-  let same_decode b = Sift.decode viaobj b = Sift.decode viabuilder b in
-  let same_enc v = Sift.to_bson viaobj v = Sift.to_bson viabuilder v && Sift.size viaobj v = Sift.size viabuilder v in
-  same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ]) (* ok *)
-  && same_decode (B.doc [ ("s", B.str "x"); ("n", B.int 5) ]) (* note absent → None *)
-  && same_decode (B.doc [ ("s", B.int 1); ("n", B.int 0) ]) (* TWO errors: s type + n<min — must collect in same order *)
-  && same_decode (B.doc []) (* required s, n missing *)
-  && same_enc ("a", 7, Some "z")
-  && same_enc ("a", 7, None) (* None omits the key, both ways *)
-  && (match Sift.decode_bytes viaobj (buf_of_bson (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ])) with Ok ("x", 5, Some "hi") -> true | _ -> false)
-
-(* ── Stage 1: the neutral data model (Sift.Value) + to_value / of_value ── *)
-
-let%test "value: structural equal / compare / get / debug render" =
-  let open Sift.Value in
-  equal (Assoc [ ("a", Int 1); ("b", List [ String "x"; Null ]) ]) (Assoc [ ("a", Int 1); ("b", List [ String "x"; Null ]) ])
-  && (not (equal (Int 1) (Float 1.0)))
-  && (not (equal (Assoc [ ("a", Int 1) ]) (Assoc [ ("a", Int 2) ])))
-  && compare (Int 1) (Int 2) < 0
-  && compare Null (Bool false) < 0 (* constructor rank: Null < Bool < Int < … *)
-  && compare (List [ Int 1 ]) (List [ Int 1; Int 0 ]) < 0
-  && (match get "b" (Assoc [ ("a", Int 1); ("b", Bool true) ]) with Some (Bool true) -> true | _ -> false)
-  && get "z" (Int 0) = None
-  && to_string (Assoc [ ("n", Int 42) ]) = {|{"n": 42}|}
-
-let%test "value: to_value preserves shape semantics LOSSLESSLY (date→Date, id→Id)" =
-  let open Sift.Value in
-  match Sift.to_value bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011") with
-  | Assoc [ ("s", String "hi"); ("n", Int 42); ("f", Float 3.5); ("b", Bool true); ("d", Date 1700000000000L); ("i", Id "507f1f77bcf86cd799439011") ] -> true
-  | _ -> false
-
-let%test "value: of_value ∘ to_value = id across leaves, nested records, options" =
-  let rt c v = match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v' v | Error _ -> false in
-  rt bag_c ("x", 1, 2.0, false, 0L, "abc")
-  && rt bag_c ("y", -5, 3.25, true, 1700000000000L, "507f1f77bcf86cd799439011")
-  && rt nested_c ("ok", ("Ada", "ada@x.io"))
-  && rt opt_c (Some "x", [ 1; 2; 3 ])
-  && rt opt_c (None, [])
-
-let%test "value: of_value validates like decode (refinements + required collect)" =
-  let open Sift.Value in
-  (match Sift.of_value viaobj (Assoc [ ("s", String "x"); ("n", Int 0) ]) with Error _ -> true | Ok _ -> false) (* n < min_i 1 *)
-  && (match Sift.of_value viaobj (Assoc [ ("n", Int 5) ]) with Error _ -> true | Ok _ -> false) (* required s missing *)
-  && (match Sift.of_value viaobj (Assoc [ ("s", String "x"); ("n", Int 5); ("note", String "hi") ]) with Ok ("x", 5, Some "hi") -> true | _ -> false)
-
-let%test "value: round-trips variants, maps, and the TBson escape LOSSLESSLY (oid/date/int64/decimal/ts)" =
-  let rt c v = match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v' v | Error _ -> false in
-  let map_c = Sift.(str_map int) in
-  rt figure_c (Circle 2.0)
-  && rt figure_c (Rect (3.0, 4.0))
-  && rt map_c [ ("de", 1); ("en", 2) ]
-  (* the rich Value model mirrors BSON 1:1 — every exotic type survives the neutral hop *)
-  && rt bson_c
-       (B.doc
-          [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]);
-            ("oid", B.oid "507f1f77bcf86cd799439011");
-            ("d", B.date 99L);
-            ("big", B.Int64 9000000000L);
-            ("dec", B.Decimal128 "3.14");
-            ("ts", B.Timestamp { t = 5; i = 2 });
-            ("rx", B.Regex { pattern = "ab"; options = "i" }) ])
-
-let%test "value: of_value honors from_string coercion (stringly leaf), driving Serde's coerce path" =
-  let open Sift.Value in
-  (match Sift.of_value coerce_c (Assoc [ ("n", String "5") ]) with Ok 5 -> true | _ -> false)
-  && (match Sift.of_value coerce_c (Assoc [ ("n", String "0") ]) with Error _ -> true | _ -> false) (* 0 < min_i 1 *)
-  && (match Sift.of_value coerce_c (Assoc [ ("n", String "abc") ]) with Error _ -> true | _ -> false)
-  && (match Sift.of_value coerce_c (Assoc [ ("n", Int 7) ]) with Ok 7 -> true | _ -> false)
-
-(* ── Stage 2b: native relaxed JSON (decode_json) — no Bson hop ── *)
-
-let%test "json: decode_json ∘ encode_json round-trips natively (no Bson hop)" =
-  let rt c v = match Sift.decode_json c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | Error _ -> false in
-  rt bag_c ("hi\"x\\y", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
-  && rt opt_c (Some "x", [ 1; 2; 3 ])
-  && rt opt_c (None, [])
-  && rt list_c [ "a"; "b\nc"; "d" ]
-  && rt figure_c (Rect (3.0, 4.0))
-  && rt figure_c (Circle 2.5)
-  && rt nested_c ("ok", ("Ada", "ada@x.io"))
-
-let%test "json: decode_json parses relaxed JSON (numbers/escapes/unicode/nesting), validates, rejects junk" =
+let%test "decode_json parses relaxed JSON (numbers/escapes/unicode/nesting), validates, rejects junk" =
   (match Sift.decode_json bag_c {|{"s":"a\nb","n":42,"f":3.5,"b":true,"d":1700000000000,"i":"507f1f77bcf86cd799439011"}|} with
    | Ok ("a\nb", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011") -> true
    | _ -> false)
@@ -697,26 +414,10 @@ let%test "json: decode_json parses relaxed JSON (numbers/escapes/unicode/nesting
   && (match Sift.decode_json Sift.int "42 oops" with Error [ e ] -> e.Sift.code = "json" | _ -> false) (* trailing data *)
   && (match Sift.decode_json (Sift.list Sift.int) "[1, 2" with Error _ -> true | _ -> false) (* unterminated *)
 
-(* ── the serde capstone: ONE codec drives FOUR formats, all round-trip to the same value ── *)
-let%test "serde: one codec → Bson-tree / Bson-bytes / neutral Value / native JSON all round-trip" =
-  let rt4 c v =
-    (match Sift.decode c (Sift.to_bson c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* Bson tree *)
-    && (match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* Bson bytes (zero-copy) *)
-    && (match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* neutral Value *)
-    && (match Sift.decode_json c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* native relaxed JSON *)
-  in
-  rt4 bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
-  && rt4 nested_c ("ok", ("Ada", "ada@x.io"))
-  && rt4 figure_c (Rect (3.0, 4.0))
-  && rt4 figure_c (Circle 2.5)
-  && rt4 opt_c (Some "x", [ 1; 2; 3 ])
-  && rt4 opt_c (None, [])
-
-let%test "dyn: the neutral escape (Value.t) round-trips an arbitrary rich value (Bson tree/bytes/Value)" =
-  let dyn_c = Sift.(seal (record (fun v -> v) |> field (req "v" dyn) (fun v -> v))) in
-  let v = Sift.Value.(Assoc [ ("n", Int 5); ("d", Date 99L); ("id", Id "507f1f77bcf86cd799439011"); ("xs", List [ Bool true; String "x" ]) ]) in
-  (match Sift.decode dyn_c (Sift.to_bson dyn_c v) with Ok v' -> Sift.equal dyn_c v v' | _ -> false)
-  && (match Sift.decode_bytes dyn_c (Sift.encode_bytes dyn_c v) with Ok v' -> Sift.equal dyn_c v v' | _ -> false)
-  && (match Sift.of_value dyn_c (Sift.to_value dyn_c v) with Ok v' -> Sift.equal dyn_c v v' | _ -> false)
+(* ── the [bson] dynamic escape: an arbitrary raw Bson.t value round-trips (any shape, untyped) ── *)
+let%test "bson: the dynamic escape round-trips an arbitrary rich Bson.t value" =
+  let v = B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("o", B.oid "507f1f77bcf86cd799439011"); ("d", B.date 99L); ("big", B.Int64 9000000000L) ] in
+  (match Sift.decode bson_c (Sift.to_bson bson_c v) with Ok v' -> Sift.equal bson_c v v' | _ -> false)
+  && (match Sift.decode bson_c (Sift.to_bson bson_c B.Null) with Ok B.Null -> true | _ -> false)
 
 let () = exit (Fennec_hunt_unit.run ())

@@ -20,12 +20,6 @@ external init : unit -> unit = "ocaml_mongo_init"
 (* whether the native libmongoc driver was compiled in (false → the stub build; use :memory:) *)
 external available : unit -> bool = "ocaml_mongo_available"
 
-(* BENCHMARK-ONLY: raw libbson full-document iteration over a buffer (bson_init_static + bson_iter,
-   borrowed values, no tree) — the "official" C parse-speed baseline to measure the pure-OCaml decoder
-   against. Returns a checksum (-1 when the native driver was not built). Not used in any production
-   path; lives here only to reuse the existing static libbson link. *)
-external bson_bench_walk : Bigstringaf.t -> int = "ocaml_bson_bench_walk"
-
 external pool_new : string -> pool = "ocaml_mongo_pool_new"
 
 (* db -> reachable? (runs {ping:1}; never raises) *)

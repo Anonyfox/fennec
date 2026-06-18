@@ -17,14 +17,3 @@ let validate c v = match run_checks c.shape v with [] -> Ok () | es -> Error es
 (* derived pretty-printing — nested documents, lists, options, variants, all readable *)
 let pp c fmt v = pretty c.shape fmt v
 let show c v = Format.asprintf "%a" (pp c) v
-
-(* ---- neutral data model ({!Value}) — the format-agnostic interchange ----------------------------
-   [to_value] projects a typed value to the neutral {!Value.t}; [of_value] reads + validates it back.
-   Both drive the {!Serde} interpreter over the {!Value_format} instance — a DIRECT neutral-model walk,
-   no BSON hop. [of_value] runs the same check phase as a decode. *)
-let to_value c v : Value.t = Serde.write (module Value_format.Writer) c.shape v
-
-let of_value c (value : Value.t) =
-  match Serde.read (module Value_format.Reader) c.shape value with
-  | Error _ as e -> e
-  | Ok v -> if not (needs_checks c.shape) then Ok v else ( match run_checks c.shape v with [] -> Ok v | es -> Error es)

@@ -1,5 +1,5 @@
 ; The shape language's unit battery — pure, native, exhaustive over the catalog.
 (test
  (name test_sift)
- (libraries fennec.pulse.sift fennec-mongo.wire bigstringaf fennec-hunt.unit)
+ (libraries fennec.pulse.sift fennec-mongo.wire fennec-hunt.unit)
  (preprocess (pps fennec-hunt.ppx)))

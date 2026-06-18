@@ -1,16 +1,15 @@
-(* value_json.ml — native relaxed JSON parser into the neutral {!Value} model. NO Bson, NO Json.t AST:
-   a self-contained recursive-descent parser over the eight-constructor data model, so JSON decode is
-   a first-class Sift format that never touches BSON. Relaxed/plain JSON (RFC 8259) — strings, numbers,
-   true/false/null, arrays, objects — the wire form an HTTP API speaks (distinct from the bson_json
-   bridge's CANONICAL extended JSON, $oid/$date, which is BSON-interchange).
+(* json_reader.ml — a relaxed-JSON parser into {!Bson.t}: a self-contained recursive-descent reader
+   over plain/relaxed JSON (RFC 8259 — strings, numbers, true/false/null, arrays, objects), the wire
+   form an HTTP API speaks (distinct from the {!Bson_json} bridge's CANONICAL extended JSON $oid/$date,
+   which is for BSON interchange). A JSON integer becomes [Int], a fractional/exponent number [Float].
 
-   A JSON integer becomes [Int], a fractional/exponent number [Float]. Pairs with {!Sift.decode_json}
-   (= parse + {!Sift.of_value}): reads back what {!Sift.encode_json} emits — an id as a string, a date
-   as a number, which of_value's coercions accept. (Encode stays the shape-direct {!Json_writer}.) *)
+   Pairs with {!Sift.decode_json} (= parse to a Bson tree, then the shape-directed tree decode): reads
+   back what {!Json_writer} emits — an id as a string, a date as a number, which the decode coercions
+   accept. Pure + jsoo-safe (no Bson library calls beyond the constructors). *)
 
 exception Parse_error of string
 
-let of_string (s : string) : (Value.t, string) result =
+let of_string (s : string) : (Bson.t, string) result =
   let n = String.length s in
   let pos = ref 0 in
   let error msg = raise (Parse_error msg) in
@@ -89,11 +88,11 @@ let of_string (s : string) : (Value.t, string) result =
       if !pos < n && (s.[!pos] = '+' || s.[!pos] = '-') then incr pos;
       while !pos < n && is_digit s.[!pos] do incr pos done);
     let lit = String.sub s start (!pos - start) in
-    if !is_float then ( match float_of_string_opt lit with Some f -> Value.Float f | None -> error "invalid number")
+    if !is_float then ( match float_of_string_opt lit with Some f -> Bson.Float f | None -> error "invalid number")
     else
       match int_of_string_opt lit with
-      | Some i -> Value.Int i (* a non-fractional number too big for a 63-bit int falls back to float *)
-      | None -> ( match float_of_string_opt lit with Some f -> Value.Float f | None -> error "invalid number")
+      | Some i -> Bson.Int i (* a non-fractional number too big for a 63-bit int falls back to float *)
+      | None -> ( match float_of_string_opt lit with Some f -> Bson.Float f | None -> error "invalid number")
   in
   let rec parse_value () =
     skip_ws ();
@@ -101,17 +100,17 @@ let of_string (s : string) : (Value.t, string) result =
     match s.[!pos] with
     | '{' -> parse_object ()
     | '[' -> parse_array ()
-    | '"' -> Value.String (parse_string ())
-    | 't' -> expect "true"; Value.Bool true
-    | 'f' -> expect "false"; Value.Bool false
-    | 'n' -> expect "null"; Value.Null
+    | '"' -> Bson.String (parse_string ())
+    | 't' -> expect "true"; Bson.Bool true
+    | 'f' -> expect "false"; Bson.Bool false
+    | 'n' -> expect "null"; Bson.Null
     | '-' -> parse_number ()
     | c when is_digit c -> parse_number ()
     | c -> error (Printf.sprintf "unexpected character %C" c)
   and parse_array () =
     incr pos; (* [ *)
     skip_ws ();
-    if !pos < n && s.[!pos] = ']' then (incr pos; Value.List [])
+    if !pos < n && s.[!pos] = ']' then (incr pos; Bson.Array [])
     else
       let rec loop acc =
         let v = parse_value () in
@@ -119,14 +118,14 @@ let of_string (s : string) : (Value.t, string) result =
         if !pos >= n then error "unterminated array";
         match s.[!pos] with
         | ',' -> incr pos; loop (v :: acc)
-        | ']' -> incr pos; Value.List (List.rev (v :: acc))
+        | ']' -> incr pos; Bson.Array (List.rev (v :: acc))
         | _ -> error "expected ',' or ']' in array"
       in
       loop []
   and parse_object () =
     incr pos; (* { *)
     skip_ws ();
-    if !pos < n && s.[!pos] = '}' then (incr pos; Value.Assoc [])
+    if !pos < n && s.[!pos] = '}' then (incr pos; Bson.Document [])
     else
       let rec loop acc =
         skip_ws ();
@@ -140,7 +139,7 @@ let of_string (s : string) : (Value.t, string) result =
         if !pos >= n then error "unterminated object";
         match s.[!pos] with
         | ',' -> incr pos; loop ((k, v) :: acc)
-        | '}' -> incr pos; Value.Assoc (List.rev ((k, v) :: acc))
+        | '}' -> incr pos; Bson.Document (List.rev ((k, v) :: acc))
         | _ -> error "expected ',' or '}' in object"
       in
       loop []

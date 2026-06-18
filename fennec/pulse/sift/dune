@@ -1,24 +1,12 @@
-; The SHAPE LANGUAGE — Pulse's foundation for saying what a value IS, now a real format-agnostic serde
-; split in two so the CORE can be used with NO bson dependency:
-;
-;   sift_core  (fennec.pulse.sift.core) — the bson-FREE core: the GADT shape, the combinators, the
-;     validation gate, the neutral Value model, native relaxed JSON, derived ops, reflection. A
-;     standalone serde. Re-exports its internal modules so the plugin can interpret shapes.
-;   sift       (fennec.pulse.sift) — the public facade: sift_core PLUS the BSON format (the BSON-tree
-;     codec, the zero-copy byte codecs, the extended-JSON bridge, the Mongo query-vocabulary field
-;     helpers). fennec uses Sift.* unchanged; the bson dep lives ONLY here.
-;
-; All pure + jsoo-safe, shared verbatim by server and browser. Methods and collections WORK ON shapes;
-; neither owns this.
-
-(library
- (name sift_core)
- (public_name fennec.pulse.sift.core)
- (modules shape value value_json serde value_format json_writer engine derived codec combinators sift_core)
- (libraries base64))
+; Sift — fennec's typed-data toolkit: ONE shape language ['a Sift.t] that says what a value IS, and
+; from it drives BSON encode/decode, validation, plain + extended JSON I/O, structural diff for reactive
+; sync, DDP method arguments, and $jsonSchema reflection. Built ON Bson.t (the tree the storage layer
+; already speaks) — simple to reason about, no neutral data model, no format abstraction. Pure +
+; jsoo-safe, so the SAME codec runs on the server and in the browser. The Mongo query vocabulary is the
+; companion fennec.pulse.sift.mongo; the [@@deriving] DX is fennec.pulse.sift.ppx. Neither is needed to
+; use a codec.
 
 (library
  (name sift)
  (public_name fennec.pulse.sift)
- (modules value_bson cursor bson_engine bson_reader bson_writer sift)
- (libraries sift_core fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.json bigstringaf base64))
+ (libraries fennec-mongo.bson fennec-mongo.bson_json fennec-mongo.json base64))

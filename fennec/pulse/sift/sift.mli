@@ -47,58 +47,20 @@ val errors_to_string : error list -> string
 (** The type representation — abstract here; reflect with {!view}. *)
 type 'a shape
 
-(** A codec — ABSTRACT: a shape and its derived operations, with no format welded into the type. The
-    codec IS the shape; per-format encode/decode are functions over it ({!to_bson}/{!decode},
-    {!to_value}/{!of_value}, {!to_json}/{!decode_json}, …), so a value never has to expose [Bson.t] to
-    be a codec. Reflect the representation with {!view}. *)
+(** A codec — ABSTRACT: a shape plus its derived operations. The codec IS the shape; encode/decode are
+    functions over it ({!to_bson}/{!decode}, {!to_json}/{!decode_json}). Reflect the representation
+    with {!view}. *)
 type 'a t
 
 (** Structured decode: every violation, each with its field path. *)
 val decode : 'a t -> Bson.t -> ('a, error list) result
 
-(** Decode a top-level BSON document {e buffer} into the value, schema-directed and single-pass,
-    WITHOUT building a {!Bson.t} tree — scans each document level into a flat span index and reads
-    only the wanted fields straight from the bytes (unwanted fields are skipped by their length
-    prefix; keys match in place; strings copy only when an owned result is demanded). Returns the
-    SAME value and SAME path-tagged errors as {!decode}; a malformed buffer is a structured error,
-    never an exception. The fast path for decoding stored/wire documents. *)
-val decode_bytes : 'a t -> Bigstringaf.t -> ('a, error list) result
+(** {1 Encode} *)
 
-(** Stream a buffer of back-to-back BSON documents (each length-prefixed): decode each in turn and fold
-    the per-document result — query-result / cursor iteration without materialising every value at once.
-    A malformed document (position lost) ends the stream with a final [Error]. *)
-val fold_bytes : 'a t -> Bigstringaf.t -> 'b -> ('b -> ('a, error list) result -> 'b) -> 'b
-
-(** Decode ONE top-level field of a BSON document buffer, by key, reading only that field's bytes —
-    the rest of the document is skipped by length prefix, never materialized. [None] when the field is
-    absent; [Some (Ok v)] / [Some (Error _)] when present (value decoded and its checks run; errors
-    path-tagged with the key). The projection primitive — route a raw document by its [_id] or a
-    variant discriminator, or pull a single value, without decoding the whole record. *)
-val peek : 'a t -> string -> Bigstringaf.t -> ('a, error list) result option
-
-(** Validate a BSON document buffer against the codec WITHOUT materializing the value — the alloc-free
-    tier. Returns the SAME Ok/Error verdict (and errors) as {!decode_bytes}, but runs at scan speed with
-    ~0 allocation when the shape's checks are all structural (types, required, nesting). For shapes with
-    refinements or cross-field rules — which need the materialized value — it falls back to a full decode
-    and discards the value. The in-process [$jsonSchema]: gate a wire/storage write without decoding it. *)
-val valid_bytes : 'a t -> Bigstringaf.t -> (unit, error list) result
-
-(** Is [buf] a structurally well-formed BSON document (consistent lengths, known type tags, terminated
-    keys, sound nesting, no out-of-bounds)? Shape-agnostic, single pass, ZERO allocation — a fast
-    pre-filter / fuzz oracle, the pure-OCaml analog of libbson's [bson_validate]. *)
-val scan_valid : Bigstringaf.t -> bool
-
-(** {1 Encode (zero-copy, SIFT-K3)} *)
-
-(** The EXACT wire byte length of encoding [v] through the codec, WITHOUT building it — equals
+(** The EXACT wire byte length of encoding [v] through the codec, WITHOUT building the bytes — equals
     [String.length] of the BSON the codec would emit. For pre-sizing a buffer, a Content-Length header,
-    a quota check; and the basis of straight-to-buffer encode ({!encode_bytes}). *)
+    or a quota check. *)
 val size : 'a t -> 'a -> int
-
-(** Encode [v] straight into a freshly-allocated buffer ([Bigstringaf.create (size c v)]) in a single
-    pass, WITHOUT building a {!Bson.t} tree — byte-identical to encoding through the tree then
-    serialising to the wire. Each document's length prefix is backpatched once its content end is known. *)
-val encode_bytes : 'a t -> 'a -> Bigstringaf.t
 
 (** RELAXED JSON encode — plain JSON (strings/numbers/[]/{}) straight from the value, no {!Bson.t} tree:
     what an HTTP API sends. Distinct from {!to_json_string}, which emits the bridge's CANONICAL extended
@@ -107,11 +69,11 @@ val encode_bytes : 'a t -> 'a -> Bigstringaf.t
     both). A non-finite float, which plain JSON cannot represent, is emitted as [null]. *)
 val encode_json : 'a t -> 'a -> string
 
-(** RELAXED JSON decode, NATIVE — parse plain JSON straight to the neutral {!Value} model then read +
-    validate, with NO {!Bson.t} hop (a self-contained recursive-descent parser over the data model).
-    The inverse of {!encode_json}; same path-collected errors as {!decode}; a parse failure is a
-    [code:"json"] error. Distinct from {!of_json_string}, which accepts the extended-JSON dialect via
-    the Bson bridge — this is the format-agnostic core's own JSON. *)
+(** RELAXED JSON decode — parse plain JSON to a {!Bson.t} tree, then the same shape decode + checks as
+    {!decode} (an id arrives as a string, a date as a number — the decode coercions accept both). The
+    inverse of {!encode_json}; same path-collected errors as {!decode}; a parse failure is a
+    [code:"json"] error. Distinct from {!of_json_string}, which accepts the extended-JSON dialect
+    ([$oid]/[$date]) via the Bson bridge. *)
 val decode_json : 'a t -> string -> ('a, error list) result
 
 (** {1 Derived operations (SIFT-K6)} *)
@@ -188,63 +150,8 @@ val to_json_string : 'a t -> 'a -> string
 (** Decode + validate a value from a JSON string ([malformed JSON] error on a parse failure). *)
 val of_json_string : 'a t -> string -> ('a, error list) result
 
-(** {1 The neutral data model}
-
-    The format-agnostic interchange — the serde "data model" every format reads into and writes out
-    of. Deliberately LEAN: richness lives at the shape level (a date is an [int64] leaf, an id a
-    string), so this stays the small common denominator BSON, JSON and later formats all share. *)
-
-module Value : sig
-  (** A neutral value — RICH by design: a LOSSLESS superset of every value a document store needs, so
-      it can fully replace a format-specific tree. The basic ctors (Null/Bool/Int/Int64/Float/String/
-      Bytes/List/Assoc) cover JSON and the common case; the semantic ctors (Date/Id/Decimal/Timestamp/
-      Regex/Symbol/Code/Min/Max) carry the richness BSON has and JSON lacks. [Assoc] is ORDERED (key
-      order preserved). NOT the hot path — the zero-copy BSON codecs never materialise a Value, so the
-      common case stays a native [int] / plain string and only a rare rich value pays for its ctor. *)
-  type t =
-    | Null
-    | Bool of bool
-    | Int of int  (** a 32-bit-range integer (native int) *)
-    | Int64 of int64  (** a full 64-bit integer *)
-    | Float of float
-    | String of string
-    | Bytes of string  (** opaque binary (generic subtype) *)
-    | List of t list
-    | Assoc of (string * t) list  (** an ordered object/document *)
-    | Date of int64  (** milliseconds since the Unix epoch *)
-    | Id of string  (** an object id — 24-char hex *)
-    | Decimal of string  (** a high-precision decimal, canonical string form *)
-    | Timestamp of int * int  (** a logical clock: (seconds, ordinal) *)
-    | Regex of string * string  (** (pattern, options) *)
-    | Symbol of string
-    | Code of string  (** code/function source *)
-    | Min  (** sort-order sentinels (below / above every other value) *)
-    | Max
-
-  (** Structural equality/ordering, monomorphic. An [Assoc] compares key-by-key IN ORDER — semantic
-      record equality (order-insensitive, field-by-field) is the shape-level {!Sift.equal}. *)
-  val equal : t -> t -> bool
-
-  val compare : t -> t -> int
-
-  (** Field lookup in an [Assoc] (first match); [None] for a non-object or absent key. *)
-  val get : string -> t -> t option
-
-  (** A readable debug rendering (JSON-ish) — not a serializer (that is a Format). *)
-  val pp : Format.formatter -> t -> unit
-
-  val to_string : t -> string
-end
-
-(** Project a typed value to the neutral {!Value.t} — the shape's semantics erase to the common
-    denominator (a date becomes an [Int], an id a [String]). Total, mirrors the encode. *)
-val to_value : 'a t -> 'a -> Value.t
-
-(** Read + validate a value back from a {!Value.t} (same path-collected errors as {!decode}). *)
-val of_value : 'a t -> Value.t -> ('a, error list) result
-
-(** TOTAL BSON encode (mirrors {!to_value}/{!to_json}) — a typed value always serializes. The
-    encode-side refinement gate is {!validate}/{!encode_checked}; decode is {!decode}. *)
+(** TOTAL BSON encode (mirrors {!to_json}) — a typed value always serializes. The encode-side
+    refinement gate is {!validate}/{!encode_checked}; decode is {!decode}. *)
 val to_bson : 'a t -> 'a -> Bson.t
 
 (** {1 Primitives} *)
@@ -265,13 +172,8 @@ val id : string t
 (** An [_id] value: accepts [String] or [ObjectId] (surfaced as the hex string); encodes as
     [ObjectId] when the value looks like one (24 hex chars), [String] otherwise. *)
 
-(** The NEUTRAL dynamic escape — an arbitrary {!Value.t} (any shape, untyped), with no Bson. This is
-    the format-agnostic "any value" leaf: it round-trips losslessly through every format the rich
-    {!Value} model covers. Prefer this to {!bson} for new code that isn't BSON-specific. *)
-val dyn : Value.t t
-
-(** The dynamic escape typed as a raw {!Bson.t} — kept for BSON-specific code and the deriver's
-    [Bson.t]-field emit. Now a LOSSLESS conv over {!dyn} (the rich {!Value} mirrors BSON 1:1). *)
+(** The dynamic escape — an arbitrary raw {!Bson.t} value (any shape, untyped). The "any value" leaf;
+    the deriver emits it for a [Bson.t]-typed record field. Reflects as opaque [V_bson]. *)
 val bson : Bson.t t
 
 val unit : unit t
