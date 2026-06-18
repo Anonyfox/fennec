@@ -1,150 +1,142 @@
-(* Sift — the shape language. One declaration drives BSON + JSON encode/decode, validation,
-   pretty-printing, and a neutral [view] reflection. The implementation is split by concern:
-   {!Shape} (representation) · {!Engine} (interpreters) · {!Codec} (the [t] value + JSON) ·
-   {!Combinators} (the builder surface). This file ties them into one flat [Sift.*] API. *)
+(* Sift — the public facade: the bson-free {!Sift_core} PLUS the BSON format (the [sift.bson] plugin —
+   the BSON-tree codec, the zero-copy byte codecs, the extended-JSON bridge, the Mongo query-vocabulary
+   field helpers). The full [Sift.*] API fennec uses; standalone users can depend on {!Sift_core} alone
+   (no bson). *)
 
-include Shape
-include Codec
-include Combinators
+include Sift_core
 
-(* The neutral data model — the format-agnostic interchange ({!to_value}/{!of_value} project a typed
-   value to/from it). Lean by design; the common denominator BSON, JSON and later formats share. *)
-module Value = Value
+(** Extended-JSON AST (re-exported), for composing with other JSON code. *)
+module Json = Fennec_mongo_json.Json
 
-(* ---- zero-copy decode: straight from a BSON document buffer (SIFT-K2) ------------------- *)
+module Bson_json = Fennec_mongo_bson_json.Bson_json
 
-(* Decode a top-level BSON document buffer into the codec's value WITHOUT building a {!Bson.t} tree:
-   a single linear pass per document level scans fields into a flat span-tape, and the shape pulls
-   exactly the fields it wants, reading each value's bytes straight into the OCaml value. Unwanted
-   fields are skipped by their length prefix; keys are matched in place; strings copy only when an
-   owned result is demanded. Returns the SAME value and SAME collected errors as {!decode} (the raw
-   read mirrors the engine; the refinement phase is the shared one). For the storage/wire fast path —
-   {!decode} (over an already-parsed {!Bson.t}) stays the tree entry. *)
+(* ---- the BSON-tree codec ------------------------------------------------------------------ *)
+
+(* decode = RAW shape decode (the BSON-tree read), then the gated check phase — refinement violations
+   COLLECT across stacked checks, sibling fields, and record-level rules. *)
+let decode_value shape b =
+  match Bson_engine.read shape b with
+  | Error es -> Error es
+  | Ok v -> if not (Engine.needs_checks shape) then Ok v else ( match Engine.run_checks shape v with [] -> Ok v | es -> Error es)
+
+let enc c v = Bson_engine.write c.shape v
+let dec c b = match decode_value c.shape b with Ok v -> Ok v | Error es -> Error (errors_to_string es)
+let decode c b = decode_value c.shape b
+let encode_checked c v = match Engine.run_checks c.shape v with [] -> Ok (enc c v) | es -> Error es
+let to_bson c v : Bson.t = enc c v
+
+(* ---- extended-JSON I/O (the Bson_json bridge — $oid/$date, lossless for mongosh interchange) ---- *)
+let to_json c v = Bson_json.to_json (enc c v)
+let of_json c j = decode_value c.shape (Bson_json.of_json j)
+let to_json_string c v = Bson_json.to_string (enc c v)
+
+let of_json_string c s =
+  match Bson_json.of_string_opt s with Some b -> decode_value c.shape b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
+
+(* ---- the dynamic BSON escape + the Mongo query-vocabulary field helpers ------------------- *)
+
+(* the dynamic escape typed as a raw {!Bson.t} — a LOSSLESS conv over the neutral {!dyn} (the rich
+   Value mirrors Bson 1:1); keeps the deriver's [Sift.bson]-for-Bson.t-field emit working *)
+let bson = conv (fun v -> Ok (Value_bson.to_bson v)) Value_bson.of_bson dyn
+
+let make ~enc ~dec = conv dec enc bson
+let field_enc f v = Bson_engine.write f.item v
+
+(* encode ONE element of a list field (for $push-style modifiers) *)
+let field_elem_enc (f : 'a list field) (v : 'a) : Bson.t =
+  match Bson_engine.write f.item [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Sift.field_elem_enc"
+
+(* decode ONE field out of a document (raw decode + the field's checks) — the projection primitive *)
+let field_get (f : 'a field) (doc : Bson.t) : ('a, error list) result =
+  match doc with
+  | Bson.Document kvs -> (
+      let raw =
+        match List.assoc_opt f.key kvs with
+        | Some v -> ( match Bson_engine.read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
+        | None -> ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
+      in
+      match raw with Error es -> Error es | Ok v -> ( match Engine.run_checks f.item v with [] -> Ok v | es -> Error (List.map (at f.key) es)))
+  | _ -> Error [ mkerr ~code:"type" ~path:[ f.key ] "expected document" ]
+
+(* ---- zero-copy BSON byte codecs ----------------------------------------------------------- *)
+
 let decode_bytes (c : 'a t) (buf : Bigstringaf.t) : ('a, error list) result = Bson_reader.decode_value_bytes c.shape buf
-
-(* Stream a buffer of back-to-back BSON documents: decode each in turn and fold the per-document result
-   — query-result / cursor iteration without materialising every value at once. *)
 let fold_bytes (c : 'a t) (buf : Bigstringaf.t) (init : 'b) (f : 'b -> ('a, error list) result -> 'b) : 'b = Bson_reader.fold_value_bytes c.shape buf init f
-
-(* Decode ONE top-level field straight from a buffer, reading only its bytes (the rest of the document
-   is skipped, never materialized). [None] if absent. The projection primitive — route a raw document
-   by its _id or a variant discriminant, or pull a single value, without decoding the whole record. *)
 let peek (c : 'a t) (key : string) (buf : Bigstringaf.t) : ('a, error list) result option = Bson_reader.peek_field c.shape key buf
-
-(* Validate a BSON document buffer against the shape WITHOUT building the value — the alloc-free tier.
-   Same Ok/Error verdict as [decode_bytes]; alloc-free (scan speed) when the shape's checks are all
-   structural, falling back to a full decode for refinement/cross-field rules that need the value. *)
 let valid_bytes (c : 'a t) (buf : Bigstringaf.t) : (unit, error list) result = Bson_reader.valid_value_bytes c.shape buf
-
-(* Is [buf] a structurally well-formed BSON document? Shape-agnostic, single pass, zero allocation —
-   the fast pre-filter / fuzz oracle (the pure-OCaml analog of libbson's bson_validate, and faster). *)
 let scan_valid (buf : Bigstringaf.t) : bool = Bson_reader.scan_valid buf
-
-(* ---- encode mirror (SIFT-K3) ----------------------------------------------------------- *)
-
-(* The EXACT wire byte length of encoding [v] through the codec, WITHOUT encoding it — equals
-   [String.length] of the BSON the codec would produce. For pre-sizing a buffer, a Content-Length, a
-   quota check; and the foundation of straight-to-buffer encode. *)
 let size (c : 'a t) (v : 'a) : int = Bson_engine.size c.shape v
-
-(* Encode [v] straight into a freshly-sized buffer, NO Bson.t tree — byte-identical to encoding through
-   the tree then serialising. Single pass; each document's length is backpatched once known. *)
 let encode_bytes (c : 'a t) (v : 'a) : Bigstringaf.t = Bson_writer.encode_value_bytes c.shape v
 
-(* RELAXED JSON encode (plain JSON for HTTP APIs), straight from the value, no Bson.t tree — distinct
-   from {!to_json_string} (the bridge's CANONICAL extended JSON, lossless for BSON/mongosh interchange).
-   Round-trips via {!decode_json} / {!of_json_string}. *)
-let encode_json (c : 'a t) (v : 'a) : string = Json_writer.encode_json c.shape v
+(* ---- structural diff / patch (Mongo-style $set/$unset; the reactive-sync primitive) ------- *)
 
-(* RELAXED JSON decode, NATIVE — parse straight to the neutral {!Value} model then {!of_value}, with
-   NO Bson hop (distinct from {!of_json_string}, which routes through the extended-JSON/Bson bridge).
-   The inverse of {!encode_json}; validates with the same path-collected errors as {!decode}. *)
-let decode_json (c : 'a t) (s : string) : ('a, error list) result =
-  match Value_json.of_string s with Ok v -> of_value c v | Error m -> Error [ mkerr ~code:"json" m ]
+type delta = { set : (string * Bson.t) list; unset : string list }
 
-(* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
+let no_change = { set = []; unset = [] }
 
-type view =
-  | V_string
-  | V_int
-  | V_float
-  | V_bool
-  | V_date
-  | V_id
-  | V_bson
-  | V_unit
-  | V_list of view
-  | V_option of view
-  | V_map of view
-  | V_check of hint * view
-  | V_obj of (string * bool (* required *) * view) list
-  | V_variant of string * (string * (string * bool * view) list) list
+let rec diff_shape : type a. a shape -> a -> a -> delta =
+ fun shape old new_ ->
+  match shape with
+  | TObj o -> diff_members o.members old new_
+  | TMap el -> diff_map el old new_
+  | TVariant { tag; cases } -> diff_variant shape tag cases old new_
+  | TCheck (_, _, _, inner) -> diff_shape inner old new_
+  | TNorm (_, inner) -> diff_shape inner old new_
+  | TConv (inj, _, inner) -> diff_shape inner (inj old) (inj new_)
+  | TCoerce inner -> diff_shape inner old new_
+  | TLazy l -> diff_shape (Lazy.force l) old new_
+  | _ -> invalid_arg "Sift.diff: needs a document-shaped codec (record / map / variant)"
 
-let rec reflect : type a. a shape -> view = function
-  | TString -> V_string
-  | TInt -> V_int
-  | TFloat _ -> V_float
-  | TBool -> V_bool
-  | TDate -> V_date
-  | TId -> V_id
-  | TDyn -> V_bson
-  | TUnit -> V_unit
-  | TList el -> V_list (reflect el)
-  | TOption el -> V_option (reflect el)
-  | TMap el -> V_map (reflect el)
-  | TCheck (_, _, h, inner) -> V_check (h, reflect inner)
-  | TNorm (_, inner) -> reflect inner
-  | TConv (_, _, inner) -> reflect inner
-  | TObj o -> V_obj (List.map (fun (Bound_field p) -> (p.name, p.required, reflect p.shape)) o.members)
-  | TVariant { tag; cases } ->
-      V_variant
-        (tag,
-         List.map
-           (fun (Case c) -> (c.name, List.map (fun (Bound_field p) -> (p.name, p.required, reflect p.shape)) c.body.members))
-           cases)
-  | TCoerce inner -> reflect inner (* transparent: a coerced leaf reflects as its inner type *)
-  | TLazy _ -> V_bson (* recursion: opaque to schema reflection (a finite view can't unfold a cycle) *)
+and diff_members : type r. r bound_field list -> r -> r -> delta =
+ fun members old new_ ->
+  let rec go set unset = function
+    | [] -> { set = List.rev set; unset = List.rev unset }
+    | Bound_field f :: rest ->
+        let ov = f.get old and nv = f.get new_ in
+        if Derived.equal f.shape ov nv then go set unset rest
+        else if f.omit nv then go set (f.name :: unset) rest
+        else go ((f.name, Bson_engine.write f.shape nv) :: set) unset rest
+  in
+  go [] [] members
 
-let view c = reflect c.shape
+and diff_map : type a. a shape -> (string * a) list -> (string * a) list -> delta =
+ fun el old new_ ->
+  let set = List.filter_map (fun (k, nv) -> match List.assoc_opt k old with Some ov when Derived.equal el ov nv -> None | _ -> Some (k, Bson_engine.write el nv)) new_ in
+  let unset = List.filter_map (fun (k, _) -> if List.mem_assoc k new_ then None else Some k) old in
+  { set; unset }
 
-(* the structural view of ONE field's shape — drives form input-type inference + HTML5 constraint
-   attributes (a renderer reads the leaf kind + refinement hints without touching the GADT) *)
-let field_view (f : 'a field) : view = reflect f.item
-let field_required (f : 'a field) : bool = f.needed
+and diff_variant : type r. r shape -> string -> r case list -> r -> r -> delta =
+ fun shape _tag cases old new_ ->
+  let rec go = function
+    | [] -> no_change
+    | Case c :: rest -> (
+        match c.project old with
+        | Some a -> ( match c.project new_ with Some b -> diff_members c.body.members a b | None -> full_replace shape old new_)
+        | None -> go rest)
+  in
+  go cases
 
-(* ---- derived operations (SIFT-K6): equal / compare / hash / default, free from the shape ----------
-   Monomorphic, structural — not OCaml's polymorphic runtime compare/hash. *)
+and full_replace : type a. a shape -> a -> a -> delta =
+ fun shape old new_ ->
+  let fields v = match Bson_engine.write shape v with Bson.Document kvs -> kvs | _ -> [] in
+  let new_fields = fields new_ in
+  let new_names = List.map fst new_fields in
+  { set = new_fields; unset = List.filter_map (fun (n, _) -> if List.mem n new_names then None else Some n) (fields old) }
 
-let equal (c : 'a t) (x : 'a) (y : 'a) : bool = Derived.equal c.shape x y
-let compare (c : 'a t) (x : 'a) (y : 'a) : int = Derived.compare c.shape x y
-let hash (c : 'a t) (v : 'a) : int = Derived.hash c.shape v
-let default (c : 'a t) : 'a = Derived.default c.shape
+let diff (c : 'a t) (old : 'a) (new_ : 'a) : delta = diff_shape c.shape old new_
 
-(* structural diff (old → new) as Mongo-style $set/$unset — the reactive-sync / minimal-update primitive *)
-type delta = Derived.delta = { set : (string * Bson.t) list; unset : string list }
-
-let diff (c : 'a t) (old : 'a) (new_ : 'a) : delta = Derived.diff c.shape old new_
-
-(* apply a {!delta} to a value — the inverse of {!diff}: [$set] replaces/adds fields, [$unset] removes
-   them, then the merged document is decoded (and validated). [patch c old (diff c old new) = Ok new]. *)
 let patch (c : 'a t) (old : 'a) (d : delta) : ('a, error list) result =
   let kvs = match enc c old with Bson.Document kvs -> kvs | _ -> [] in
   let touched = d.unset @ List.map fst d.set in
   let kept = List.filter (fun (k, _) -> not (List.mem k touched)) kvs in
   decode c (Bson.Document (kept @ d.set))
 
-(* a random value conforming to the shape (refinements best-effort via rejection) — property testing.
-   Pure given the [Random.State.t], so a seeded state reproduces. *)
-let arbitrary (c : 'a t) (st : Random.State.t) : 'a = Derived.arbitrary c.shape st
-
-(* ---- positional parameter lists (DDP method params) — unchanged surface ----------------- *)
+(* ---- positional parameter lists (DDP method params) ----------------------------------------- *)
 
 type 'a args = { enc_args : 'a -> Bson.t list; dec_args : Bson.t list -> ('a, string) result }
 
-(* function forms of the (now-sealed) [args] fields — the method layer marshals params through these *)
 let encode_args (a : 'a args) (v : 'a) : Bson.t list = a.enc_args v
 let decode_args (a : 'a args) (params : Bson.t list) : ('a, string) result = a.dec_args params
-
 let a0 = { enc_args = (fun () -> []); dec_args = (function [] -> Ok () | _ -> Error "expected no arguments") }
 
 let a1 c =

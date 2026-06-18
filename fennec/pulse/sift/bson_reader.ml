@@ -22,7 +22,7 @@
    Additive: the working [Sift.*] facade still routes through the tree path; {!decode_bytes} is the new
    path, exposed alongside and benchmarked, until it is proven enough to become the default (K7). *)
 
-open Shape
+open Sift_core
 
 (* a malformed buffer (bad tag, inconsistent length, unsupported type) aborts the pass and is turned
    into a structured [Error] at the entry — never an escaping exception, never an out-of-bounds read *)

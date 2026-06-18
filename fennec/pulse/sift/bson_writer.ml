@@ -10,7 +10,7 @@
    — tag choices (int32 vs int64 by range, oid vs string for an id) and the optional/opt_list omission
    mirror {!Bson_engine.write}/{!Shape.bound_field}'s [omit] exactly. Differential-tested. *)
 
-open Shape
+open Sift_core
 
 (* a write head over a buffer sized EXACTLY by {!Bson_engine.size}; the setters bounds-check, so a size/write
    divergence raises rather than corrupting (and {!encode_bytes} asserts the end position equals size) *)

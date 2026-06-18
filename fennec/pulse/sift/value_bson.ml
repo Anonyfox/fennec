@@ -8,6 +8,8 @@
    non-generic Binary SUBTYPE collapses to generic [Bytes], and the deprecated Code-with-scope drops
    its scope — neither appears in real document data.) *)
 
+open Sift_core
+
 let rec of_bson : Bson.t -> Value.t = function
   | Bson.Null -> Value.Null
   | Bson.Bool b -> Value.Bool b

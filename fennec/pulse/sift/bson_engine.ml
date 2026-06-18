@@ -4,7 +4,7 @@
    the [sift.bson] plugin; the format-AGNOSTIC interpreters (checks, normalize, pretty) stay in {!Engine}
    (the bson-free core). *)
 
-open Shape
+open Sift_core
 
 let looks_like_oid s =
   String.length s = 24

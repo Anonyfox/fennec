@@ -3,7 +3,6 @@
 
 open Shape
 open Engine
-open Bson_engine
 open Codec
 
 let string = of_shape TString
@@ -19,12 +18,6 @@ let list c = of_shape (TList c.shape)
 let option c = of_shape (TOption c.shape)
 let str_map c = of_shape (TMap c.shape)
 let conv proj inj c = of_shape (TConv (inj, proj, c.shape))
-
-(* the dynamic escape, typed as a raw {!Bson.t} — rebuilt LOSSLESSLY as a conv over the neutral {!dyn}
-   (the rich Value mirrors Bson 1:1). Keeps the [Sift.bson] surface + the deriver's [Sift.bson] emit
-   working; when Sift goes dependency-free this binding moves to the [sift.bson] plugin. *)
-let bson = conv (fun v -> Ok (Value_bson.to_bson v)) Value_bson.of_bson dyn
-let make ~enc ~dec = conv dec enc bson
 
 (* a total, two-way transform — [conv] without the fallible decode side (the common case) *)
 let map (to_ : 'a -> 'b) (of_ : 'b -> 'a) (c : 'a t) : 'b t = conv (fun a -> Ok (to_ a)) of_ c
@@ -159,15 +152,6 @@ let rec writes_empty_array : type a. a shape -> a -> bool =
 let omit_of (f : 'a field) : 'a -> bool =
  fun v -> (not f.needed) && (writes_null f.item v || (writes_empty_array f.item v && f.fallback = Some v))
 
-let decode_named (f : 'a field) kvs : ('a, error list) result =
-  match List.assoc_opt f.key kvs with
-  | Some v -> ( match read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
-  | None -> (
-      match f.fallback with
-      | Some d -> Ok d
-      (* path-tagged by field name (like the type-mismatch case above), so a missing required field
-         is attributable to it — what per-field consumers (form feedback) need *)
-      | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
 
 
 type ('r, 'k) builder = {
@@ -223,24 +207,7 @@ let dot (outer : _ field) (inner : 'a field) : 'a field =
 
 (* accessors for the collection vocabulary (Filter/M/Index build on field handles) *)
 let field_name f = f.key
-let field_enc f v = write f.item v
-
-(* encode ONE element of a list field — total through any check/norm/conv wrapping: encode the
-   singleton list and unwrap (the list encoder is structural) *)
-let field_elem_enc (f : 'a list field) (v : 'a) : Bson.t =
-  match write f.item [ v ] with Bson.Array [ x ] -> x | _ -> invalid_arg "Sift.field_elem_enc"
-
 let field_validate f v = match run_checks f.item v with [] -> Ok () | es -> Error (List.map (at f.key) es)
-
-(* decode ONE field out of a document (raw decode + the field's checks) — the projection primitive:
-   reading a projected slice without ever constructing the full record *)
-let field_get (f : 'a field) (doc : Bson.t) : ('a, error list) result =
-  match doc with
-  | Bson.Document kvs -> (
-      match decode_named f kvs with
-      | Error es -> Error es
-      | Ok v -> ( match run_checks f.item v with [] -> Ok v | es -> Error (List.map (at f.key) es)))
-  | _ -> Error [ mkerr ~code:"type" ~path:[ f.key ] "expected document" ]
 
 (* ---- variants (tagged unions over a discriminator field) ----------------------------- *)
 
