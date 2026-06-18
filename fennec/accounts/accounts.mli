@@ -23,7 +23,7 @@
       let handler conn =
         match Fennec.Accounts.user_id conn with
         | Some uid -> Fennec.Conn.text conn ("hello " ^ uid)
-        | None -> Fennec.Conn.redirect "/login" conn
+        | None -> Fennec.Conn.redirect conn "/login"
     ]}
 
     {1 Submodules}
@@ -160,7 +160,7 @@ type password_hasher = Password.hasher
 
     Argon2id remains the preferred adapter when an application wants that dependency, but this gives
     Accounts a secure, dependency-light password strategy out of the box. [iterations] defaults to
-    [210_000]. Hashes are encoded as [pbkdf2-sha256$iterations$salt$derived]. *)
+    [600_000] (the OWASP-2023 floor). Hashes are encoded as [pbkdf2-sha256$iterations$salt$derived]. *)
 val password_hasher : ?iterations:int -> unit -> password_hasher
 
 (** Errors returned by Accounts operations. They are intentionally stable and small so HTTP handlers,
@@ -465,27 +465,6 @@ type identity_login_completion =
 (** Accounts configuration/state. *)
 type t
 
-(** Build an Accounts instance.
-
-    [secret] signs browser session cookies/tokens and must be a long random string. [store] is the
-    only persistence dependency. [password_hasher] enables the password strategy. [password_policy]
-    validates create/change/set/reset password flows before hashing. [cookie] defaults to
-    ["_fennec_login"]. [lifetime] defaults to one day and is the login-token expiration (Meteor's
-    [loginExpirationInDays] equivalent): every issued session is recorded in [store.tokens] with
-    [expires_at = issued_at + lifetime].
-
-    {b Session source of truth.} The signed cookie stays a zero-read fast-path integrity proof (HMAC +
-    expiry + [auth_epoch]). The token store is an {e additional} gate consulted on the token-
-    presentation paths — {!verify_token} and {!login_with_token} {b always}, and {!paw} per request
-    {e only} when [validate_every_request=true]. So {!revoke_session}/{!logout} take effect immediately
-    on resume/API/opt-in-per-request, while a [validate_every_request=false] browser cookie keeps
-    authenticating until it expires (the same boundary the [auth_epoch] already had). Recording a
-    session is {e fail-closed}: if the token row cannot be persisted the login fails atomically.
-    [validate_every_request] additionally re-checks [auth_epoch] against the store on each request;
-    leave it [false] for the zero-read path, enable it for immediate per-request revocation/epoch
-    enforcement. [rate_limit] throttles the [login] and [createUser] DDP methods against brute force
-    (default: {!Accounts_rate_limit.make} — 5 attempts / 10 s per client IP and per account, à la
-    Meteor); pass a custom limiter to retune or a disabled one to turn it off. *)
 (** Central password/email authentication policy — the typed twin of Meteor's [Accounts.config({...})].
     This is the [password] sub-record of the umbrella {!config}; {!default_config} aliases
     [defaults.password]. *)
@@ -822,6 +801,34 @@ val defaults : config
     lifetimes. Alias of [defaults.password]. *)
 val default_config : password_config
 
+(** Build an explicit Accounts instance.
+
+    Most apps do not call this: the framework-native singleton is {!current} (), configured
+    declaratively through {!defaults} + {!Fennec.serve} [?accounts] (or {!start}). Reach for [make]
+    only for an explicit/test instance with its own store.
+
+    [secret] signs browser session cookies/tokens and must be a long random string. [store] is the
+    only persistence dependency. [password_hasher] enables the password strategy. [password_policy]
+    validates create/change/set/reset password flows before hashing. [policy] is the code-declared
+    role→permission {!Roles.policy} the RBAC guards ({!can} / {!require_permission} / {!require_org})
+    evaluate against (default: the empty policy). [config] sets the initial {!password_config} (default
+    {!default_config}; mutable afterwards via {!configure}). [cookie] defaults to ["_fennec_login"] and
+    [path] to ["/"]. [lifetime] defaults to one day and is the login-token expiration (Meteor's
+    [loginExpirationInDays] equivalent): every issued session is recorded in [store.tokens] with
+    [expires_at = issued_at + lifetime].
+
+    {b Session source of truth.} The signed cookie stays a zero-read fast-path integrity proof (HMAC +
+    expiry + [auth_epoch]). The token store is an {e additional} gate consulted on the token-
+    presentation paths — {!verify_token} and {!login_with_token} {b always}, and {!paw} per request
+    {e only} when [validate_every_request=true]. So {!revoke_session}/{!logout} take effect immediately
+    on resume/API/opt-in-per-request, while a [validate_every_request=false] browser cookie keeps
+    authenticating until it expires (the same boundary the [auth_epoch] already had). Recording a
+    session is {e fail-closed}: if the token row cannot be persisted the login fails atomically.
+    [validate_every_request] additionally re-checks [auth_epoch] against the store on each request;
+    leave it [false] for the zero-read path, enable it for immediate per-request revocation/epoch
+    enforcement. [rate_limit] throttles the [login] and [createUser] DDP methods against brute force
+    (default: {!Accounts_rate_limit.make} — 5 attempts / 10 s per client IP and per account, à la
+    Meteor); pass a custom limiter to retune or a disabled one to turn it off. *)
 val make :
   secret:string ->
   store:store ->
