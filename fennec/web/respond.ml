@@ -30,12 +30,12 @@ let prefers_json (conn : Conn.t) : bool =
 (* answer with a raw BSON value as JSON *)
 let bson ?(status = 200) (conn : Conn.t) (b : Bson.t) : Conn.t = Conn.json ~status conn (Bson_json.to_string b)
 
-(* answer with ONE model value, encoded through its codec *)
-let model ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (v : 'a) : Conn.t = bson ~status conn (Sift.to_bson c v)
+(* answer with ONE model value as native relaxed JSON (straight from the codec, no Bson tree) *)
+let model ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (v : 'a) : Conn.t = Conn.json ~status conn (Sift.encode_json c v)
 
-(* answer with a LIST of model values *)
+(* answer with a LIST of model values as a native JSON array *)
 let models ?(status = 200) (conn : Conn.t) (c : 'a Sift.t) (vs : 'a list) : Conn.t =
-  bson ~status conn (Bson.array (List.map (Sift.to_bson c) vs))
+  Conn.json ~status conn ("[" ^ String.concat "," (List.map (Sift.encode_json c) vs) ^ "]")
 
 (* the JSON error envelope — the canonical {!Form.summary} shape:
    [{ form_errors: [..], field_errors: { field: [..] } }] *)
