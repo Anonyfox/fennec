@@ -53,8 +53,14 @@ let encode_bytes (c : 'a t) (v : 'a) : Bigstringaf.t = Bson_writer.encode_value_
 
 (* RELAXED JSON encode (plain JSON for HTTP APIs), straight from the value, no Bson.t tree — distinct
    from {!to_json_string} (the bridge's CANONICAL extended JSON, lossless for BSON/mongosh interchange).
-   Round-trips via {!of_json_string}. *)
+   Round-trips via {!decode_json} / {!of_json_string}. *)
 let encode_json (c : 'a t) (v : 'a) : string = Json_writer.encode_json c.shape v
+
+(* RELAXED JSON decode, NATIVE — parse straight to the neutral {!Value} model then {!of_value}, with
+   NO Bson hop (distinct from {!of_json_string}, which routes through the extended-JSON/Bson bridge).
+   The inverse of {!encode_json}; validates with the same path-collected errors as {!decode}. *)
+let decode_json (c : 'a t) (s : string) : ('a, error list) result =
+  match Value_json.of_string s with Ok v -> of_value c v | Error m -> Error [ mkerr ~code:"json" m ]
 
 (* ---- introspection: the neutral reflection renderers consume + positional params ---- *)
 

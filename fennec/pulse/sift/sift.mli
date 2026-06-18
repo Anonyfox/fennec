@@ -102,9 +102,16 @@ val encode_bytes : 'a t -> 'a -> Bigstringaf.t
 (** RELAXED JSON encode — plain JSON (strings/numbers/[]/{}) straight from the value, no {!Bson.t} tree:
     what an HTTP API sends. Distinct from {!to_json_string}, which emits the bridge's CANONICAL extended
     JSON ([$numberInt]/[$oid]/[$date], lossless for BSON/mongosh interchange). Round-trips via
-    {!of_json_string} (an id reads back as a string, a date as a number — decode's coercions accept
+    {!decode_json} (an id reads back as a string, a date as a number — decode's coercions accept
     both). A non-finite float, which plain JSON cannot represent, is emitted as [null]. *)
 val encode_json : 'a t -> 'a -> string
+
+(** RELAXED JSON decode, NATIVE — parse plain JSON straight to the neutral {!Value} model then read +
+    validate, with NO {!Bson.t} hop (a self-contained recursive-descent parser over the data model).
+    The inverse of {!encode_json}; same path-collected errors as {!decode}; a parse failure is a
+    [code:"json"] error. Distinct from {!of_json_string}, which accepts the extended-JSON dialect via
+    the Bson bridge — this is the format-agnostic core's own JSON. *)
+val decode_json : 'a t -> string -> ('a, error list) result
 
 (** {1 Derived operations (SIFT-K6)} *)
 

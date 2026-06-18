@@ -665,4 +665,27 @@ let%test "value: of_value honors from_string coercion (stringly leaf), driving S
   && (match Sift.of_value coerce_c (Assoc [ ("n", String "abc") ]) with Error _ -> true | _ -> false)
   && (match Sift.of_value coerce_c (Assoc [ ("n", Int 7) ]) with Ok 7 -> true | _ -> false)
 
+(* ── Stage 2b: native relaxed JSON (decode_json) — no Bson hop ── *)
+
+let%test "json: decode_json ∘ encode_json round-trips natively (no Bson hop)" =
+  let rt c v = match Sift.decode_json c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | Error _ -> false in
+  rt bag_c ("hi\"x\\y", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && rt opt_c (Some "x", [ 1; 2; 3 ])
+  && rt opt_c (None, [])
+  && rt list_c [ "a"; "b\nc"; "d" ]
+  && rt figure_c (Rect (3.0, 4.0))
+  && rt figure_c (Circle 2.5)
+  && rt nested_c ("ok", ("Ada", "ada@x.io"))
+
+let%test "json: decode_json parses relaxed JSON (numbers/escapes/unicode/nesting), validates, rejects junk" =
+  (match Sift.decode_json bag_c {|{"s":"a\nb","n":42,"f":3.5,"b":true,"d":1700000000000,"i":"507f1f77bcf86cd799439011"}|} with
+   | Ok ("a\nb", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011") -> true
+   | _ -> false)
+  && (match Sift.decode_json Sift.string {|"café"|} with Ok "café" -> true | _ -> false) (* \u + UTF-8 *)
+  && (match Sift.decode_json (Sift.list Sift.int) "[1, 2, 3]" with Ok [ 1; 2; 3 ] -> true | _ -> false)
+  && (match Sift.decode_json viaobj {|{"s":"x","n":0}|} with Error _ -> true | _ -> false) (* n < min_i 1 *)
+  && (match Sift.decode_json bag_c "not json" with Error [ e ] -> e.Sift.code = "json" | _ -> false)
+  && (match Sift.decode_json Sift.int "42 oops" with Error [ e ] -> e.Sift.code = "json" | _ -> false) (* trailing data *)
+  && (match Sift.decode_json (Sift.list Sift.int) "[1, 2" with Error _ -> true | _ -> false) (* unterminated *)
+
 let () = exit (Fennec_hunt_unit.run ())
