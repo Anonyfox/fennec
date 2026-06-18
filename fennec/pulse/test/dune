@@ -6,7 +6,7 @@
  (libraries
   fennec.pulse
   fennec.pulse.method
-  fennec.pulse.collection
+  fennec.pulse.sift.mongo
   fennec.pulse.sift
   fennec-mongo.backend
   fennec-mongo.bson

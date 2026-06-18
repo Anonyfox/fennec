@@ -16,4 +16,4 @@
   fennec.ddp
   fennec.pulse.method
   fennec.pulse.sift
-  fennec.pulse.collection))
+  fennec.pulse.sift.mongo))

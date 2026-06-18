@@ -6,5 +6,5 @@
 (library
  (name fennec_pulse_app)
  (public_name fennec.pulse.app)
- (libraries fennec.pulse fennec.pulse.server fennec-mongo.dynamic fennec.pulse.collection
+ (libraries fennec.pulse fennec.pulse.server fennec-mongo.dynamic fennec.pulse.sift.mongo
    fennec.pulse.sift fennec.pulse.method fennec.pulse.live.client fennec-mongo.bson))

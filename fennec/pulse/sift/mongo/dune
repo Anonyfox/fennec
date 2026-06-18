@@ -1,0 +1,11 @@
+; sift.mongo — the opt-in Mongo TOOLKIT that ships with Sift: the pure data-shape→Bson-artifact
+; vocabulary built on a Sift codec. Filter / M / Sort (selectors, update modifiers, sort docs), Index
+; (key specs), Schema ($jsonSchema rendered from Sift's view), Proj (typed projections), Def (the
+; collection declaration: name + codec + indexes + validator). All PURE + instance-free + jsoo-safe —
+; no store, no connection, no runtime (that fusion is fennec's job). Unwrapped, so userland reads
+; Filter.eq / Def.v directly.
+(library
+ (name fennec_pulse_sift_mongo)
+ (public_name fennec.pulse.sift.mongo)
+ (wrapped false)
+ (libraries fennec-mongo.bson fennec.pulse.sift))

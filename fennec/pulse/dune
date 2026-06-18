@@ -12,4 +12,4 @@
   fennec-mongo.minimongo
   fennec-mongo.backend
   fennec.pulse.method
-  fennec.pulse.collection))
+  fennec.pulse.sift.mongo))
