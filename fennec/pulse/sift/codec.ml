@@ -41,10 +41,14 @@ let of_json_string c s =
 (* ---- neutral data model ({!Value}) — the format-agnostic interchange ----------------------------
    [to_value] projects a typed value to the neutral {!Value.t} (the shape's semantics are erased to
    the common denominator: a date becomes an [Int], an id a [String]); [of_value] reads + validates a
-   value back from it. For now these route through the BSON engine and the {!Value_bson} bridge so
-   they reuse the battle-tested interpreters verbatim; the Format abstraction replaces this with a
-   direct Value-format walk (no Bson hop). The neutral lens a generic renderer / serializer consumes. *)
-let to_value c v : Value.t = Value_bson.of_bson (c.enc v)
-let of_value c (value : Value.t) = decode_value c.shape (Value_bson.to_bson value)
+   value back from it. Both drive the {!Format} interpreter over the {!Value_format} instance — a
+   DIRECT neutral-model walk, no BSON hop. [of_value] runs the same check phase as {!decode}. The
+   neutral lens a generic renderer / serializer consumes. *)
+let to_value c v : Value.t = Serde.write (module Value_format.Writer) c.shape v
+
+let of_value c (value : Value.t) =
+  match Serde.read (module Value_format.Reader) c.shape value with
+  | Error _ as e -> e
+  | Ok v -> if not (needs_checks c.shape) then Ok v else ( match run_checks c.shape v with [] -> Ok v | es -> Error es)
 
 (* ---- primitives ------------------------------------------------------------------ *)

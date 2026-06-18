@@ -650,4 +650,19 @@ let%test "value: of_value validates like decode (refinements + required collect)
   && (match Sift.of_value viaobj (Assoc [ ("n", Int 5) ]) with Error _ -> true | Ok _ -> false) (* required s missing *)
   && (match Sift.of_value viaobj (Assoc [ ("s", String "x"); ("n", Int 5); ("note", String "hi") ]) with Ok ("x", 5, Some "hi") -> true | _ -> false)
 
+let%test "value: round-trips variants, maps, and the TBson escape (representable subset)" =
+  let rt c v = match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v' v | Error _ -> false in
+  let map_c = Sift.(str_map int) in
+  rt figure_c (Circle 2.0)
+  && rt figure_c (Rect (3.0, 4.0))
+  && rt map_c [ ("de", 1); ("en", 2) ]
+  && rt bson_c (B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("s", B.str "x") ])
+
+let%test "value: of_value honors from_string coercion (stringly leaf), driving Serde's coerce path" =
+  let open Sift.Value in
+  (match Sift.of_value coerce_c (Assoc [ ("n", String "5") ]) with Ok 5 -> true | _ -> false)
+  && (match Sift.of_value coerce_c (Assoc [ ("n", String "0") ]) with Error _ -> true | _ -> false) (* 0 < min_i 1 *)
+  && (match Sift.of_value coerce_c (Assoc [ ("n", String "abc") ]) with Error _ -> true | _ -> false)
+  && (match Sift.of_value coerce_c (Assoc [ ("n", Int 7) ]) with Ok 7 -> true | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())
