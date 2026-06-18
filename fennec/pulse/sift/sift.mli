@@ -195,17 +195,31 @@ val of_json_string : 'a t -> string -> ('a, error list) result
     string), so this stays the small common denominator BSON, JSON and later formats all share. *)
 
 module Value : sig
-  (** A neutral value. [Int] is 63-bit native (int64/date precision is a shape-level concern);
-      [Bytes] is opaque binary; [Assoc] is an ORDERED object (key order preserved). *)
+  (** A neutral value — RICH by design: a LOSSLESS superset of every value a document store needs, so
+      it can fully replace a format-specific tree. The basic ctors (Null/Bool/Int/Int64/Float/String/
+      Bytes/List/Assoc) cover JSON and the common case; the semantic ctors (Date/Id/Decimal/Timestamp/
+      Regex/Symbol/Code/Min/Max) carry the richness BSON has and JSON lacks. [Assoc] is ORDERED (key
+      order preserved). NOT the hot path — the zero-copy BSON codecs never materialise a Value, so the
+      common case stays a native [int] / plain string and only a rare rich value pays for its ctor. *)
   type t =
     | Null
     | Bool of bool
-    | Int of int
+    | Int of int  (** a 32-bit-range integer (native int) *)
+    | Int64 of int64  (** a full 64-bit integer *)
     | Float of float
     | String of string
-    | Bytes of string
+    | Bytes of string  (** opaque binary (generic subtype) *)
     | List of t list
-    | Assoc of (string * t) list
+    | Assoc of (string * t) list  (** an ordered object/document *)
+    | Date of int64  (** milliseconds since the Unix epoch *)
+    | Id of string  (** an object id — 24-char hex *)
+    | Decimal of string  (** a high-precision decimal, canonical string form *)
+    | Timestamp of int * int  (** a logical clock: (seconds, ordinal) *)
+    | Regex of string * string  (** (pattern, options) *)
+    | Symbol of string
+    | Code of string  (** code/function source *)
+    | Min  (** sort-order sentinels (below / above every other value) *)
+    | Max
 
   (** Structural equality/ordering, monomorphic. An [Assoc] compares key-by-key IN ORDER — semantic
       record equality (order-insensitive, field-by-field) is the shape-level {!Sift.equal}. *)

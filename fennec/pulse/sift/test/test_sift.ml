@@ -630,10 +630,10 @@ let%test "value: structural equal / compare / get / debug render" =
   && get "z" (Int 0) = None
   && to_string (Assoc [ ("n", Int 42) ]) = {|{"n": 42}|}
 
-let%test "value: to_value erases shape semantics to the neutral model (date→Int, id→String)" =
+let%test "value: to_value preserves shape semantics LOSSLESSLY (date→Date, id→Id)" =
   let open Sift.Value in
   match Sift.to_value bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011") with
-  | Assoc [ ("s", String "hi"); ("n", Int 42); ("f", Float 3.5); ("b", Bool true); ("d", Int 1700000000000); ("i", String "507f1f77bcf86cd799439011") ] -> true
+  | Assoc [ ("s", String "hi"); ("n", Int 42); ("f", Float 3.5); ("b", Bool true); ("d", Date 1700000000000L); ("i", Id "507f1f77bcf86cd799439011") ] -> true
   | _ -> false
 
 let%test "value: of_value ∘ to_value = id across leaves, nested records, options" =
@@ -650,13 +650,22 @@ let%test "value: of_value validates like decode (refinements + required collect)
   && (match Sift.of_value viaobj (Assoc [ ("n", Int 5) ]) with Error _ -> true | Ok _ -> false) (* required s missing *)
   && (match Sift.of_value viaobj (Assoc [ ("s", String "x"); ("n", Int 5); ("note", String "hi") ]) with Ok ("x", 5, Some "hi") -> true | _ -> false)
 
-let%test "value: round-trips variants, maps, and the TBson escape (representable subset)" =
+let%test "value: round-trips variants, maps, and the TBson escape LOSSLESSLY (oid/date/int64/decimal/ts)" =
   let rt c v = match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v' v | Error _ -> false in
   let map_c = Sift.(str_map int) in
   rt figure_c (Circle 2.0)
   && rt figure_c (Rect (3.0, 4.0))
   && rt map_c [ ("de", 1); ("en", 2) ]
-  && rt bson_c (B.doc [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]); ("s", B.str "x") ])
+  (* the rich Value model mirrors BSON 1:1 — every exotic type survives the neutral hop *)
+  && rt bson_c
+       (B.doc
+          [ ("a", B.array [ B.int 1; B.Float 2.5; B.bool true ]);
+            ("oid", B.oid "507f1f77bcf86cd799439011");
+            ("d", B.date 99L);
+            ("big", B.Int64 9000000000L);
+            ("dec", B.Decimal128 "3.14");
+            ("ts", B.Timestamp { t = 5; i = 2 });
+            ("rx", B.Regex { pattern = "ab"; options = "i" }) ])
 
 let%test "value: of_value honors from_string coercion (stringly leaf), driving Serde's coerce path" =
   let open Sift.Value in
