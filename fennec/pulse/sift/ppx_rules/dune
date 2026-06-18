@@ -1,0 +1,10 @@
+; Sift's REUSABLE ppx rules (the [@@deriving sift] / [@@deriving model] codec + Fields deriver) as a
+; plain library — NOT a ppx_rewriter. Any driver links it to register the rule in its single ppx pass:
+; fennec's fur.ppx and the standalone fennec.pulse.sift.ppx both do, and a downstream user can too. Owns
+; no runtime; generates Sift.* code. Ships with the Sift package.
+(library
+ (name sift_ppx_rules)
+ (public_name fennec.pulse.sift.ppx.rules)
+ (libraries ppxlib)
+ (preprocess
+  (pps ppxlib.metaquot)))

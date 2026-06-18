@@ -1,0 +1,6 @@
+; Proves the standalone Sift ppx: ONLY fennec.pulse.sift + the sift.ppx driver, no collection/fur.
+(test
+ (name test_sift_ppx)
+ (libraries fennec.pulse.sift)
+ (preprocess
+  (pps fennec.pulse.sift.ppx)))
