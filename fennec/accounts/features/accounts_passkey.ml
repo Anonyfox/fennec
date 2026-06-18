@@ -564,6 +564,98 @@ let identity (credential : credential) =
   | Ok key -> Ok key
   | Error e -> Error (Identity_error e)
 
+(* ---- browser WebAuthn wire shapes ----
+   The credential-creation / credential-request options JSON the browser's [navigator.credentials]
+   expects, and the parsers for the responses it posts back. These are the WebAuthn protocol's own
+   field names, so they belong with the rest of the passkey protocol here rather than being hand-built
+   by the HTTP layer reaching into [registration]/[assertion_challenge]/[*_response] internals. *)
+
+let json_opt_string key = function Some value -> [ (key, Json.String value) ] | None -> []
+
+let json_member_string key json =
+  match Json.member key json with Some (Json.String s) -> Some s | _ -> None
+
+let json_member_list_strings key json =
+  match Option.bind (Json.member key json) Json.to_list_opt with
+  | None -> []
+  | Some xs -> List.filter_map Json.to_string_opt xs
+
+let nested_response json key =
+  match Json.member "response" json with Some response -> json_member_string key response | None -> None
+
+(* PublicKeyCredentialCreationOptions, plus the single-use registration [token] the caller echoes back. *)
+let registration_options_json (issued : registration) =
+  Json.to_string
+    (Json.Obj
+       [
+         ("token", Json.String (Challenge.token_to_string issued.token));
+         ( "publicKey",
+           Json.Obj
+             [
+               ("challenge", Json.String issued.challenge);
+               ("rp", Json.Obj [ ("id", Json.String issued.rp.id); ("name", Json.String issued.rp.name) ]);
+               ( "user",
+                 Json.Obj
+                   [
+                     ("id", Json.String issued.user.handle);
+                     ("name", Json.String issued.user.name);
+                     ("displayName", Json.String issued.user.display_name);
+                   ] );
+               ( "pubKeyCredParams",
+                 Json.List [ Json.Obj [ ("type", Json.String "public-key"); ("alg", Json.Number (-7.)) ] ] );
+               ( "authenticatorSelection",
+                 Json.Obj [ ("userVerification", Json.String (if issued.rp.user_verification then "required" else "preferred")) ] );
+               ("attestation", Json.String "none");
+             ] );
+       ])
+
+(* PublicKeyCredentialRequestOptions, plus the single-use assertion [token]. *)
+let assertion_options_json (issued : assertion_challenge) =
+  Json.to_string
+    (Json.Obj
+       [
+         ("token", Json.String (Challenge.token_to_string issued.token));
+         ( "publicKey",
+           Json.Obj
+             ([
+                ("challenge", Json.String issued.challenge);
+                ("rpId", Json.String issued.rp.id);
+                ( "allowCredentials",
+                  Json.List
+                    (List.map
+                       (fun id -> Json.Obj [ ("type", Json.String "public-key"); ("id", Json.String id) ])
+                       issued.allowed_credentials) );
+                ( "userVerification",
+                  Json.String (if issued.rp.user_verification then "required" else "preferred") );
+              ]
+             @ json_opt_string "userId" issued.user_id) );
+       ])
+
+(* Parse the browser's AuthenticatorAttestationResponse. [None] when a required field is missing. *)
+let registration_response_of_json json : registration_response option =
+  match
+    ( json_member_string "id" json,
+      json_member_string "rawId" json,
+      nested_response json "clientDataJSON",
+      nested_response json "attestationObject" )
+  with
+  | Some id, Some raw_id, Some client_data_json, Some attestation_object ->
+    Some { id; raw_id; client_data_json; attestation_object; transports = json_member_list_strings "transports" json }
+  | _ -> None
+
+(* Parse the browser's AuthenticatorAssertionResponse. [None] when a required field is missing. *)
+let assertion_response_of_json json : assertion_response option =
+  match
+    ( json_member_string "id" json,
+      json_member_string "rawId" json,
+      nested_response json "clientDataJSON",
+      nested_response json "authenticatorData",
+      nested_response json "signature" )
+  with
+  | Some id, Some raw_id, Some client_data_json, Some authenticator_data, Some signature ->
+    Some { id; raw_id; client_data_json; authenticator_data; signature; user_handle = nested_response json "userHandle" }
+  | _ -> None
+
 (* ---- inline tests ---- *)
 
 let test_clock () =

@@ -188,3 +188,19 @@ val finish_assertion :
 
 (** Canonical identity key for a passkey credential. *)
 val identity : credential -> (Identity.key, error) result
+
+(** Browser-ready [PublicKeyCredentialCreationOptions] JSON for a registration ceremony (WebAuthn field
+    names), with the single-use [token] the caller echoes back on finish. *)
+val registration_options_json : registration -> string
+
+(** Browser-ready [PublicKeyCredentialRequestOptions] JSON for an assertion ceremony, with the
+    single-use [token]. *)
+val assertion_options_json : assertion_challenge -> string
+
+(** Parse the browser's [AuthenticatorAttestationResponse] JSON into a {!registration_response}.
+    [None] when a required field is missing or malformed. *)
+val registration_response_of_json : Fennec_mongo_json.Json.t -> registration_response option
+
+(** Parse the browser's [AuthenticatorAssertionResponse] JSON into an {!assertion_response}.
+    [None] when a required field is missing or malformed. *)
+val assertion_response_of_json : Fennec_mongo_json.Json.t -> assertion_response option

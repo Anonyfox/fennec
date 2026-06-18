@@ -2430,101 +2430,25 @@ let nested_response json key =
   | Some response -> json_member_string key response
   | None -> None
 
-let passkey_registration_options_json (issued : Passkey.registration) =
-  Json.to_string
-    (Json.Obj
-       [
-         json_string "token" (Challenge.token_to_string issued.token);
-         ( "publicKey",
-           Json.Obj
-             [
-               json_string "challenge" issued.challenge;
-               ( "rp",
-                 Json.Obj
-                   [
-                     json_string "id" issued.rp.id;
-                     json_string "name" issued.rp.name;
-                   ] );
-               ( "user",
-                 Json.Obj
-                   [
-                     json_string "id" issued.user.handle;
-                     json_string "name" issued.user.name;
-                     json_string "displayName" issued.user.display_name;
-                   ] );
-               ( "pubKeyCredParams",
-                 Json.List [ Json.Obj [ ("type", Json.String "public-key"); ("alg", Json.Number (-7.)) ] ] );
-               ( "authenticatorSelection",
-                 Json.Obj [ ("userVerification", Json.String (if issued.rp.user_verification then "required" else "preferred")) ] );
-               json_string "attestation" "none";
-             ] );
-       ])
-
-let passkey_assertion_options_json (issued : Passkey.assertion_challenge) =
-  Json.to_string
-    (Json.Obj
-       [
-         json_string "token" (Challenge.token_to_string issued.token);
-         ( "publicKey",
-           Json.Obj
-             ([
-                json_string "challenge" issued.challenge;
-                json_string "rpId" issued.rp.id;
-                ( "allowCredentials",
-                  Json.List
-                    (List.map
-                       (fun id -> Json.Obj [ ("type", Json.String "public-key"); ("id", Json.String id) ])
-                       issued.allowed_credentials) );
-                ( "userVerification",
-                  Json.String (if issued.rp.user_verification then "required" else "preferred") );
-              ]
-             @ json_opt_string "userId" issued.user_id) );
-       ])
-
+(* The browser WebAuthn wire shapes now live in {!Accounts_passkey} (their protocol owner); the engine
+   builds the typed ceremony and renders/parses through the feature, mapping a malformed response to the
+   engine's stable [Login_rejected] error. *)
 let begin_passkey_registration t relying_party user =
   let passkey = Passkey.make ~challenge:(challenge_service t ()) in
   Result.map_error (fun e -> Login_rejected (Passkey.string_of_error e))
     (Passkey.begin_registration passkey relying_party user)
   |> Result.map (fun registration ->
-         { registration; json = passkey_registration_options_json registration })
+         { registration; json = Passkey.registration_options_json registration })
 
 let passkey_registration_response_of_json json =
-  match
-    ( json_member_string "id" json,
-      json_member_string "rawId" json,
-      nested_response json "clientDataJSON",
-      nested_response json "attestationObject" )
-  with
-  | Some id, Some raw_id, Some client_data_json, Some attestation_object ->
-    Ok
-      {
-        Passkey.id;
-        raw_id;
-        client_data_json;
-        attestation_object;
-        transports = json_member_list_strings "transports" json;
-      }
-  | _ -> Error (Login_rejected "Malformed passkey registration response")
+  match Passkey.registration_response_of_json json with
+  | Some response -> Ok response
+  | None -> Error (Login_rejected "Malformed passkey registration response")
 
 let passkey_assertion_response_of_json json =
-  match
-    ( json_member_string "id" json,
-      json_member_string "rawId" json,
-      nested_response json "clientDataJSON",
-      nested_response json "authenticatorData",
-      nested_response json "signature" )
-  with
-  | Some id, Some raw_id, Some client_data_json, Some authenticator_data, Some signature ->
-    Ok
-      {
-        Passkey.id;
-        raw_id;
-        client_data_json;
-        authenticator_data;
-        signature;
-        user_handle = nested_response json "userHandle";
-      }
-  | _ -> Error (Login_rejected "Malformed passkey assertion response")
+  match Passkey.assertion_response_of_json json with
+  | Some response -> Ok response
+  | None -> Error (Login_rejected "Malformed passkey assertion response")
 
 let finish_passkey_registration t relying_party ~user_id ~token json =
   Result.bind (passkey_registration_response_of_json json) (fun response ->
@@ -2541,7 +2465,7 @@ let begin_passkey_assertion t ?user_id ?allowed_credentials relying_party =
   let passkey = Passkey.make ~challenge:(challenge_service t ()) in
   Result.map_error (fun e -> Login_rejected (Passkey.string_of_error e))
     (Passkey.begin_assertion passkey ?user_id ?allowed_credentials relying_party)
-  |> Result.map (fun assertion -> { assertion; json = passkey_assertion_options_json assertion })
+  |> Result.map (fun assertion -> { assertion; json = Passkey.assertion_options_json assertion })
 
 let finish_passkey_assertion_verified t relying_party ~token json =
   Result.bind (passkey_assertion_response_of_json json) (fun response ->
