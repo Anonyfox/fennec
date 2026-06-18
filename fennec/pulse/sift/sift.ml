@@ -7,6 +7,10 @@ include Shape
 include Codec
 include Combinators
 
+(* The neutral data model — the format-agnostic interchange ({!to_value}/{!of_value} project a typed
+   value to/from it). Lean by design; the common denominator BSON, JSON and later formats share. *)
+module Value = Value
+
 (* ---- zero-copy decode: straight from a BSON document buffer (SIFT-K2) ------------------- *)
 
 (* Decode a top-level BSON document buffer into the codec's value WITHOUT building a {!Bson.t} tree:

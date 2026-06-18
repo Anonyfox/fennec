@@ -616,4 +616,38 @@ let%test "k4: objN decoder == applicative builder (decode verdict+errors, encode
   && same_enc ("a", 7, None) (* None omits the key, both ways *)
   && (match Sift.decode_bytes viaobj (buf_of_bson (B.doc [ ("s", B.str "x"); ("n", B.int 5); ("note", B.str "hi") ])) with Ok ("x", 5, Some "hi") -> true | _ -> false)
 
+(* ── Stage 1: the neutral data model (Sift.Value) + to_value / of_value ── *)
+
+let%test "value: structural equal / compare / get / debug render" =
+  let open Sift.Value in
+  equal (Assoc [ ("a", Int 1); ("b", List [ String "x"; Null ]) ]) (Assoc [ ("a", Int 1); ("b", List [ String "x"; Null ]) ])
+  && (not (equal (Int 1) (Float 1.0)))
+  && (not (equal (Assoc [ ("a", Int 1) ]) (Assoc [ ("a", Int 2) ])))
+  && compare (Int 1) (Int 2) < 0
+  && compare Null (Bool false) < 0 (* constructor rank: Null < Bool < Int < … *)
+  && compare (List [ Int 1 ]) (List [ Int 1; Int 0 ]) < 0
+  && (match get "b" (Assoc [ ("a", Int 1); ("b", Bool true) ]) with Some (Bool true) -> true | _ -> false)
+  && get "z" (Int 0) = None
+  && to_string (Assoc [ ("n", Int 42) ]) = {|{"n": 42}|}
+
+let%test "value: to_value erases shape semantics to the neutral model (date→Int, id→String)" =
+  let open Sift.Value in
+  match Sift.to_value bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011") with
+  | Assoc [ ("s", String "hi"); ("n", Int 42); ("f", Float 3.5); ("b", Bool true); ("d", Int 1700000000000); ("i", String "507f1f77bcf86cd799439011") ] -> true
+  | _ -> false
+
+let%test "value: of_value ∘ to_value = id across leaves, nested records, options" =
+  let rt c v = match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v' v | Error _ -> false in
+  rt bag_c ("x", 1, 2.0, false, 0L, "abc")
+  && rt bag_c ("y", -5, 3.25, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && rt nested_c ("ok", ("Ada", "ada@x.io"))
+  && rt opt_c (Some "x", [ 1; 2; 3 ])
+  && rt opt_c (None, [])
+
+let%test "value: of_value validates like decode (refinements + required collect)" =
+  let open Sift.Value in
+  (match Sift.of_value viaobj (Assoc [ ("s", String "x"); ("n", Int 0) ]) with Error _ -> true | Ok _ -> false) (* n < min_i 1 *)
+  && (match Sift.of_value viaobj (Assoc [ ("n", Int 5) ]) with Error _ -> true | Ok _ -> false) (* required s missing *)
+  && (match Sift.of_value viaobj (Assoc [ ("s", String "x"); ("n", Int 5); ("note", String "hi") ]) with Ok ("x", 5, Some "hi") -> true | _ -> false)
+
 let () = exit (Fennec_hunt_unit.run ())

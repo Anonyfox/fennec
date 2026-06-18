@@ -180,6 +180,47 @@ val to_json_string : 'a t -> 'a -> string
 (** Decode + validate a value from a JSON string ([malformed JSON] error on a parse failure). *)
 val of_json_string : 'a t -> string -> ('a, error list) result
 
+(** {1 The neutral data model}
+
+    The format-agnostic interchange — the serde "data model" every format reads into and writes out
+    of. Deliberately LEAN: richness lives at the shape level (a date is an [int64] leaf, an id a
+    string), so this stays the small common denominator BSON, JSON and later formats all share. *)
+
+module Value : sig
+  (** A neutral value. [Int] is 63-bit native (int64/date precision is a shape-level concern);
+      [Bytes] is opaque binary; [Assoc] is an ORDERED object (key order preserved). *)
+  type t =
+    | Null
+    | Bool of bool
+    | Int of int
+    | Float of float
+    | String of string
+    | Bytes of string
+    | List of t list
+    | Assoc of (string * t) list
+
+  (** Structural equality/ordering, monomorphic. An [Assoc] compares key-by-key IN ORDER — semantic
+      record equality (order-insensitive, field-by-field) is the shape-level {!Sift.equal}. *)
+  val equal : t -> t -> bool
+
+  val compare : t -> t -> int
+
+  (** Field lookup in an [Assoc] (first match); [None] for a non-object or absent key. *)
+  val get : string -> t -> t option
+
+  (** A readable debug rendering (JSON-ish) — not a serializer (that is a Format). *)
+  val pp : Format.formatter -> t -> unit
+
+  val to_string : t -> string
+end
+
+(** Project a typed value to the neutral {!Value.t} — the shape's semantics erase to the common
+    denominator (a date becomes an [Int], an id a [String]). Total, mirrors the encode. *)
+val to_value : 'a t -> 'a -> Value.t
+
+(** Read + validate a value back from a {!Value.t} (same path-collected errors as {!decode}). *)
+val of_value : 'a t -> Value.t -> ('a, error list) result
+
 (** {1 Primitives} *)
 
 val string : string t

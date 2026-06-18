@@ -38,4 +38,13 @@ let to_json_string c v = Bson_json.to_string (c.enc v)
 let of_json_string c s =
   match Bson_json.of_string_opt s with Some b -> decode_value c.shape b | None -> Error [ mkerr ~code:"json" "malformed JSON" ]
 
+(* ---- neutral data model ({!Value}) — the format-agnostic interchange ----------------------------
+   [to_value] projects a typed value to the neutral {!Value.t} (the shape's semantics are erased to
+   the common denominator: a date becomes an [Int], an id a [String]); [of_value] reads + validates a
+   value back from it. For now these route through the BSON engine and the {!Value_bson} bridge so
+   they reuse the battle-tested interpreters verbatim; the Format abstraction replaces this with a
+   direct Value-format walk (no Bson hop). The neutral lens a generic renderer / serializer consumes. *)
+let to_value c v : Value.t = Value_bson.of_bson (c.enc v)
+let of_value c (value : Value.t) = decode_value c.shape (Value_bson.to_bson value)
+
 (* ---- primitives ------------------------------------------------------------------ *)
