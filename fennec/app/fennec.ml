@@ -158,6 +158,13 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error
   (* outbound email transport from MAIL_URL (smtp:// / smtps:// / unset ⇒ dev log), booted with the
      switch's net so SMTP submission runs on the server's Eio loop *)
   Fennec_mail.boot ~sw ~net:(Eio.Stdenv.net env) ();
+  (* the ambient outbound-HTTPS transport the Accounts provider presets use for token-exchange / profile
+     / JWKS / discovery calls: bind fennec's prod-safe HTTPS client (Paw.Https_client — peer verified
+     against the OS trust store) to the server's net, exactly as the mail transport is bound. Without a
+     configured SSO preset this is never exercised; with one, [Accounts.OAuth.github ~client_id
+     ~client_secret ()] is a true one-liner because the preset's exchange reads this transport at
+     callback time (a request handler has no Eio net of its own). *)
+  Accounts.set_http_transport (Accounts.Http_transport.default ~net:(Eio.Stdenv.net env) ());
   (* eager accounts: build the (memoized) store now — inside the switch, after the ambient switch is
      installed — so the engine opens + indexes are ensured at boot, not on the first authenticated
      request. Opt-in is preserved: no MONGO_URL ⇒ the no-op store, and a request with no session cookie

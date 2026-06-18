@@ -48,14 +48,11 @@ module Password = Accounts_password
 (** Email ownership, verification, magic links, and OTP login. *)
 module Email = Accounts_email
 
-(** OAuth provider login using Authorization Code + PKCE. *)
-module OAuth = Accounts_oauth
-
-(** OpenID Connect login and enterprise OIDC SSO. *)
-module Oidc = Accounts_oidc
-
-(** SAML 2.0 enterprise SSO. *)
-module Saml = Accounts_saml
+(* OAuth / OIDC / SAML are declared lower down (after the [provider] variant), because their facade
+   modules now additionally expose the config-level {b preset constructors} ([OAuth.github] &c.) whose
+   return type is [external_identity provider] — a type that must be in scope first. The protocol
+   surface they re-export ([OAuth.provider], [Oidc.principal], [Saml.principal], …) is identical to the
+   old [module OAuth = Accounts_oauth] aliases; only the path order in this file changed. *)
 
 (** Passkeys and WebAuthn. *)
 module Passkey = Accounts_passkey
@@ -164,7 +161,7 @@ val password_hasher : ?iterations:int -> unit -> password_hasher
 
 (** Errors returned by Accounts operations. They are intentionally stable and small so HTTP handlers,
     DDP methods, and UIs can map them without string parsing. *)
-type error =
+type error = Accounts_types.error =
   | User_not_found
   | Duplicate_email of string
   | Duplicate_username of string
@@ -319,7 +316,7 @@ type strategy = {
     the small common shape Accounts needs to turn that key into the familiar login/link/create
     outcome. [email_verified] controls whether [email] may be used as explicit auto-link evidence;
     provider modules must set it only when the upstream provider asserted verification. *)
-type external_identity = {
+type external_identity = Accounts_types.external_identity = {
   key : Identity.key;
   email : string option;
   email_verified : bool;
@@ -350,15 +347,15 @@ val oauth_identity :
   ?username:string ->
   ?profile:Bson.t ->
   ?service:Bson.t ->
-  OAuth.provider ->
+  Accounts_oauth.provider ->
   subject:string ->
   (external_identity, error) result
 
 (** External identity facts for a validated OIDC principal. *)
-val oidc_identity : ?username:string -> ?profile:Bson.t -> ?service:Bson.t -> Oidc.principal -> external_identity
+val oidc_identity : ?username:string -> ?profile:Bson.t -> ?service:Bson.t -> Accounts_oidc.principal -> external_identity
 
 (** External identity facts for a validated SAML principal. *)
-val saml_identity : ?username:string -> ?profile:Bson.t -> ?service:Bson.t -> Saml.principal -> external_identity
+val saml_identity : ?username:string -> ?profile:Bson.t -> ?service:Bson.t -> Accounts_saml.principal -> external_identity
 
 (** External identity facts for a verified passkey assertion. *)
 val passkey_identity : ?service:Bson.t -> Passkey.assertion -> (external_identity, error) result
@@ -555,29 +552,42 @@ type routes_config = {
 
     Each variant bundles the {b existing} typed provider value with the token-exchange recipe its
     matching callback route already needs (OAuth/OIDC) or the trusted signing keys (SAML); the
-    auto-wiring mounts its authorize + callback routes under [routes.auth_prefix]. The preset
-    constructors that {e synthesize} the exchange (e.g. [Accounts.OAuth.github]) are a later pass — for
-    now an app supplies the provider and its exchange explicitly (the same [~exchange] the [*_paw]
-    constructors take). The [external_identity] phantom keeps the type concrete at use sites. *)
-type 'a provider =
+    auto-wiring mounts its authorize + callback routes under [routes.auth_prefix].
+
+    [exchange] is the code→identity recipe. Supply it explicitly for full control (the original
+    "each deployment decides" path — see {!OAuth.custom} / {!Oidc.from_connection} /
+    {!Saml.from_connection}), or let a {b preset constructor} synthesize it:
+    [Accounts.OAuth.github ~client_id ~client_secret ()] bundles the provider's
+    authorize/token/userinfo endpoints plus the default token-exchange HTTP, so a provider becomes a
+    one-liner. The presets reuse the {b verified} protocol primitives (PKCE/state, OIDC nonce, RS256
+    ID-token signature + iss/aud/exp/nonce verification) from the feature modules and only add the HTTP
+    call + response parsing.
+
+    [role_map], when [Some f], maps the verified principal/identity to app-wide role strings applied via
+    {!set_roles_from_strings} after the login succeeds; [None] (the default) is inert. The
+    [external_identity] phantom keeps the type concrete at use sites. *)
+type 'a provider = 'a Accounts_types.provider =
   | OAuth_provider of {
-      provider : OAuth.provider;
-      exchange : OAuth.state -> code:string -> (external_identity, error) result;
+      provider : Accounts_oauth.provider;
+      exchange : Accounts_oauth.state -> code:string -> (external_identity, error) result;
       link_verified_email : bool;
+      role_map : (external_identity -> string list) option;
       success : string;
       error : string;
     }
   | Oidc_provider of {
-      connection : Oidc.connection;
-      exchange : Oidc.state -> code:string -> (Oidc.principal, error) result;
+      connection : Accounts_oidc.connection;
+      exchange : Accounts_oidc.state -> code:string -> (Accounts_oidc.principal, error) result;
       link_verified_email : bool;
+      role_map : (Accounts_oidc.principal -> string list) option;
       success : string;
       error : string;
     }
   | Saml_provider of {
-      connection : Saml.connection;
+      connection : Accounts_saml.connection;
       trusted_keys : X509.Public_key.t list;
       signing_key : X509.Private_key.t option;
+      role_map : (Accounts_saml.principal -> string list) option;
       success : string;
       error : string;
     }
@@ -595,6 +605,211 @@ type config = {
   providers : external_identity provider list;
       (** SSO providers; the auto-wiring mounts authorize + callback routes per provider *)
 }
+
+(** {1 The ambient outbound-HTTPS transport for the provider presets}
+
+    The preset constructors below ({!OAuth.github} &c.) bundle a default token-exchange that performs
+    HTTP. That HTTP runs inside a request handler (which has no Eio network handle), so the network is
+    captured once at boot — exactly as {!Fennec_mail} captures it for SMTP — and read back when an
+    exchange fires. {!Fennec.serve} installs it; the default is fennec's prod-safe outbound HTTPS client
+    (the same tls-eio + x509 + ca-certs stack the server links, peer verified against the OS trust
+    store, never downgraded). Tests install a stub via {!set_http_transport}. *)
+module Http_transport = Accounts_http_client
+
+(** Install the process-ambient outbound-HTTPS transport the presets use. Called by {!Fennec.serve} at
+    boot; an app or test may override it (e.g. to inject a stub). *)
+val set_http_transport : Http_transport.transport -> unit
+
+(** {1 Capability submodules with config-level preset constructors}
+
+    Each capability module re-exports its protocol surface ({!OAuth.provider}, {!Oidc.principal}, …)
+    {b and} adds the config-level preset constructors that return a closed {!provider} ready to drop into
+    [config.providers]. The presets bundle the provider's authorize/token/userinfo/JWKS endpoints plus
+    the default token-exchange HTTP, reusing the {b verified} protocol primitives (PKCE/state, OIDC
+    nonce, RS256 ID-token signature + iss/aud/exp/nonce, SAML XML-signature) — they add only endpoint
+    config + the HTTP call. The escape hatches ([OAuth.custom] / [Oidc.from_connection] /
+    [Saml.from_connection]) keep the explicit app-owned [~exchange]. *)
+
+(** OAuth provider login using Authorization Code + PKCE, plus the OAuth config presets. *)
+module OAuth : sig
+  include module type of struct
+    include Accounts_oauth
+  end
+
+  (** GitHub login as a one-liner: bundles GitHub's authorize/token endpoints + the [/user] +
+      [/user/emails] profile fetch (the verified primary address is taken from [/user/emails], never the
+      possibly-unverified public profile email). [scopes] default to [read:user user:email]. [redirect_uri]
+      is the provider's callback URL (the auto-wiring derives [<auth_prefix>/github/callback]). *)
+  val github :
+    ?scopes:string list ->
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(external_identity -> string list) ->
+    ?http:Http_transport.transport ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** Google login over OAuth2 (reads the v3 userinfo endpoint; [email_verified] is honoured). Prefer
+      {!Oidc.google} when full ID-token verification is wanted. *)
+  val google :
+    ?scopes:string list ->
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(external_identity -> string list) ->
+    ?http:Http_transport.transport ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** The escape hatch: a fully app-owned provider + exchange (the original "each deployment decides"
+      path). No preset endpoints are assumed; [exchange] does whatever the app needs and returns the
+      canonical {!external_identity} facts. *)
+  val custom :
+    ?link_verified_email:bool ->
+    ?role_map:(external_identity -> string list) ->
+    ?success:string ->
+    ?error:string ->
+    provider:provider ->
+    exchange:(state -> code:string -> (external_identity, Accounts_types.error) result) ->
+    unit ->
+    Accounts_types.external_identity Accounts_types.provider
+end
+
+(** OpenID Connect login and enterprise OIDC SSO, plus the OIDC config presets. *)
+module Oidc : sig
+  include module type of struct
+    include Accounts_oidc
+  end
+
+  (** Google Sign-In (OIDC). Discovers the token endpoint + JWKS from the issuer, then verifies the
+      RS256 ID token (iss/aud/exp/nonce) via {!Accounts_oidc.verify_id_token}. *)
+  val google :
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(principal -> string list) ->
+    ?http:Http_transport.transport ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** Microsoft Entra ID (OIDC). [tenant_id] pins the exact token issuer for strict ID-token
+      validation. *)
+  val microsoft :
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(principal -> string list) ->
+    ?http:Http_transport.transport ->
+    tenant_id:string ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** Okta (OIDC). [domain] is the Okta org domain; [authorization_server_id] defaults to [default]. *)
+  val okta :
+    ?success:string ->
+    ?error:string ->
+    ?authorization_server_id:string ->
+    ?role_map:(principal -> string list) ->
+    ?http:Http_transport.transport ->
+    domain:string ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** Auth0 (OIDC). [domain] may be [example.us.auth0.com] or a full [https://] URL. *)
+  val auth0 :
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(principal -> string list) ->
+    ?http:Http_transport.transport ->
+    domain:string ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** Keycloak (OIDC). [base_url] may include a path; [realm] selects the realm. *)
+  val keycloak :
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(principal -> string list) ->
+    ?http:Http_transport.transport ->
+    base_url:string ->
+    realm:string ->
+    redirect_uri:string ->
+    client_id:string ->
+    client_secret:string ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** The escape hatch: a pre-built {!connection} plus either the default discovery+verify exchange
+      (supply [client_secret]) or a fully app-owned [exchange] (the original explicit path). Named
+      [from_connection] so it does not shadow {!connection} (the connection builder). *)
+  val from_connection :
+    ?link_verified_email:bool ->
+    ?role_map:(principal -> string list) ->
+    ?discovery_url:string ->
+    ?http:Http_transport.transport ->
+    ?success:string ->
+    ?error:string ->
+    ?client_secret:string ->
+    ?exchange:(state -> code:string -> (principal, Accounts_types.error) result) ->
+    connection:connection ->
+    unit ->
+    Accounts_types.external_identity Accounts_types.provider
+end
+
+(** SAML 2.0 enterprise SSO, plus the SAML config presets. *)
+module Saml : sig
+  include module type of struct
+    include Accounts_saml
+  end
+
+  (** Okta SAML: builds the SP connection and bundles the trusted IdP signing keys. SAML has no
+      token-exchange HTTP — the IdP POSTs a signed assertion to the ACS route, verified against
+      [trusted_keys] by {!Accounts_saml.consume_response}. Use {!trusted_keys_of_pem} to parse the IdP
+      certificate PEM into [trusted_keys]. *)
+  val okta :
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(principal -> string list) ->
+    ?signing_key:X509.Private_key.t ->
+    ?org_id:string ->
+    ?domains:string list ->
+    ?trust_email:bool ->
+    id:string ->
+    issuer:string ->
+    sso_url:string ->
+    entity_id:string ->
+    acs_url:string ->
+    trusted_keys:X509.Public_key.t list ->
+    unit ->
+    (Accounts_types.external_identity Accounts_types.provider, error) result
+
+  (** The escape hatch: a pre-built {!connection} + trusted keys. Named [from_connection] so it does not
+      shadow {!connection} (the connection builder). *)
+  val from_connection :
+    ?success:string ->
+    ?error:string ->
+    ?role_map:(principal -> string list) ->
+    ?signing_key:X509.Private_key.t ->
+    connection:connection ->
+    trusted_keys:X509.Public_key.t list ->
+    unit ->
+    Accounts_types.external_identity Accounts_types.provider
+end
 
 (** The zero-config umbrella — today's behaviour exactly. Every optional feature off, secure password
     defaults, the framework session/route defaults, no extra providers. Override one field at a time. *)
@@ -1587,10 +1802,12 @@ val oauth_authorize_paw :
     It parses and consumes OAuth state, then calls [exchange] with the consumed state and provider
     code. [exchange] must perform token exchange/profile validation and return canonical
     {!external_identity} facts. On success the helper resolves/links the account, sets the login
-    cookie, and redirects to the state redirect or [success]. *)
+    cookie, and redirects to the state redirect or [success]. [role_map], when given, maps the
+    resolved identity to app-wide role strings applied via {!set_roles_from_strings} after login. *)
 val oauth_callback_paw :
   t ->
   ?link_verified_email:bool ->
+  ?role_map:(external_identity -> string list) ->
   path:string ->
   success:string ->
   error:string ->
@@ -1624,10 +1841,13 @@ val oidc_authorize_paw :
 
     [exchange] must exchange the authorization code, verify the ID token, validate claims against
     the consumed state/connection, and return an {!Oidc.principal}. The helper then uses
-    {!login_with_oidc}, sets the login cookie, and redirects. *)
+    {!login_with_oidc}, sets the login cookie, and redirects. [role_map], when given, maps the
+    verified {!Oidc.principal} to app-wide role strings applied via {!set_roles_from_strings} after
+    login. *)
 val oidc_callback_paw :
   t ->
   ?link_verified_email:bool ->
+  ?role_map:(Oidc.principal -> string list) ->
   path:string ->
   success:string ->
   error:string ->
@@ -1652,9 +1872,11 @@ val saml_authorize_paw :
 (** POST route helper for SAML ACS callbacks.
 
     Reads [RelayState] and [SAMLResponse], validates the response with [trusted_keys], resolves the
-    Accounts login, sets the login cookie, and redirects. *)
+    Accounts login, sets the login cookie, and redirects. [role_map], when given, maps the verified
+    {!Saml.principal} to app-wide role strings applied via {!set_roles_from_strings} after login. *)
 val saml_callback_paw :
   t ->
+  ?role_map:(Saml.principal -> string list) ->
   path:string ->
   success:string ->
   error:string ->

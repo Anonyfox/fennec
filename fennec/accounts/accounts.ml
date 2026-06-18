@@ -19,6 +19,50 @@ include Accounts_base
 module Codec = Accounts_codec
 module Collection_store = Accounts_collection_store
 
+(* the config-level provider PRESETS (Stage 3b): one-liner constructors that return the closed
+   [external_identity provider] variant with the token-exchange recipe bundled. They live in
+   {!Accounts_provider_presets} (above the engine, below this facade) because the variant + the
+   [external_identity] bridge are engine types. Re-export each onto its capability submodule so the
+   public paths are [Accounts.OAuth.github] / [Accounts.Oidc.google] / [Accounts.Saml.okta], next to
+   the existing protocol surface ([OAuth.provider], [OAuth.Providers.*], …) — additive, nothing
+   removed. The presets default their exchange HTTP to the ambient {!Accounts_http_client} transport,
+   so the call site is a true one-liner; the explicit app-owned [~exchange] stays via [OAuth.custom]
+   / [Oidc.connection] / [Saml.connection]. *)
+module OAuth = struct
+  include Accounts_oauth
+
+  let github = Accounts_provider_presets.OAuth.github
+  let google = Accounts_provider_presets.OAuth.google
+  let custom = Accounts_provider_presets.OAuth.custom
+end
+
+module Oidc = struct
+  include Accounts_oidc
+
+  let google = Accounts_provider_presets.Oidc.google
+  let microsoft = Accounts_provider_presets.Oidc.microsoft
+  let okta = Accounts_provider_presets.Oidc.okta
+  let auth0 = Accounts_provider_presets.Oidc.auth0
+  let keycloak = Accounts_provider_presets.Oidc.keycloak
+
+  (* the escape hatch ([from_connection], not [connection] — that name is the connection builder above). *)
+  let from_connection = Accounts_provider_presets.Oidc.from_connection
+end
+
+module Saml = struct
+  include Accounts_saml
+
+  let okta = Accounts_provider_presets.Saml.okta
+  let from_connection = Accounts_provider_presets.Saml.from_connection
+end
+
+(* the ambient outbound-HTTPS transport the presets drive (Paw.Https_client by default). {!Fennec.serve}
+   installs it at boot with the server's Eio net (mirroring Fennec_mail); exposed so the runtime — and
+   tests — can set it. *)
+module Http_transport = Accounts_http_client
+
+let set_http_transport = Accounts_http_client.set_transport
+
 (* the HTTP session-view serializers live in {!Accounts_session}; re-export the two public entry
    points at the [Accounts] top level so accounts.mli is satisfied unchanged. *)
 let session_doc = Accounts_session.session_doc

@@ -514,7 +514,16 @@ let oauth_authorize_paw t ?(redirect_param = "redirect") ~path ~error provider (
       | Error _ -> Conn.redirect c error
       | Ok issued -> Conn.redirect c issued.OAuth.url)
 
-let oauth_callback_paw t ?(link_verified_email = true) ~path ~success ~error provider ~exchange () =
+(* Apply a provider's optional role-map to a freshly-logged-in user. The mapped role strings are
+   persisted through the same audited path as admin/SCIM role changes; a role-map failure is
+   non-fatal to the login (the session is already valid) but is surfaced via the audit log inside
+   set_roles_from_strings. [None] is inert. *)
+let apply_role_map t role_map principal user_id =
+  match role_map with
+  | None -> ()
+  | Some f -> ignore (set_roles_from_strings t user_id (f principal))
+
+let oauth_callback_paw t ?(link_verified_email = true) ?role_map ~path ~success ~error provider ~exchange () =
   Paw.Route.get path (fun c ->
       let oauth = OAuth.make ~challenge:(challenge_service t ()) in
       match OAuth.parse_callback (Conn.req c).H.query_string with
@@ -534,6 +543,7 @@ let oauth_callback_paw t ?(link_verified_email = true) ~path ~success ~error pro
             with
             | Error _ -> Conn.redirect c error
             | Ok login ->
+              apply_role_map t role_map facts login.user.id;
               route_redirect (set_login_cookie t c login.token) success state.redirect))))
 
 (* Bounce page for the OAuth-over-DDP popup: post the JSON result to the opener (same-origin only,
@@ -592,7 +602,7 @@ let oidc_authorize_paw t ?(redirect_param = "redirect") ~path ~error (connection
       | Error _ -> Conn.redirect c error
       | Ok issued -> Conn.redirect c issued.Oidc.url)
 
-let oidc_callback_paw t ?(link_verified_email = true) ~path ~success ~error (connection : Oidc.connection) ~exchange () =
+let oidc_callback_paw t ?(link_verified_email = true) ?role_map ~path ~success ~error (connection : Oidc.connection) ~exchange () =
   Paw.Route.get path (fun c ->
       let oidc = Oidc.make ~challenge:(challenge_service t ()) in
       match Oidc.parse_callback (Conn.req c).H.query_string with
@@ -612,6 +622,7 @@ let oidc_callback_paw t ?(link_verified_email = true) ~path ~success ~error (con
             with
             | Error _ -> Conn.redirect c error
             | Ok login ->
+              apply_role_map t role_map principal login.user.id;
               route_redirect (set_login_cookie t c login.token) success state.redirect))))
 
 let saml_authorize_paw t ?(redirect_param = "redirect") ?signing_key ~path ~error connection () =
@@ -628,7 +639,7 @@ let saml_authorize_paw t ?(redirect_param = "redirect") ?signing_key ~path ~erro
           | Ok url -> Conn.redirect c url
           | Error _ -> Conn.redirect c error)))
 
-let saml_callback_paw t ~path ~success ~error connection ~trusted_keys () =
+let saml_callback_paw t ?role_map ~path ~success ~error connection ~trusted_keys () =
   Paw.Route.post path (fun c ->
       let saml = Saml.make ~challenge:(challenge_service t ()) in
       match (Conn.param c "RelayState", Conn.param c "SAMLResponse") with
@@ -641,7 +652,9 @@ let saml_callback_paw t ~path ~success ~error connection ~trusted_keys () =
         | Ok principal -> (
           match login_with_saml t ?current_user_id:(user_id c) principal with
           | Error _ -> Conn.redirect c error
-          | Ok login -> Conn.redirect (set_login_cookie t c login.token) success))
+          | Ok login ->
+            apply_role_map t role_map principal login.user.id;
+            Conn.redirect (set_login_cookie t c login.token) success))
       | _ -> Conn.redirect c error)
 
 let doc_get_string d k = match Bson.get d k with Some (Bson.String s) -> Some s | _ -> None

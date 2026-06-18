@@ -571,23 +571,23 @@ module Wiring = struct
   let provider_routes t (r : routes_config) (provider : external_identity provider) : Paw.t list =
     let p sub = join r.auth_prefix sub in
     match provider with
-    | OAuth_provider { provider = pr; exchange; link_verified_email; success; error } ->
+    | OAuth_provider { provider = pr; exchange; link_verified_email; role_map; success; error } ->
       let id = pr.OAuth.name in
       [
         oauth_authorize_paw t ~path:(p id) ~error pr ();
-        oauth_callback_paw t ~link_verified_email ~path:(p (id ^ "/callback")) ~success ~error pr ~exchange ();
+        oauth_callback_paw t ~link_verified_email ?role_map ~path:(p (id ^ "/callback")) ~success ~error pr ~exchange ();
       ]
-    | Oidc_provider { connection; exchange; link_verified_email; success; error } ->
+    | Oidc_provider { connection; exchange; link_verified_email; role_map; success; error } ->
       let id = connection.Oidc.id in
       [
         oidc_authorize_paw t ~path:(p id) ~error connection ();
-        oidc_callback_paw t ~link_verified_email ~path:(p (id ^ "/callback")) ~success ~error connection ~exchange ();
+        oidc_callback_paw t ~link_verified_email ?role_map ~path:(p (id ^ "/callback")) ~success ~error connection ~exchange ();
       ]
-    | Saml_provider { connection; trusted_keys; signing_key; success; error } ->
+    | Saml_provider { connection; trusted_keys; signing_key; role_map; success; error } ->
       let id = connection.Saml.id in
       [
         saml_authorize_paw t ?signing_key ~path:(p id) ~error connection ();
-        saml_callback_paw t ~path:(p (id ^ "/callback")) ~success ~error connection ~trusted_keys ();
+        saml_callback_paw t ?role_map ~path:(p (id ^ "/callback")) ~success ~error connection ~trusted_keys ();
       ]
 
   (* the full derived route list for an instance, in mount order. Empty for the zero-config default. *)
@@ -979,7 +979,7 @@ let%test "Wiring: me_path mounts GET <me_path> only when set" =
 let%test "Wiring: an OAuth provider mounts authorize + callback under <prefix>/<id>" =
   let provider =
     OAuth_provider
-      { provider = oauth_provider_ (); exchange = (fun _ ~code:_ -> Error (Login_rejected "stub")); link_verified_email = true; success = "/"; error = "/auth/error" }
+      { provider = oauth_provider_ (); exchange = (fun _ ~code:_ -> Error (Login_rejected "stub")); link_verified_email = true; role_map = None; success = "/"; error = "/auth/error" }
   in
   let a = wired_ { defaults with providers = [ provider ] } in
   route_mounted_ a oauth_authorize_probe_
@@ -989,8 +989,8 @@ let%test "Wiring: an OAuth provider mounts authorize + callback under <prefix>/<
   && (not (route_mounted_ a passkey_probe_))
 
 let%test "Wiring: an OIDC + a SAML provider each mount their own authorize + callback" =
-  let oidc = Oidc_provider { connection = oidc_connection_ (); exchange = (fun _ ~code:_ -> Error (Login_rejected "stub")); link_verified_email = true; success = "/"; error = "/auth/error" } in
-  let saml = Saml_provider { connection = saml_connection_ (); trusted_keys = []; signing_key = None; success = "/"; error = "/auth/error" } in
+  let oidc = Oidc_provider { connection = oidc_connection_ (); exchange = (fun _ ~code:_ -> Error (Login_rejected "stub")); link_verified_email = true; role_map = None; success = "/"; error = "/auth/error" } in
+  let saml = Saml_provider { connection = saml_connection_ (); trusted_keys = []; signing_key = None; role_map = None; success = "/"; error = "/auth/error" } in
   let a = wired_ { defaults with providers = [ oidc; saml ] } in
   route_mounted_ a (get_ "/auth/main")
   && route_mounted_ a (get_ "/auth/main/callback")

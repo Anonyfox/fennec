@@ -326,13 +326,23 @@ let default_routes_config = { auth_prefix = "/auth"; me_path = None }
 (* One configured SSO/identity provider in [config.providers]. Each variant bundles the EXISTING typed
    provider value with the token-exchange recipe the matching [*_callback_paw] already needs (OAuth/OIDC)
    or the trusted signing keys (SAML). {!Accounts_http.Wiring} mounts the authorize + callback routes
-   per provider under [auth_prefix]. The preset constructors that synthesize the exchange (Accounts.OAuth.
-   github &c.) are a later pass; today an app supplies the provider + its exchange explicitly. *)
+   per provider under [auth_prefix].
+
+   [exchange] is the code→identity recipe. An app may supply it explicitly (the original "each deployment
+   decides" path, e.g. {!Accounts.OAuth.custom}); the preset constructors ({!Accounts_provider_presets} —
+   surfaced as [Accounts.OAuth.github] &c.) synthesize it by bundling the provider's token/userinfo/JWKS
+   endpoints + the default HTTP exchange over the ambient {!Accounts_http_client} transport. Either way the
+   verified protocol primitives (PKCE/state/nonce, RS256 ID-token signature + iss/aud/exp/nonce) stay in the
+   feature modules — the exchange only does the HTTP and hands their output back.
+
+   [role_map], when [Some f], is applied AFTER a successful login (via {!Accounts_lifecycle.set_roles_from_strings})
+   so a provider can map its verified principal/claims to app-wide roles; [None] is inert. *)
 type 'a provider =
   | OAuth_provider of {
       provider : OAuth.provider;
       exchange : OAuth.state -> code:string -> (external_identity, error) result;
       link_verified_email : bool;
+      role_map : (external_identity -> string list) option;
       success : string;
       error : string;
     }
@@ -340,6 +350,7 @@ type 'a provider =
       connection : Oidc.connection;
       exchange : Oidc.state -> code:string -> (Oidc.principal, error) result;
       link_verified_email : bool;
+      role_map : (Oidc.principal -> string list) option;
       success : string;
       error : string;
     }
@@ -347,6 +358,7 @@ type 'a provider =
       connection : Saml.connection;
       trusted_keys : X509.Public_key.t list;
       signing_key : X509.Private_key.t option;
+      role_map : (Saml.principal -> string list) option;
       success : string;
       error : string;
     }
