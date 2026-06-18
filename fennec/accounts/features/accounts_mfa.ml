@@ -48,6 +48,31 @@ type level =
   | Multi_factor
   | Phishing_resistant_multi_factor
 
+(* Canonical wire/string name for each factor — the single source consumed by the engine's session
+   codec and the BSON enrollment codec, so the two can never drift. *)
+let factor_to_name = function
+  | Password -> "password"
+  | Email -> "email"
+  | OAuth -> "oauth"
+  | Oidc -> "oidc"
+  | Saml -> "saml"
+  | Passkey -> "passkey"
+  | Totp -> "totp"
+  | Backup_code -> "backup_code"
+  | Recovery_code -> "recovery_code"
+
+let factor_of_name = function
+  | "password" -> Some Password
+  | "email" -> Some Email
+  | "oauth" -> Some OAuth
+  | "oidc" -> Some Oidc
+  | "saml" -> Some Saml
+  | "passkey" -> Some Passkey
+  | "totp" -> Some Totp
+  | "backup_code" -> Some Backup_code
+  | "recovery_code" -> Some Recovery_code
+  | _ -> None
+
 let factor_rank = function
   | Passkey -> 2
   | Password | Email | OAuth | Oidc | Saml | Totp | Backup_code | Recovery_code -> 1

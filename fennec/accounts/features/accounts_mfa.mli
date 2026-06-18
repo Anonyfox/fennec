@@ -51,6 +51,13 @@ type factor =
   | Backup_code
   | Recovery_code
 
+(** Canonical wire/string name of a factor (["password"], ["totp"], …). The single source of factor
+    naming, so the session codec and the persistence codec cannot drift. *)
+val factor_to_name : factor -> string
+
+(** Parse a canonical factor name; [None] for an unknown string. Inverse of {!factor_to_name}. *)
+val factor_of_name : string -> factor option
+
 (** Assurance level carried by a session or recent step-up. *)
 type level =
   | Anonymous

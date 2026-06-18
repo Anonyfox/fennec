@@ -408,28 +408,10 @@ let email_service t ?ttl () =
   let challenge = challenge_service t ?ttl () in
   Email.make ~secret:(t.secret ^ "\000accounts-email") ~challenge
 
-let mfa_factor_name = function
-  | Mfa.Password -> "password"
-  | Email -> "email"
-  | OAuth -> "oauth"
-  | Oidc -> "oidc"
-  | Saml -> "saml"
-  | Passkey -> "passkey"
-  | Totp -> "totp"
-  | Backup_code -> "backup_code"
-  | Recovery_code -> "recovery_code"
-
-let mfa_factor_of_name = function
-  | "password" -> Some Mfa.Password
-  | "email" -> Some Email
-  | "oauth" -> Some OAuth
-  | "oidc" -> Some Oidc
-  | "saml" -> Some Saml
-  | "passkey" -> Some Passkey
-  | "totp" -> Some Totp
-  | "backup_code" -> Some Backup_code
-  | "recovery_code" -> Some Recovery_code
-  | _ -> None
+(* the single source of factor naming lives in {!Accounts_mfa}; these are thin aliases used by the
+   session codec below *)
+let mfa_factor_name = Mfa.factor_to_name
+let mfa_factor_of_name = Mfa.factor_of_name
 
 let encode_mfa_factors factors = String.concat "," (List.map mfa_factor_name factors)
 let decode_mfa_factors s =

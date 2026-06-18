@@ -509,28 +509,9 @@ open Accounts_base
       | _ -> Error (Store_error "Malformed org invite document"))
     | _ -> Error (Store_error "Malformed org invite document")
 
-  let mfa_factor_to_string = function
-    | Mfa.Password -> "password"
-    | Email -> "email"
-    | OAuth -> "oauth"
-    | Oidc -> "oidc"
-    | Saml -> "saml"
-    | Passkey -> "passkey"
-    | Totp -> "totp"
-    | Backup_code -> "backup_code"
-    | Recovery_code -> "recovery_code"
-
-  let mfa_factor_of_string = function
-    | "password" -> Some Mfa.Password
-    | "email" -> Some Email
-    | "oauth" -> Some OAuth
-    | "oidc" -> Some Oidc
-    | "saml" -> Some Saml
-    | "passkey" -> Some Passkey
-    | "totp" -> Some Totp
-    | "backup_code" -> Some Backup_code
-    | "recovery_code" -> Some Recovery_code
-    | _ -> None
+  (* delegate to the single source of factor naming in {!Accounts_mfa} *)
+  let mfa_factor_to_string = Mfa.factor_to_name
+  let mfa_factor_of_string = Mfa.factor_of_name
 
   let enrollment_status_to_string = function
     | Mfa.Pending -> "pending"
