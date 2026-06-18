@@ -40,6 +40,12 @@ let rec coerce_string : type a. a shape -> string -> Bson.t =
   | TCheck (_, _, _, inner) | TNorm (_, inner) | TCoerce inner -> coerce_string inner s
   | _ -> Bson.String s
 
+(* a doc's keys indexed for O(1) field lookup (first occurrence wins, matching [List.assoc_opt]) *)
+let index_of (kvs : (string * Bson.t) list) : (string, Bson.t) Hashtbl.t =
+  let tbl = Hashtbl.create (max 4 (List.length kvs)) in
+  List.iter (fun (k, v) -> if not (Hashtbl.mem tbl k) then Hashtbl.replace tbl k v) kvs;
+  tbl
+
 let rec read : type a. a shape -> Bson.t -> (a, error list) result =
  fun shape b ->
   match shape with
@@ -107,7 +113,7 @@ let rec read : type a. a shape -> Bson.t -> (a, error list) result =
   | TObj o -> (
       (* RAW phase: build the record (missing/type errors); record-level checks run in run_checks,
          so a field's refinement failure can't mask a cross-field violation — all collect *)
-      match b with Bson.Document kvs -> o.decode_doc kvs | v -> expected "document" v)
+      match b with Bson.Document kvs -> read_record o kvs | v -> expected "document" v)
   | TVariant { tag; cases } -> (
       match b with
       | Bson.Document kvs -> (
@@ -115,12 +121,27 @@ let rec read : type a. a shape -> Bson.t -> (a, error list) result =
           | Some (Bson.String k) -> (
               match List.find_opt (fun (Case c) -> c.name = k) cases with
               | Some (Case c) -> (
-                  match c.body.decode_doc kvs with Ok a -> Ok (c.inject a) | Error e -> Error (List.map (at k) e))
+                  match read_record c.body kvs with Ok a -> Ok (c.inject a) | Error e -> Error (List.map (at k) e))
               | None -> fail (Printf.sprintf "unknown %s %S" tag k))
           | _ -> fail (Printf.sprintf "missing tag field %s" tag))
       | v -> expected "document" v)
   | TLazy l -> read (Lazy.force l) b
   | TCoerce inner -> ( match b with Bson.String s -> read inner (coerce_string inner s) | other -> read inner other)
+
+(* decode a record from a doc's kvs: index the keys, then thread the constructor via the format-agnostic
+   {!Shape.field_reader} (the SAME [decode_src] the buffer path uses) — so the BSON-tree decode needs no
+   Bson-typed field on {!Shape.record_shape}. *)
+and read_record : type r. r record_shape -> (string * Bson.t) list -> (r, error list) result =
+ fun o kvs ->
+  let idx = index_of kvs in
+  o.decode_src
+    {
+      read_field =
+        (fun f ->
+          match Hashtbl.find_opt idx f.key with
+          | Some v -> ( match read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
+          | None -> ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ]));
+    }
 
 (* encode is TOTAL (a typed value always serializes); refinement checks belong to [run_checks] *)
 let rec write : type a. a shape -> a -> Bson.t =
@@ -140,18 +161,24 @@ let rec write : type a. a shape -> a -> Bson.t =
   | TCheck (_, _, _, inner) -> write inner v
   | TNorm (f, inner) -> write inner (f v)
   | TConv (inj, _, inner) -> write inner (inj v)
-  | TObj o -> Bson.Document (o.encode_doc v)
+  | TObj o -> Bson.Document (write_record o.members v)
   | TVariant { tag; cases } -> (
       let rec go = function
         | [] -> invalid_arg "Sift: variant value matches no declared case"
         | Case c :: rest -> (
             match c.project v with
-            | Some a -> Bson.Document ((tag, Bson.String c.name) :: c.body.encode_doc a)
+            | Some a -> Bson.Document ((tag, Bson.String c.name) :: write_record c.body.members a)
             | None -> go rest)
       in
       go cases)
   | TLazy l -> write (Lazy.force l) v
   | TCoerce inner -> write inner v
+
+(* encode a record from its members: each non-omitted field's [name -> write] in declaration order —
+   reproduces the old [encode_doc] / [encode_field] without a Bson-typed field on the record_shape *)
+and write_record : type r. r bound_field list -> r -> (string * Bson.t) list =
+ fun members v ->
+  List.filter_map (fun (Bound_field f) -> let x = f.get v in if f.omit x then None else Some (f.name, write f.shape x)) members
 
 (* the inner normalizer chain applied to a value (normalizers must be idempotent) *)
 let rec normalize : type a. a shape -> a -> a =

@@ -137,38 +137,18 @@ let decode_named (f : 'a field) kvs : ('a, error list) result =
          is attributable to it — what per-field consumers (form feedback) need *)
       | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
 
-(* a doc's keys indexed for O(1) field lookup, built ONCE per record decode — the record builder used
-   to [List.assoc_opt] per field, i.e. O(fields × keys). First occurrence wins, matching the prior
-   [List.assoc_opt] semantics on (rare) duplicate keys, so behaviour is byte-identical. *)
-let index_of (kvs : (string * Bson.t) list) : (string, Bson.t) Hashtbl.t =
-  let tbl = Hashtbl.create (max 4 (List.length kvs)) in
-  List.iter (fun (k, v) -> if not (Hashtbl.mem tbl k) then Hashtbl.replace tbl k v) kvs;
-  tbl
-
-let decode_field (f : 'a field) (idx : (string, Bson.t) Hashtbl.t) : ('a, error list) result =
-  match Hashtbl.find_opt idx f.key with
-  | Some v -> ( match read f.item v with Ok x -> Ok x | Error es -> Error (List.map (at f.key) es))
-  | None -> ( match f.fallback with Some d -> Ok d | None -> Error [ mkerr ~code:"required" ~path:[ f.key ] "is required" ])
-
-(* [None]/default-empty encodes by omitting the key — Mongo-idiomatic absence *)
-let encode_field (f : 'a field) (v : 'a) : (string * Bson.t) option =
-  match write f.item v with
-  | Bson.Null when not f.needed -> None
-  | Bson.Array [] when f.fallback = Some v -> None
-  | b -> Some (f.key, b)
 
 type ('r, 'k) builder = {
-  (* decode is now driven by a {!Shape.field_reader} — the SAME builder feeds the tree path (a kvs
-     index, via {!record_of_builder}) and the zero-copy buffer path (spans), the constructor threaded
-     once. The source (index / span-tape) lives in the reader's closure, not in this type. *)
+  (* decode is driven by a {!Shape.field_reader} — the SAME builder feeds every format (the engine's
+     kvs index, the zero-copy buffer spans, …), the constructor threaded once. The source lives in the
+     reader's closure, not in this type. Encode is reconstructed per-format from {!acc_members} (name +
+     shape + omit), so no format-typed accumulator lives here — the builder is format-agnostic. *)
   acc_decode : field_reader -> ('k, error list) result;
-  acc_encode : 'r -> (string * Bson.t) list;
   acc_members : 'r bound_field list; (* reverse order *)
   acc_invariants : (('r -> bool) * string) list;
 }
 
-let record (make : 'k) : ('r, 'k) builder =
-  { acc_decode = (fun _ -> Ok make); acc_encode = (fun _ -> []); acc_members = []; acc_invariants = [] }
+let record (make : 'k) : ('r, 'k) builder = { acc_decode = (fun _ -> Ok make); acc_members = []; acc_invariants = [] }
 
 let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k) builder =
   {
@@ -178,16 +158,15 @@ let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k
         | Ok k, Ok a -> Ok (k a)
         | Error e1, Error e2 -> Error (e1 @ e2)
         | Error e, Ok _ | Ok _, Error e -> Error e);
-    acc_encode = (fun r -> b.acc_encode r @ (match encode_field f (get r) with Some kv -> [ kv ] | None -> []));
     acc_members =
       Bound_field
         { name = f.key;
           shape = f.item;
           get;
           required = f.needed;
-          (* mirror {!encode_field}: a required field never omits (so [not f.needed] short-circuits
+          (* the wire-omission rule: a required field never omits (so [not f.needed] short-circuits
              before any [write]); an optional/opt_list field omits when its value encodes to Null / the
-             matching empty array *)
+             matching empty array. (Still uses [write] — Bson-coupled; teased out in the lib split.) *)
           omit = (fun v -> (not f.needed) && (match write f.item v with Bson.Null -> true | Bson.Array [] -> f.fallback = Some v | _ -> false));
         }
       :: b.acc_members;
@@ -196,16 +175,8 @@ let field (f : 'a field) (get : 'r -> 'a) (b : ('r, 'a -> 'k) builder) : ('r, 'k
 
 let checking p msg b = { b with acc_invariants = (p, msg) :: b.acc_invariants }
 
-(* the tree reader: a kvs index wrapped as a {!Shape.field_reader} — so the legacy [decode_doc] entry
-   reuses the exact same constructor threading as the buffer path (no logic duplication) *)
-let tree_reader (idx : (string, Bson.t) Hashtbl.t) : field_reader = { read_field = (fun f -> decode_field f idx) }
-
 let record_of_builder (b : ('r, 'r) builder) : 'r record_shape =
-  { decode_doc = (fun kvs -> b.acc_decode (tree_reader (index_of kvs)));
-    decode_src = b.acc_decode;
-    encode_doc = b.acc_encode;
-    members = List.rev b.acc_members;
-    invariants = List.rev b.acc_invariants }
+  { decode_src = b.acc_decode; members = List.rev b.acc_members; invariants = List.rev b.acc_invariants }
 
 let seal (b : ('r, 'r) builder) : 'r t = of_shape (TObj (record_of_builder b))
 let doc_id = req "_id" id
@@ -268,25 +239,21 @@ let errs : type a. (a, error list) result -> error list = function Ok _ -> [] | 
 let bound (f : 'a field) (get : 'r -> 'a) : 'r bound_field =
   Bound_field { name = f.key; shape = f.item; get; required = f.needed; omit = (fun v -> (not f.needed) && (match write f.item v with Bson.Null -> true | Bson.Array [] -> f.fallback = Some v | _ -> false)) }
 
-let direct (decode_src : field_reader -> ('r, error list) result) (members : 'r bound_field list) (encode_doc : 'r -> (string * Bson.t) list) : 'r t =
-  of_shape (TObj { decode_doc = (fun kvs -> decode_src (tree_reader (index_of kvs))); decode_src; encode_doc; members; invariants = [] })
-
-let pack l = List.filter_map Fun.id l
+let direct (decode_src : field_reader -> ('r, error list) result) (members : 'r bound_field list) : 'r t =
+  of_shape (TObj { decode_src; members; invariants = [] })
 
 let obj1 fa ~make ~split =
-  direct (fun fr -> match fr.read_field fa with Ok a -> Ok (make a) | r -> Error (errs r)) [ bound fa split ] (fun r -> pack [ encode_field fa (split r) ])
+  direct (fun fr -> match fr.read_field fa with Ok a -> Ok (make a) | r -> Error (errs r)) [ bound fa split ]
 
 let obj2 fa fb ~make ~split =
   direct
     (fun fr -> match (fr.read_field fa, fr.read_field fb) with Ok a, Ok b -> Ok (make a b) | r1, r2 -> Error (errs r1 @ errs r2))
     [ bound fa (fun r -> fst (split r)); bound fb (fun r -> snd (split r)) ]
-    (fun r -> let a, b = split r in pack [ encode_field fa a; encode_field fb b ])
 
 let obj3 fa fb fc ~make ~split =
   direct
     (fun fr -> match (fr.read_field fa, fr.read_field fb, fr.read_field fc) with Ok a, Ok b, Ok c -> Ok (make a b c) | r1, r2, r3 -> Error (errs r1 @ errs r2 @ errs r3))
     [ bound fa (fun r -> let a, _, _ = split r in a); bound fb (fun r -> let _, b, _ = split r in b); bound fc (fun r -> let _, _, c = split r in c) ]
-    (fun r -> let a, b, c = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c ])
 
 let obj4 fa fb fc fd ~make ~split =
   direct
@@ -295,7 +262,6 @@ let obj4 fa fb fc fd ~make ~split =
       | Ok a, Ok b, Ok c, Ok d -> Ok (make a b c d)
       | r1, r2, r3, r4 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4))
     [ bound fa (fun r -> let a, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _ = split r in b); bound fc (fun r -> let _, _, c, _ = split r in c); bound fd (fun r -> let _, _, _, d = split r in d) ]
-    (fun r -> let a, b, c, d = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d ])
 
 let obj5 fa fb fc fd fe ~make ~split =
   direct
@@ -304,7 +270,6 @@ let obj5 fa fb fc fd fe ~make ~split =
       | Ok a, Ok b, Ok c, Ok d, Ok e -> Ok (make a b c d e)
       | r1, r2, r3, r4, r5 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5))
     [ bound fa (fun r -> let a, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _ = split r in d); bound fe (fun r -> let _, _, _, _, e = split r in e) ]
-    (fun r -> let a, b, c, d, e = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e ])
 
 let obj6 fa fb fc fd fe ff ~make ~split =
   direct
@@ -313,7 +278,6 @@ let obj6 fa fb fc fd fe ff ~make ~split =
       | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f -> Ok (make a b c d e f)
       | r1, r2, r3, r4, r5, r6 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6))
     [ bound fa (fun r -> let a, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f = split r in f) ]
-    (fun r -> let a, b, c, d, e, f = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e; encode_field ff f ])
 
 let obj7 fa fb fc fd fe ff fg ~make ~split =
   direct
@@ -322,7 +286,6 @@ let obj7 fa fb fc fd fe ff fg ~make ~split =
       | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f, Ok g -> Ok (make a b c d e f g)
       | r1, r2, r3, r4, r5, r6, r7 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6 @ errs r7))
     [ bound fa (fun r -> let a, _, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f, _ = split r in f); bound fg (fun r -> let _, _, _, _, _, _, g = split r in g) ]
-    (fun r -> let a, b, c, d, e, f, g = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e; encode_field ff f; encode_field fg g ])
 
 let obj8 fa fb fc fd fe ff fg fh ~make ~split =
   direct
@@ -331,7 +294,6 @@ let obj8 fa fb fc fd fe ff fg fh ~make ~split =
       | Ok a, Ok b, Ok c, Ok d, Ok e, Ok f, Ok g, Ok h -> Ok (make a b c d e f g h)
       | r1, r2, r3, r4, r5, r6, r7, r8 -> Error (errs r1 @ errs r2 @ errs r3 @ errs r4 @ errs r5 @ errs r6 @ errs r7 @ errs r8))
     [ bound fa (fun r -> let a, _, _, _, _, _, _, _ = split r in a); bound fb (fun r -> let _, b, _, _, _, _, _, _ = split r in b); bound fc (fun r -> let _, _, c, _, _, _, _, _ = split r in c); bound fd (fun r -> let _, _, _, d, _, _, _, _ = split r in d); bound fe (fun r -> let _, _, _, _, e, _, _, _ = split r in e); bound ff (fun r -> let _, _, _, _, _, f, _, _ = split r in f); bound fg (fun r -> let _, _, _, _, _, _, g, _ = split r in g); bound fh (fun r -> let _, _, _, _, _, _, _, h = split r in h) ]
-    (fun r -> let a, b, c, d, e, f, g, h = split r in pack [ encode_field fa a; encode_field fb b; encode_field fc c; encode_field fd d; encode_field fe e; encode_field ff f; encode_field fg g; encode_field fh h ])
 
 (* ---- introspection: the neutral reflection renderers consume --------------------------- *)
 

@@ -94,14 +94,14 @@ type _ shape =
   | TCoerce : 'a shape -> 'a shape (* {!from_string}: decode also accepts a [String] and parses it to the inner leaf *)
 
 and 'r record_shape = {
-  (* the BSON-tree decode (a kvs list) — the original path, kept verbatim so the engine/facade stay
-     green. It is now a thin wrapper that drives [decode_src] with a kvs-backed reader. *)
-  decode_doc : (string * Bson.t) list -> ('r, error list) result;
   (* the FORMAT-AGNOSTIC decode: pull each field through a {!field_reader}, threading the record's
-     constructor. The same builder serves the tree path (a kvs index) AND the zero-copy buffer path
-     (spans scanned straight from bytes) — the serde "Deserializer drives the visitor" inversion. *)
+     constructor. The SAME builder serves the BSON-tree path (the engine indexes the kvs into a reader),
+     the zero-copy buffer path (spans scanned straight from bytes), and every other format — the serde
+     "Deserializer drives the visitor" inversion. NO format is named here, so this type is Bson-free. *)
   decode_src : field_reader -> ('r, error list) result;
-  encode_doc : 'r -> (string * Bson.t) list;
+  (* drives BOTH reflection AND encode: each field's name + shape + omit-rule, so any format's encoder
+     (the engine's [write_record], the JSON writer, …) reproduces the wire doc without a format-typed
+     field stored here. *)
   members : 'r bound_field list;
   invariants : (('r -> bool) * string) list; (* record-level (cross-field) checks *)
 }
@@ -118,8 +118,9 @@ and field_reader = { read_field : 'a. 'a field -> ('a, error list) result }
 
 and 'r bound_field =
   (* [omit v] is the encode-side rule: does this field, with value [v], get dropped from the wire? (an
-     absent optional / an empty opt_list — Mongo-idiomatic absence). Carried here so the encode
-     interpreters (size/write) reproduce [encode_field]'s omission WITHOUT building a {!Bson.t}. *)
+     absent optional / an empty opt_list — Mongo-idiomatic absence). Carried here so EVERY format's
+     encoder (the engine's [write_record], the JSON writer, the byte writer) reproduces the omission
+     from the members alone. *)
   | Bound_field : { name : string; shape : 'a shape; get : 'r -> 'a; required : bool; omit : 'a -> bool } -> 'r bound_field
 
 and 'r case =
