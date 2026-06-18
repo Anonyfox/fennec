@@ -688,4 +688,19 @@ let%test "json: decode_json parses relaxed JSON (numbers/escapes/unicode/nesting
   && (match Sift.decode_json Sift.int "42 oops" with Error [ e ] -> e.Sift.code = "json" | _ -> false) (* trailing data *)
   && (match Sift.decode_json (Sift.list Sift.int) "[1, 2" with Error _ -> true | _ -> false) (* unterminated *)
 
+(* ── the serde capstone: ONE codec drives FOUR formats, all round-trip to the same value ── *)
+let%test "serde: one codec → Bson-tree / Bson-bytes / neutral Value / native JSON all round-trip" =
+  let rt4 c v =
+    (match Sift.decode c (Sift.to_bson c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* Bson tree *)
+    && (match Sift.decode_bytes c (Sift.encode_bytes c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* Bson bytes (zero-copy) *)
+    && (match Sift.of_value c (Sift.to_value c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* neutral Value *)
+    && (match Sift.decode_json c (Sift.encode_json c v) with Ok v' -> Sift.equal c v v' | _ -> false) (* native relaxed JSON *)
+  in
+  rt4 bag_c ("hi", 42, 3.5, true, 1700000000000L, "507f1f77bcf86cd799439011")
+  && rt4 nested_c ("ok", ("Ada", "ada@x.io"))
+  && rt4 figure_c (Rect (3.0, 4.0))
+  && rt4 figure_c (Circle 2.5)
+  && rt4 opt_c (Some "x", [ 1; 2; 3 ])
+  && rt4 opt_c (None, [])
+
 let () = exit (Fennec_hunt_unit.run ())
