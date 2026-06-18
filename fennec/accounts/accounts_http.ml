@@ -379,6 +379,22 @@ let ensure_scim_account t (connection : Scim.connection) (incoming : Scim.user) 
                    (t.store.orgs.Org.upsert_membership membership))
                 (fun () -> Ok user))))
 
+(* Resolve the Fennec user behind a SCIM user (via its tenant-scoped identity key) and OFFBOARD it:
+   disable the account (bumps the revocation epoch, so the gated paths reject it) AND prune its live
+   session rows (so the zero-read paths reject it too). This is what an IdP deprovision / DELETE must
+   do — flipping the SCIM sync row alone leaves the Fennec account Active with live sessions. The user
+   may already be gone (no link); that is a no-op. Best-effort; never fails the SCIM response. *)
+let scim_offboard_account t (connection : Scim.connection) (scim_user : Scim.user) =
+  match Scim.identity connection scim_user with
+  | Error _ -> ()
+  | Ok key -> (
+    match t.store.identities.Identity.find key with
+    | None -> ()
+    | Some link ->
+      let uid = link.Identity.user_id in
+      ignore (disable_user t uid);
+      ignore (t.store.tokens.revoke_user uid ()))
+
 let apply_scim_user t (connection : Scim.connection) (incoming : Scim.user) =
   let connection_id = connection.id in
   let existing = t.store.scim.Scim.find_user ~connection_id ~external_id:incoming.external_id in
@@ -394,8 +410,13 @@ let apply_scim_user t (connection : Scim.connection) (incoming : Scim.user) =
       in
       match plan with
       | Scim.No_user_change -> Ok incoming
-      | Scim.Create_user user | Scim.Update_user { after = user; _ } | Scim.Deprovision_user { after = user; _ } ->
-        persist user)
+      | Scim.Create_user user | Scim.Update_user { after = user; _ } -> persist user
+      | Scim.Deprovision_user { after = user; _ } ->
+        (* persist the synced row first (keeps the directory state), THEN offboard the account: an
+           [active=false] deprovision disables the Fennec user + kills its sessions. *)
+        Result.map
+          (fun user -> scim_offboard_account t connection user; user)
+          (persist user))
 
 let scim_resource_path ~prefix path =
   let prefix = if String.ends_with ~suffix:"/" prefix then String.sub prefix 0 (String.length prefix - 1) else prefix in
@@ -461,6 +482,11 @@ let scim_paw t ~prefix () : Paw.t =
             | Error e -> json_error c (string_of_error e)
             | Ok user -> Conn.json c (Json.to_string (Scim.scim_user_json user)))))
       | H.DELETE, `Users (Some external_id), _ ->
+        (* a SCIM DELETE is a hard deprovision: offboard the Fennec account (disable + revoke sessions)
+           — resolved from the stored row BEFORE we drop it — then remove the SCIM sync row. *)
+        (match t.store.scim.Scim.find_user ~connection_id:connection.id ~external_id with
+        | Some scim_user -> scim_offboard_account t connection scim_user
+        | None -> ());
         ignore (t.store.scim.Scim.delete_user ~connection_id:connection.id ~external_id);
         Conn.text ~status:204 c ""
       | H.GET, `Groups None, _ ->

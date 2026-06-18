@@ -1565,6 +1565,73 @@ let%test "scim_paw applies user and group PATCH operations" =
     && group.members = [ "ext-1"; "ext-2" ]
   | _ -> false
 
+(* SCIM deprovision = the IdP offboarding the user. It must OFFBOARD: disabling the Fennec account
+   (so it cannot log in again) and killing its live sessions — not merely flip the SCIM sync row's
+   [active] flag. These two guards provision a user, mint a live session for the Fennec account, then
+   deprovision (PATCH active:false / DELETE) and assert the session is dead ([verify_token]) AND the
+   account is disabled (a fresh [finish_login] is rejected). They FAIL on the pre-fix engine, which
+   left the Fennec user Active with a live session. *)
+let scim_headers_ = [ ("authorization", "Bearer very-secret-scim-token"); ("content-type", "application/json") ]
+
+let scim_deprovision_fixture_ () =
+  let store = Store.minimongo () in
+  let a = make ~secret:"accounts-test-secret" ~store ~password_hasher:test_hasher ~validate_every_request:false () in
+  let org = match create_org a ~id:"acme" ~name:"Acme" () with Ok org -> org | Error _ -> failwith "org" in
+  let connection =
+    match Scim.connection ~id:"corp" ~org_id:org.id ~bearer_token:"very-secret-scim-token" () with
+    | Ok c -> c
+    | Error e -> failwith (Scim.string_of_error e)
+  in
+  ignore ((Store.scim store).upsert_connection connection);
+  let app = scim_paw a ~prefix:"/scim" () in
+  let _ =
+    Paw.run app
+      (H.make_request ~meth:H.POST ~path:"/scim/Users" ~headers:scim_headers_
+         ~body:{|{"externalId":"ext-1","userName":"ada","active":true,"emails":["ada@example.com"],"groups":[]}|}
+         ())
+  in
+  (* the provisioned Fennec account, and a live session minted for it (SCIM users have no password,
+     so mint via finish_login — the same session a SCIM/OIDC login would yield) *)
+  match (Store.users store).find_user_by_email "ada@example.com" with
+  | Ok (Some user) -> (
+    match finish_login a ~strategy:"scim" user with
+    | Ok (_, token) -> (a, app, user, token)
+    | Error e -> failwith (string_of_error e))
+  | _ -> failwith "scim user not provisioned"
+
+(* a fresh login attempt for the (now-deprovisioned) account: re-fetch the record (a real login path
+   loads the user) and try to mint a session. A Disabled account is rejected. *)
+let attempt_fresh_login_ a uid =
+  match find_required_user a uid with
+  | Error _ as e -> e
+  | Ok user -> Result.map (fun _ -> ()) (finish_login a ~strategy:"scim" user)
+
+let%test "scim PATCH active:false disables the Fennec account and kills its live sessions" =
+  let a, app, user, token = scim_deprovision_fixture_ () in
+  (* the session authenticates before deprovision *)
+  verify_token a token = Ok user.id
+  && (let r =
+        Paw.run app
+          (H.make_request ~meth:H.PATCH ~path:"/scim/Users/ext-1" ~headers:scim_headers_
+             ~body:{|{"Operations":[{"op":"replace","path":"active","value":false}]}|} ())
+      in
+      r.H.status = 200)
+  (* the live session is terminated and the account can no longer start a new one *)
+  && verify_token a token = Error Invalid_token
+  && (match find_required_user a user.id with Ok u -> u.status = Disabled | Error _ -> false)
+  && attempt_fresh_login_ a user.id = Error (Login_rejected "Account is not active")
+
+let%test "scim DELETE /Users disables the Fennec account and kills its live sessions" =
+  let a, app, user, token = scim_deprovision_fixture_ () in
+  verify_token a token = Ok user.id
+  && (let r =
+        Paw.run app (H.make_request ~meth:H.DELETE ~path:"/scim/Users/ext-1" ~headers:scim_headers_ ())
+      in
+      r.H.status = 204)
+  && verify_token a token = Error Invalid_token
+  && (match find_required_user a user.id with Ok u -> u.status = Disabled | Error _ -> false)
+  && attempt_fresh_login_ a user.id = Error (Login_rejected "Account is not active")
+
 let%test "paw assigns user_id from signed login cookie" =
   let a = test_accounts () in
   match create_user a ~username:"ada" ~password:"pw" () with
