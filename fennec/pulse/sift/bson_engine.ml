@@ -1,8 +1,7 @@
-(* bson_engine.ml — the BSON-TREE format: the shape-directed read/write/size over {!Bson.t}, plus its
-   helpers (the [TDyn] escape goes through {!Value_bson}). The reference decode (the oracle the zero-copy
-   {!Bson_reader} differential-tests against) and the only path that materialises a Bson tree. Lives in
-   the [sift.bson] plugin; the format-AGNOSTIC interpreters (checks, normalize, pretty) stay in {!Engine}
-   (the bson-free core). *)
+(* bson_engine.ml — the BSON codec: the shape-directed read / write / size over {!Bson.t}. This IS
+   Sift's encode/decode — one tree pass, no intermediate model. The [TBson] escape is the identity (the
+   value already IS a {!Bson.t}). The validation / normalization / pretty interpreters live in
+   {!Engine}; the combinator surface in {!Combinators}. *)
 
 open Shape
 
@@ -131,9 +130,9 @@ let rec read : type a. a shape -> Bson.t -> (a, error list) result =
   | TLazy l -> read (Lazy.force l) b
   | TCoerce inner -> ( match b with Bson.String s -> read inner (coerce_string inner s) | other -> read inner other)
 
-(* decode a record from a doc's kvs: index the keys, then thread the constructor via the format-agnostic
-   {!Shape.field_reader} (the SAME [decode_src] the buffer path uses) — so the BSON-tree decode needs no
-   Bson-typed field on {!Shape.record_shape}. *)
+(* decode a record from a doc's kvs: index the keys, then thread the constructor via the
+   {!Shape.field_reader} (the record's [decode_src]) — so {!Shape.record_shape} carries no Bson-typed
+   field and stays the single description that drives decode, encode, reflection and the rest. *)
 and read_record : type r. r record_shape -> (string * Bson.t) list -> (r, error list) result =
  fun o kvs ->
   let idx = index_of kvs in

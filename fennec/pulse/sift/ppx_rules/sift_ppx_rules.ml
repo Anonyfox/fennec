@@ -1,9 +1,9 @@
-(* Sift's REUSABLE ppx rules as a plain library (NOT a ppx_rewriter) — the neutral codec/Fields
-   deriver, shippable with the Sift package and composable into ANY ppx pipeline (a downstream user
-   links this into their single driver; fennec links it into fur.ppx alongside its own rules, so a
-   file still pays ONE ppx process). Owns NO semantics beyond "the hand-written builder form".
+(* The [@@deriving model] codec/Fields deriver — one of the three modules of
+   fennec.pulse.sift.ppx.rules (with {!Sift_mongo_ppx_rules} the query DSL and {!Collection_deriver} the
+   collection tail). A plain rules lib (NOT a ppx_rewriter); fur.ppx and the standalone sift.ppx register
+   it in their one ppx pass. Owns NO semantics beyond "the hand-written builder form".
 
-   [@@deriving sift] (alias [@@deriving model]) — generates, for a plain record type t:
+   [@@deriving model] — generates, for a plain record type t:
      module Fields = struct let <f> = Sift.req/opt/opt_list/doc_id … end
      let codec      = Sift.(seal (record (fun … -> {…}) |> field Fields.f (fun x -> x.f) |> …))
    Conventions (annotation-free common case): a field named id/_id is the _id (doc_id); a TRAILING

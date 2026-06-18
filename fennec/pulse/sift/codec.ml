@@ -1,6 +1,5 @@
-(* The codec value ['a t] — the FORMAT-AGNOSTIC core: a shape, the validation gate, neutral-Value I/O,
-   and pretty-printing. NO Bson here — the BSON encode/decode functions (decode/to_bson/to_json/…) live
-   in the public {!Sift} facade (the [sift.bson] plugin). *)
+(* The codec value ['a t] — just a shape, plus the encode-side validation gate and pretty-printing.
+   The BSON encode/decode and JSON I/O are functions over it, in the {!Sift} facade. *)
 
 open Shape
 open Engine

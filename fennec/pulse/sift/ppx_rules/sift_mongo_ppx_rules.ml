@@ -1,13 +1,13 @@
-(* sift.mongo's query-DSL ppx extensions — the pleasant Mongo sugar that ships with the sift.mongo
-   toolkit (opt-in). Each expands, under a model's scope (so its [Fields] resolve), to a sift.mongo
-   artifact:
+(* The Mongo query-DSL ppx extensions — the pleasant Mongo sugar; one of the three modules of
+   fennec.pulse.sift.ppx.rules. Each expands, under a model's scope (so its [Fields] resolve), to a
+   sift.mongo artifact:
      [%q status = "doing" && age > 18]   -> Filter.t  (a Bson selector)
      [%fields a; b; author / name]        -> Projection.t    (a typed projection)
      [%sort age desc; name]               -> Sort.t
      [%set status = "done"]               -> Update.t  (an update modifier)
      [%index unique [ asc email ]]        -> declares an index
-   Pure AST -> sift.mongo references, resolved at the consumer (which links fennec.pulse.sift.mongo). Any
-   driver links {!rules} into its single ppx pass; fennec's fur.ppx does, and so can a downstream user. *)
+   Pure AST -> sift.mongo references, resolved at the consumer (which links fennec.pulse.sift.mongo).
+   fur.ppx and the standalone sift.ppx link {!rules} into their single ppx pass. *)
 
 open Ppxlib
 

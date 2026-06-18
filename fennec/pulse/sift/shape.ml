@@ -8,10 +8,7 @@
    Refinements carry a [hint] — the machine-readable half a renderer can translate (min_len →
    minLength…); an arbitrary [check] carries [H_none] and is honestly app-side-only. Floats reject
    nan/inf by default (a Bson Float can carry them; silently storing them is how data rots).
-   Options: absent OR null decode to [None]; [None] encodes by OMITTING the key (Mongo-idiomatic).
-
-   Back-compat: the original combinator surface (string/int/…/req/opt/obj1-4/a0-a3, and the public
-   [enc]/[dec] record fields) is preserved verbatim — every existing call site keeps compiling. *)
+   Options: absent OR null decode to [None]; [None] encodes by OMITTING the key (Mongo-idiomatic). *)
 
 (* ---- errors ------------------------------------------------------------------ *)
 
@@ -94,10 +91,9 @@ type _ shape =
   | TCoerce : 'a shape -> 'a shape (* {!from_string}: decode also accepts a [String] and parses it to the inner leaf *)
 
 and 'r record_shape = {
-  (* the FORMAT-AGNOSTIC decode: pull each field through a {!field_reader}, threading the record's
-     constructor. The SAME builder serves the BSON-tree path (the engine indexes the kvs into a reader),
-     the zero-copy buffer path (spans scanned straight from bytes), and every other format — the serde
-     "Deserializer drives the visitor" inversion. NO format is named here, so this type is Bson-free. *)
+  (* decode: pull each field through a {!field_reader}, threading the record's constructor once. The
+     reader is the seam between the shape and the document — {!Bson_engine} indexes a doc's kvs into one
+     — so [record_shape] itself names no format and stays the single description every derivation reads. *)
   decode_src : field_reader -> ('r, error list) result;
   (* drives BOTH reflection AND encode: each field's name + shape + omit-rule, so any format's encoder
      (the engine's [write_record], the JSON writer, …) reproduces the wire doc without a format-typed

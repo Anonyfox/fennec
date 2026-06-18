@@ -1,7 +1,6 @@
-(* engine.ml — the FORMAT-AGNOSTIC interpreters over a {!Shape.t}: normalization, the refinement-check
-   phase (the encode/decode validation gate), the [needs_checks] gate that lets a clean read skip it,
-   and derived pretty-printing. NO Bson — these walk values + shapes, never a wire format. The
-   BSON-tree read/write/size live in {!Bson_engine} (the [sift.bson] plugin). *)
+(* engine.ml — the interpreters over a {!Shape.t} that are NOT the wire codec: normalization, the
+   refinement-check phase (the encode/decode validation gate), the [needs_checks] gate that lets a clean
+   read skip it, and derived pretty-printing. The BSON read / write / size is {!Bson_engine}. *)
 
 open Shape
 

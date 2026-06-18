@@ -155,10 +155,9 @@ let omit_of (f : 'a field) : 'a -> bool =
 
 
 type ('r, 'k) builder = {
-  (* decode is driven by a {!Shape.field_reader} — the SAME builder feeds every format (the engine's
-     kvs index, the zero-copy buffer spans, …), the constructor threaded once. The source lives in the
-     reader's closure, not in this type. Encode is reconstructed per-format from {!acc_members} (name +
-     shape + omit), so no format-typed accumulator lives here — the builder is format-agnostic. *)
+  (* decode is driven by a {!Shape.field_reader} ({!Bson_engine} builds one from a doc's kvs index), the
+     constructor threaded once — the source lives in the reader's closure, not in this type. Encode is
+     reconstructed from {!acc_members} (name + shape + omit), so no format-typed accumulator lives here. *)
   acc_decode : field_reader -> ('k, error list) result;
   acc_members : 'r bound_field list; (* reverse order *)
   acc_invariants : (('r -> bool) * string) list;
@@ -224,8 +223,7 @@ let variant ~tag cases : 'r t = of_shape (TVariant { tag; cases })
    time, which compiles to O(N) growing caml_curry closures — measured at ~82% of decode allocation.
    These objN read all N fields through the reader, then apply [make] to all of them at ONCE (a single
    caml_applyN, no intermediate closures). Errors COLLECT in field order, byte-identical to the
-   applicative builder. They build the [record_shape] directly (their own [decode_src]); decode reads
-   fields via the SAME field_reader, so both the tree path AND decode_bytes get the win. [@@deriving
+   applicative builder. They build the [record_shape] directly (their own [decode_src]). [@@deriving
    collection/model] emits these for arity ≤ 8; a wider record falls back to the applicative builder
    (still correct, just not staged). *)
 
