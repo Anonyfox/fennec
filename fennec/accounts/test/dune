@@ -2,14 +2,20 @@
 ; FENNEC_ACME_TEST_DIR (skips otherwise), run manually / in CI with pebble up. Not an inline test.
 ; Drives Paw.Acme_client (the ACME wire client now lives in fennec-paw).
 
+; Two independent single-module exes share this directory, so each stanza pins its own
+; (modules …): without it dune can't decide which .ml belongs to which executable, and the
+; @check alias trips on the ambiguity (phantom .mli / unbound-library cmi) even though the
+; full build + runtest resolve it. The explicit module sets keep @check honest.
 (executable
  (name acme_pebble_test)
+ (modules acme_pebble_test)
  (libraries fennec-paw eio eio_main eio.unix x509 mirage-crypto-rng.unix))
 
 ; Accounts backend parity over the embedded Burrow engine — self-contained (a temp dir, no mongod),
 ; so it runs under `dune runtest` and fails the build if accounts ever breaks on burrow://.
 (executable
  (name accounts_backends_test)
+ (modules accounts_backends_test)
  (libraries fennec.accounts fennec-mongo.dynamic eio eio_main eio.unix unix mirage-crypto-rng.unix))
 
 (rule
