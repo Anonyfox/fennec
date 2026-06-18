@@ -35,5 +35,10 @@ module Store = Accounts_native.Store
 let memory_store = Accounts_native.memory_store
 let current = Accounts_native.current
 let start = Accounts_native.start
+
+(* the config -> auto-wire seam: native_paw/boot already consult [Wiring.routes (current ())]; the
+   pulse server consults [Wiring.method_enabled] for the DDP method gate. *)
+module Wiring = Accounts_native.Wiring
+
 let native_paw = Accounts_native.native_paw
 let boot = Accounts_native.boot

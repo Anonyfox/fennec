@@ -499,8 +499,126 @@ let start ?(config = defaults) () =
   Atomic.set pending_config config;
   match Atomic.get native with Some t -> apply_settings t config | None -> ()
 
+(* ---- the config -> auto-wire seam ----------------------------------------------------------------
+
+   [Wiring] folds the umbrella {!Accounts_types.config} held on the instance into the two things the
+   framework already auto-wires: a [Paw.t] route table (consulted by {!native_paw} / {!boot}) and the
+   set of DDP method names to register (consulted by the pulse server via {!method_enabled}). It is
+   pure data → routes; nothing here weakens a default security posture — the enumeration guard, the
+   throttle, and the verified-email gate live in the engine and apply to every wired route. The config
+   only turns OPTIONAL features on: the password/email routes (when [mail] is set), the passkey routes
+   (when [passkeys] is set), the SCIM battery (when [orgs.scim_prefix] is set), [GET <me_path>] (when
+   set), and the authorize/callback routes for each listed provider.
+
+   With the zero-config {!defaults} the derived table is EMPTY — so [native_paw] is exactly today's
+   identity paw and the full method set stays registered. An app opts into routes by naming features. *)
+module Wiring = struct
+  (* join a prefix and a sub-path into one clean route path ("/auth" + "password/reset"). *)
+  let join prefix sub =
+    let prefix = if String.length prefix > 1 && String.ends_with ~suffix:"/" prefix then String.sub prefix 0 (String.length prefix - 1) else prefix in
+    let sub = if String.length sub > 0 && sub.[0] = '/' then String.sub sub 1 (String.length sub - 1) else sub in
+    if sub = "" then prefix else prefix ^ "/" ^ sub
+
+  (* the password + email routes, mounted only when [mail] is configured. The request endpoints reuse
+     the high-level send verbs (issue + deliver via the installed templates, non-enumerating); the
+     consume endpoints reuse the MFA-aware [*_paw] completion constructors. Success lands on the app
+     root; failures bounce back under the auth prefix — an app overrides the layout with the explicit
+     [*_paw] constructors when it wants its own URLs. *)
+  let mail_routes t (r : routes_config) : Paw.t list =
+    let p sub = join r.auth_prefix sub in
+    let success = "/" and error = join r.auth_prefix "error" in
+    let mfa_required = join r.auth_prefix "mfa" in
+    [
+      (* request a password-reset email (non-enumerating: always redirects to success) *)
+      Paw.Route.post (p "password/reset-request") (fun c ->
+          match Conn.param c "email" with
+          | None -> Conn.redirect c error
+          | Some email -> ignore (send_reset_password_email t email); Conn.redirect c success);
+      password_reset_paw t ~mfa_required ~path:(p "password/reset") ~success ~error ();
+      enrollment_paw t ~mfa_required ~path:(p "password/enroll") ~success ~error ();
+      (* request an email-verification email for the current user *)
+      Paw.Route.post (p "email/verify-request") (fun c ->
+          match user_id c with
+          | None -> Conn.redirect c error
+          | Some uid -> ignore (send_verification_email t uid); Conn.redirect c success);
+      email_verification_paw t ~mfa_required ~path:(p "email/verify") ~success ~error ();
+      (* request a magic login link / an OTP code (both naturally non-enumerating) *)
+      Paw.Route.post (p "email/login-link-request") (fun c ->
+          match Conn.param c "email" with
+          | None -> Conn.redirect c error
+          | Some email -> ignore (send_login_token_email t email); Conn.redirect c success);
+      email_login_link_paw t ~mfa_required ~path:(p "email/login-link") ~success ~error ();
+      Paw.Route.post (p "email/otp-request") (fun c ->
+          match Conn.param c "email" with
+          | None -> Conn.redirect c error
+          | Some email -> ignore (send_login_token_email t email); Conn.redirect c success);
+      email_otp_paw t ~mfa_required ~path:(p "email/otp") ~success ~error ();
+    ]
+
+  (* the passkey registration/assertion JSON routes, mounted only when [passkeys] is configured. *)
+  let passkey_routes t (rp : Passkey.relying_party) (r : routes_config) : Paw.t list =
+    let p sub = join r.auth_prefix sub in
+    [
+      passkey_registration_options_paw t rp ~path:(p "passkey/register/options") ();
+      passkey_registration_finish_paw t rp ~path:(p "passkey/register") ();
+      passkey_assertion_options_paw t rp ~path:(p "passkey/login/options") ();
+      passkey_assertion_finish_paw t rp ~path:(p "passkey/login") ();
+      mfa_passkey_assertion_options_paw t rp ~path:(p "passkey/mfa/options") ();
+      mfa_passkey_assertion_finish_paw t rp ~path:(p "passkey/mfa") ();
+    ]
+
+  (* one provider's authorize + callback routes under [<prefix>/<id>] + [<prefix>/<id>/callback]. *)
+  let provider_routes t (r : routes_config) (provider : external_identity provider) : Paw.t list =
+    let p sub = join r.auth_prefix sub in
+    match provider with
+    | OAuth_provider { provider = pr; exchange; link_verified_email; success; error } ->
+      let id = pr.OAuth.name in
+      [
+        oauth_authorize_paw t ~path:(p id) ~error pr ();
+        oauth_callback_paw t ~link_verified_email ~path:(p (id ^ "/callback")) ~success ~error pr ~exchange ();
+      ]
+    | Oidc_provider { connection; exchange; link_verified_email; success; error } ->
+      let id = connection.Oidc.id in
+      [
+        oidc_authorize_paw t ~path:(p id) ~error connection ();
+        oidc_callback_paw t ~link_verified_email ~path:(p (id ^ "/callback")) ~success ~error connection ~exchange ();
+      ]
+    | Saml_provider { connection; trusted_keys; signing_key; success; error } ->
+      let id = connection.Saml.id in
+      [
+        saml_authorize_paw t ?signing_key ~path:(p id) ~error connection ();
+        saml_callback_paw t ~path:(p (id ^ "/callback")) ~success ~error connection ~trusted_keys ();
+      ]
+
+  (* the full derived route list for an instance, in mount order. Empty for the zero-config default. *)
+  let route_list t : Paw.t list =
+    let cfg = t.settings in
+    let r = cfg.routes in
+    List.concat
+      [
+        (match cfg.mail with Some _ -> mail_routes t r | None -> []);
+        (match cfg.passkeys with Some pk -> passkey_routes t pk.relying_party r | None -> []);
+        (match cfg.orgs with Some { scim_prefix = Some prefix } -> [ scim_paw t ~prefix () ] | _ -> []);
+        (match r.me_path with Some path -> [ Accounts_session.session_paw t ~path () ] | None -> []);
+        List.concat_map (provider_routes t r) cfg.providers;
+      ]
+
+  (* the derived routes as one paw (first to answer wins; declines when none match). *)
+  let routes t : Paw.t = Paw.seq (route_list t)
+
+  (* the DDP method gate: today every built-in method is on. The umbrella config does not yet carry a
+     method allow-list (no clean field maps to it — see the report), so this is constant [true]; the
+     pulse server consults it so the gate is already in place for a later narrowing pass. *)
+  let method_enabled (_t : t) (_name : string) : bool = true
+end
+
 let native_paw () : Paw.t =
- fun c -> paw (current ()) () c
+ fun c ->
+  let t = current () in
+  (* today's identity paw FIRST (assigns user_id), THEN the config-derived routes (which read user_id).
+     With the zero-config default [Wiring.routes] is the empty paw, so this is byte-identical to the
+     old [paw (current ()) () c]. *)
+  Paw.seq [ paw t (); Wiring.routes t ] c
 
 (* Eagerly build the (memoized) native store at boot — inside {!Fennec.serve}'s switch, after the data
    layer's ambient switch is installed — so the engine opens and indexes are ensured BEFORE the first
@@ -786,3 +904,135 @@ let oidc_connection_ () =
   with
   | Ok connection -> connection
   | Error e -> failwith (Oidc.string_of_error e)
+
+let saml_connection_ () =
+  match
+    Saml.connection ~id:"okta" ~issuer:"https://idp.test" ~sso_url:"https://idp.test/sso"
+      ~entity_id:"sp" ~acs_url:"https://app.test/auth/okta/callback" ()
+  with
+  | Ok connection -> connection
+  | Error e -> failwith (Saml.string_of_error e)
+
+(* ---- inline tests: the config -> route-table derivation (Wiring) ----------------------------------
+
+   The proof the auto-wire seam is correct and the default path is preserved: zero-config derives an
+   EMPTY route table (so native_paw is exactly today's identity paw); naming a feature mounts exactly
+   that feature's routes and nothing else; a narrowed config omits the rest; the prefix relocates them. *)
+
+(* an instance whose umbrella [settings] is [cfg] (test_accounts builds with [defaults]). *)
+let wired_ cfg = let a = test_accounts () in a.settings <- cfg; a
+
+(* is [req] answered by the config-derived route table? (an unmounted path falls through Paw.seq [] →
+   404; every mounted accounts route answers with a redirect / JSON / 401, never a 404). *)
+let route_mounted_ a req = (Paw.run (Wiring.routes a) req).H.status <> 404
+let get_ path = H.make_request ~meth:H.GET ~path ()
+let post_ path = H.make_request ~meth:H.POST ~path ~headers:[ ("content-type", "application/x-www-form-urlencoded") ] ~body:"" ()
+
+(* the canonical probe paths per feature, under the default "/auth" prefix *)
+let mail_probe_ = post_ "/auth/password/reset-request"
+let passkey_probe_ = get_ "/auth/passkey/login/options"
+let scim_probe_ = get_ "/scim/v2/ServiceProviderConfig"
+let me_probe_ = get_ "/me"
+let oauth_authorize_probe_ = get_ "/auth/github"
+let oauth_callback_probe_ = get_ "/auth/github/callback"
+
+let%test "Wiring: zero-config derives an EMPTY route table (today's behaviour preserved)" =
+  let a = wired_ defaults in
+  (not (route_mounted_ a mail_probe_))
+  && (not (route_mounted_ a passkey_probe_))
+  && (not (route_mounted_ a scim_probe_))
+  && (not (route_mounted_ a me_probe_))
+  && (not (route_mounted_ a oauth_authorize_probe_))
+  (* the empty derived paw declines every path *)
+  && (Paw.run (Wiring.routes a) (get_ "/anything")).H.status = 404
+
+let%test "Wiring: mail config mounts the password/email routes and nothing else" =
+  let a = wired_ { defaults with mail = Some { from = "no-reply@acme.test"; site_name = Some "Acme"; templates = None } } in
+  route_mounted_ a mail_probe_
+  && route_mounted_ a (post_ "/auth/email/otp-request")
+  && route_mounted_ a (get_ "/auth/email/verify")
+  && (not (route_mounted_ a passkey_probe_))
+  && (not (route_mounted_ a scim_probe_))
+  && (not (route_mounted_ a oauth_authorize_probe_))
+
+let%test "Wiring: passkeys config mounts the passkey routes and not the mail routes" =
+  let a = wired_ { defaults with passkeys = Some { relying_party = passkey_rp_ () } } in
+  route_mounted_ a passkey_probe_
+  && route_mounted_ a (get_ "/auth/passkey/register/options")
+  && route_mounted_ a (get_ "/auth/passkey/mfa/options")
+  && (not (route_mounted_ a mail_probe_))
+  && (not (route_mounted_ a scim_probe_))
+
+let%test "Wiring: orgs.scim_prefix mounts the SCIM battery at that prefix" =
+  let a = wired_ { defaults with orgs = Some { scim_prefix = Some "/scim/v2" } } in
+  route_mounted_ a scim_probe_
+  && route_mounted_ a (get_ "/scim/v2/Users")
+  (* not at the default-ish other prefix; not the mail/passkey routes *)
+  && (not (route_mounted_ a (get_ "/scim/ServiceProviderConfig")))
+  && (not (route_mounted_ a mail_probe_))
+
+let%test "Wiring: me_path mounts GET <me_path> only when set" =
+  let off = wired_ defaults in
+  let on = wired_ { defaults with routes = { defaults.routes with me_path = Some "/me" } } in
+  (not (route_mounted_ off me_probe_)) && route_mounted_ on me_probe_
+
+let%test "Wiring: an OAuth provider mounts authorize + callback under <prefix>/<id>" =
+  let provider =
+    OAuth_provider
+      { provider = oauth_provider_ (); exchange = (fun _ ~code:_ -> Error (Login_rejected "stub")); link_verified_email = true; success = "/"; error = "/auth/error" }
+  in
+  let a = wired_ { defaults with providers = [ provider ] } in
+  route_mounted_ a oauth_authorize_probe_
+  && route_mounted_ a oauth_callback_probe_
+  (* a provider does NOT pull in the mail/passkey/scim routes *)
+  && (not (route_mounted_ a mail_probe_))
+  && (not (route_mounted_ a passkey_probe_))
+
+let%test "Wiring: an OIDC + a SAML provider each mount their own authorize + callback" =
+  let oidc = Oidc_provider { connection = oidc_connection_ (); exchange = (fun _ ~code:_ -> Error (Login_rejected "stub")); link_verified_email = true; success = "/"; error = "/auth/error" } in
+  let saml = Saml_provider { connection = saml_connection_ (); trusted_keys = []; signing_key = None; success = "/"; error = "/auth/error" } in
+  let a = wired_ { defaults with providers = [ oidc; saml ] } in
+  route_mounted_ a (get_ "/auth/main")
+  && route_mounted_ a (get_ "/auth/main/callback")
+  && route_mounted_ a (get_ "/auth/okta")
+  && route_mounted_ a (post_ "/auth/okta/callback")
+
+let%test "Wiring: a custom auth_prefix relocates the derived routes" =
+  let a = wired_ { defaults with mail = Some { from = "no-reply@acme.test"; site_name = None; templates = None }; routes = { auth_prefix = "/identity"; me_path = None } } in
+  route_mounted_ a (post_ "/identity/password/reset-request")
+  (* the default "/auth" location is now empty *)
+  && (not (route_mounted_ a mail_probe_))
+
+let%test "Wiring: a narrowed config (mail only) omits passkey/scim/provider routes" =
+  let a = wired_ { defaults with mail = Some { from = "no-reply@acme.test"; site_name = None; templates = None } } in
+  route_mounted_ a mail_probe_
+  && (not (route_mounted_ a passkey_probe_))
+  && (not (route_mounted_ a scim_probe_))
+  && (not (route_mounted_ a oauth_authorize_probe_))
+  && (not (route_mounted_ a oauth_callback_probe_))
+
+(* the defaults value + sub-record round-trips: a one-field override leaves everything else at the
+   secure/empty defaults, and [default_config] still aliases [defaults.password]. *)
+let%test "defaults: zero-config is all-off with secure password defaults" =
+  defaults.mail = None && defaults.passkeys = None && defaults.orgs = None && defaults.rbac = None
+  && defaults.providers = []
+  && defaults.routes.auth_prefix = "/auth"
+  && defaults.routes.me_path = None
+  && defaults.session.cookie = "_fennec_login"
+  && defaults.session.lifetime = 86_400.
+  && defaults.password.ambiguous_error_messages = true
+  && defaults.password == default_config
+
+let%test "defaults: a one-field override is a one-liner that leaves the rest at defaults" =
+  let cfg = { defaults with mail = Some { from = "x@y.z"; site_name = Some "Acme"; templates = None } } in
+  cfg.passkeys = None && cfg.orgs = None && cfg.providers = []
+  && cfg.session = defaults.session
+  && cfg.password = defaults.password
+  && (match cfg.mail with Some m -> m.from = "x@y.z" && m.site_name = Some "Acme" | None -> false)
+
+(* the method gate is currently "every method on" — the default path keeps the full DDP method set. *)
+let%test "Wiring.method_enabled: every built-in method is enabled by default" =
+  let a = wired_ defaults in
+  List.for_all (Wiring.method_enabled a)
+    [ "createUser"; "currentUser"; "login"; "logout"; "logoutOtherClients"; "changePassword";
+      "resetPassword"; "verifyEmail"; "enrollAccount"; "completeLoginStepUp"; "forgotPassword"; "requestLoginToken" ]

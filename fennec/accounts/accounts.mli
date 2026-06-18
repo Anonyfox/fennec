@@ -633,6 +633,25 @@ val configure : t -> password_config -> unit
     hard-wired, anonymous identity is [None], and the full route/method set is present. *)
 val start : ?config:config -> unit -> unit
 
+(** The config → auto-wire seam. Folds the umbrella {!config} held on an instance into a route table +
+    a DDP method gate. {!native_paw} / {!boot} consult [Wiring.routes (current ())]; the pulse server
+    consults [Wiring.method_enabled] to decide which built-in methods to register. With the zero-config
+    {!defaults} the derived route table is {b empty} and every method is enabled — so the default path
+    is byte-identical to today. Apps normally never call these directly (they configure via {!start} /
+    {!Fennec.serve}); they are exposed for advanced/custom wiring. *)
+module Wiring : sig
+  (** The routes the instance's config implies, as one paw (first to answer wins; declines when none
+      match): the password/email routes when [mail] is set, the passkey routes when [passkeys] is set,
+      the SCIM battery when [orgs.scim_prefix] is set, [GET <me_path>] when set, and the
+      authorize/callback routes for each configured provider — all under [routes.auth_prefix]. *)
+  val routes : t -> Paw.t
+
+  (** Whether a built-in DDP method should be registered for the instance. The umbrella config does not
+      yet carry a method allow-list, so this is currently constant [true] (every method on) — the seam
+      is in place for a later narrowing pass. *)
+  val method_enabled : t -> string -> bool
+end
+
 (** {1 Transactional account emails} — Meteor's [Accounts.sendVerificationEmail] family, delivered through
     {!Fennec_mail} (the [MAIL_URL] transport; with it unset, mail is logged to stdout). *)
 
