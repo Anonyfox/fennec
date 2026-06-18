@@ -148,7 +148,8 @@ let memory_token_store () : token_store =
   let find_live ~sid ~hashed ~now =
     locked (fun () ->
         match Hashtbl.find_opt rows sid with
-        | Some ((info : session_info), h) when info.expires_at > now && h = hashed -> Ok (Some info)
+        (* constant-time hash compare (defense-in-depth: post-HMAC-verify, but free) *)
+        | Some ((info : session_info), h) when info.expires_at > now && constant_eq h hashed -> Ok (Some info)
         | _ -> Ok None)
   in
   let list_for_user user_id ~now =

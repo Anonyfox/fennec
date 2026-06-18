@@ -556,7 +556,11 @@ module Codec = Accounts_codec
           | None -> Ok None
           | Some doc -> (
             match Codec.session_info_of_doc doc with
-            | Some info when info.expires_at > now && doc_get_string doc "hashedToken" = Some hashed -> Ok (Some info)
+            (* constant-time hash compare (defense-in-depth: post-HMAC-verify, but free) *)
+            | Some info
+              when info.expires_at > now
+                   && (match doc_get_string doc "hashedToken" with Some h -> constant_eq h hashed | None -> false) ->
+              Ok (Some info)
             | _ -> Ok None))
     in
     let list_for_user user_id ~now =
