@@ -1,0 +1,35 @@
+; The per-protocol auth features, each self-contained on top of the primitives (challenge/identity):
+;   email   — verification + magic-link + OTP
+;   mfa     — TOTP + backup codes + step-up factors
+;   org     — organisations, memberships, invites, domains
+;   oauth   — OAuth2 + PKCE   ← oidc — OpenID Connect (ID-token verify over oauth)
+;   passkey — WebAuthn registration/assertion
+;   saml    — SAML 2.0 request/response + XML signature
+;   scim    — SCIM 2.0 provisioning (builds on identity + org)
+; Pure logic — NO HTTP and NO storage backend (the *_paw routes + the mongo adapter live above).
+; Inline unit tests are colocated and run against in-memory stores.
+(library
+ (name fennec_accounts_features)
+ (public_name fennec.accounts.features)
+ (wrapped false)
+ (libraries
+  fennec.accounts.primitives
+  fennec-paw
+  fennec-mongo.bson
+  fennec-mongo.bson_json
+  fennec-mongo.json
+  x509
+  zarith
+  ptime
+  mirage-crypto-rng.unix
+  base64
+  digestif
+  zlib
+  bigstringaf
+  unix
+  fennec-hunt.unit
+  fennec-hunt.prop)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))
