@@ -212,6 +212,11 @@ end
     With no login, identity remains anonymous ([None]) and ["currentUser"] returns the anonymous
     session payload.
 
+    [~accounts] is the one declarative Accounts config (start from {!Accounts.defaults} and override a
+    field at a time): it parameterizes the native instance and auto-wires the routes + DDP methods it
+    implies ({!Accounts.start} / {!Accounts.Wiring}). {b Omitting it leaves Accounts at today's
+    defaults} — hard-wired, every optional feature off, all methods on, anonymous identity [None].
+
     This is the single place that starts the server — a second call is a runtime error.
     The CLI's discovery ({!Discover}) finds this call site automatically. *)
 val serve :
@@ -219,6 +224,7 @@ val serve :
   ?max_conns:int ->
   ?tls:Tls.t ->
   ?acme:Acme.config ->
+  ?accounts:Accounts.config ->
   ?on_error:(request_error -> Http.response) ->
   ?on_start:
      (sw:Eio.Switch.t -> sleep:(float -> unit) -> net:[ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t -> unit) ->

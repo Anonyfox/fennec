@@ -333,21 +333,27 @@ struct
           | Error e -> forbidden e ))
       | _ -> bad_request "requestLoginToken expects one document argument"
     in
+    (* the config method gate: register only the methods [Wiring.method_enabled] approves for [t].
+       Today that predicate is constant-true (the umbrella config carries no method allow-list yet),
+       so the full Meteor-shaped method set is installed exactly as before — the seam is here for a
+       later narrowing pass without touching the functor parameter [R]. *)
     R.methods
-      [
-        ("createUser", create_user_method);
-        ("currentUser", current_user_method);
-        ("login", login_method);
-        ("logout", logout_method);
-        ("logoutOtherClients", logout_other_clients_method);
-        ("changePassword", change_password_method);
-        ("resetPassword", reset_password_method);
-        ("verifyEmail", verify_email_method);
-        ("enrollAccount", enroll_account_method);
-        ("completeLoginStepUp", complete_login_step_up_method);
-        ("forgotPassword", forgot_password_method);
-        ("requestLoginToken", request_login_token_method);
-      ]
+      (List.filter
+         (fun (name, _) -> Wiring.method_enabled t name)
+         [
+           ("createUser", create_user_method);
+           ("currentUser", current_user_method);
+           ("login", login_method);
+           ("logout", logout_method);
+           ("logoutOtherClients", logout_other_clients_method);
+           ("changePassword", change_password_method);
+           ("resetPassword", reset_password_method);
+           ("verifyEmail", verify_email_method);
+           ("enrollAccount", enroll_account_method);
+           ("completeLoginStepUp", complete_login_step_up_method);
+           ("forgotPassword", forgot_password_method);
+           ("requestLoginToken", request_login_token_method);
+         ])
 end
 
 

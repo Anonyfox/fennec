@@ -124,10 +124,15 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?on_error ?on_start
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error ?on_start
     (endpoints : Endpoint.t list) : unit =
   if not (Atomic.compare_and_set started false true) then
     failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
+  (* apply the declarative Accounts config (if any) to the process-native instance BEFORE [Accounts.boot]
+     forces it below — so the configured cookie/path/lifetime/policy/password settings and the derived
+     routes/method gate take effect at boot. Omitting [?accounts] leaves Accounts at today's defaults
+     (hard-wired, every feature off, all methods on) — byte-identical to before. *)
+  Accounts.start ?config:accounts ();
   Eio_main.run @@ fun env ->
   let lr = Livereload.create () in
   (* Livereload is a dev convenience; it reloads the page on a frontend edit. For an e2e or
