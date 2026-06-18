@@ -343,6 +343,7 @@ type claims = {
   issuer : string;
   subject : string;
   audience : string list;
+  authorized_party : string option;  (** the OIDC ["azp"] claim — the party the token was issued for *)
   expires_at : float;
   not_before : float option;
   issued_at : float option;
@@ -378,9 +379,10 @@ val jwks_of_string : string -> (jwk list, error) result
 
 (** Validate verified ID-token claims against the connection and consumed state.
 
-    This checks exact issuer, audience/client id, expiry, not-before, issued-at skew, nonce,
-    configured domain policy, and derives canonical OIDC/email identities. [now] defaults to
-    [Unix.gettimeofday] and [leeway] defaults to 60 seconds. *)
+    This checks exact issuer, audience/client id, the [azp] authorized-party rule (required and equal
+    to the client id when [aud] is multi-valued; rejected when present and unequal), expiry, not-before,
+    issued-at skew, nonce, configured domain policy, and derives canonical OIDC/email identities. [now]
+    defaults to [Unix.gettimeofday] and [leeway] defaults to 60 seconds. *)
 val validate_claims :
   ?now:(unit -> float) -> ?leeway:float -> connection -> state -> claims -> (principal, error) result
 

@@ -418,6 +418,7 @@ type claims = {
   issuer : string;
   subject : string;
   audience : string list;
+  authorized_party : string option;  (* the "azp" claim — the party the token was issued for *)
   expires_at : float;
   not_before : float option;
   issued_at : float option;
@@ -522,6 +523,13 @@ let validate_claims ?(now = Unix.gettimeofday) ?(leeway = 60.) (connection : con
   else if state.client_id <> connection.client_id then Error (Claim_mismatch "client_id")
   else if state.redirect_uri <> connection.redirect_uri then Error (Claim_mismatch "redirect_uri")
   else if not (audience_contains connection.client_id claims.audience) then Error (Claim_mismatch "audience")
+  (* OIDC Core 3.1.3.7: when [aud] has multiple values, [azp] MUST be present and equal our client_id;
+     and whenever [azp] is present it must equal our client_id (reject a token authorized for a
+     DIFFERENT party even if our id is merely one of several audiences). *)
+  else if List.length claims.audience > 1 && claims.authorized_party <> Some connection.client_id then
+    Error (Claim_mismatch "azp")
+  else if option_exists (fun azp -> azp <> connection.client_id) claims.authorized_party then
+    Error (Claim_mismatch "azp")
   else if claims.expires_at +. leeway < current then Error (Claim_mismatch "expired")
   else if option_exists (fun nbf -> nbf -. leeway > current) claims.not_before then Error (Claim_mismatch "not_before")
   else if option_exists (fun iat -> iat -. leeway > current) claims.issued_at then Error (Claim_mismatch "issued_at")
@@ -550,6 +558,7 @@ let claims_of_json json =
           issuer;
           subject;
           audience;
+          authorized_party = json_string "azp" json;
           expires_at;
           not_before = json_number "nbf" json;
           issued_at = json_number "iat" json;
@@ -628,9 +637,11 @@ let query_of_url url =
   | None -> []
   | Some i -> H.parse_query (String.sub url (i + 1) (String.length url - i - 1))
 
-let claims ?(issuer = "https://idp.example") ?(subject = "sub") ?(audience = [ "client" ]) ?(expires_at = 1_200.)
-    ?not_before ?issued_at ?nonce ?email ?email_verified ?hosted_domain ?tenant ?(groups = []) () =
-  { issuer; subject; audience; expires_at; not_before; issued_at; nonce; email; email_verified; hosted_domain; tenant; groups }
+let claims ?(issuer = "https://idp.example") ?(subject = "sub") ?(audience = [ "client" ]) ?authorized_party
+    ?(expires_at = 1_200.) ?not_before ?issued_at ?nonce ?email ?email_verified ?hosted_domain ?tenant
+    ?(groups = []) () =
+  { issuer; subject; audience; authorized_party; expires_at; not_before; issued_at; nonce; email;
+    email_verified; hosted_domain; tenant; groups }
 
 let%test "connection normalizes id, scopes, and domains" =
   let c = test_connection () in
@@ -794,6 +805,36 @@ let%test "validate_claims enforces domain policy" =
     | Ok state ->
       validate_claims ~now:(fun () -> 1_000.) c state (claims ~nonce:a.nonce ~email:"ada@other.test" ~email_verified:true ())
       = Error (Claim_mismatch "domain"))
+
+(* OIDC Core azp rule. Multi-audience tokens MUST carry azp = our client_id; a missing or wrong azp is
+   rejected. A single-audience token with a WRONG azp (issued for another party) is rejected too; absent
+   azp on a single-audience token is fine. Pre-fix the azp claim was never inspected. *)
+let%test "validate_claims enforces the azp (authorized party) rule" =
+  let t, _ = test_service () in
+  let c = test_connection () in
+  match authorize t c with
+  | Error _ -> false
+  | Ok a -> (
+    match consume_state t a.state with
+    | Error _ -> false
+    | Ok state ->
+      (* the positive cases carry an in-domain verified email so the domain gate (checked after azp)
+         passes — isolating the azp axis. *)
+      let v ?authorized_party audience =
+        validate_claims ~now:(fun () -> 1_000.) c state
+          (claims ~nonce:a.nonce ~audience ?authorized_party ~email:"ada@example.com" ~email_verified:true ())
+      in
+      (* multi-aud without azp → reject *)
+      v [ "client"; "other-rp" ] = Error (Claim_mismatch "azp")
+      (* multi-aud with wrong azp → reject *)
+      && v ~authorized_party:"other-rp" [ "client"; "other-rp" ] = Error (Claim_mismatch "azp")
+      (* multi-aud with correct azp → accepted *)
+      && Result.is_ok (v ~authorized_party:"client" [ "client"; "other-rp" ])
+      (* single-aud with a wrong azp → reject (token authorized for a different party) *)
+      && v ~authorized_party:"other-rp" [ "client" ] = Error (Claim_mismatch "azp")
+      (* single-aud with the right azp, or none at all → accepted *)
+      && Result.is_ok (v ~authorized_party:"client" [ "client" ])
+      && Result.is_ok (v [ "client" ]))
 
 let z_octets (z : Z.t) =
   let len = max 1 ((Z.numbits z + 7) / 8) in
