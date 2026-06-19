@@ -8,3 +8,10 @@
  (name test_components)
  (modules test_components)
  (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))
+
+; BYTE-EXACT HTML oracle for the bare-text migration (manual proof tool, not in the test alias).
+; `dune exec` it before + after the .mlx migration; the two dumps must be byte-identical.
+(executable
+ (name snapshot_html)
+ (modules snapshot_html)
+ (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))
