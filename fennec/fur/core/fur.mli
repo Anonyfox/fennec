@@ -327,6 +327,14 @@ module Data : sig
   (** [string key ?fallback ?client_only ()] — a string resource (no decode needed). *)
   val string : string -> ?fallback:string -> ?client_only:bool -> unit -> string t
 
+  (** [model codec key ?client_only ~fallback ()] — a TYPED resource over a {!Sift} codec: the
+      one-liner over {!resource} that decodes the seeded / fetched JSON with {!Sift.decode_json}
+      (relaxed-JSON decode + the model's full validation), SSR-seeded + refetchable like {!string} but
+      yielding the typed ['a]. A malformed / invalid payload falls back to [fallback] (the resource never
+      crashes the UI on foreign garbage). The [codec] is the SAME ['a Sift.t] the server's
+      {!Sift.encode_json} produced — wire shape = model shape, no second serializer. *)
+  val model : 'a Sift.t -> string -> ?client_only:bool -> fallback:'a -> unit -> 'a t
+
   (** The current resolved value of a resource (the fallback while loading). *)
   val value : 'a t -> 'a
 

@@ -7,4 +7,4 @@
 (test
  (name test_components)
  (modules test_components)
- (libraries fennec.fur fennec.fur.server site_components site_styles site_handlers))
+ (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))

@@ -1,11 +1,16 @@
 ; Fur core — signals, vdom, SSR, head, data, router, reconciler. Pure + abstract
 ; (.mli is the contract + recompile firewall). Platform ops are a virtual library.
+; fennec.pulse.sift is here ONLY for Data.model (the typed resource: Sift.decode_json a seed) —
+; the one place the isomorphic data layer speaks the shared model. Sift is bson-only + jsoo-safe and
+; is already linked into every client bundle (collections/codecs/handler payloads), so this adds NO
+; bytes to a real bundle; it is the natural home for Data.model since `Data` (this module) is what
+; `open Fur` binds in userland.
 
 (library
  (name fennec_fur)
  (public_name fennec.fur)
  (wrapped false)
- (libraries fennec.fur.platform fennec-hunt.unit fennec-hunt.prop)
+ (libraries fennec.fur.platform fennec.pulse.sift fennec-hunt.unit fennec-hunt.prop)
  (inline_tests
   (backend fennec-hunt.runner))
  (preprocess

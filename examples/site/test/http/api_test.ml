@@ -16,4 +16,10 @@ let%http "site api (http)" = fun () ->
 
   check "extract + assert a JSON field" (fun () ->
     get "/api/health";
-    assert (json_field "app" = "web"))
+    assert (json_field "app" = "web"));
+
+  (* the TYPED resource endpoint (Data.model's refetch source): /api/site-info serves the SAME bytes
+     Sift.encode_json Site_info.codec produced — the typed field shape the client decodes back *)
+  check "typed resource endpoint: Sift.encode_json shape over the codec" (fun () ->
+    get "/api/site-info"
+      ~expect:[ status 200; is_json; json_path_is "name" "Fennec"; json_path_is "stars" "1280" ])

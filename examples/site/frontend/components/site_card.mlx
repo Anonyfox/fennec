@@ -1,0 +1,25 @@
+(* TYPED ISOMORPHIC DATA — the typed twin of <Greeting> (which is Data.string, string-only). `Data.model
+   Site_info.codec "/api/site-info"` declares a TYPED resource: on the server the SSR driver runs the
+   in-process source for that key and embeds the result as a fast-render seed; the client reads the seed
+   on boot (no loading flash, no refetch on first paint) and DECODES it through the same Sift codec the
+   server encoded with — so the value is typed `Site_info.t`, not a raw string, with the model's
+   refinements validated at the boundary (a malformed payload falls back, never crashes). `refetch` then
+   hits the real /api/site-info HTTP endpoint of the same name. Server source + HTTP route both live in
+   server.ml and BOTH return `Sift.encode_json Site_info.codec v`, so SSR and client agree. *)
+[%%style {scss|
+.site-card { margin: 1rem 0; padding: .7rem .95rem; border: 1px solid #eee; border-radius: 6px }
+.site-card h3 { margin: 0 0 .15rem; font-size: 1.05rem }
+.site-card .sc-tag { margin: 0; color: #666 }
+.site-card .sc-stars { color: #b8860b; font-weight: 600 }
+.sc-refetch { margin-top: .5rem; cursor: pointer; font: inherit }
+|scss}]
+
+let info = Data.model Site_info.codec "/api/site-info" ~fallback:Site_info.empty ()
+let view =
+  <div className="site-card">
+    (* (Data.value info) is a typed Site_info.t — field access is compile-checked *)
+    <h3>((Data.value info).name)</h3>
+    <p className="sc-tag">((Data.value info).tagline)</p>
+    <p className="sc-stars">("★ " ^ string_of_int (Data.value info).stars)</p>
+    <button className="sc-refetch" id="sc-refetch" onClick=(Data.refetch info)>"refetch"</button>
+  </div>

@@ -12,6 +12,7 @@ let view =
     <p>"One component tree, server-rendered then hydrated."</p>
     <Counter label="clicks" />
     <Greeting />
+    <Site_card />
     <Browser_box />
     <Visits />
     <Name_form />

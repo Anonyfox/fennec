@@ -38,6 +38,18 @@ let () =
   check "greeting: fallback shown" (has greeting "…");
   check "greeting: refetch button" (has greeting "id=\"refetch\"");
 
+  (* TYPED resource (Data.model): seed exactly what the server's Sift.encode_json emits, then render —
+     the card decodes the seed through Site_info.codec and shows the TYPED fields (name/tagline/stars),
+     proving the typed value round-trips server-encode -> client-decode through the seed. *)
+  Fur.Data.clear_seed ();
+  Fur.Data.put_seed "/api/site-info"
+    (Sift.encode_json Site_info.codec { Site_info.name = "Fennec"; tagline = "OCaml, end to end."; stars = 1280 });
+  let card = render (Site_card.make ()) in
+  check "site_card (Data.model): typed name from the seed" (has card ">Fennec<");
+  check "site_card (Data.model): typed tagline from the seed" (has card "OCaml, end to end.");
+  check "site_card (Data.model): typed int field rendered" (has card "1280");
+  Fur.Data.clear_seed ();
+
   (* global store: empty at start, Stats reflects it *)
   let stats = render (Stats.make ()) in
   check "stats: reads store count" (has stats "todos in store: 0");

@@ -480,6 +480,16 @@ module Data = struct
   let string key ?(fallback = "") ?(client_only = false) () =
     resource ~key ~client_only ~fallback ~decode:Fun.id ()
 
+  (* TYPED resource over a Sift codec: [Data.model codec "/api/x" ~fallback ()] decodes the seeded /
+     fetched JSON with [Sift.decode_json codec] (the relaxed-JSON decode + the model's full validation),
+     SSR-seeded + refetchable like {!string} but yielding the typed ['a]. A malformed / invalid payload
+     falls back to [fallback] (the resource never crashes the UI on foreign garbage) — the same skip
+     posture {!Live.find_c} takes. The codec is the SAME ['a Sift.t] the server's [Sift.encode_json]
+     produced, so wire shape = model shape with no second serializer. *)
+  let model codec key ?(client_only = false) ~fallback () =
+    resource ~key ~client_only ~fallback
+      ~decode:(fun json -> match Sift.decode_json codec json with Ok v -> v | Error _ -> fallback) ()
+
   (* reactive readers (each subscribes via get) *)
   let status r = get r.st
   let value r = match get r.st with Ready v -> v | _ -> r.fallback  (* fallback until ready *)
@@ -1137,6 +1147,35 @@ let%test_unit "miss is loading" =
   Data.set_source (fun _ _ -> ());
   let miss = Data.string "absent" ~fallback:"f" () in
   Fennec_hunt_unit.check "miss is loading" (Data.loading miss)
+
+(* Data.model: a typed resource round-trips the SAME codec through the seed (what Sift.encode_json
+   put in on the server, Sift.decode_json reads back on the client). *)
+type model_demo = { who : string; count : int }
+
+let model_demo_codec =
+  Sift.(
+    seal
+      (record (fun who count -> { who; count })
+      |> field (req "who" (non_empty string)) (fun t -> t.who)
+      |> field (req "count" (min_i 0 int)) (fun t -> t.count)))
+
+let model_demo_fallback = { who = "?"; count = 0 }
+
+let%test_unit "Data.model decodes a typed seed via the codec (server encode -> client decode)" =
+  Data.clear_seed ();
+  (* exactly what the server's [Sift.encode_json codec v] emits into the seed *)
+  Data.put_seed "/api/demo" (Sift.encode_json model_demo_codec { who = "Ada"; count = 7 });
+  let r = Data.model model_demo_codec "/api/demo" ~fallback:model_demo_fallback () in
+  let v = Data.value r in
+  Fennec_hunt_unit.check "typed seed round-trips" (v.who = "Ada" && v.count = 7);
+  Fennec_hunt_unit.check "typed seed is not loading" (not (Data.loading r))
+
+let%test_unit "Data.model falls back on a malformed / invalid payload (never crashes the UI)" =
+  Data.clear_seed ();
+  (* count = -1 violates [min_i 0] -> decode errors -> the resource yields the fallback, not an exn *)
+  Data.put_seed "/api/demo" {|{"who":"Ada","count":-1}|};
+  let r = Data.model model_demo_codec "/api/demo" ~fallback:model_demo_fallback () in
+  Fennec_hunt_unit.check "invalid payload -> fallback" (Data.value r = model_demo_fallback)
 
 let%test_unit "to_script assigns global" =
   Data.clear_seed (); Data.put_seed "u" "ok";

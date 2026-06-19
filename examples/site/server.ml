@@ -22,9 +22,16 @@ module Accounts = Fennec.Accounts
 let greeting = "Hello from the server 👋"
 let browser_only = "fetched live in the browser 🌐"
 
+(* a TYPED isomorphic payload: ONE value, encoded with Site_info.codec for BOTH the SSR seed (api_source
+   below) and the /api/site-info HTTP route — so the client's [Data.model Site_info.codec …] decodes the
+   exact same bytes the server produced. The typed twin of the string [greeting] above. *)
+let site_info : Site_info.t = { name = "Fennec"; tagline = "OCaml, end to end."; stars = 1280 }
+let site_info_json = Fennec.Sift.encode_json Site_info.codec site_info
+
 let api_source = function
   | "/api/greeting" -> Some greeting
   | "/api/browser-only" -> Some browser_only
+  | "/api/site-info" -> Some site_info_json   (* the typed resource's SSR seed (relaxed JSON) *)
   | _ -> None
 
 (* a small on-disk fixture so /api/download can stream a real file (send_file) *)
@@ -167,6 +174,9 @@ let web =
   |> Paw.get "/api/health" (fun c -> c |> Paw.json {|{"ok":true,"app":"web"}|})
   |> Paw.get "/api/greeting" (fun c -> c |> Paw.text greeting)
   |> Paw.get "/api/browser-only" (fun c -> c |> Paw.text browser_only)
+  (* the typed resource's refetch endpoint: the SAME bytes the SSR seed carries — Site_info.codec encodes
+     once, both surfaces serve it, the client's Data.model decodes it back to the typed Site_info.t *)
+  |> Paw.get "/api/site-info" (fun c -> c |> Paw.json site_info_json)
   (* streaming: a chunked (SSE-style) body and a streamed file download *)
   |> Paw.get "/api/stream"
        (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
