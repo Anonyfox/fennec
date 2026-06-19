@@ -1,0 +1,202 @@
+(* PROOF that the unified component shape — render = the TRAILING expression of the body, the
+   `fun () ->` emitted by the ppx — preserves the SSR-once / render-many reactive semantics
+   EXACTLY. Getting the setup-vs-render boundary wrong is a SILENT reactivity bug, so this is
+   exhaustive and checks OBSERVABLE behaviour (rendered DOM, run counts, signal identity), not
+   pretty-printed source.
+
+   Every component module below is written in the UNIFIED shape (NO manual `fun () ->`): setup
+   bindings above, the render JSX as the trailing expression. The ppx wraps that trailing
+   expression as the render thunk; these tests fail unless it lands the boundary correctly.
+
+   Driven over a tiny in-memory DOM backend through {!Fur.Reconcile} (the SAME shape fur.ml's
+   own reconciler tests use) so we can mount, force re-renders via signal writes, and unmount. *)
+
+(* ---- a minimal test DOM backend (mirrors fur.ml's internal Fake) ---- *)
+module Fake = struct
+  type node = { mutable text : string; mutable attrs : (string * string) list;
+                mutable kids : node list; mutable par : node option; tag : string option }
+  let mk () = { text = ""; attrs = []; kids = []; par = None; tag = None }
+  let create_text s = let n = mk () in n.text <- s; n
+  let create_element t = { (mk ()) with tag = Some t }
+  let get_text n = n.text
+  let set_text n s = n.text <- s
+  let get_attr n k = List.assoc_opt k n.attrs
+  let set_attr n k v = n.attrs <- (k, v) :: List.remove_assoc k n.attrs
+  let remove_attr n k = n.attrs <- List.remove_assoc k n.attrs
+  let set_prop n k v = set_attr n k v
+  let get_prop n k = Option.value ~default:"" (get_attr n k)
+  let detach c = match c.par with Some p -> p.kids <- List.filter (fun x -> x != c) p.kids; c.par <- None | None -> ()
+  let append p c = detach c; p.kids <- p.kids @ [ c ]; c.par <- Some p
+  let insert_before p c r =
+    detach c;
+    (match r with
+     | None -> p.kids <- p.kids @ [ c ]
+     | Some r -> p.kids <- List.concat_map (fun x -> if x == r then [ c; r ] else [ x ]) p.kids);
+    c.par <- Some p
+  let remove _ c = detach c
+  let replace p nw od = detach nw;
+    p.kids <- List.concat_map (fun x -> if x == od then [ nw ] else [ x ]) p.kids;
+    nw.par <- Some p; od.par <- None
+  let parent n = n.par
+  let listen _ _ _ = ()
+  let child n i = List.nth_opt n.kids i
+  let first_child n = match n.kids with x :: _ -> Some x | [] -> None
+  let node_tag n = Option.map String.lowercase_ascii n.tag
+  let is_text n = n.tag = None
+end
+module D = Fur.Reconcile (Fake)
+
+(* read the text of the FIRST text descendant under a node — the leaf our probes write *)
+let rec first_text (n : Fake.node) =
+  if Fake.is_text n then Some n.Fake.text
+  else List.fold_left (fun acc k -> match acc with Some _ -> acc | None -> first_text k) None n.Fake.kids
+let text_of n = Option.value ~default:"<none>" (first_text n)
+
+(* =====================================================================================
+   1. SETUP RUNS ONCE; RENDER RE-RUNS AND STAYS REACTIVE.
+      The setup body increments a module counter and creates a signal (exposed so the driver
+      can force re-renders from outside); mounting once + forcing MANY re-renders must run setup
+      EXACTLY ONCE while the render thunk re-runs every time and reflects the latest value. If
+      the ppx had put the setup `incr`/`signal` inside the render thunk, the count would climb
+      and a fresh signal would be made every render.
+   ===================================================================================== *)
+let setup_runs = ref 0
+let render_runs = ref 0
+let probe_tick : int signal option ref = ref None
+
+module Probe = struct
+  let make () =
+    incr setup_runs;                       (* SETUP — once per mount *)
+    let tick = signal 0 in
+    probe_tick := Some tick;               (* SETUP — expose this instance's signal *)
+    <span className="probe">
+      (incr render_runs; "v" ^ string_of_int (get tick))   (* RENDER — re-runs on `tick` *)
+    </span>
+end
+
+let%test "setup runs ONCE across many re-renders; render re-runs and stays reactive" =
+  setup_runs := 0; render_runs := 0; probe_tick := None;
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root (fun () -> <Probe />) in
+  (* NB: in a [.mlx] file [!s] is the signal-read sugar ([get s]); a real OCaml ref is read with
+     [.contents], so the module counters below spell [.contents], never [!]. *)
+  let mounted_setup = setup_runs.contents and mounted_render = render_runs.contents in
+  let tick = match probe_tick.contents with Some s -> s | None -> assert false in
+  for i = 1 to 25 do flush_sync (fun () -> set tick i) done;   (* 25 forced re-renders *)
+  mounted_setup = 1 && setup_runs.contents = 1         (* setup ran exactly once *)
+  && mounted_render = 1 && render_runs.contents = 26   (* render: mount + 25 writes *)
+  && text_of root = "v25"                              (* DOM reflects the latest value *)
+
+let%test "setup-created signal identity is stable across re-renders" =
+  setup_runs := 0; probe_tick := None;
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root (fun () -> <Probe />) in
+  let s1 = match probe_tick.contents with Some s -> s | None -> assert false in
+  flush_sync (fun () -> set s1 1);
+  flush_sync (fun () -> set s1 2);
+  let s2 = match probe_tick.contents with Some s -> s | None -> assert false in
+  s1 == s2 && setup_runs.contents = 1     (* the same physical signal — setup never re-ran *)
+
+(* =====================================================================================
+   2. UNIFIED == EXPLICIT. The unified shape must be behaviourally identical to the explicit
+      `fun () ->` shape with the same setup + render — proven on the SSR path (same HTML) AND
+      reactively (same DOM after a write). `Unified.make` omits the thunk; `Explicit.make`
+      writes it; both have a `let n = signal …` setup and read it in the markup.
+   ===================================================================================== *)
+let seen_unified : int signal option ref = ref None
+let seen_explicit : int signal option ref = ref None
+
+module Unified = struct
+  let make ~label () =
+    let n = signal 7 in
+    seen_unified := Some n;
+    <b className="u">(label ^ ":" ^ string_of_int (get n))</b>
+end
+
+module Explicit = struct
+  let make ~label () =
+    let n = signal 7 in
+    seen_explicit := Some n;
+    fun () -> <b className="u">(label ^ ":" ^ string_of_int (get n))</b>
+end
+
+let%test "unified shape renders byte-identically to the explicit `fun () ->` shape (SSR)" =
+  Fur.to_html ((Unified.make ~label:"x" ()) ()) = Fur.to_html ((Explicit.make ~label:"x" ()) ())
+
+let%test "unified and explicit are reactive identically (same DOM after a write)" =
+  seen_unified := None; seen_explicit := None;
+  let ru = Fake.create_element "" and re = Fake.create_element "" in
+  let _ = D.mount_root ru (fun () -> <Unified label="x" />) in
+  let _ = D.mount_root re (fun () -> <Explicit label="x" />) in
+  let nu = match seen_unified.contents with Some s -> s | None -> assert false in
+  let ne = match seen_explicit.contents with Some s -> s | None -> assert false in
+  text_of ru = text_of re                               (* identical first render *)
+  && (flush_sync (fun () -> set nu 99); flush_sync (fun () -> set ne 99);
+      text_of ru = "x:99" && text_of ru = text_of re)   (* identical after a write *)
+
+(* =====================================================================================
+   3. PER-INSTANCE ISOLATION. Two <Counter/> instances must have INDEPENDENT state — the
+      unified shape must NOT have hoisted `let count = signal …` to module scope. Each
+      instance's setup pushes its OWN freshly-created signal; we bump instance 0's signal and
+      assert ONLY instance 0's DOM changes.
+   ===================================================================================== *)
+let instances : int signal list ref = ref []
+
+module Counter = struct
+  let make () =
+    let count = signal 0 in
+    instances := instances.contents @ [ count ];   (* register this instance's own signal *)
+    <li className="c">("n=" ^ string_of_int (get count))</li>
+end
+
+let%test "two instances keep independent state (no hoisted module signal)" =
+  instances := [];
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root (fun () -> <ul><Counter /><Counter /></ul>) in
+  (match instances.contents with
+   | [ a; b ] ->
+     a != b                                  (* two distinct signals: setup ran per instance *)
+     && (let ul = List.hd root.Fake.kids in
+         let li0 = List.nth ul.Fake.kids 0 and li1 = List.nth ul.Fake.kids 1 in
+         text_of li0 = "n=0" && text_of li1 = "n=0"
+         && (flush_sync (fun () -> set a 9); text_of li0 = "n=9" && text_of li1 = "n=0")
+         && (flush_sync (fun () -> set b 4); text_of li0 = "n=9" && text_of li1 = "n=4"))
+   | _ -> false)
+
+(* =====================================================================================
+   4. on_mount IN SETUP fires ONCE and DISPOSES on unmount (composes with the owner-scope fix —
+      the watch a component starts in on_mount is torn down on ITS unmount, no leak). Written
+      unified: `on_mount (…)` is a setup statement, the JSX is the trailing render. Across N
+      mount/unmount cycles the steady state must not grow: after disposing every cycle, a write
+      re-runs NONE of the watches.
+   ===================================================================================== *)
+let mounts = ref 0
+let watch_runs = ref 0
+let watched = signal 0
+
+module Sub = struct
+  let make () =
+    on_mount (fun () ->                       (* SETUP — registers a once-only browser effect *)
+        incr mounts;
+        ignore (watch (fun () -> incr watch_runs; ignore (get watched))));
+    <span>"sub"</span>
+end
+
+let%test "on_mount in setup fires once per mount and its watch disposes on unmount (no leak)" =
+  let saved = Fur.is_browser.contents in
+  Fur.is_browser := true;
+  mounts := 0; watch_runs := 0;
+  let cycle () =
+    let root = Fake.create_element "" in
+    let dispose = D.mount_root_disposable root (fun () -> <Sub />) in
+    Fur.flush_mounts ();                       (* runs on_mount (browser path) *)
+    dispose ()                                 (* unmount — must tear the watch down *)
+  in
+  for _ = 1 to 10 do cycle () done;
+  let runs_before = watch_runs.contents in
+  flush_sync (fun () -> set watched 1);         (* if any cycle leaked, its watch re-runs here *)
+  let leaked = watch_runs.contents - runs_before in
+  Fur.is_browser := saved;
+  mounts.contents = 10 && leaked = 0
+
+let () = exit (Fennec_hunt_unit.run ())
