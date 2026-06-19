@@ -109,7 +109,69 @@ let () =
   if Hashtbl.length abox <> 0 then failf "anonymous (user_id=None) subscriber received documents";
   (ah : Rx.live_handle).stop ();
 
+  (* ---- STEP 3 proof: an in-session identity change re-scopes __currentUser ---------------------
+     Drive the REAL DDP session (Fennec_pulse_server over the app's R, the SAME stack the websocket
+     paw runs) through a fake channel. A login method's set_user_id rebinds the connection and the
+     server pushes Msg.User; the client reacts by RE-SENDING Sub for every live sub (resubscribe_all),
+     which makes the server stop the old pub and re-run it under the new user_id. We model exactly that
+     re-Sub here and assert: anon sub is empty → after login + re-Sub the user's doc appears → after
+     logout + re-Sub it is removed. *)
+  let module Srv = Fennec_pulse_server.Make (R) in
+  let module Msg = Fennec_ddp.Message in
+  let module Ws = Paw.Ws_channel in
+  (* test login/logout verbs: the only thing that matters here is that they flip the connection user
+     via set_user_id, exactly as the native [login]/[logout] do *)
+  R.methods
+    [ ("test_login", fun (inv : R.invocation) args ->
+         (match args with [ B.String u ] -> inv.set_user_id (Some u) | _ -> ());
+         B.Null);
+      ("test_logout", fun (inv : R.invocation) _ -> inv.set_user_id None; B.Null) ];
+  let out = ref [] in
+  let ch = { Ws.send = (fun s -> out := s :: !out); on_text = (fun _ -> ()); on_close = (fun () -> ()) } in
+  let emitted () = List.rev_map Msg.decode !out in
+  Srv.serve ~session_id:"S-rescope" ch;
+  ch.Ws.on_text (Msg.encode (Msg.Connect { session = None; version = "1"; support = [ "1" ] }));
+  (* anonymous sub → no user doc for uid *)
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "cu"; name = "__currentUser"; params = []; have = None }));
+  let has_user_added ms =
+    List.exists
+      (function Msg.Added { sub = Some "cu"; id; _ } -> id = uid | _ -> false) ms
+  in
+  let has_user_removed ms =
+    List.exists (function Msg.Removed { sub = Some "cu"; id; _ } -> id = uid | _ -> false) ms
+  in
+  if has_user_added (emitted ()) then failf "anonymous __currentUser sub leaked the user doc over the wire";
+
+  (* LOGIN: the method rebinds the connection, the server emits Msg.User { id = uid } *)
+  out := [];
+  ch.Ws.on_text
+    (Msg.encode (Msg.Method { method_ = "test_login"; params = [ B.str uid ]; id = "ml"; random_seed = None }));
+  if not (List.exists (function Msg.User { id = Some u } -> u = uid | _ -> false) (emitted ())) then
+    failf "login did not push Msg.User to the client";
+
+  (* the client's reaction: re-Sub every live sub (this is resubscribe_all). Now the server re-runs
+     __currentUser under the NEW user_id → the user's doc is added. *)
+  out := [];
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "cu"; name = "__currentUser"; params = []; have = None }));
+  if not (has_user_added (emitted ())) then
+    failf "after login + re-Sub, __currentUser did not deliver the user's doc";
+
+  (* LOGOUT: set_user_id None → Msg.User None; the re-Sub (delta-resync, holding the user doc) makes
+     the server's resync ready emit removed for the now-unmatched doc *)
+  out := [];
+  ch.Ws.on_text
+    (Msg.encode (Msg.Method { method_ = "test_logout"; params = []; id = "mo"; random_seed = None }));
+  if not (List.exists (function Msg.User { id = None } -> true | _ -> false) (emitted ())) then
+    failf "logout did not push Msg.User None to the client";
+  out := [];
+  (* the client holds the user doc; a delta-resync Sub declares it, and the now-empty pub removes it *)
+  let have = [ ("accounts_users", [ (uid, "anyhash") ]) ] in
+  ch.Ws.on_text (Msg.encode (Msg.Sub { id = "cu"; name = "__currentUser"; params = []; have = Some have }));
+  if not (has_user_removed (emitted ())) then
+    failf "after logout + re-Sub, __currentUser did not remove the user's doc";
+
   Unix.putenv "MONGO_URL" "";
   print_endline
     "__currentUser publication: OK (initial safe doc + live set_profile/set_roles/add_email deltas + \
-     no passwordHash/services leak + empty for anonymous)"
+     no passwordHash/services leak + empty for anonymous + login/logout re-scope over a live DDP \
+     session)"

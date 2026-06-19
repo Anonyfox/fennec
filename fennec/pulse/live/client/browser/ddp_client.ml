@@ -160,6 +160,44 @@ let schedule_persist t =
 
 let mark_ready t id = match Hashtbl.find_opt t.by_id id with Some st -> Fur.set st.ready_sig true | None -> ()
 
+(* Re-send a [Sub] for every active subscription over [send], with the v2 delta-resync payload (WHAT
+   WE HOLD) when the server is v2 — the server then skips matching docs and, at [ready], emits explicit
+   removed for the docs we still hold that no longer match. This serves TWO callers:
+   - reconnect (onopen): the server session is fresh, so re-running each publication rebuilds it; the
+     delta payload makes a warm reconnect download only the difference.
+   - an in-session identity change (Msg.User, login/logout/user-switch): the server's [set_user_id]
+     already updated the connection's user and pushed Msg.User; a fresh Sub with the SAME id makes the
+     server stop the old pub (still scoped to the old identity) and re-run it under the NEW user_id —
+     so [__currentUser] (and any user-scoped publication) re-scopes. On login the new user's doc is
+     added; on logout the now-unmatched doc is removed via the resync [ready]. Zero userland code. *)
+let resubscribe_all t ~send =
+  Hashtbl.iter
+    (fun _ (st : sub_state) ->
+      let have =
+        if not t.v2 then None
+        else
+          Some
+            (List.map
+               (fun (coll, docs) ->
+                 ( coll,
+                   List.filter_map
+                     (fun d ->
+                       match Bson.get d "_id" with
+                       | Some (Bson.String id) | Some (Bson.Object_id id) ->
+                           let fields =
+                             match d with
+                             | Bson.Document kvs -> List.filter (fun (k, _) -> k <> "_id") kvs
+                             | _ -> []
+                           in
+                           Some (id, Fennec_ddp.Doc_hash.fields fields)
+                       | _ -> None)
+                     docs ))
+               (MS.snapshot_sub (Live.store t.live) ~sub:st.id))
+      in
+      if have = None then MS.resync_begin (Live.store t.live) st.id;
+      send (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params; have })))
+    t.subs
+
 (* route one decoded message: data deltas → merge store (via the shared Wire_route); control frames
    are this client's concern (they touch session/subscription state) *)
 let handle t raw =
@@ -190,7 +228,12 @@ let handle t raw =
                 if owner <> Some now then begin
                   (match owner with Some _ -> Kv.purge ~ns | None -> ());
                   Kv.put ~ns "owner" now
-                end)
+                end);
+            (* re-scope every live subscription to the NEW identity: the server already rebound the
+               connection's user (set_user_id) before pushing this Msg.User, so a fresh Sub re-runs each
+               user-scoped publication under the new user_id. This is what keeps __currentUser (and the
+               Accounts.user/user_id signals derived from it) live across an in-session login/logout. *)
+            resubscribe_all t ~send:t.send_if_open
         | Msg.Ready { subs } ->
             (* quiescence: drop seeded/stale docs the live snapshot didn't re-confirm, then mark ready *)
             List.iter
@@ -404,33 +447,9 @@ let connect ?(path = "/websocket") ?persist ?chrome () : t =
               beacon was seen), send WHAT WE HOLD (delta resync): the server skips matching docs and
               sends explicit removed for dead ones — a warm reconnect downloads only the difference,
               and no tentative/quiesce pass is needed. Otherwise (first connect, stock server):
-              re-mark docs tentative and let the full replay + ready quiescence heal. *)
-           Hashtbl.iter
-             (fun _ (st : sub_state) ->
-               let have =
-                 if not t.v2 then None
-                 else
-                   Some
-                     (List.map
-                        (fun (coll, docs) ->
-                          ( coll,
-                            List.filter_map
-                              (fun d ->
-                                match Bson.get d "_id" with
-                                | Some (Bson.String id) | Some (Bson.Object_id id) ->
-                                    let fields =
-                                      match d with
-                                      | Bson.Document kvs -> List.filter (fun (k, _) -> k <> "_id") kvs
-                                      | _ -> []
-                                    in
-                                    Some (id, Fennec_ddp.Doc_hash.fields fields)
-                                | _ -> None)
-                              docs ))
-                        (MS.snapshot_sub (Live.store t.live) ~sub:st.id))
-               in
-               if have = None then MS.resync_begin (Live.store t.live) st.id;
-               raw (Msg.encode (Msg.Sub { id = st.id; name = st.name; params = st.params; have })))
-             t.subs;
+              re-mark docs tentative and let the full replay + ready quiescence heal. (Shared with the
+              Msg.User identity-change path — see resubscribe_all.) *)
+           resubscribe_all t ~send:raw;
            (* flush the offline buffer: every unacknowledged method, oldest first, verbatim *)
            List.iter (fun (_, frame) -> raw frame) (List.rev t.unacked);
            Js._true));
