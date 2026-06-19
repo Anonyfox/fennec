@@ -52,6 +52,22 @@ let () =
   check "user_badge: anonymous label" (has badge "Guest");
   check "user_badge: no personalized content in the cacheable SSR frame" (not (has badge "Hello,"));
 
+  (* the Mode-B MIRROR of the badge above: a standalone handler's [view] renders the user's data
+     PERSONALIZED server-side from its payload (the server [load] read the userId off the Conn and put
+     exactly this here), so the first paint is already personalized — and the SAME tree hydrates from
+     the seed, byte-identical, no snap. See frontend/handlers/me.mlx + the Mode-B README section. *)
+  let me =
+    Fur.to_html
+      (Site_handlers.Me.view
+         { Site_handlers.Me.username = "alice";
+           roles = [ "admin" ];
+           emails = [ { Site_handlers.Me.Email.address = "alice@example.com"; verified = true } ] })
+  in
+  check "me (Mode B): personalized server-render names the user" (has me "Signed in as alice");
+  check "me (Mode B): role rendered" (has me "admin");
+  check "me (Mode B): verified email rendered" (has me "alice@example.com");
+  check "me (Mode B): verified marker" (has me "verified");
+
   (* forms: controlled input + add button render server-side *)
   let todos = render (Todo_list.make ()) in
   check "todo_list: input present" (has todos "id=\"todo-input\"");

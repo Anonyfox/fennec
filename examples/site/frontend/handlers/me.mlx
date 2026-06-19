@@ -1,0 +1,78 @@
+(* A PERSONALIZED, AUTHENTICATED server handler — Mode B, the mirror of the Mode-A reactive badge.
+   Where a file-tree page (Paw.app) renders the cacheable ANONYMOUS frame and snaps the user in on
+   hydration, this handler reads the userId FROM THE CONN, renders the user's data server-side, and
+   SEEDS exactly that payload — so the client hydrates ALREADY personalized, byte-identical, NO snap.
+   Use Mode B for dashboards / authed pages / classical server-rendered apps; Mode A for the
+   cacheable content/app-shell. See fennec/accounts/README.md, "Mode B — the personalized handler".
+
+   The split: [load] is SERVER-ONLY (the fur -handler ppx strips it from the jsoo bundle), so it may
+   read the Conn + Accounts; [view] is ISOMORPHIC (SSR + the client bundle), so it sees ONLY the
+   payload — which carries plain serializable data, never the Conn or the full user record. *)
+
+[%%style {scss|
+.me { max-width: 34rem; margin: 2rem auto; padding: 1.4rem 1.6rem; border: 1px solid #e3e3e3; border-radius: 10px; font: inherit }
+.me h1 { margin: 0 0 .2rem; font-size: 1.3rem }
+.me .me-sub { margin: 0 0 1rem; color: #666 }
+.me h2 { margin: 1.1rem 0 .35rem; font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; color: #888 }
+.me ul { margin: 0; padding-left: 1.2rem }
+.me li { margin: .15rem 0 }
+.me .me-verified { color: #16794a; font-weight: 600 }
+.me .me-unverified { color: #b45309; font-weight: 600 }
+.me .me-empty { color: #999; font-style: italic }
+.me .me-logout { display: inline-block; margin-top: 1.2rem; color: var(--brand); text-decoration: none; font-weight: 600 }
+.me .me-logout:hover { text-decoration: underline }
+|scss}]
+
+(* one verified-or-not email, as a nested derived model so the payload stays fully typed end to end *)
+module Email = struct
+  type t = { address : string; verified : bool }
+  [@@deriving model]
+end
+
+(* exactly the user-scoped data the dashboard shows — this is what gets seeded + hydrated (NOT the
+   full user record, which has no codec and could carry secrets). Put user-scoped data HERE in Mode B. *)
+type t = { username : string; roles : string list; emails : Email.t list }
+[@@deriving model]
+
+(* SERVER: stripped from the client bundle. [guard] is the blessed auth gate — [Accounts.user_id conn]
+   is the request user (None ⇒ redirect to /login before any personalized render). Past the gate we
+   load the full record for the profile fields and seed the trimmed payload via [render]. *)
+let load conn =
+  guard conn ~user:Accounts.user_id ~login:"/login" @@ fun _uid ->
+  match Accounts.current_user (Accounts.current ()) conn with
+  | Ok (Some u) ->
+    let emails = List.map (fun (e : Accounts.email) -> { Email.address = e.address; verified = e.verified }) u.emails in
+    render
+      { username = Option.value u.username ~default:"(no username)";
+        roles = Accounts.Roles.role_names u.roles;
+        emails }
+  (* the cookie verified but the record vanished (or the store erred) — bounce to login, don't 500 *)
+  | Ok None | Error _ -> redirect "/login"
+
+(* ISOMORPHIC: payload -> vnode. The SAME tree SSRs on the server and hydrates in the bundle from the
+   seed — byte-identical, already personalized. Sees only [t]; never names Accounts or the Conn. *)
+let view (p : t) =
+  <main className="me" id="me">
+    <h1>(node ("Signed in as " ^ p.username))</h1>
+    <p className="me-sub">"This page was rendered for you on the server, then hydrated from its seed."</p>
+
+    <h2>"Roles"</h2>
+    (match p.roles with
+     | [] -> <p className="me-empty">"no roles granted"</p>
+     | roles -> <ul>(frag (each roles (fun r -> <li>(node r)</li>)))</ul>)
+
+    <h2>"Emails"</h2>
+    (match p.emails with
+     | [] -> <p className="me-empty">"no emails on file"</p>
+     | emails ->
+       <ul>
+         (frag (each emails (fun (e : Email.t) ->
+            <li>
+              (node e.address)" — "
+              (if e.verified then <span className="me-verified">"verified"</span>
+               else <span className="me-unverified">"unverified"</span>)
+            </li>)))
+       </ul>)
+
+    <a className="me-logout" href="/logout">"Sign out"</a>
+  </main>

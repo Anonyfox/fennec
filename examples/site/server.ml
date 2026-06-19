@@ -14,6 +14,7 @@
 module Endpoint = Fennec.Endpoint
 module Paw = Fennec.Paw
 module Conn = Fennec.Conn
+module Accounts = Fennec.Accounts
 
 (* The app's data: ONE place defines each value, used by BOTH the SSR source (in-process,
    for fast-render seeds) and the HTTP route (what the client fetches on refetch / for
@@ -73,10 +74,20 @@ let outbox_doc (m : Fennec.Mail.t) : Outbox.t =
     html = Option.value m.html ~default:"";
     received = stamp }
 
+(* a demo user so /me (and the reactive user_badge) work end-to-end the moment the example boots with a
+   backend present. Idempotent: on a re-run [create_user] just fails on the duplicate, which we ignore.
+   Needs auth ON (~accounts below) and a backend — with MONGO_URL unset and no mongod this no-ops and
+   /me simply stays at its /login redirect. NOTE: a demo credential; a real app never ships a fixed one. *)
+let seed_demo_user () =
+  ignore
+    (Accounts.create_user (Accounts.current ()) ~username:"alice" ~email:"alice@example.com"
+       ~password:"correct-horse" ())
+
 let setup_realtime () =
   Pulse.seed Task.collection
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
   Pulse.publish Task.collection;
+  seed_demo_user ();
   (* the TYPED method over the TYPED collection: handler and stub share the declarations, so a
      renamed field/method is a compile error in every file; a malformed call is a 400 before this
      handler runs, and an invalid document raises before it writes *)
@@ -104,6 +115,44 @@ let common =
 
 let hello_secret = "hello-handler-demo-secret-key-1234"
 
+(* ── live auth (the one step that makes /me + the reactive user_badge go end-to-end) ──────────────
+   Three tiny same-origin routes over the framework-native Accounts session. The GET renders a plain
+   login form (no bundle); the POST verifies the password and ATTACHES the signed login cookie to the
+   response conn — which a Form `submit` could not do (it returns an outcome, not a conn), so login is
+   a raw handler. Logout expires the cookie. CSRF is enforced by the Csrf paw already in the pipeline
+   (the form embeds [_csrf_token]); the Session paw backs it. Sign in as alice / correct-horse. *)
+let login_page ?(error = false) c =
+  let token = Paw.Csrf.token c in
+  let err = if error then {|<p style="color:#b91c1c">Wrong username or password.</p>|} else "" in
+  c
+  |> Paw.html
+       (Printf.sprintf
+          {|<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in</title></head>
+<body style="font:16px system-ui;max-width:22rem;margin:3rem auto">
+<h1>Sign in</h1>%s
+<form method="post" action="/login">
+<input type="hidden" name="_csrf_token" value="%s">
+<p><label>Username<br><input name="username" autofocus></label></p>
+<p><label>Password<br><input name="password" type="password"></label></p>
+<button type="submit">Sign in</button>
+</form>
+<p style="color:#666">Demo user: <code>alice</code> / <code>correct-horse</code></p>
+</body></html>|}
+          err token)
+
+let do_login c =
+  let username = Option.value (Conn.body_param c "username") ~default:"" in
+  let password = Option.value (Conn.body_param c "password") ~default:"" in
+  match Accounts.login_with_password (Accounts.current ()) (Accounts.By_username username) ~password with
+  | Ok (_user, token) -> Conn.redirect (Accounts.set_login_cookie (Accounts.current ()) c token) "/me"
+  | Error _ -> login_page ~error:true c
+
+let auth_routes e =
+  e
+  |> Paw.get "/login" (fun c -> login_page c)
+  |> Paw.post "/login" do_login
+  |> Paw.get "/logout" (fun c -> Conn.redirect (Accounts.logout (Accounts.current ()) c) "/")
+
 (* The app's component styles, declared for BOTH surfaces in one place: the web endpoints below pass
    [~styles:Site_styles.css] (the document <style>), and this installs the SAME rules — var(--brand)
    already resolved at build — for email, so [Fur_email.to_email component] inlines them with nothing
@@ -128,11 +177,17 @@ let web =
   |> Paw.use (Paw.Session.make ~secret:hello_secret ())
   |> Paw.use (Paw.Csrf.make ~secret:hello_secret ())
   |> Paw.form "/hello" Site_handlers.Hello.serve
+  (* live auth: /login (GET form + POST verify) and /logout, over the native Accounts session *)
+  |> auth_routes
   (* standalone HANDLERS — mounted MANUALLY at any path, central-router style. The same handler
      (Site_handlers.Greet.serve, a hydrated SPA with its own bundle) is wired at two paths to show
      reuse: a query-string route and a path-param route. Adding a handler = drop a .mlx + one line here. *)
   |> Paw.get "/greet" Site_handlers.Greet.serve
   |> Paw.get "/hi/:name" Site_handlers.Greet.serve
+  (* Mode B — a PERSONALIZED, authenticated server handler: [load] reads the userId from the conn,
+     renders the user's dashboard server-side, and seeds that payload so the client hydrates already
+     personalized (no snap). Anonymous ⇒ it redirects to /login. See frontend/handlers/me.mlx. *)
+  |> Paw.get "/me" Site_handlers.Me.serve
   (* the dev mailbox — mounted ONLY in dev (Fennec.dev_only); in production these routes do not exist.
      "/dev/send-test-mail" is a demo trigger: hit it and the email shows up at /dev/mailbox live. *)
   |> Fennec.dev_only (fun e ->
@@ -163,4 +218,10 @@ let admin =
 (* serve the assembled web root. Livereload is fully handled by the CLI in dev: it
    watches the served bundles and pings the server's dev control socket, which relays
    a CSS hot-swap or full reload to the browser. The server watches nothing. *)
-let () = Fennec.serve ~on_start:(fun ~sw:_ ~sleep:_ ~net:_ -> setup_realtime ()) [ web; admin ]
+(* ~accounts turns the framework-native identity ON (password login + sessions + the always-on
+   __currentUser publication that drives the reactive user_badge) so /me and the badge go live. With
+   no backend (MONGO_URL unset, no mongod) identity is simply None and /me redirects to /login. *)
+let () =
+  Fennec.serve ~accounts:Accounts.defaults
+    ~on_start:(fun ~sw:_ ~sleep:_ ~net:_ -> setup_realtime ())
+    [ web; admin ]

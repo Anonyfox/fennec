@@ -1,9 +1,10 @@
 ; Unit tests for the mlx components — render to HTML via Fur.to_html (native SSR).
 ; In their own dir, not inside frontend/ (its route_gen rule + data_only_dirs apps
 ; would otherwise interfere). Links the components lib directly (it is wrapped false,
-; so Counter/Nav/Hero are top-level modules).
+; so Counter/Nav/Hero are top-level modules). site_handlers: the Mode-B [Me.view]
+; whose personalized SSR frame is the mirror of user_badge's anonymous one.
 
 (test
  (name test_components)
  (modules test_components)
- (libraries fennec.fur fennec.fur.server site_components site_styles))
+ (libraries fennec.fur fennec.fur.server site_components site_styles site_handlers))
