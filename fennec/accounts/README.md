@@ -27,6 +27,74 @@ deep-dives live under [`docs/`](docs/README.md).
 
 ---
 
+## SSR + the reactive user (the anonymous, cacheable frame)
+
+Fennec renders the page **server-side first**, then hydrates it in the browser. The contract for
+identity across that boundary is deliberate and worth stating outright:
+
+> **The SSR pass is the anonymous, cacheable frame; personalization snaps in on hydration.**
+
+**The mechanism.** The SSR data fetchers are **user-blind** — they take the published-document
+*params* only, never a `userId` (the server-side publication registry is keyed by name alone). So
+during the server render every userId-scoped subscription resolves as if **`userId = None`**: the
+always-on `__currentUser` publication yields no document, and the client-side
+`Fennec_accounts_client.user` / `user_id` signals (Meteor's `Meteor.user()` / `Meteor.userId()`)
+read `None`. The server-rendered HTML is therefore **identical for every visitor, signed-in or
+not**.
+
+Then the browser takes over: the WebSocket upgrade carries the (HttpOnly) login cookie, the server
+seeds the session `userId`, the userId-scoped subscriptions **re-scope** to the real user, the merge
+store fills in, and the signals recompute. Personalization **"snaps in"** over the anonymous frame —
+no full re-render, just the reactive slots updating.
+
+**Why this is the default (and a security property, not just a cache win).** Because the SSR frame
+is byte-identical for everyone, it is uniformly **edge/CDN-cacheable**, and it **structurally cannot
+leak one user's private data into a shared cached frame** — there is no per-user data in it to leak.
+Per-user SSR would be the opposite trade: the first paint would already be personalized (no snap),
+but the HTML would be uncacheable and one user's data would be one cache-key mistake away from
+another user's screen. Fennec picks cacheable-and-safe by default.
+
+**The userland rules.** Author components so the SSR frame is correct and public:
+
+1. **Render the anonymous / `None` view for SSR.** Read the live signal and branch on it; the `None`
+   arm is what the server emits and what every cached visitor sees first.
+
+   ```ocaml
+   module Accounts = Fennec_accounts_client
+
+   let make () =
+     let user = Accounts.current_user () in   (* user option Fur.signal *)
+     fun () ->
+       <span className="user-badge">          (* a FIXED-size slot — see rule 2 *)
+         (match get user with
+          | None   -> <a href="/login">"Sign in"</a>           (* the SSR / cacheable frame *)
+          | Some u -> (node ("Hello, " ^ Option.value u.username ~default:"there")))
+       </span>
+   ```
+
+2. **Reserve the layout so the snap is a fill-in, not a layout shift.** Give the personalized slot a
+   fixed size (height / min-width) so the `None → Some` transition is a clean swap, not a reflow.
+   The "snap" should be visible as content appearing, never as the page jumping.
+
+3. **Auth-gated content renders its *gate*, never the protected content.** The SSR frame is
+   public and cacheable, so a component behind a login must server-render a **skeleton / redirect /
+   "sign in to continue"** placeholder and only reveal the protected content after hydration (when
+   `user` becomes `Some` and, if you need it, a role check passes). Never put data you would not put
+   on a billboard into the SSR output of a gated view — it will be cached and served to anonymous
+   visitors. (For hard server-side enforcement of a *route*, the request-time guards —
+   `Accounts.require_user` / `require_role` / `require_permission`, RBAC below — still apply; this
+   rule is about what the *rendered component tree* exposes.)
+
+The live signals (`user`, `user_id`, `logging_in`) and the verbs (`login_with_password`, `logout`,
+…) are the browser-side `Fennec_accounts_client` facade (`fennec.accounts.client`); the server side
+is `Accounts.user_id conn` in a handler. A worked end-to-end example of the skeleton→snap pattern —
+a fixed-slot badge that renders "Sign in" for SSR and "Hello, …" after hydration — is
+[`examples/site/frontend/components/user_badge.mlx`](../../examples/site/frontend/components/user_badge.mlx)
+(mounted in the web app's `layout.mlx`; its SSR `None`-frame is asserted in
+`examples/site/frontend_test/test_components.ml`).
+
+---
+
 ## The DX: one declarative config object
 
 A whole app is configured from a single value. Start at `Accounts.defaults` and override one field

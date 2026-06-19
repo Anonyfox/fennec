@@ -42,6 +42,16 @@ let () =
   let stats = render (Stats.make ()) in
   check "stats: reads store count" (has stats "todos in store: 0");
 
+  (* the SSR (cacheable) frame of the reactive-user contract: with no session — exactly the
+     server-render case, where [Accounts.current_user ()] resolves to None — User_badge renders the
+     ANONYMOUS frame ("Sign in"), never any personalized "Hello, …". This is the half of the contract
+     that makes the SSR HTML identical for every visitor and safe to edge-cache. *)
+  let badge = render (User_badge.make ()) in
+  check "user_badge: fixed-size slot present" (has badge "class=\"user-badge\"");
+  check "user_badge: anonymous frame (Sign in)" (has badge "Sign in");
+  check "user_badge: anonymous label" (has badge "Guest");
+  check "user_badge: no personalized content in the cacheable SSR frame" (not (has badge "Hello,"));
+
   (* forms: controlled input + add button render server-side *)
   let todos = render (Todo_list.make ()) in
   check "todo_list: input present" (has todos "id=\"todo-input\"");
