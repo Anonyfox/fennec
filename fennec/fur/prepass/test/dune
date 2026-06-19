@@ -20,3 +20,32 @@
  (deps parses_through_mlx.exe)
  (action
   (run %{exe:parses_through_mlx.exe})))
+
+; A THIRD proof — the MERLIN READER (ocamlmerlin-fennec-mlx) over the real external-reader protocol.
+; It drives both the stock `ocamlmerlin-mlx` and our `ocamlmerlin-fennec-mlx` as Merlin would, then
+; asserts: bare-text .mlx yields MANY syntax-error nodes on the stock reader but ZERO on ours; an
+; already-quoted .mlx yields a BYTE-IDENTICAL parsetree on both (faithful delegation); and our
+; locations stay line-exact within the buffer.
+;
+; The proof links `merlin-extend` (to speak the protocol), so — exactly like the reader binary — it is
+; a `(select)` over that editor-only library: the real proof when present, a SKIP stub when absent, so
+; the BUILD never depends on merlin. At runtime it also needs `ocamlmerlin-mlx` on PATH and SKIPS if
+; absent. The runtest rule passes the built reader exe path as argv.(1) (and depends on it, so it is
+; built first — as the real reader or, without merlin-extend, the harmless stub, either way present).
+
+(executable
+ (name reader_delegation)
+ (modules reader_delegation reader_delegation_impl)
+ (libraries
+  fennec_mlx_prepass
+  unix
+  compiler-libs.common
+  (select reader_delegation_impl.ml from
+   (merlin-extend -> reader_delegation_impl.real.ml)
+   (-> reader_delegation_impl.stub.ml))))
+
+(rule
+ (alias runtest)
+ (deps reader_delegation.exe ../bin/ocamlmerlin_fennec_mlx.exe)
+ (action
+  (run %{exe:reader_delegation.exe} %{dep:../bin/ocamlmerlin_fennec_mlx.exe})))

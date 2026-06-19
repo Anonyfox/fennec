@@ -1,10 +1,12 @@
-; The `fennec-mlx-pp` dialect preprocessor: runs the fennec pre-pass, pipes the result through the
-; real mlx-pp, and rewrites the embedded source filename back to the original .mlx path. Installed
-; with a public_name so the workspace dialect can invoke it by bare name (like mlx-pp from PATH).
-;
+; Two BUILD/EDITOR tools over the one fennec `.mlx` pre-pass (fennec_mlx_prepass). Both are tiny
+; wrappers; neither is ever linked into the shipped framework runtime.
+
+; ── fennec-mlx-pp : the dialect PREPROCESSOR (drives the BUILD) ──────────────────────────────────
+; Runs the fennec pre-pass, pipes the result through the real mlx-pp, and rewrites the embedded
+; source filename back to the original .mlx path. Installed with a public_name so the workspace
+; dialect's (preprocess (run fennec-mlx-pp …)) can invoke it by bare name (like mlx-pp from PATH).
 ; Depends on compiler-libs (Parsetree/Ast_mapper/Config) only to swap the filename in mlx-pp's binary
-; AST — a value-level rewrite, robust to marshalling layout. This is a BUILD tool, never linked into
-; the shipped framework runtime.
+; AST — a value-level rewrite, robust to marshalling layout.
 
 (executable
  (name fennec_mlx_pp)
@@ -12,3 +14,32 @@
  (package fennec-cli)
  (modules fennec_mlx_pp)
  (libraries fennec_mlx_prepass unix compiler-libs.common))
+
+; ── ocamlmerlin-fennec-mlx : the dialect MERLIN READER (fixes the EDITOR) ────────────────────────
+; The dialect's (merlin_reader fennec-mlx) makes Merlin spawn `ocamlmerlin-fennec-mlx` as the
+; external reader for .mlx buffers in the EDITOR. It runs the SAME pre-pass over the editor buffer,
+; then DELEGATES to the stock `ocamlmerlin-mlx` reader (spawned as a child via merlin-extend's
+; Extend_driver) on the transformed buffer — so bare-text .mlx stops showing false in-editor syntax
+; errors while hover / complete / jump keep working (the pre-pass is line-preserving, so positions are
+; line-exact; only columns inside a quoted prose run shift).
+;
+; merlin-extend is an EDITOR-only dependency that ships with merlin / ocaml-lsp-server. To guarantee
+; the BUILD never depends on merlin, the reader body is a `(select)` over it: when merlin-extend is
+; present dune compiles fennec_mlx_reader.real.ml (the real reader); when ABSENT it compiles
+; fennec_mlx_reader.stub.ml (a build-only stub), so `dune build @all` / @check stay green with no
+; merlin in the environment. (An (optional) executable does NOT achieve this — dune still tries to
+; build it under @all and fails when the library is missing; only a select cleanly substitutes.)
+; compiler-libs.common precedes the select so it links before merlin-extend (which depends on Config);
+; the public_name is exactly the binary name Merlin looks for on PATH (ocamlmerlin-<reader-name>).
+
+(executable
+ (name ocamlmerlin_fennec_mlx)
+ (public_name ocamlmerlin-fennec-mlx)
+ (package fennec-cli)
+ (modules ocamlmerlin_fennec_mlx fennec_mlx_reader)
+ (libraries
+  fennec_mlx_prepass
+  compiler-libs.common
+  (select fennec_mlx_reader.ml from
+   (merlin-extend -> fennec_mlx_reader.real.ml)
+   (-> fennec_mlx_reader.stub.ml))))
