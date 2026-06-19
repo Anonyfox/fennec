@@ -4,12 +4,48 @@
     firewall — editing the [.ml] body never recompiles dependents. Internals (reaction,
     run_effect, the effect tracker, flatten/escape, take_seed, Head counter, etc.) are hidden.
 
-    A component is a setup thunk returning a render thunk. Setup runs once (create local
-    {!signal}s); the render thunk re-runs whenever a signal it {!get}s changes — the same
-    code drives SSR and post-hydration interactivity.
+    {2 The component shape — ONE function returning JSX}
 
-    In a [.mlx] component file this is written with familiar JSX/Svelte-flavoured tags. The
-    rules (all pure ppx, no type-safety loss):
+    A component is, at runtime, a SETUP thunk returning a RENDER thunk ({!comp} takes
+    [unit -> (unit -> vnode)]). The boundary is the same as Solid/Svelte's "component body runs
+    once, reactivity lives in the markup":
+    - {b SETUP runs ONCE} per mounted instance — every [let … in] (and [let open … in], a
+      [let () = …] side effect) in the body: create {!signal}s, {!Pulse.subscribe}, {!on_mount},
+      derive-once values.
+    - {b RENDER re-runs} whenever a signal it {!get}s changes — and the render is the {b trailing
+      expression of the body}. The same code drives SSR and post-hydration interactivity.
+
+    In a [.mlx] file the author writes the render as that trailing expression and the fur ppx
+    emits the [fun () ->] wrapper — there is NO manual render-thunk split:
+
+    {[
+      (* the .mlx source — what userland writes: setup above, render JSX trailing *)
+      let make ?(label = "count") () =
+        let count = signal 0 in              (* SETUP — runs once per <Counter/> *)
+        <span className="counter">           (* RENDER — re-runs on `count` change *)
+          (label ^ ": ")
+          <button onClick=(count -= 1)>"−"</button>
+          <span className="count">(!count)</span>
+          <button onClick=(count += 1)>"+"</button>
+        </span>
+    ]}
+
+    Resolution rules:
+    - {b [let make … () = <trailing render>]} — a component whose param list ends in [()] (the
+      instance contract; the JSX desugar always calls [make ~props ()]). The ppx wraps the
+      trailing expression as the render thunk. The explicit [let make … () = … fun () -> <jsx>]
+      shape still compiles unchanged (it is detected as already-thunked) — migration is opt-in.
+    - {b [let view = <jsx>]} — a component with NO local state: module-level [view] (+ any
+      module-level setup bindings) is folded into the same [make] for you.
+    - {b [let make ctx = <html>…]} — a non-unit final parameter is a server-only document shell
+      (a plain [ctx -> vnode]), NEVER wrapped: the full-power escape hatch.
+
+    {b The one footgun} (the same one Solid has): a setup [let x = get s in …] computes [x] ONCE
+    at mount, so it is NOT reactive. Read the signal IN the markup ([(get s)] / [(!s)]) or use a
+    {!memo}. The ppx emits a non-fatal warning on exactly that pattern (a setup binding whose RHS
+    is a bare tracking read [get s] / [!s]); {!peek} (a deliberate snapshot) never warns.
+
+    {2 JSX sugar in a [.mlx] component file}  (all pure ppx, no type-safety loss)
     - a [ "string" ] literal between tags is TEXT (handles any punctuation, [<], [(] …);
     - a parenthesized [ (expr) ] between tags is a VALUE child — auto-wrapped in {!node}, so
       an [int]/[float]/[string]/[vnode] all render and userland never writes [node];
@@ -22,20 +58,8 @@
       Repeatable; the spread merges after the element's own labeled attrs. (On a {!comp} it stays a
       normal [attrs] prop.)
 
-    {[
-      (* the .mlx source — what userland writes *)
-      let make ?(label = "count") () =
-        let count = signal 0 in
-        fun () ->
-          <span className="counter">
-            (label ^ ": ")
-            <button onClick=(count -= 1)>"−"</button>
-            <span className="count">(!count)</span>
-            <button onClick=(count += 1)>"+"</button>
-          </span>
-    ]}
-
-    desugars to the runtime API below — this is what it compiles to ([h]/{!node}/{!comp}/{!get}):
+    The component above desugars to the runtime API below ([h]/{!node}/{!comp}/{!get}) — the ppx
+    emits the [fun () ->] render thunk that wraps the trailing JSX:
 
     {[
       let make ?(label = "count") () =

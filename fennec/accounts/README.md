@@ -63,13 +63,12 @@ another user's screen. Fennec picks cacheable-and-safe by default.
    module Accounts = Fennec_accounts_client
 
    let make () =
-     let user = Accounts.current_user () in   (* user option Fur.signal *)
-     fun () ->
-       <span className="user-badge">          (* a FIXED-size slot — see rule 2 *)
-         (match get user with
-          | None   -> <a href="/login">"Sign in"</a>           (* the SSR / cacheable frame *)
-          | Some u -> (node ("Hello, " ^ Option.value u.username ~default:"there")))
-       </span>
+     let user = Accounts.current_user () in   (* SETUP: user option Fur.signal (live sub) *)
+     <span className="user-badge">            (* RENDER (trailing body): re-runs when `user` fills in *)
+       (match !user with
+        | None   -> <a href="/login">"Sign in"</a>           (* the SSR / cacheable frame *)
+        | Some u -> ("Hello, " ^ Option.value u.username ~default:"there"))
+     </span>
    ```
 
 2. **Reserve the layout so the snap is a fill-in, not a layout shift.** Give the personalized slot a

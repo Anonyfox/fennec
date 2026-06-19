@@ -16,15 +16,19 @@ framework runtime, no bundler magic, no `node_modules`.
 [%%style {scss| .count { font-weight: 700; min-width: 2ch } |scss}]   (* colocated, auto-scoped *)
 
 let make ?(label = "count") () =
-  let count = signal 0 in                       (* local reactive state, live after hydration *)
-  fun () ->
-    <span className="counter">
-      <span className="clabel">(node (label ^ ":"))</span>
-      <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
-      <span className="count">(get count)</span>
-      <button className="cbtn inc" onClick=(count += 1)>"+"</button>
-    </span>
+  let count = signal 0 in                       (* SETUP — runs once per mount (local state) *)
+  <span className="counter">                    (* RENDER — re-runs on `count`; the trailing body *)
+    <span className="clabel">(label ^ ":")</span>
+    <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
+    <span className="count">(!count)</span>
+    <button className="cbtn inc" onClick=(count += 1)>"+"</button>
+  </span>
 ```
+
+A component is **one function returning JSX**: the `let … in` lines above are setup (run once
+when it mounts — create signals, subscribe), and the trailing JSX is the render (re-runs when a
+signal it reads changes). No manual render-thunk `fun () ->` — the same single-function feel as
+React/Solid/Svelte. (The explicit `… () = … fun () -> <jsx>` form still compiles.)
 
 The `[%%style]` block is extracted and scoped to this component (a `data-fur` hash) — no
 external `.scss`, no className collisions. The same file is linked natively into the server

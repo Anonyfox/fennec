@@ -163,8 +163,31 @@ let%test "two instances keep independent state (no hoisted module signal)" =
          && (flush_sync (fun () -> set b 4); text_of li0 = "n=9" && text_of li1 = "n=4"))
    | _ -> false)
 
+(* The render trailing expression is often NOT a bare element but a `match`/`if` over vnodes
+   (the user_badge / task_list shape). The ppx must wrap THAT whole expression as the render
+   thunk — so the branch re-runs reactively when the signal it scrutinizes changes. Setup binds
+   `shown` above; the trailing `match` is the render. *)
+let branch_seen : bool signal option ref = ref None
+module Branch = struct
+  let make () =
+    let shown = signal false in                   (* SETUP *)
+    branch_seen := Some shown;
+    (match get shown with                          (* RENDER — a match is the trailing expr *)
+     | false -> <span className="off">"hidden"</span>
+     | true -> <span className="on">"shown"</span>)
+end
+
+let%test "a match/if as the trailing render is wrapped and re-runs reactively" =
+  branch_seen := None;
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root (fun () -> <Branch />) in
+  let shown = match branch_seen.contents with Some s -> s | None -> assert false in
+  text_of root = "hidden"
+  && (flush_sync (fun () -> set shown true); text_of root = "shown")
+  && (flush_sync (fun () -> set shown false); text_of root = "hidden")
+
 (* =====================================================================================
-   4. on_mount IN SETUP fires ONCE and DISPOSES on unmount (composes with the owner-scope fix —
+   5. on_mount IN SETUP fires ONCE and DISPOSES on unmount (composes with the owner-scope fix —
       the watch a component starts in on_mount is torn down on ITS unmount, no leak). Written
       unified: `on_mount (…)` is a setup statement, the JSX is the trailing render. Across N
       mount/unmount cycles the steady state must not grow: after disposing every cycle, a write
