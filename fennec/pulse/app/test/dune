@@ -1,0 +1,15 @@
+; The always-on __currentUser publication proof — a standalone Eio exe over MONGO_URL=:memory: that
+; drives the PUBLIC Accounts API and reads the publication through Fennec_pulse_app.R.run_publication.
+; It is the central proof a SERVER-SIDE user mutation reaches a __currentUser subscriber (and so also
+; proves STEP 1, the shared in-memory accounts_users handle). Run via a runtest rule, like the
+; accounts/burrow parity exe.
+(executable
+ (name test_current_user_pub)
+ (libraries fennec.pulse.app fennec.accounts fennec-mongo.dynamic fennec-mongo.bson eio eio_main
+   eio.unix unix mirage-crypto-rng.unix))
+
+(rule
+ (alias runtest)
+ (deps test_current_user_pub.exe)
+ (action
+  (run ./test_current_user_pub.exe)))

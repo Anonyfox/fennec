@@ -49,5 +49,53 @@ let publish ?(where = fun _ -> []) (def : 'a Def.t) =
 (* register a typed method handler (the one client write path) *)
 let method_ m handler = R.handle m handler
 
+(* ---- the always-on current-user publication -------------------------------------------------
+
+   [__currentUser] keeps the client's [Accounts.user]/[user_id] signals live over the user DOCUMENT
+   — profile / roles / emails / status changes, not merely the auth transition. It is the fennec
+   equivalent of Meteor's "null publication" that the accounts package auto-creates: transparent,
+   zero userland wiring. Registering it here (module init of the app facade) means any server that
+   links {!serve_ddp} installs it for free; the DDP session's [registries ()] rebuild reads
+   [R.publications ()] per connection, so it is present on every socket.
+
+   Scope is [pub.user_id] — the cookie-seeded session user the websocket paw threads in. [None]
+   (anonymous) yields a never-matching cursor (empty). [Some uid] yields a one-document cursor over
+   the SHARED accounts users collection (the SAME name + handle the Accounts store opens, so a
+   server-side write through Accounts is visible here — STEP 1 made that true on [:memory:] too).
+
+   A [fields] inclusion projection whitelists EXACTLY the safe public set (the field list of
+   {!Accounts_session.public_user_to_doc}: username/emails/roles/status/createdAt/updatedAt/profile,
+   [_id] implicit). [services] and [passwordHash] are NEVER listed — minimongo applies the projection
+   on the live deltas before the observe callbacks fire (the backend seam), so no secret ever enters
+   the beat / merge pipeline even in memory. Belt and suspenders. *)
+let current_user_publication = "__currentUser"
+
+let accounts_users_collection = "accounts_users"
+
+(* the safe public projection — an inclusion spec; [_id] rides along by Mongo convention *)
+let current_user_fields =
+  Bson.doc
+    [ ("username", Bson.int 1);
+      ("emails", Bson.int 1);
+      ("roles", Bson.int 1);
+      ("status", Bson.int 1);
+      ("createdAt", Bson.int 1);
+      ("updatedAt", Bson.int 1);
+      ("profile", Bson.int 1) ]
+
+(* a selector that matches no document — the anonymous (user_id = None) case *)
+let never_match = Bson.doc [ ("_id", Bson.doc [ ("$in", Bson.array []) ]) ]
+
+(* the reactive handle over the shared accounts users collection, built once *)
+let users_reactive : R.Collection.t Lazy.t =
+  lazy (R.Collection.create ~name:accounts_users_collection (D.collection ~name:accounts_users_collection ()))
+
+let () =
+  R.publish current_user_publication (fun (pub : R.publication) ->
+      let selector =
+        match pub.user_id with Some uid -> Bson.doc [ ("_id", Bson.str uid) ] | None -> never_match
+      in
+      R.Cursor (R.cursor (Lazy.force users_reactive) ~selector ~fields:current_user_fields ()))
+
 (* the DDP websocket paw for the endpoint pipeline *)
 let serve_ddp ?path () = RT.paw ?path ()
