@@ -6,10 +6,34 @@
 
     A component is a setup thunk returning a render thunk. Setup runs once (create local
     {!signal}s); the render thunk re-runs whenever a signal it {!get}s changes — the same
-    code drives SSR and post-hydration interactivity:
+    code drives SSR and post-hydration interactivity.
+
+    In a [.mlx] component file this is written with familiar JSX/Svelte-flavoured tags. The
+    rules (all pure ppx, no type-safety loss):
+    - a [ "string" ] literal between tags is TEXT (handles any punctuation, [<], [(] …);
+    - a parenthesized [ (expr) ] between tags is a VALUE child — auto-wrapped in {!node}, so
+      an [int]/[float]/[string]/[vnode] all render and userland never writes [node];
+    - a child that evaluates to a [vnode list] (an [each] / [List.map]) auto-wraps in {!frag},
+      so the idiom is a bare [(each xs (fun x -> …))] — no [frag], no [Array.to_list] for a list;
+    - [!s] reads a signal — the sugar for [(get s)] (writes stay explicit: [set]/[+=]/[-=]).
 
     {[
-      let counter ?(label = "count") () =
+      (* the .mlx source — what userland writes *)
+      let make ?(label = "count") () =
+        let count = signal 0 in
+        fun () ->
+          <span className="counter">
+            (label ^ ": ")
+            <button onClick=(count -= 1)>"−"</button>
+            <span className="count">(!count)</span>
+            <button onClick=(count += 1)>"+"</button>
+          </span>
+    ]}
+
+    desugars to the runtime API below — this is what it compiles to ([h]/{!node}/{!comp}/{!get}):
+
+    {[
+      let make ?(label = "count") () =
         let count = signal 0 in
         fun () ->
           h "span" [ class_ "counter" ]
@@ -17,10 +41,7 @@
               h "button" [ on "click" (fun () -> count -= 1) ] [ text "−" ];
               h "span" [ class_ "count" ] [ node (get count) ];
               h "button" [ on "click" (fun () -> count += 1) ] [ text "+" ] ]
-    ]}
-
-    In [.mlx] component files this is written with JSX-style tags that desugar to {!h} /
-    {!comp}; the runtime API above is what they compile to. *)
+    ]} *)
 
 (** {1 Reactivity} *)
 
@@ -44,7 +65,10 @@ val signal : ?eq:('a -> 'a -> bool) -> 'a -> 'a signal
 val peek : 'a signal -> 'a
 
 (** Read the signal value, registering it as a dependency of the enclosing reactive context
-    ({!watch} or {!comp}). Aliased as [!s] in Fur component syntax. *)
+    ({!watch} or {!comp}). In a [.mlx] file the fur ppx accepts [!s] as the sugar for [get s]
+    (a JSX value child [(!count)], an attribute [value=(!draft)], or an ordinary expression);
+    writes stay explicit ([set]/[update]/[+=]/[-=]). Signals are not OCaml refs — a real ref in
+    a [.mlx] is read with [r.contents]. *)
 val get : 'a signal -> 'a
 
 (** Set the signal to a new value; notifies dependents synchronously. Use from browser event
@@ -150,7 +174,9 @@ val text : string -> vnode
     Skipped by the reconciler's structural diff. *)
 val raw : string -> vnode
 
-(** A fragment: multiple sibling nodes with no wrapper element. *)
+(** A fragment: multiple sibling nodes with no wrapper element. In [.mlx] the ppx inserts this
+    automatically around a child that evaluates to a [vnode list] (an {!each} / [List.map]), so
+    userland writes a bare [(each xs f)] — never [frag (each xs f)]. *)
 val frag : vnode list -> vnode
 
 (** [h ?key tag attrs children] — an HTML element. [key] is the reconciler's stable identity
@@ -173,14 +199,20 @@ val attr : string -> string -> attr
 val class_ : string -> attr
 
 (** [node v] — coerce a heterogeneous child: pass an [int], [float], [string], or [vnode]
-    as a child of {!h} without explicit conversion. *)
+    as a child of {!h} without explicit conversion. In [.mlx] the ppx inserts this at every
+    [(expr)] value-child position, so userland writes a bare [(expr)] and never spells [node]
+    (an unsupported child type is still a compile error). Idempotent: an explicit [(node x)]
+    is not re-wrapped. *)
 val node : 'a -> vnode
 
 (** [skey v] — coerce a stable key to a string ([int] or [string]). *)
 val skey : 'a -> string
 
-(** [each xs f] — [List.map f xs] accepting a mixed-type list via coercion. Cleaner than a
-    bare [List.map] in element-construction expressions. *)
+(** [each xs f] — [List.map f xs] accepting a mixed-type list via coercion: the one idiom for
+    rendering a dynamic list of children. In [.mlx] a child [(each xs f)] is auto-wrapped in
+    {!frag} (so no [frag]); for an array, convert at the call site with [Array.to_list]
+    ([(each (Array.to_list arr) f)]) — one [each] typed over both list and array is not
+    expressible in OCaml without modular implicits. *)
 val each : 'a list -> ('a -> 'b) -> 'b list
 
 (** Attach a stable reconciler key to an existing vnode (use when [h ~key] is inconvenient,
