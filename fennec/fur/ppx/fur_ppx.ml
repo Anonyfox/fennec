@@ -135,13 +135,39 @@ let mapper = object
     in
     if !in_mlx && is_bang_get e then bang_get ~loc:e.pexp_loc e else e
 end
-(* ---- <script setup> transform ----
-   A component file may be written as top-level setup bindings + `let view = <jsx>`,
-   with no `make`. This folds them into the real contract:
-       let make () = <setup let-ins, in source order> in fun () -> view
-   Setup runs once per instance; `view` is the reactive render. A file that defines
-   `make` explicitly is left ALONE — the full-power escape hatch (typed props, custom
-   args, server-only shells like document.mlx). A file with no `view` is untouched. *)
+(* ---- THE component shape: ONE function body, no manual render thunk ----
+
+   A Fur component is, at the runtime level, a SETUP thunk that returns a RENDER thunk
+   ([Fur.comp]'s argument is [unit -> (unit -> vnode)]): setup runs ONCE per mounted
+   instance (create signals, subscribe, [on_mount], derive-once values), and the render
+   thunk RE-RUNS whenever a signal it reads changes. Two userland shapes both lower to it,
+   and a beginner never writes the [fun () ->] split:
+
+   1. No local state — module-level [let view = <jsx>]. Folded here into
+        let make () = <module-level setup let-bindings, in source order> in fun () -> view
+      (the [let () = Head.title …]-style top-level bindings become the per-instance setup).
+
+   2. Local state / props — [let make <params> () = <setup let-ins> in <trailing jsx>].
+      The author writes the render as the TRAILING EXPRESSION of the body; this transform
+      emits the [fun () ->] wrapper around it. Everything BEFORE the trailing expression —
+      every [let … in], [let open … in], [let () = … in] side effect — is SETUP (runs once
+      when [make ~… ()] is called, i.e. once per mount). Only the trailing JSX is the render
+      thunk (re-runs on signal change). This is Solid/Svelte's "component body runs once,
+      reactivity lives in the markup" model.
+
+   The boundary is keyed to the component-instance CONTRACT: a component [make]'s parameter
+   list ENDS IN [()] (the JSX desugar always calls [Module.make ~props () ] — see {!expand}),
+   and the render is the body after that final [()]. The explicit [fun () ->] shape STILL
+   compiles unchanged (it is detected as already-thunked and left alone — backward compatible;
+   migration is opt-in). A [make] whose last parameter is NOT [()] (a server-only document
+   shell like [let make ctx = <html>…</html>], consumed as a plain [ctx -> vnode]) is NEVER
+   wrapped — it is the full-power escape hatch.
+
+   The ONE footgun this shape introduces, and the SAME one Solid has: a setup
+   [let x = get s in …] computes [x] ONCE (at mount), so it is NOT reactive — the reactive
+   forms are reading the signal IN the markup ([(get s)] / [(!s)] in the JSX) or a [memo]. We
+   emit a non-fatal ppx warning on exactly that pattern (a setup binding whose RHS is a bare
+   tracking read [get s] / [!s]); [peek] is the deliberate snapshot and never warns. *)
 let pat_name p = match p.ppat_desc with
   | Ppat_var { txt; _ } -> Some txt
   | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) -> Some txt
@@ -149,6 +175,113 @@ let pat_name p = match p.ppat_desc with
 let item_defines name item = match item.pstr_desc with
   | Pstr_value (_, vbs) -> List.exists (fun vb -> pat_name vb.pvb_pat = Some name) vbs
   | _ -> false
+
+(* the unit pattern [()] — the final parameter of every component [make] (the JSX desugar
+   always applies [make ~props ()]). Distinguishes a component [make ~props ()] from a shell
+   [make ctx]. A [(() : unit)] constraint counts too. *)
+let rec is_unit_pat p = match p.ppat_desc with
+  | Ppat_construct ({ txt = Lident "()"; _ }, None) -> true
+  | Ppat_constraint (p, _) -> is_unit_pat p
+  | _ -> false
+(* already a function (a render thunk): [fun .. -> ..] or [function | ..] — in the merged
+   OCaml-5.2 AST both are [Pexp_function]. *)
+let is_fun_expr e = match e.pexp_desc with Pexp_function _ -> true | _ -> false
+(* descend the SETUP prelude (lets / opens / local modules / sequenced side effects, and a
+   type-annotated body) to the single TRAILING expression — what the component renders. *)
+let rec trailing e = match e.pexp_desc with
+  | Pexp_let (_, _, body) | Pexp_open (_, body) | Pexp_letmodule (_, _, body)
+  | Pexp_sequence (_, body) -> trailing body
+  | Pexp_constraint (inner, _) -> trailing inner
+  | _ -> e
+
+(* ---- setup-let lint: a binding computed ONCE that looks like it wants to be reactive ----
+   [get s] / [!s] (the TRACKING reads) on the RHS of a setup [let] is the footgun: the value
+   is snapshotted at mount and never updates. [peek s] is the explicit non-tracking read, so
+   it is left alone (a deliberate snapshot). Attached as [ocaml.ppwarning] (compiler warning,
+   never an error). *)
+let rhs_is_tracking_read e = match e.pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = (Lident "get" | Ldot (_, "get")); _ }; _ },
+                [ (Nolabel, _) ]) -> true
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "!"; _ }; _ }, [ (Nolabel, _) ]) -> true
+  | _ -> false
+let lint_setup_binding vb =
+  let open Ast_builder.Default in
+  if rhs_is_tracking_read vb.pvb_expr then
+    let loc = vb.pvb_expr.pexp_loc in
+    let name = match pat_name vb.pvb_pat with Some n -> n | None -> "this binding" in
+    let msg =
+      Printf.sprintf
+        "Fur: setup binding %S reads a signal once (at mount) — it is NOT reactive. For a value \
+         that updates, read the signal in the markup ((get s) / !s) or use a memo." name
+    in
+    let attr = attribute ~loc ~name:{ txt = "ocaml.ppwarning"; loc }
+                 ~payload:(PStr [ pstr_eval ~loc (estring ~loc msg) [] ]) in
+    { vb with pvb_attributes = attr :: vb.pvb_attributes }
+  else vb
+(* lint every setup [let] in a prelude (descend the same constructs as {!trailing}). *)
+let rec lint_prelude e =
+  match e.pexp_desc with
+  | Pexp_let (rf, vbs, body) ->
+    { e with pexp_desc = Pexp_let (rf, List.map lint_setup_binding vbs, lint_prelude body) }
+  | Pexp_open (o, body) -> { e with pexp_desc = Pexp_open (o, lint_prelude body) }
+  | Pexp_letmodule (n, m, body) -> { e with pexp_desc = Pexp_letmodule (n, m, lint_prelude body) }
+  | Pexp_sequence (a, body) -> { e with pexp_desc = Pexp_sequence (a, lint_prelude body) }
+  | Pexp_constraint (inner, t) -> { e with pexp_desc = Pexp_constraint (lint_prelude inner, t) }
+  | _ -> e
+
+(* wrap the trailing expression of a render BODY in [fun () ->] (the render thunk), keeping the
+   setup prelude as-is, and lint the setup bindings. The body is everything after the final
+   [()] parameter. *)
+let wrap_render_body body =
+  let loc = body.pexp_loc in
+  let rec rebuild e = match e.pexp_desc with
+    | Pexp_let (rf, vbs, b) ->
+      { e with pexp_desc = Pexp_let (rf, List.map lint_setup_binding vbs, rebuild b) }
+    | Pexp_open (o, b) -> { e with pexp_desc = Pexp_open (o, rebuild b) }
+    | Pexp_letmodule (n, m, b) -> { e with pexp_desc = Pexp_letmodule (n, m, rebuild b) }
+    | Pexp_sequence (a, b) -> { e with pexp_desc = Pexp_sequence (a, rebuild b) }
+    | Pexp_constraint (inner, t) -> { e with pexp_desc = Pexp_constraint (rebuild inner, t) }
+    | _ -> [%expr fun () -> [%e e]]   (* the trailing render expression *)
+  in
+  rebuild body
+
+let param_is_unit = function
+  | { pparam_desc = Pparam_val (_, _, pat); _ } -> is_unit_pat pat
+  | _ -> false
+
+(* Transform B — unify a component [make]'s body to ONE function returning JSX.
+   In the merged OCaml-5.2 AST a whole curried lambda is ONE [Pexp_function] with all params in
+   [params] and the body separate — and crucially the parser FOLDS an explicit trailing thunk
+   into the param list: [fun ~a () -> fun () -> jsx] parses as [params = a, (), ()] + [body = jsx]
+   (the extra [()]), exactly like the unified [params = a, ()] + [body = jsx] but with one more
+   unit param. So we wrap iff this is the component-instance shape AND not already thunked:
+     - the FINAL param is [()] (the component-instance contract — the JSX desugar always calls
+       [make ~props ()]); and
+     - we are NOT already returning a render thunk, detected two ways:
+         · the body's trailing expr (past its setup prelude) is a [fun]/[function] — the
+           explicit-thunk-WITH-setup shape [make () = let .. in fun () -> jsx] (the [let] keeps
+           the thunk OUT of the merged param list); OR
+         · the last TWO params are BOTH [()] — the explicit-thunk-WITHOUT-setup shape
+           [make ~props () = fun () -> jsx] (the parser merged the thunk's [()] in).
+   When neither tripwire fires, the body IS the render (a vnode, or a [match]/[if] over vnodes) ⇒
+   wrap its trailing expr as [fun () -> …], keeping the setup prelude once. A non-unit final
+   param ([make ctx = <html>…]) or a [Pfunction_cases] body falls through unwrapped — a
+   server-only shell / explicit escape hatch, not a component instance. *)
+let wrap_make_expr e =
+  match e.pexp_desc with
+  | Pexp_function (params, constr, Pfunction_body body) ->
+    let last_two_unit = match List.rev params with
+      | a :: b :: _ -> param_is_unit a && param_is_unit b | _ -> false in
+    let final_unit = match List.rev params with p :: _ -> param_is_unit p | [] -> false in
+    if final_unit && not last_two_unit && not (is_fun_expr (trailing body)) then
+      { e with pexp_desc = Pexp_function (params, constr, Pfunction_body (wrap_render_body body)) }
+    else e
+  | _ -> e
+let wrap_make_binding vb =
+  if pat_name vb.pvb_pat = Some "make"
+  then { vb with pvb_expr = wrap_make_expr vb.pvb_expr }
+  else vb
+
 let rec componentize str =
   let open Ast_builder.Default in
   (* recurse into nested module structures first (so generated route files, which
@@ -158,9 +291,21 @@ let rec componentize str =
       { item with pstr_desc =
           Pstr_module { mb with pmb_expr = { me with pmod_desc = Pmod_structure (componentize s) } } }
     | _ -> item) str in
-  if (not (List.exists (item_defines "view") str)) || List.exists (item_defines "make") str
-  then str
+  if List.exists (item_defines "make") str then
+    (* Transform B: a component [make] is unified (trailing-JSX → render thunk) but otherwise
+       kept verbatim — the escape hatch. Non-[make] bindings are untouched. Gated to [.mlx]
+       component files: the fur.ppx is ALSO attached to plain [.ml] libs (fennec.fur core,
+       sift, …) for inline tests, and THOSE define ordinary [make]s ([Router.make], …) that
+       return records/values, not render thunks — those must never be wrapped. ([.mlx] is the
+       same reliable gate the [!s] read sugar uses; the generated route files are [.mlx].) *)
+    if !in_mlx then
+      List.map (fun item -> match item.pstr_desc with
+        | Pstr_value (rf, vbs) -> { item with pstr_desc = Pstr_value (rf, List.map wrap_make_binding vbs) }
+        | _ -> item) str
+    else str
+  else if not (List.exists (item_defines "view") str) then str
   else begin
+    (* Transform A: no [make], a [view] — fold module-level setup + [view] into [make]. *)
     let setup = ref [] and view_expr = ref None and others = ref [] in
     List.iter (fun item -> match item.pstr_desc with
       | Pstr_value (_, vbs) when List.exists (fun vb -> pat_name vb.pvb_pat = Some "view") vbs ->
@@ -173,7 +318,11 @@ let rec componentize str =
     | Some ve ->
       let loc = ve.pexp_loc in
       let render = [%expr fun () -> [%e ve]] in
-      let body = List.fold_left (fun body (rf, vbs) -> pexp_let ~loc rf vbs body) render !setup in
+      (* lint the module-level setup bindings too (a [let x = get s] above [view] is the same
+         once-only footgun), then fold them in source order in front of the render thunk. *)
+      let body = List.fold_left
+          (fun body (rf, vbs) -> pexp_let ~loc rf (List.map lint_setup_binding vbs) body)
+          render !setup in
       List.rev !others @ [ [%stri let make () = [%e body]] ]
   end
 
