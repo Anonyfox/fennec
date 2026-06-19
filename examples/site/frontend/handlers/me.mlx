@@ -53,25 +53,25 @@ let load conn =
    seed — byte-identical, already personalized. Sees only [t]; never names Accounts or the Conn. *)
 let view (p : t) =
   <main className="me" id="me">
-    <h1>(node ("Signed in as " ^ p.username))</h1>
+    <h1>("Signed in as " ^ p.username)</h1>
     <p className="me-sub">"This page was rendered for you on the server, then hydrated from its seed."</p>
 
     <h2>"Roles"</h2>
     (match p.roles with
      | [] -> <p className="me-empty">"no roles granted"</p>
-     | roles -> <ul>(frag (each roles (fun r -> <li>(node r)</li>)))</ul>)
+     | roles -> <ul>(each roles (fun r -> <li>(r)</li>))</ul>)
 
     <h2>"Emails"</h2>
     (match p.emails with
      | [] -> <p className="me-empty">"no emails on file"</p>
      | emails ->
        <ul>
-         (frag (each emails (fun (e : Email.t) ->
+         (each emails (fun (e : Email.t) ->
             <li>
-              (node e.address)" — "
+              (e.address)" — "
               (if e.verified then <span className="me-verified">"verified"</span>
                else <span className="me-unverified">"unverified"</span>)
-            </li>)))
+            </li>))
        </ul>)
 
     <a className="me-logout" href="/logout">"Sign out"</a>

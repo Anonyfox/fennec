@@ -10,7 +10,7 @@
 let make ~title ~subtitle () =
   fun () ->
     <section className="hero">
-      <h1 className="hero-title">(node title)</h1>
-      <p className="hero-subtitle">(node subtitle)</p>
+      <h1 className="hero-title">(title)</h1>
+      <p className="hero-subtitle">(subtitle)</p>
       <a className="hero-cta" href="/about">"Learn more"</a>
     </section>

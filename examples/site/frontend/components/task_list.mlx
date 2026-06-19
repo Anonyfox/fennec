@@ -36,9 +36,9 @@ let make () =
   fun () ->
     <div className="tasks">
       <h2>"Live tasks"</h2>
-      (if get ready then
+      (if !ready then
          <ul className="task-items">
-           (frag (each (Array.to_list (get tasks)) (fun t -> <li>(node t#title)</li>)))
+           (each (Array.to_list !tasks) (fun t -> <li>(t#title)</li>))
          </ul>
        else <p className="loading">"Loading tasks…"</p>)
       <button className="add-task" onClick=(add_task ())>"Add task"</button>

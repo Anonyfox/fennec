@@ -4,6 +4,6 @@
 let () = Head.title (Printf.sprintf "Product %s — Fennec Site" id)
 let view =
   <main className="page" data_page="product">
-    <h1>"Product #"id</h1>
+    <h1>"Product #"(id)</h1>
     <a className="back" href="/products">"← all products"</a>
   </main>

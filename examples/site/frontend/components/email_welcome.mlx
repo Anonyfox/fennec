@@ -13,7 +13,7 @@
 let make ~name ~url () =
  fun () ->
   <div className="mailw">
-    <h1 className="mailw-h1">(node ("Welcome, " ^ name ^ "!"))</h1>
+    <h1 className="mailw-h1">("Welcome, " ^ name ^ "!")</h1>
     <p className="mailw-p">"Thanks for signing up — confirm your email address to get started:"</p>
     <p><a className="mailw-cta" href=(url)>"Confirm email"</a></p>
     <p className="mailw-foot">"— The Fennec team"</p>

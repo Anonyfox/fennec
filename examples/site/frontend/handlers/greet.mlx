@@ -32,8 +32,8 @@ let load conn =
    The same view backs all three responses above (hydrated, static, or skipped for JSON). *)
 let view (p : t) =
   <main className="greet" id="greet">
-    <h1>(node ("Hello, " ^ p.who ^ "!"))</h1>
-    <p className="seed">(node ("server-computed start = " ^ string_of_int p.count))</p>
+    <h1>("Hello, " ^ p.who ^ "!")</h1>
+    <p className="seed">("server-computed start = " ^ string_of_int p.count)</p>
     <Counter label="clicks" start=(p.count) />
     <Task_list />
   </main>

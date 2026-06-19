@@ -11,6 +11,6 @@
 let make ~links () =
   fun () ->
     <nav className="nav">
-      (frag (each links (fun (href, label) ->
-        <a className="nav-link" key=href href=href>(node label)</a>)))
+      (each links (fun (href, label) ->
+        <a className="nav-link" key=href href=href>(label)</a>))
     </nav>
