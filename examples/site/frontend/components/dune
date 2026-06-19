@@ -7,6 +7,7 @@
  (libraries
   fennec.fur
   fennec.fur.html
+  fennec.fur.form
   site_store
   fennec.pulse.live.client
   fennec.accounts.client

@@ -15,7 +15,12 @@
       an [int]/[float]/[string]/[vnode] all render and userland never writes [node];
     - a child that evaluates to a [vnode list] (an [each] / [List.map]) auto-wraps in {!frag},
       so the idiom is a bare [(each xs (fun x -> …))] — no [frag], no [Array.to_list] for a list;
-    - [!s] reads a signal — the sugar for [(get s)] (writes stay explicit: [set]/[+=]/[-=]).
+    - [!s] reads a signal — the sugar for [(get s)] (writes stay explicit: [set]/[+=]/[-=]);
+    - [attrs=(expr)] on a plain element SPREADS an [attr list] into the element's attributes (React's
+      [{...spread}]) — e.g. [<input attrs=(Form.input_attrs Fields.email) name="email" />] drops the
+      codec-driven HTML5 constraints ([required]/[maxlength]/[type=email]) straight onto the input.
+      Repeatable; the spread merges after the element's own labeled attrs. (On a {!comp} it stays a
+      normal [attrs] prop.)
 
     {[
       (* the .mlx source — what userland writes *)

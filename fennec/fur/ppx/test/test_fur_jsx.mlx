@@ -99,4 +99,26 @@ let literal () = fun () -> <p>"Loading tasks… (1 < 2)"</p>
 let%test "literal string text child (with punctuation)" =
   has (html (literal ())) "Loading tasks… (1 &lt; 2)"
 
+(* ---- attr-list SPREAD: [attrs=(expr)] merges an [attr list] into the element (React's {...spread}).
+   This is how Form.input_attrs (codec-driven required/maxlength/type=… ) drops onto an <input>. ---- *)
+
+let spread () =
+  let extra = [ Fur.attr "required" "required"; Fur.attr "maxlength" "40"; Fur.attr "type" "email" ] in
+  fun () -> <input name="email" className="f" attrs=(extra) />
+
+let%test "spread: every attr in the list lands on the element" =
+  let o = html (spread ()) in
+  has o "required=\"required\"" && has o "maxlength=\"40\"" && has o "type=\"email\""
+let%test "spread: coexists with the element's own labeled attrs" =
+  let o = html (spread ()) in has o "name=\"email\"" && has o "class=\"f\""
+
+(* multiple spreads + a static attr concatenate, in source order *)
+let spread_multi () =
+  let a = [ Fur.attr "min" "1" ] and b = [ Fur.attr "max" "9" ] in
+  fun () -> <input type_="number" attrs=(a) attrs=(b) />
+
+let%test "spread: multiple attrs= lists all merge" =
+  let o = html (spread_multi ()) in
+  has o "type=\"number\"" && has o "min=\"1\"" && has o "max=\"9\""
+
 let () = exit (Fennec_hunt_unit.run ())

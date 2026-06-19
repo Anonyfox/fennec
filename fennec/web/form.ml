@@ -6,6 +6,21 @@
 
 module Conn = Paw.Conn
 
+(* ── one Form, both surfaces ──────────────────────────────────────────────────────────────────────
+   Re-export the CLIENT form primitive ({!Fennec_fur_form}) so a server-rendered handler and a browser
+   SPA component reach the SAME [Form.signal] / [Form.input_attrs] under the same name, validating the
+   SAME ['a Sift.t] with the SAME [Sift.error] codes/paths. The codec-driven HTML5 attrs ([input_attrs]/
+   [field_attrs]) let a server-rendered <input> carry its [required]/[maxlength]/[type=email] straight
+   off the codec — no hand-duplication. ([field_errors] keeps THIS module's (field, errors) -> messages
+   shape; the client form's reactive [field_error]/[field_errors] live on [fennec.fur.form] for clients.)
+   We name it [Fur_form] (not bare [Form]) because THIS unit IS [Fennec_web.Form] — it cannot reference
+   the global [Form] from inside itself; [Fur_form] is the same module under a collision-free name. *)
+type 'a live = 'a Fur_form.t
+
+let signal = Fur_form.signal
+let input_attrs = Fur_form.input_attrs
+let field_attrs = Fur_form.field_attrs
+
 (* strip refinement wrappers to the structural kind (for the coercion message) *)
 let rec strip (v : Sift.view) : Sift.view = match v with Sift.V_check (_, inner) -> strip inner | v -> v
 

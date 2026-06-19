@@ -11,6 +11,29 @@
 
 module Conn = Paw.Conn
 
+(** {1 One Form, both surfaces — the client primitive + codec-driven attrs, re-exported}
+
+    The CLIENT form primitive (the top-level [Form] module of [fennec.fur.form]) re-exported here, so a
+    server-rendered handler and a browser SPA component reach the SAME [Form.signal] / [Form.input_attrs]
+    under one name, validating the SAME ['a Sift.t] with the SAME {!Sift.error} shape. The full reactive
+    surface ([value]/[valid]/[field_error]/[submit]…) lives on [fennec.fur.form] for client components;
+    here we surface the constructor and the codec-driven HTML5 attrs a server-rendered [<input>] uses. *)
+
+(** A reactive client form over a codec — see [fennec.fur.form]'s [Form.t]. ([Fur_form] is that module
+    under a collision-free name, since this unit is itself named [Form].) *)
+type 'a live = 'a Fur_form.t
+
+(** [signal codec init] — a fresh reactive client form (see [fennec.fur.form]'s [Form.signal]). *)
+val signal : 'a Sift.t -> 'a -> 'a live
+
+(** [input_attrs field] — the HTML5 constraint attrs ([required]/[maxlength]/[type=email]/…) for one
+    typed field handle, straight off the codec. Drop onto a server-rendered [<input>] so the browser
+    enforces the model's refinements natively, with no hand-duplication. *)
+val input_attrs : _ Sift.field -> Fur.attr list
+
+(** [field_attrs view required] — the pure core {!input_attrs} builds on. *)
+val field_attrs : Sift.view -> bool -> Fur.attr list
+
 (** Where {!read} takes the pairs from: the request [Body] (a POSTed form — the default) or the
     [Query] string (a GET filter/search form). *)
 type source = Body | Query

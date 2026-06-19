@@ -8,7 +8,7 @@
  (name fennec_web)
  (public_name fennec.web)
  (modes byte native)
- (libraries fennec-paw fennec.pulse.sift fennec-mongo.bson fennec-mongo.bson_json fennec.fur fennec.accounts)
+ (libraries fennec-paw fennec.pulse.sift fennec-mongo.bson fennec-mongo.bson_json fennec.fur fennec.fur.form fennec.accounts)
  (inline_tests
   (backend fennec-hunt.runner))
  (preprocess

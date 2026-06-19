@@ -56,12 +56,19 @@ let expand ~loc e =
   match e.pexp_desc with
   | Pexp_apply (f, args) ->
     let is_comp = (match f.pexp_desc with Pexp_ident { txt = Ldot (_, "createElement"); _ } -> true | _ -> false) in
-    let children = ref None and labeled = ref [] and extra = ref [] and key = ref None in
+    let children = ref None and labeled = ref [] and extra = ref [] and key = ref None and spread = ref [] in
     List.iter (fun (label, arg) -> match label with
       | (Labelled "children" | Optional "children") -> children := Some arg
       | (Labelled "key" | Optional "key") ->
         let k = [%expr Fur.skey [%e arg]] in           (* auto-coerce int/string keys *)
         if is_comp then key := Some k else labeled := (Labelled "key", k) :: !labeled
+      (* attr-list SPREAD: [attrs=(expr)] on a plain element merges an [attr list] (e.g.
+         [Form.input_attrs Fields.x] — codec-driven HTML5 attrs) into the element's attributes, like
+         React's [{...spread}]. Last-wins is the DOM's own attribute semantics; we append AFTER the
+         element's labeled attrs + the data-/aria-/scope extras, so an explicit [name=]/[value=] still
+         takes precedence in source order via {!Fur_html}'s [?attrs] tail. On a component it stays a
+         normal [Labelled "attrs"] prop (a component may legitimately take an [attrs] argument). *)
+      | Labelled "attrs" when not is_comp -> spread := arg :: !spread
       | Labelled name when (not is_comp) && (starts_with "data_" name || starts_with "aria_" name) ->
         extra := [%expr Fur.attr [%e estring ~loc (dash name)] [%e arg]] :: !extra
       | Labelled name when (not is_comp) && is_event name ->
@@ -83,8 +90,14 @@ let expand ~loc e =
         | None -> [%expr Fur.comp ~cid:[%e cid] [%e setup]])
      | Pexp_ident { txt = Lident tag; _ } ->
        (match !module_scope with Some sc -> extra := [%expr Fur.attr "data-fur" [%e estring ~loc sc]] :: !extra | None -> ());
+       (* the element's static attrs (data-/aria-/scope) followed by every [attrs=] spread, in source
+          order — so [Fur_html]'s [?attrs] tail carries [scope ++ input_attrs ++ …] after the labeled
+          ones. With nothing spread this is byte-identical to the old [elist extra]. *)
+       let attrs_e =
+         List.fold_left (fun acc s -> [%expr [%e acc] @ [%e s]]) (elist ~loc (List.rev !extra)) (List.rev !spread)
+       in
        pexp_apply ~loc (evar ~loc ("Fur_html." ^ tag))
-         (List.rev !labeled @ [ (Labelled "attrs", elist ~loc (List.rev !extra)); (Nolabel, children_e) ])
+         (List.rev !labeled @ [ (Labelled "attrs", attrs_e); (Nolabel, children_e) ])
      | _ -> e)
   | _ -> [%expr ()]
 

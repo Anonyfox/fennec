@@ -14,5 +14,6 @@ let view =
     <Greeting />
     <Browser_box />
     <Visits />
+    <Name_form />
     <Task_list />
   </main>

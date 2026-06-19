@@ -1,0 +1,51 @@
+(* A TYPED CLIENT FORM — the headline of Form.signal. This SPA form is bound to Hello_form.codec, the
+   SAME Sift model the SERVER-rendered handler at /hello validates (frontend/handlers/hello.mlx). So the
+   [@trim][@non_empty][@max_len 40] refinements fire HERE, in the browser, reactively and offline — type
+   a 41st character and the error appears with no round-trip — and they fire IDENTICALLY on the server,
+   because both sides validate one codec. There is no hand-written "is it empty / too long" check: the
+   model is the single source of truth.
+
+   Two Sift-driven pieces:
+     • Form.input_attrs Hello_form.Fields.name  — the <input>'s required/maxlength come OFF THE CODEC
+       (D2), spread in with attrs=(…); the browser enforces them natively before any JS runs.
+     • Form.field_error / Form.valid             — reactive validation feedback + the submit gate (D1).
+   The submit yields the typed Hello_form.t (here we just echo it; a real app would call a DDP method,
+   the same boundary the server re-validates). *)
+[%%style {scss|
+.hello-form { margin: 1rem 0; padding: .8rem 1rem; border: 1px solid #e3e3e3; border-radius: 8px }
+.hello-form h2 { margin: 0 0 .5rem; font-size: 1.05rem }
+.hello-form label { display: block; font-size: .85rem; color: #555; margin-bottom: .2rem }
+.hello-form input { font: inherit; padding: .35rem .55rem; border: 1px solid #ccc; border-radius: 6px; width: 16rem; max-width: 100% }
+.hello-form input.invalid { border-color: #c0392b }
+.hf-err { color: #c0392b; font-size: .82em; margin: .25rem 0 0 }
+.hf-ok { color: #16794a; font-size: .9em; margin: .5rem 0 0 }
+.hf-submit { font: inherit; margin-top: .6rem; cursor: pointer; border: 1px solid var(--brand); background: var(--brand); color: #fff; border-radius: 6px; padding: .3rem .9rem }
+.hf-submit:disabled { opacity: .5; cursor: not-allowed }
+|scss}]
+
+let make () =
+  (* the reactive form: one signal of Hello_form.t + a memoized Sift.validate error list. Per-instance,
+     so it lives in setup (like a local `signal`). Seeded empty via the shared model's [empty]. *)
+  let form = Form.signal Hello_form.codec Hello_form.empty in
+  let greeting = signal "" in
+  let submit () =
+    match Form.submit form with
+    | Ok (t : Hello_form.t) -> set greeting ("Hello, " ^ t.name ^ "!")
+    | Error _ -> ()   (* the button is disabled while invalid, so this branch is belt-and-braces *)
+  in
+  fun () ->
+    <div className="hello-form">
+      <h2>"Say hello (typed client form)"</h2>
+      <label htmlFor="hf-name">"Your name"</label>
+      <input id="hf-name"
+             attrs=(Form.input_attrs Hello_form.Fields.name)   (* required + maxlength=40, straight off the codec *)
+             className=(if Form.field_error form Hello_form.Fields.name <> None then "invalid" else "")
+             name="name"
+             value=((Form.value form).name)
+             onInput=(Form.update form (fun d -> { d with name = target_value () })) />
+      (match Form.field_error form Hello_form.Fields.name with
+       | Some msg -> <p className="hf-err">(msg)</p>
+       | None -> <span />)
+      <button className="hf-submit" disabled=(not (Form.valid form)) onClick=(submit ())>"Greet"</button>
+      (if !greeting <> "" then <p className="hf-ok">(!greeting)</p> else <span />)
+    </div>

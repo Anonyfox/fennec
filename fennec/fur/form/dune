@@ -1,0 +1,17 @@
+; fennec.fur.form — the CLIENT form primitive (Form.signal) + codec-driven HTML5 attrs
+; (Form.input_attrs), bound to a Sift codec. Pure over Fur's isomorphic signals + the jsoo-safe
+; Sift lib (validate / field_view / field_required), so a SPA form gets the SAME refinement
+; validation the server's Fennec_web.Form enforces — reactively, offline. Runs native (SSR/tests)
+; and compiles to JavaScript for the browser bundle. Server-side Fennec_web.Form re-exports it, so
+; the three form stories share one Form name, one codec, one Sift.error shape.
+
+(library
+ (name fennec_fur_form)
+ (public_name fennec.fur.form)
+ (wrapped false) ; expose the module as top-level [Form] (like fennec.fur.html) so .mlx writes [Form.signal]
+ (modes byte native)
+ (libraries fennec.fur fennec.pulse.sift)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

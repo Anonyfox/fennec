@@ -5,9 +5,18 @@
 
    Re-rendering HTML is first-class: `submit` returns `again` (re-show the form with an error — the input
    is PRESERVED, awaiting correction) or `redirect` (post-redirect-get). Sift-invalid input (empty / too
-   long) re-renders automatically before `submit` runs, with the per-field error AND the typed value. *)
-type t = { name : string [@trim] [@non_empty] [@max_len 40] }
-[@@deriving model]
+   long) re-renders automatically before `submit` runs, with the per-field error AND the typed value.
+
+   The model is SHARED, literally the SAME codec value: `type t = Hello_form.t` and `let codec =
+   Hello_form.codec` reuse the ONE Sift model that the browser SPA form (frontend/components/name_form.mlx)
+   validates with `Form.signal`. So client and server enforce the SAME [@trim][@non_empty][@max_len 40]
+   from one declaration — not two copies that could drift. The ppx-generated `serve` runs `Form.read
+   codec`; the <input>'s HTML5 constraints come off the same codec via `Form.input_attrs
+   Hello_form.Fields.name` (no hand-written `required`/`maxlength`): browser, client form, and server all
+   enforce one source. *)
+type t = Hello_form.t = { name : string }
+
+let codec = Hello_form.codec
 
 let view (f : Form.ctx) =
   <main className="page">
@@ -15,7 +24,8 @@ let view (f : Form.ctx) =
     (Form.flash f)
     <form method_="post" action="">
       (Form.csrf f)
-      <input type_="text" name="name" value=(Form.value f "name") placeholder="Your name" />
+      <input type_="text" name="name" attrs=(Form.input_attrs Hello_form.Fields.name)
+             value=(Form.value f "name") placeholder="Your name" />
       (Form.error f "name")
       <button type_="submit">"Greet"</button>
     </form>

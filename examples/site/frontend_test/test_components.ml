@@ -72,6 +72,20 @@ let () =
   let todos = render (Todo_list.make ()) in
   check "todo_list: input present" (has todos "id=\"todo-input\"");
   check "todo_list: add button" (has todos "id=\"add\"");
+  (* the migrated todo input carries its [maxlength] STRAIGHT OFF Todo_form.codec ([@max_len 80]) — the
+     codec-driven HTML5 attr (Form.input_attrs), not a hand-written number; Add is disabled while the
+     empty draft is invalid (the [@non_empty] refinement, validated reactively with no round-trip) *)
+  check "todo_list: input maxlength comes off the codec" (has todos "maxlength=\"80\"");
+  check "todo_list: add disabled while the draft is invalid" (has todos "disabled");
+
+  (* the TYPED CLIENT FORM (Form.signal): the SAME Hello_form.codec the server /hello handler validates.
+     Its <input> gets [required] + [maxlength=40] from the codec (Form.input_attrs), and the empty draft
+     is invalid so the Greet button renders disabled — all from one Sift model, no hand-written rules. *)
+  let nf = render (Name_form.make ()) in
+  check "name_form: input present" (has nf "id=\"hf-name\"");
+  check "name_form: required comes off the codec" (has nf "required=\"required\"");
+  check "name_form: maxlength=40 comes off the codec ([@max_len 40])" (has nf "maxlength=\"40\"");
+  check "name_form: Greet disabled while the empty draft is invalid ([@non_empty])" (has nf "disabled");
 
   (* email: the SAME [%%style] component machinery, inlined for email via Fur_email (server-side, pure).
      The engine in isolation — an explicit stylesheet inlines by (scope, class): *)
