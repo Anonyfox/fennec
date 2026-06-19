@@ -45,8 +45,12 @@ val find_p :
     that recomputes whenever collection [name] changes. Read it with {!Fur.get} inside a component;
     the underlying watch is torn down on the component's cleanup.
 
-    Choose this when the UI should follow live server data. For a local counter or button-only
-    widget, create a {!Fur.signal} instead. *)
+    @deprecated The raw [Bson.t] selector/sort/fields bypass the typed DSL: a malformed selector or a
+    renamed field is a silent runtime mismatch, and the result is untyped [Bson.t]. Prefer {!find_c}
+    (the typed collection read) or {!find_p} (typed projection) with the [%q] selector DSL and
+    {!Filter} / {!Sort} — they decode at the boundary and compile-check field names + value types.
+    The sanctioned raw escape, when you truly need a hand-built selector, is [Filter.raw bson]
+    threaded through {!find_c} ([~where:[ Filter.raw … ]]), which keeps the result typed. *)
 val find :
   t ->
   string ->
@@ -57,6 +61,10 @@ val find :
   ?fields:Bson.t ->
   unit ->
   Bson.t array Fur.signal
+[@@deprecated
+  "Use the typed find_c/find_p with the [%q] selector DSL + Filter/Sort (Filter.raw is the \
+   sanctioned escape). The raw Bson.t selector bypasses field-name/type checking and returns untyped \
+   Bson.t."]
 
 (** [aggregate t name pipeline] is a Fur signal of the aggregation result over collection [name];
     [$lookup] / [$unionWith] join across the client's other collections, and the signal recomputes

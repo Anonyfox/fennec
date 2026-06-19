@@ -6,6 +6,8 @@
  (libraries
   fennec.pulse.live
   fennec.pulse.method
+  fennec.pulse.sift
+  fennec.pulse.sift.mongo
   fennec.ddp
   fennec.fur
   fennec-mongo.bson

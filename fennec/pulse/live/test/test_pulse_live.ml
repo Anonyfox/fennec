@@ -3,6 +3,11 @@
    changed/sub_stopped — proven purely; and the Fur `find` binding proven to recompute reactively
    as the store changes (Fur signals run native, so no browser is needed). *)
 
+(* [Live.find] (the RAW Bson.t-selector binding) is now [@@deprecated] in favour of the typed
+   find_c/find_p; these tests are precisely the regression tests FOR that low-level reactive binding,
+   so they keep using it deliberately — suppress the deprecation alert for the whole suite. *)
+[@@@alert "-deprecated"]
+
 module MS = Fennec_pulse_live.Merge_store
 module Live = Fennec_pulse_live.Live
 module B = Bson
@@ -349,6 +354,31 @@ let%test "find_c: typed live signal decodes the cache, skips foreign garbage, re
   (match Fur.peek r with [| { id = "1"; label = "Alpha" } |] -> true | _ -> false)
   && (MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"2" ~fields:[ ("label", B.str "Beta") ];
       Array.length (Fur.peek r) = 2)
+
+(* the TYPED path is the replacement for the deprecated raw [Live.find]: [find_c ~where:[…]] takes a
+   typed Filter.t clause list and STILL returns the typed [item array]. And [Filter.raw bson] — the
+   sanctioned escape the deprecation message points to — threads a hand-built selector through that same
+   typed channel WITHOUT giving up the typed result (unlike the deprecated raw find's [Bson.t array]).
+   [Filter] is the top-level module of the (wrapped-false) fennec.pulse.sift.mongo lib — the same way
+   live.ml references it. *)
+let item_label = Sift.req "label" Sift.string
+
+let%test "find_c ~where: the typed Filter clause filters AND keeps the typed result" =
+  let lv = Live.create () in
+  MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"1" ~fields:[ ("label", B.str "Alpha") ];
+  MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"2" ~fields:[ ("label", B.str "Beta") ];
+  let only_beta = Live.find_c lv item_def ~where:[ Filter.eq item_label "Beta" ] () in
+  (* the result is [item array] (typed records), filtered to the one matching doc *)
+  match Fur.peek only_beta with [| { id = "2"; label = "Beta" } |] -> true | _ -> false
+
+let%test "find_c ~where:[Filter.raw …]: the sanctioned escape keeps the result typed" =
+  let lv = Live.create () in
+  MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"1" ~fields:[ ("label", B.str "Alpha") ];
+  MS.added (Live.store lv) ~sub:"a" ~collection:"items_t" ~id:"2" ~fields:[ ("label", B.str "Beta") ];
+  (* a hand-built Bson selector wrapped by Filter.raw — the blessed escape, threaded through find_c *)
+  let raw = Filter.raw (B.doc [ ("label", B.str "Alpha") ]) in
+  let r = Live.find_c lv item_def ~where:[ raw ] () in
+  match Fur.peek r with [| { id = "1"; label = "Alpha" } |] -> true | _ -> false
 
 let%test "Sim.insert_t: validates with the server's checks; valid values mint the seeded id" =
   let s = MS.create () in

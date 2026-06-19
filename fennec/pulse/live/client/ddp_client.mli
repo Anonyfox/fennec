@@ -129,7 +129,14 @@ end) : sig
 end
 
 (** [find t name ?selector ?sort ?skip ?limit ?fields ()] is a Fur signal of the matching documents
-    that recomputes as the server pushes changes. Read it with {!Fur.get} inside a component. *)
+    that recomputes as the server pushes changes. Read it with {!Fur.get} inside a component.
+
+    @deprecated The raw [Bson.t] selector/sort/fields bypass the typed DSL — a renamed field or a
+    malformed selector is a silent runtime mismatch, and the result is untyped [Bson.t]. Prefer
+    {!find_c} / {!find_p} (or a bound [Collection.find] / [Collection.project]) with the [%q] selector
+    DSL + {!Filter} / {!Sort} / {!Projection}: they compile-check field names + value types and decode
+    at the boundary. When a hand-built selector is genuinely needed, thread [Filter.raw bson] through
+    {!find_c}'s [~where] — the sanctioned escape that keeps the result typed. *)
 val find :
   t ->
   string ->
@@ -140,6 +147,10 @@ val find :
   ?fields:Bson.t ->
   unit ->
   Bson.t array Fur.signal
+[@@deprecated
+  "Use the typed find_c/find_p (or Collection.find/project) with the [%q] selector DSL + \
+   Filter/Sort/Projection (Filter.raw is the sanctioned escape). The raw Bson.t selector bypasses \
+   field-name/type checking and returns untyped Bson.t."]
 
 (** [aggregate t name pipeline] is a Fur signal of the aggregation result over collection [name],
     recomputing as the server pushes changes; [$lookup] / [$unionWith] join across the client's other
