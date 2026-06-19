@@ -148,6 +148,27 @@ let () =
     "let v = <div><a/> <b/></div>"
     ("let v = <div><a/>" ^ q ^ " " ^ q ^ "<b/></div>");
 
+  (* RECURSION — JSX nested inside a (…) / {…} escape gets the SAME bare-text treatment, to any depth.
+     This is the common real shape: a list/conditional escape whose body is JSX with bare children. *)
+  t ~name:"each-escape: bare child + {expr} inside the lambda body"
+    "let v = <nav>(each links (fun (href, label) -> <a href=href>{label}</a>))</nav>"
+    "let v = <nav>(each links (fun (href, label) -> <a href=href>(label)</a>))</nav>";
+  t ~name:"match-escape: bare text in one arm, {expr} in another"
+    ("let v = <span>(match x with None -> <b>none</b> | Some u -> <i>{name u}</i>)</span>")
+    ("let v = <span>(match x with None -> <b>" ^ q ^ "none" ^ q ^ "</b> | Some u -> <i>(name u)</i>)</span>");
+  t ~name:"if-escape: jsx branches with bare text"
+    ("let v = <div>(if ok then <p>yes</p> else <p>no</p>)</div>")
+    ("let v = <div>(if ok then <p>" ^ q ^ "yes" ^ q ^ "</p> else <p>" ^ q ^ "no" ^ q ^ "</p>)</div>");
+  t ~name:"mixed bare text + {expr} inside an each body"
+    "let v = <ul>(each xs (fun x -> <li>row {x.id}</li>))</ul>"
+    ("let v = <ul>(each xs (fun x -> <li>" ^ q ^ "row " ^ q ^ "(x.id)</li>))</ul>");
+  t ~name:"deeply nested escapes (each inside each)"
+    "let v = <div>(each rows (fun r -> <tr>(each r.cells (fun c -> <td>{c}</td>))</tr>))</div>"
+    "let v = <div>(each rows (fun r -> <tr>(each r.cells (fun c -> <td>(c)</td>))</tr>))</div>";
+  t ~name:"brace-escape whose expression contains a nested element"
+    "let v = <div>{wrap (<b>hi</b>)}</div>"
+    ("let v = <div>(wrap (<b>" ^ q ^ "hi" ^ q ^ "</b>))</div>");
+
   (* ──────────────────────────────────────────────────────────────────────────────────────
      B. NEGATIVE / GUARD — OCaml code must pass through byte-for-byte
      ────────────────────────────────────────────────────────────────────────────────────── *)
@@ -215,6 +236,10 @@ let () =
     ("let v = <div>" ^ q ^ "todos: " ^ q ^ "(n)</div>");
   idem ~name:"already-paren-escaped (the pre-migration form)"
     "let v = <li>(t.text)<button onClick=(f g)>(label)</button></li>";
+  idem ~name:"recursive each-escape with bare children"
+    "let v = <ul>(each xs (fun x -> <li>row {x.id}<b>{x.k}</b></li>))</ul>";
+  idem ~name:"recursive match-escape with bare + interp arms"
+    "let v = <span>(match x with None -> <b>none</b> | Some u -> <i>{name u}</i>)</span>";
 
   Printf.printf "\nprepass unit table: %d passed, %d failed\n" !pass !fail;
   if !fail > 0 then exit 1

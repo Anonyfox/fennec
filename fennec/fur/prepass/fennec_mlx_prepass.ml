@@ -207,60 +207,15 @@ let copy_comment st =
   done
 
 (* ════════════════════════════════════════════════════════════════════════════════════════
-   CHILDREN — the rewriting heart.
-
-   We track, within ONE children region, whether the *immediately preceding* emitted thing was an
-   element/escape boundary (so a leading-edge text run is left-trimmed) and accumulate a pending text
-   run with its surrounding whitespace, applying JSX collapsing only when we flush.
-
-   `scan_expr_paren` / `scan_expr_brace` copy a balanced `(…)` / `{…}` (rewriting only the outer
-   braces of the latter to parens), with full literal awareness inside (so `{ "}" }` or `( ">" )`
-   are balanced correctly). These are also what makes nested JSX inside an escape work — a `<tag>`
-   inside `{…}` is just OCaml that mlx will parse; we don't need to re-enter Children for it, we copy
-   the bytes through and mlx handles the nested element. (Children mode is only entered for the
-   TOP-LEVEL element written as bare JSX; everything inside `{…}`/`(…)` is plain mlx already.)
+   CHILDREN — the rewriting heart — plus the two escape scanners, all mutually recursive with the
+   tag scanner so the pre-pass is FULLY recursive: an escape holds OCaml, which may itself hold a
+   nested JSX element (an `(each … <li>…</li>)` / `(match x with … -> <span>…</span>)`), whose
+   children get the SAME bare-text treatment, whose children may hold more escapes, and so on. A
+   `<ident` encountered while scanning an escape is therefore handed to {!scan_tag}; everything else
+   in the escape (strings, comments, quoted-strings, records, operators) is copied verbatim and
+   balanced with full literal awareness (so a close-brace or close-paren inside a string, or inside a
+   CSS quoted-string extension, never closes the escape early).
    ════════════════════════════════════════════════════════════════════════════════════════ *)
-
-(* copy a balanced delimited region `open … close` VERBATIM (literal-aware), assuming cursor on the
-   opener. Used for `(…)`. Returns with cursor just past the matching close. *)
-let copy_balanced st ~op ~cl =
-  copy st (* opener *);
-  let depth = ref 1 in
-  while !depth > 0 && st.i < st.len do
-    let c = cur st in
-    if c = '"' then copy_string st
-    else if c = '(' && peek st 1 = '*' then copy_comment st
-    else (match quoted_string_delim st with
-          | Some delim -> copy_quoted_string st ~delim
-          | None ->
-            if try_copy_char st then ()
-            else begin
-              if c = op then incr depth
-              else if c = cl then decr depth;
-              copy st
-            end)
-  done
-
-(* copy a balanced `{ … }` but EMIT it as `( … )` (the value-escape rewrite). Literal-aware so a
-   `}` inside a string / quoted-string inside the expr does not close early; inner `{ }` (e.g. a
-   record literal in the expression) are balanced and copied as-is (NOT rewritten — only the
-   outermost pair is the escape). *)
-let rewrite_brace_escape st =
-  skip st (* drop the opening { *);
-  emit st '(';
-  let depth = ref 1 in
-  while !depth > 0 && st.i < st.len do
-    let c = cur st in
-    if c = '"' then copy_string st
-    else if c = '(' && peek st 1 = '*' then copy_comment st
-    else (match quoted_string_delim st with
-          | Some delim -> copy_quoted_string st ~delim
-          | None ->
-            if try_copy_char st then ()
-            else if c = '{' then (incr depth; copy st)
-            else if c = '}' then (decr depth; if !depth = 0 then (skip st; emit st ')') else copy st)
-            else copy st)
-  done
 
 (* JSX whitespace collapse for one bare-text run — the canonical React/Babel algorithm
    (`cleanJSXElementLiteralChild`), which is what the existing `frontend_test` HTML asserts against:
@@ -424,10 +379,56 @@ and scan_tag st =
   done;
   if !opened_children && not !self_closed then scan_children st
 
+(* copy a balanced delimited region `op … cl` (literal-aware), assuming cursor on the opener. Used
+   for a `(…)` paren-escape. RECURSES into a nested JSX element (a `<ident` whose `<` is not an
+   operator), so bare text inside `(each … <li>txt</li>)` is rewritten too. Returns with the cursor
+   just past the matching close. The nested element consumes its OWN `(`/`)`/`{`/`}`, so they do not
+   perturb this scanner's [depth]. *)
+and copy_balanced st ~op ~cl =
+  copy st (* opener *);
+  let depth = ref 1 in
+  while !depth > 0 && st.i < st.len do
+    let c = cur st in
+    if c = '"' then copy_string st
+    else if c = '(' && peek st 1 = '*' then copy_comment st
+    else if c = '<' && starts_ident (peek st 1) then scan_tag st   (* nested JSX element *)
+    else (match quoted_string_delim st with
+          | Some delim -> copy_quoted_string st ~delim
+          | None ->
+            if try_copy_char st then ()
+            else begin
+              if c = op then incr depth
+              else if c = cl then decr depth;
+              copy st
+            end)
+  done
+
+(* copy a balanced `{ … }` but EMIT it as `( … )` (the value-escape rewrite). Literal-aware so a `}`
+   inside a string / quoted-string in the expr does not close early; inner record-literal `{ }` are
+   balanced and copied as-is (only the OUTERMOST pair is the escape). Also RECURSES into a nested JSX
+   element inside the expression. *)
+and rewrite_brace_escape st =
+  skip st (* drop the opening { *);
+  emit st '(';
+  let depth = ref 1 in
+  while !depth > 0 && st.i < st.len do
+    let c = cur st in
+    if c = '"' then copy_string st
+    else if c = '(' && peek st 1 = '*' then copy_comment st
+    else if c = '<' && starts_ident (peek st 1) then scan_tag st   (* nested JSX element *)
+    else (match quoted_string_delim st with
+          | Some delim -> copy_quoted_string st ~delim
+          | None ->
+            if try_copy_char st then ()
+            else if c = '{' then (incr depth; copy st)
+            else if c = '}' then (decr depth; if !depth = 0 then (skip st; emit st ')') else copy st)
+            else copy st)
+  done
+
 (* ════════════════════════════════════════════════════════════════════════════════════════
    CODE — the outermost driver. Copies OCaml verbatim, entering the shared literal scanners and, on a
-   JSX open tag, [scan_tag]. There is no separate "Tag/Children" recursion here: scan_tag/scan_children
-   own that sub-tree and return to Code when the element closes.
+   JSX open tag, [scan_tag]. scan_tag/scan_children own that sub-tree and return to Code when the
+   element closes.
    ════════════════════════════════════════════════════════════════════════════════════════ *)
 let scan_code st =
   while st.i < st.len do
