@@ -1,0 +1,102 @@
+(* Behavioural proof of the fur.ppx JSX desugars — every NEW userland form compiles through the
+   ppx AND renders to the expected HTML (via Fur.to_html, the native SSR path). This is the
+   ppx-level twin of examples/site/frontend_test: it pins that the sugar lowers to the right
+   runtime calls (text/node/frag/get) by checking the OUTPUT, not the pretty-printed source.
+
+   Covered:
+     2. auto-node — a bare (expr) value child needs no `node`; int/float/string/vnode all coerce.
+     3. frag inference — a bare (each …) list child auto-wraps in a fragment (no `frag (each …)`).
+     4. !s read sugar — `!s` in a value child / attribute / ordinary expr means `get s`.
+   Plus: idempotency (an explicit (node …)/(frag …) still works, never double-wrapped), and the
+   `"string"` text child (the backward-compatible literal text form). *)
+
+let html (thunk : unit -> Fur.vnode) = Fur.to_html (thunk ())
+
+(* substring search, stdlib only *)
+let has hay needle =
+  let nh = String.length hay and nn = String.length needle in
+  let rec go i = i + nn <= nh && (String.sub hay i nn = needle || go (i + 1)) in
+  nn = 0 || go 0
+
+(* ---- 2. auto-node: bare value children of every coercible type, no `node` written ---- *)
+
+let auto_node () =
+  let s = "txt" and i = 7 and f = 1.5 in
+  fun () ->
+    <div>
+      <span className="s">(s)</span>          (* string  *)
+      <span className="i">(i)</span>           (* int     *)
+      <span className="f">(f)</span>           (* float   *)
+      <span className="e">(s ^ "!")</span>     (* a value EXPRESSION, not a bare ident *)
+    </div>
+
+let%test "auto-node: string value child" = has (html (auto_node ())) ">txt<"
+let%test "auto-node: int value child coerces" = has (html (auto_node ())) ">7<"
+let%test "auto-node: float value child coerces" = has (html (auto_node ())) ">1.5<"
+let%test "auto-node: value expression child" = has (html (auto_node ())) ">txt!<"
+
+(* ---- 3. frag inference: a bare (each …) list child, no `frag` wrapper ---- *)
+
+let each_list () =
+  let xs = [ "a"; "b"; "c" ] in
+  fun () -> <ul>(each xs (fun x -> <li>(x)</li>))</ul>
+
+let%test "each: renders every item" =
+  let o = html (each_list ()) in
+  has o "<li>a</li>" && has o "<li>b</li>" && has o "<li>c</li>"
+
+(* a value child that is itself a `vnode list` (not via `each`) — List.map auto-frags too *)
+let mapped () =
+  fun () -> <ul>(List.map (fun x -> <li>(x)</li>) [ "x"; "y" ])</ul>
+
+let%test "List.map list child auto-frags" =
+  let o = html (mapped ()) in
+  has o "<li>x</li>" && has o "<li>y</li>"
+
+(* ---- 4. !s read sugar — value child, attribute, and ordinary expression ---- *)
+
+let bang () =
+  let count = signal 41 in
+  let cls = signal "on" in
+  fun () ->
+    <div>
+      <span className="c">(!count)</span>                 (* value child: !count = get count *)
+      <span className=(!cls)>"x"</span>                   (* attribute:   !cls   = get cls   *)
+      <b>(if !count > 40 then "big" else "small")</b>     (* ordinary expr inside a value child *)
+    </div>
+
+let%test "!s: value-child read" = has (html (bang ())) ">41<"
+let%test "!s: attribute read" = has (html (bang ())) "class=\"on\""
+let%test "!s: ordinary-expr read" = has (html (bang ())) ">big<"
+
+(* !s is live, not a snapshot: a set before render is observed (proves it is `get`, the tracking
+   read, over the same signal — not a value captured at setup time) *)
+let bang_live () =
+  let n = signal 0 in
+  set n 9;
+  fun () -> <span>(!n)</span>
+
+let%test "!s: reads the current signal value" = has (html (bang_live ())) ">9<"
+
+(* ---- idempotency: an explicit (node …)/(frag …) still compiles and is not double-wrapped ---- *)
+
+let explicit () =
+  let xs = [ "p"; "q" ] in
+  fun () ->
+    <div>
+      <span>(node "lit")</span>
+      <ul>(frag (each xs (fun x -> <li>(node x)</li>)))</ul>
+    </div>
+
+let%test "explicit node still works" = has (html (explicit ())) ">lit<"
+let%test "explicit frag (each …) still works" =
+  let o = html (explicit ()) in has o "<li>p</li>" && has o "<li>q</li>"
+
+(* ---- backward-compatible "string" literal text child (handles punctuation / < / ( ) ---- *)
+
+let literal () = fun () -> <p>"Loading tasks… (1 < 2)"</p>
+
+let%test "literal string text child (with punctuation)" =
+  has (html (literal ())) "Loading tasks… (1 &lt; 2)"
+
+let () = exit (Fennec_hunt_unit.run ())

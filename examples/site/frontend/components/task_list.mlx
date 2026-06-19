@@ -16,6 +16,10 @@
 open Task   (* the model: brings its fields into scope (queries read bare) AND its Tasks view *)
 
 let () = Pulse.connect ~path:"/ddp" ()   (* the one page connection (ambient) *)
+(* a plain non-reactive counter for naming added tasks. It stays a genuine OCaml [ref]; it is read
+   with [added.contents], NOT [!added], because in a [.mlx] file [!s] is the signal-read sugar
+   ([get s]) — so a real ref deref spells out [.contents] to stay clear of it. (The type checker
+   also keeps them apart: a signal is not a ref.) *)
 let added = ref 0
 
 let make () =
@@ -27,7 +31,7 @@ let make () =
   let add_task () =
     incr added;
     (* the TYPED method call — a wrong argument type is a compile error (Meteor's Meteor.call) *)
-    ignore (Pulse.call Site_methods.add_task ("Task " ^ string_of_int !added))
+    ignore (Pulse.call Site_methods.add_task ("Task " ^ string_of_int added.contents))
   in
   fun () ->
     <div className="tasks">

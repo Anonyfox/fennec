@@ -1,6 +1,13 @@
 open Ppxlib
 let scope_of css = "fur-" ^ String.sub (Digest.to_hex (Digest.string css)) 0 6
 let module_scope = ref None
+(* TRUE only while transforming a [.mlx] file. The fur.ppx is also attached to plain [.ml]
+   libraries (fennec.fur core, the sift ppx_rules, …) for inline tests — and THOSE files use
+   real OCaml refs ([!current], [!batch_depth], …). The [!s] read sugar must therefore fire
+   ONLY in [.mlx] source, where signals (not refs) are the idiom; on [.ml] [!] keeps its deref
+   meaning. The JSX/`<script setup>`/param sugars are already self-gating (they key off [@JSX]
+   nodes / a `view` binding, which only [.mlx] produces), so only the bang rewrite needs this. *)
+let in_mlx = ref false
 let starts_with p s = String.length s >= String.length p && String.sub s 0 (String.length p) = p
 let dash s = String.map (fun c -> if c = '_' then '-' else c) s
 let lid_str f = match f.pexp_desc with
@@ -17,10 +24,26 @@ let wrap_handler ~loc arg = match arg.pexp_desc with
 let is_vnode_head h =
   starts_with "Fur_html." h || starts_with "Fur." h
   || (let n = String.length h in n >= 5 && String.sub h (n-5) 5 = ".make")
+(* a child whose head is one of our own combinators is ALREADY a vnode: pass it through
+   verbatim. This makes the desugar IDEMPOTENT — an explicit (node …) / (frag …) is not
+   re-wrapped into Fur.node (node …). So the canonical migrated child `(expr)` and a
+   hand-written `(node expr)` BOTH lower to a SINGLE `Fur.node expr` — and a stray
+   hand-written `node`/`frag`/`text`/`raw` still compiles. *)
+let is_passthrough_head h =
+  is_vnode_head h || List.mem h [ "node"; "frag"; "text"; "raw"; "Fur.text"; "Fur.raw" ]
+(* JSX child positions accept three shapes, mapped UNIFORMLY to the runtime:
+   - a list-producing expression (each / List.map / …) -> wrapped in {!Fur.frag} (a
+     `vnode list` becomes one fragment child), so userland writes a bare `each` — never
+     `frag (each …)`;
+   - an expression that already evaluates to a vnode (a nested <jsx> element/component, an
+     `outlet ()`, or an explicit node/frag/text) -> passed through untouched (the one runtime
+     coercion, never doubled);
+   - any other VALUE expression -> wrapped in {!Fur.node}, the total int|float|string|vnode
+     coercion, so userland writes `(expr)` and never spells `node` itself. *)
 let wrap_child ~loc c =
   match head c with
   | Some h when List.mem h list_heads -> [%expr Fur.frag [%e c]]
-  | Some h when is_vnode_head h -> c
+  | Some h when is_passthrough_head h -> c
   | _ -> [%expr Fur.node [%e c]]
 let rec list_elements e = match e.pexp_desc with
   | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> Some []
@@ -65,12 +88,39 @@ let expand ~loc e =
      | _ -> e)
   | _ -> [%expr ()]
 
+(* ---- [!s] read sugar (the fur.mli-promised alias for {!Fur.get}) ----
+   In a Fur component a signal is read with [get s]; [!s] is the JSX/Svelte-flavoured
+   shorthand. We rewrite ONLY the exact prefix application [! e] (one unlabeled argument) to
+   the bare [get e] — bare, NOT [Fur.get], so it is byte-for-byte the SAME expansion as an
+   explicit [(get s)] child (every [.mlx] consumer compiles with [-open Fur], the same open
+   that already lets userland write [signal]/[get]/[set] unqualified). Emitting bare [get]
+   also keeps the result a plain VALUE so {!wrap_child} still wraps it in [Fur.node]; a
+   qualified [Fur.get] would be misread as an already-vnode head and dropped through unwrapped.
+
+   The clash with OCaml's deref is type-SAFE, never silent: signals carry [-open Fur]'s
+   [signal] type, so [!] on a real [ref] becomes [get (r : _ ref)] — a compile error, not a
+   wrong read. Writes stay explicit ([set]/[update]/[+=]/[-=]); the MEMORY rule "never [:=] a
+   signal" holds, and [.mlx] uses signals, not refs (see fur.mli). Any operator merely NAMED
+   [!…] (a custom [!=]-style op) or [!] applied with labels is left untouched. Runs over every
+   expression node, so it fires in a JSX child [(!count)], an attribute [value=(!draft)], and
+   an ordinary expression alike. *)
+let is_bang_get e = match e.pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "!"; _ }; _ }, [ (Nolabel, _) ]) -> true
+  | _ -> false
+let bang_get ~loc e = match e.pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "!"; _ }; _ }, [ (Nolabel, arg) ]) ->
+    [%expr get [%e arg]]
+  | _ -> e
+
 let mapper = object
   inherit Ast_traverse.map as super
   method! expression e =
     let e = super#expression e in
-    if List.exists (fun a -> a.attr_name.txt = "JSX") e.pexp_attributes
-    then expand ~loc:e.pexp_loc e else e
+    let e =
+      if List.exists (fun a -> a.attr_name.txt = "JSX") e.pexp_attributes
+      then expand ~loc:e.pexp_loc e else e
+    in
+    if !in_mlx && is_bang_get e then bang_get ~loc:e.pexp_loc e else e
 end
 (* ---- <script setup> transform ----
    A component file may be written as top-level setup bindings + `let view = <jsx>`,
@@ -291,7 +341,12 @@ let scan_scope str = List.iter (fun item -> match item.pstr_desc with
     module_scope := Some (scope_of css)
   | _ -> ()) str
 let impl str =
-  module_scope := None; scan_scope str;
+  module_scope := None;
+  (* per-file gate for the [!s] read sugar (see [in_mlx]): the original source path is preserved in
+     locations even after mlx-pp, so a [.mlx] extension reliably distinguishes a Fur component file
+     (signals; [!s] = read) from a plain [.ml] in the same lib (refs; [!] = deref). *)
+  in_mlx := (let f = input_fname str in Filename.check_suffix f ".mlx");
+  scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
   (* MLX desugaring first (turn JSX into plain OCaml), THEN append executable doc-block tests. Handler

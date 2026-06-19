@@ -1,0 +1,13 @@
+; The fur.ppx JSX-desugar proofs. Behavioural (like the sift.ppx golden test next door): a .mlx
+; written in the NEW userland syntax — bare (expr) value children with no `node`, bare (each …)
+; with no `frag`, and the `!s` read sugar — compiled THROUGH fennec.fur.ppx and asserted via
+; Fur.to_html. It pins that the sugar lowers to the right runtime calls by checking the rendered
+; HTML, not the pretty-printed source. `-open Fur` mirrors the component/handler libs exactly
+; (the open that lets userland write signal/get/set and `!s` -> bare get unqualified).
+(test
+ (name test_fur_jsx)
+ (libraries fennec.fur fennec.fur.html fennec-hunt.unit)
+ (preprocess
+  (pps fennec.fur.ppx))
+ (flags
+  (:standard -w -a -open Fur)))
