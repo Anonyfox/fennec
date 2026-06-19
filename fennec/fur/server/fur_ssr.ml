@@ -29,7 +29,12 @@ let warm_data () =
   List.iter
     (fun (m : Fur.mount) ->
       (* a fully isolated, discarded render context — same machinery as a real SSR request, but the
-         HTML is thrown away. Its only purpose is to run component setup so [Data.local] registers. *)
+         HTML is thrown away. Its only purpose is to run component setup so [Data.local] registers. We
+         render the mount's BASE route (its home page): that registers the home-page components' resources
+         — the common case. A resource that lives ONLY on a deeper route registers on that route's first
+         render instead (still before any refetch of it, by the page→hydrate→refetch lifecycle). A render
+         that throws (e.g. a component's setup needs request state absent at boot) is swallowed per mount,
+         degrading that mount to first-render registration rather than failing boot. *)
       Fur.Data.with_context (fun () ->
           let router = Fur.Router.clone_for_render m.Fur.router in
           Fur.Router.activate router;
