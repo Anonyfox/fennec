@@ -36,6 +36,14 @@ val redirect : string -> 'p outcome
 val not_found : 'p outcome
 val error : int -> 'p outcome
 
+(** The protected-handler combinator: [guard conn ~user ~login f] runs [f uid] when [user conn] is
+    [Some uid], else [redirect login]. The Conn type is abstract here (this lib has no paw/accounts
+    dependency), so the caller passes the id extractor — inside a handler's [load] that is
+    [Accounts.user_id]: [guard conn ~user:Accounts.user_id ~login:"/login" (fun uid -> render …)].
+    It is the Mode-B mirror of a component's anonymous-frame gate — a server-side bounce before any
+    personalized [render]. *)
+val guard : 'conn -> user:('conn -> string option) -> login:string -> (string -> 'p outcome) -> 'p outcome
+
 (** Server-only values: NO {!Sift}, so a secret held in [load] cannot be seeded — putting one in a
     payload is a COMPILE error (Eliom's no-identity-converter, by type). *)
 module Server_only : sig

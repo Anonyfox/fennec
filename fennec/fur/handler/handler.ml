@@ -46,6 +46,16 @@ let redirect (url : string) : 'p outcome = Redirect url
 let not_found : 'p outcome = Not_found
 let error (status : int) : 'p outcome = Error status
 
+(* The protected-handler combinator. The bare idiom is [match user conn with Some uid -> … | None ->
+   redirect login]; [guard] names it so a [load] reads [guard conn ~user:Accounts.user_id ~login f].
+   The Conn type stays ABSTRACT ([_]) — this lib has no paw/accounts dep — so the caller supplies both
+   the conn and the id extractor ([Accounts.user_id], in scope inside [load]); on [None] it [Redirect]s
+   to the login path. The Mode-B mirror of a component's anonymous-frame gate: a server-side bounce
+   before any personalized [render]. *)
+let guard (conn : 'conn) ~(user : 'conn -> string option) ~(login : string) (f : string -> 'p outcome) :
+    'p outcome =
+  match user conn with Some uid -> f uid | None -> Redirect login
+
 (* SERVER-ONLY values: NO {!Sift}, so a secret held in [load] can NEVER be seeded — putting one in a
    payload is a COMPILE error (Eliom's no-identity-converter, by type). *)
 module Server_only = struct
@@ -122,3 +132,9 @@ let%test "render_static SSRs the view but emits NO seed and NO bundle" =
 
 let%test "Server_only holds a value but exposes no Sift — it cannot be seeded" =
   Server_only.get (Server_only.wrap "sk-secret") = "sk-secret"
+
+let%test "guard runs the body with the id when present, redirects to login when anonymous" =
+  let signed_in _ = Some "u123" and anon _ = None in
+  guard () ~user:signed_in ~login:"/login" (fun uid -> render { who = uid; count = 0 })
+  = Render { who = "u123"; count = 0 }
+  && guard () ~user:anon ~login:"/login" (fun uid -> render { who = uid; count = 0 }) = Redirect "/login"
