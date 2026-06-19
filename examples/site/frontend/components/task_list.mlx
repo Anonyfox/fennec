@@ -22,6 +22,10 @@ let () = Pulse.connect ~path:"/ddp" ()   (* the one page connection (ambient) *)
    also keeps them apart: a signal is not a ref.) *)
 let added = ref 0
 
+(* SETUP (runs once when this <Task_list/> mounts): open the subscription, bind the live [find]
+   signal, define the click handler. The trailing <div> is the RENDER (the ppx wraps it as the
+   render thunk) — it re-runs as the server pushes deltas, because it reads the live [!ready] /
+   [!tasks] signals in the markup. *)
 let make () =
   (* subscribe for this component's lifetime (auto-stops on cleanup) — Meteor's Meteor.subscribe *)
   let ready = Pulse.subscribe ~name:"tasks" () in
@@ -33,13 +37,12 @@ let make () =
     (* the TYPED method call — a wrong argument type is a compile error (Meteor's Meteor.call) *)
     ignore (Pulse.call Site_methods.add_task ("Task " ^ string_of_int added.contents))
   in
-  fun () ->
-    <div className="tasks">
-      <h2>"Live tasks"</h2>
-      (if !ready then
-         <ul className="task-items">
-           (each (Array.to_list !tasks) (fun t -> <li>(t#title)</li>))
-         </ul>
-       else <p className="loading">"Loading tasks…"</p>)
-      <button className="add-task" onClick=(add_task ())>"Add task"</button>
-    </div>
+  <div className="tasks">
+    <h2>"Live tasks"</h2>
+    (if !ready then
+       <ul className="task-items">
+         (each (Array.to_list !tasks) (fun t -> <li>(t#title)</li>))
+       </ul>
+     else <p className="loading">"Loading tasks…"</p>)
+    <button className="add-task" onClick=(add_task ())>"Add task"</button>
+  </div>

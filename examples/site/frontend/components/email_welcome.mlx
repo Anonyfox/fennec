@@ -11,7 +11,6 @@
 |scss}]
 
 let make ~name ~url () =
- fun () ->
   <div className="mailw">
     <h1 className="mailw-h1">("Welcome, " ^ name ^ "!")</h1>
     <p className="mailw-p">"Thanks for signing up — confirm your email address to get started:"</p>

@@ -7,10 +7,11 @@
 .hero-cta:hover { opacity: .9 }
 |scss}]
 
+(* The render is the trailing expression of the body — the ppx emits the render thunk. No
+   setup here (no signals/state), so the whole [make] is one function returning JSX. *)
 let make ~title ~subtitle () =
-  fun () ->
-    <section className="hero">
-      <h1 className="hero-title">(title)</h1>
-      <p className="hero-subtitle">(subtitle)</p>
-      <a className="hero-cta" href="/about">"Learn more"</a>
-    </section>
+  <section className="hero">
+    <h1 className="hero-title">(title)</h1>
+    <p className="hero-subtitle">(subtitle)</p>
+    <a className="hero-cta" href="/about">"Learn more"</a>
+  </section>

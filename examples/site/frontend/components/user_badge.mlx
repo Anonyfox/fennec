@@ -36,18 +36,19 @@ module Accounts = Fennec_accounts_client
 let () = Pulse.connect ~path:"/ddp" ()
 
 let make () =
-  (* [current_user ()] : user option Fur.signal — Meteor's Meteor.user(), live over the user
-     document. [None] during SSR (the cacheable frame) and until hydration re-scopes the sub. *)
+  (* SETUP: [current_user ()] : user option Fur.signal — Meteor's Meteor.user(), live over the
+     user document. [None] during SSR (the cacheable frame) and until hydration re-scopes the sub.
+     The trailing <span> is the RENDER thunk (ppx-wrapped): it reads [!user] in the markup, so it
+     recomputes when the live sub fills in — "Hello, …" SNAPS IN over the "Sign in" frame. *)
   let user = Accounts.current_user () in
   let name (u : Accounts.user) = Option.value u.username ~default:"there" in
-  fun () ->
-    (* ONE fixed-size slot — identical box whether anonymous or personalized, so the snap-in is a
-       fill, never a layout shift. *)
-    <span className="user-badge">
-      (match !user with
-       | None ->
-         <span className="ub-anon">
-           "Guest"<a className="ub-signin" href="/login">"Sign in"</a>
-         </span>
-       | Some u -> <span className="ub-hello">("Hello, " ^ name u)</span>)
-    </span>
+  (* ONE fixed-size slot — identical box whether anonymous or personalized, so the snap-in is a
+     fill, never a layout shift. *)
+  <span className="user-badge">
+    (match !user with
+     | None ->
+       <span className="ub-anon">
+         "Guest"<a className="ub-signin" href="/login">"Sign in"</a>
+       </span>
+     | Some u -> <span className="ub-hello">("Hello, " ^ name u)</span>)
+  </span>

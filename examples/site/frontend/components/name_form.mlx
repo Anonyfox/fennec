@@ -24,8 +24,11 @@
 |scss}]
 
 let make () =
-  (* the reactive form: one signal of Hello_form.t + a memoized Sift.validate error list. Per-instance,
-     so it lives in setup (like a local `signal`). Seeded empty via the shared model's [empty]. *)
+  (* SETUP (once per mount): the reactive form (one signal of Hello_form.t + a memoized
+     Sift.validate error list), a local [greeting] signal, the submit handler. Per-instance, so
+     these live in setup like a local [signal]. The trailing <div> is the RENDER thunk
+     (ppx-wrapped) — it reads the form/greeting signals in the markup, so validation feedback and
+     the greeting update reactively, with no round-trip. *)
   let form = Form.signal Hello_form.codec Hello_form.empty in
   let greeting = signal "" in
   let submit () =
@@ -33,19 +36,18 @@ let make () =
     | Ok (t : Hello_form.t) -> set greeting ("Hello, " ^ t.name ^ "!")
     | Error _ -> ()   (* the button is disabled while invalid, so this branch is belt-and-braces *)
   in
-  fun () ->
-    <div className="hello-form">
-      <h2>"Say hello (typed client form)"</h2>
-      <label htmlFor="hf-name">"Your name"</label>
-      <input id="hf-name"
-             attrs=(Form.input_attrs Hello_form.Fields.name)   (* required + maxlength=40, straight off the codec *)
-             className=(if Form.field_error form Hello_form.Fields.name <> None then "invalid" else "")
-             name="name"
-             value=((Form.value form).name)
-             onInput=(Form.update form (fun d -> { d with name = target_value () })) />
-      (match Form.field_error form Hello_form.Fields.name with
-       | Some msg -> <p className="hf-err">(msg)</p>
-       | None -> <span />)
-      <button className="hf-submit" disabled=(not (Form.valid form)) onClick=(submit ())>"Greet"</button>
-      (if !greeting <> "" then <p className="hf-ok">(!greeting)</p> else <span />)
-    </div>
+  <div className="hello-form">
+    <h2>"Say hello (typed client form)"</h2>
+    <label htmlFor="hf-name">"Your name"</label>
+    <input id="hf-name"
+           attrs=(Form.input_attrs Hello_form.Fields.name)   (* required + maxlength=40, straight off the codec *)
+           className=(if Form.field_error form Hello_form.Fields.name <> None then "invalid" else "")
+           name="name"
+           value=((Form.value form).name)
+           onInput=(Form.update form (fun d -> { d with name = target_value () })) />
+    (match Form.field_error form Hello_form.Fields.name with
+     | Some msg -> <p className="hf-err">(msg)</p>
+     | None -> <span />)
+    <button className="hf-submit" disabled=(not (Form.valid form)) onClick=(submit ())>"Greet"</button>
+    (if !greeting <> "" then <p className="hf-ok">(!greeting)</p> else <span />)
+  </div>

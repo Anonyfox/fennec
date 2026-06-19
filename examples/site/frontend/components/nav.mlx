@@ -9,8 +9,7 @@
 |scss}]
 
 let make ~links () =
-  fun () ->
-    <nav className="nav">
-      (each links (fun (href, label) ->
-        <a className="nav-link" key=href href=href>(label)</a>))
-    </nav>
+  <nav className="nav">
+    (each links (fun (href, label) ->
+      <a className="nav-link" key=href href=href>(label)</a>))
+  </nav>

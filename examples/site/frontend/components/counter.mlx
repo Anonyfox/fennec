@@ -14,12 +14,14 @@
 .count { font-weight: 700; min-width: 2ch; text-align: center }
 |scss}]
 
+(* [let count = signal start] is SETUP — runs ONCE per mounted <Counter/>, so each instance has
+   its own independent counter. The trailing <span> is the RENDER (the ppx wraps it as the render
+   thunk); it re-runs when [count] changes — that is where the reactivity lives ([(!count)]). *)
 let make ?(label = "count") ?(start = 0) () =
   let count = signal start in
-  fun () ->
-    <span className="counter">
-      <span className="clabel">(label ^ ":")</span>
-      <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
-      <span className="count">(!count)</span>
-      <button className="cbtn inc" onClick=(count += 1)>"+"</button>
-    </span>
+  <span className="counter">
+    <span className="clabel">(label ^ ":")</span>
+    <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
+    <span className="count">(!count)</span>
+    <button className="cbtn inc" onClick=(count += 1)>"+"</button>
+  </span>
