@@ -359,6 +359,55 @@ module Data : sig
       {!Sift.encode_json} produced — wire shape = model shape, no second serializer. *)
   val model : 'a Sift.t -> string -> ?client_only:bool -> fallback:'a -> unit -> 'a t
 
+  (** {2 Co-located resources — the SERVER fetcher declared inline}
+
+      {!string} / {!model} key a resource to a path, but the path's VALUE still lives elsewhere
+      (server.ml): an SSR seed source AND a separate HTTP route, both keyed by a magic string — the
+      data is invisible from the component. {!local} / {!model_local} kill that split: the component
+      declares the server fetcher {b in the same file}, server-only, and the framework auto-registers
+      BOTH the SSR seed source and the HTTP refetch route (path derived from the name, or [~path]). The
+      app author wires nothing — the same fusion {!Pulse.publish} performs for a live publication.
+
+      The fetcher is {!Server_only.fn}-wrapped, so it is leak-proof two ways: it has no {!Sift} (it can
+      never be seeded — only the value it produces is), and the fur ppx STRIPS its body from the jsoo
+      bundle (like a handler's [load]) — a secret inside it is a compile error there, and no server logic
+      reaches the client. On the client {!local}/{!model_local} are just the seeded, refetchable resource
+      reading the path. *)
+
+  (** A SERVER-ONLY value: NO {!Sift}, so it can never be seeded — and the fur ppx replaces its body in
+      the client build, so the wrapped server logic never links into the jsoo bundle. *)
+  module Server_only : sig
+    type 'a t
+
+    (** [fn f] wraps a server fetcher [f] (run on the server to produce a resource's value). *)
+    val fn : (unit -> 'a) -> 'a t
+  end
+
+  (** [local name ?path ~fallback fetch] — a STRING resource whose SERVER fetcher is declared INLINE.
+      The served path is [~path] (verbatim) or ["/api/" ^ name] (a [name] already starting with ["/"] is
+      taken as the path). Declaring it registers [fetch] as both the SSR seed source and the auto-mounted
+      refetch route for that path; the returned resource reads the seed and refetches the path exactly
+      like {!string}. On the client the ppx strips [fetch] — only the path crosses. *)
+  val local : string -> ?path:string -> fallback:string -> string Server_only.t -> string t
+
+  (** [model_local codec name ?path ~fallback fetch] — the TYPED twin of {!local} over a {!Sift} codec:
+      the inline server [fetch] yields an ['a], seeded with {!Sift.encode_json} and decoded back with
+      {!Sift.decode_json} — typed end to end, no stringly key, no manual decode. The same codec drives
+      the registered SSR seed and the mounted route, so wire shape = model shape on both surfaces. *)
+  val model_local : 'a Sift.t -> string -> ?path:string -> fallback:'a -> 'a Server_only.t -> 'a t
+
+  (** {3 The registry the framework drains (not userland)} *)
+
+  (** Derive the served path from a name + optional [~path] (the rule {!local}/{!model_local} use). *)
+  val local_path : ?path:string -> string -> string
+
+  (** All registered co-located sources as [(path, produce)] pairs: each is one auto-mounted refetch
+      route AND one SSR seed source. {!Fennec.serve} and the SSR driver drain this at boot. *)
+  val local_sources : unit -> (string * (unit -> string)) list
+
+  (** The producer registered for a path, if any — the SSR driver's in-process source consults this. *)
+  val local_source : string -> (unit -> string) option
+
   (** The current resolved value of a resource (the fallback while loading). *)
   val value : 'a t -> 'a
 

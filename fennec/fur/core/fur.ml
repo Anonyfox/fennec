@@ -490,6 +490,75 @@ module Data = struct
     resource ~key ~client_only ~fallback
       ~decode:(fun json -> match Sift.decode_json codec json with Ok v -> v | Error _ -> fallback) ()
 
+  (* ── CO-LOCATED resources: the SERVER fetcher declared INLINE in the component ─────────────────
+     A {!local} / {!model_local} resource carries its own server data-source: a {!Server_only.fn}
+     thunk that produces the value. Declaring one at component module-init (server side) REGISTERS that
+     fetcher in a process table keyed by the resource's path — the single source of truth the framework
+     drains to fuse BOTH halves of the old three-place split: the SSR seed source (consulted between
+     render passes) AND the HTTP refetch route (mounted on every endpoint). The app author wires
+     nothing — exactly as [Pulse.publish] fuses the live publication + the SSR seed in one call.
+
+     The fetcher is leak-proof by CONSTRUCTION + by STRIPPING:
+     - {!Server_only.fn} has no {!Sift}, so its thunk can never be seeded (only the produced string is);
+     - on the client (jsoo) the fur ppx STRIPS the thunk body (the same posture as a handler's [load]),
+       so no server logic — and no secret inside it — ever reaches the bundle. There [local]/[model_local]
+       degrade to a plain seeded + refetchable {!string}/{!model} reading the path. *)
+  module Server_only = struct
+    (* a server-only fetcher: a thunk with NO Sift, so it cannot cross into a seed/payload. The ppx
+       replaces the body with [client_inert] in the client build, so the real body never links into jsoo. *)
+    type 'a t = Fetch of (unit -> 'a)
+
+    let fn (f : unit -> 'a) : 'a t = Fetch f
+    let run (Fetch f : 'a t) : 'a = f ()
+
+    (* the client placeholder the ppx swaps the body for — never invoked (the client has no source to run
+       it), so it only needs to typecheck and be inert. *)
+    let client_inert : 'a t = Fetch (fun () -> failwith "Server_only.fn: stripped from the client build")
+  end
+
+  (* the process registry: path -> a producer that runs the inline fetcher and yields its JSON string.
+     Server-only in effect (the producer closes over the {!Server_only.fn} thunk); on the client every
+     [local]/[model_local] lowers to a stripped [string]/[model], so nothing is registered there. A
+     [Hashtbl] keyed by path is idempotent under a re-declared key (last registration wins — module init
+     runs once per process anyway). *)
+  let _local_sources : (string, unit -> string) Hashtbl.t = Hashtbl.create 16
+
+  (* derive the served path from a bare name: ["greeting"] -> ["/api/greeting"]. An explicit [~path]
+     (already absolute) is used verbatim, so a resource can sit anywhere. A name already starting with
+     ["/"] is taken as the path too (so [local "/api/x"] keeps working like the old stringly key). *)
+  let local_path ?path name =
+    match path with
+    | Some p -> p
+    | None -> if String.length name > 0 && name.[0] = '/' then name else "/api/" ^ name
+
+  (* register a co-located source under [path] (server side). Idempotent per path. *)
+  let register_local ~path (produce : unit -> string) = Hashtbl.replace _local_sources path produce
+
+  (* the framework drains these at boot ({!Fennec.serve} / the SSR driver): each entry is one
+     auto-mounted refetch route AND one SSR seed source, both keyed by the path. *)
+  let local_sources () = Hashtbl.fold (fun path produce acc -> (path, produce) :: acc) _local_sources []
+
+  (* look up the producer for a path (the SSR driver's in-process source consults this first). *)
+  let local_source path = Hashtbl.find_opt _local_sources path
+
+  (* [local name ?path ~fallback fetch] — a STRING resource whose SERVER fetcher [fetch] is declared
+     INLINE. The path is [~path] or ["/api/" ^ name]; the resource reads the SSR seed + refetches that
+     path, exactly like {!string}. Registering [fetch] is what wires the seed source + the refetch route,
+     so server.ml needs no [api_source] arm and no [Paw.get]. On the client the ppx strips [fetch]. *)
+  let local name ?path ~(fallback : string) (fetch : string Server_only.t) : string t =
+    let path = local_path ?path name in
+    register_local ~path (fun () -> Server_only.run fetch);
+    string path ~fallback ()
+
+  (* [model_local codec name ?path ~fallback fetch] — the TYPED twin of {!local}: the inline server
+     [fetch] yields an ['a], encoded to the seed with [Sift.encode_json codec] and decoded back on read
+     with [Sift.decode_json codec] — typed end to end, no stringly key, no manual decode. The same codec
+     drives the registered SSR seed AND the mounted route, so wire shape = model shape on both surfaces. *)
+  let model_local codec name ?path ~(fallback : 'a) (fetch : 'a Server_only.t) : 'a t =
+    let path = local_path ?path name in
+    register_local ~path (fun () -> Sift.encode_json codec (Server_only.run fetch));
+    model codec path ~fallback ()
+
   (* reactive readers (each subscribes via get) *)
   let status r = get r.st
   let value r = match get r.st with Ready v -> v | _ -> r.fallback  (* fallback until ready *)
@@ -1176,6 +1245,50 @@ let%test_unit "Data.model falls back on a malformed / invalid payload (never cra
   Data.put_seed "/api/demo" {|{"who":"Ada","count":-1}|};
   let r = Data.model model_demo_codec "/api/demo" ~fallback:model_demo_fallback () in
   Fennec_hunt_unit.check "invalid payload -> fallback" (Data.value r = model_demo_fallback)
+
+(* Data.local / Data.model_local: the CO-LOCATED fetcher. Declaring one registers a producer keyed by
+   the derived path; the framework drains the registry to fuse the SSR seed + the refetch route. *)
+let%test_unit "Data.local_path derives /api/<name>, honors ~path, passes a /-prefixed name through" =
+  Fennec_hunt_unit.check "bare name -> /api/<name>" (Data.local_path "greeting" = "/api/greeting");
+  Fennec_hunt_unit.check "~path verbatim" (Data.local_path ~path:"/x/y" "greeting" = "/x/y");
+  Fennec_hunt_unit.check "/-prefixed name is the path" (Data.local_path "/api/raw" = "/api/raw")
+
+let%test_unit "Data.local registers a producer that runs the inline fetcher (server side)" =
+  let calls = ref 0 in
+  let r = Data.local "greet_test" ~fallback:"…" (Data.Server_only.fn (fun () -> incr calls; "hi from server")) in
+  (* the resource is keyed by the derived path and refetchable like a plain string resource *)
+  Fennec_hunt_unit.check "value starts at fallback (no seed/source yet)" (Data.value r = "…");
+  (* registration happened under the derived path, and the producer runs the fetcher lazily *)
+  (match Data.local_source "/api/greet_test" with
+   | Some produce ->
+     Fennec_hunt_unit.check "producer runs the fetcher" (produce () = "hi from server");
+     Fennec_hunt_unit.check "fetcher actually invoked" (!calls = 1)
+   | None -> Fennec_hunt_unit.check "producer registered" false)
+
+let%test_unit "Data.model_local encodes the typed value through the codec for the seed/route" =
+  let r =
+    Data.model_local model_demo_codec "demo_local" ~fallback:model_demo_fallback
+      (Data.Server_only.fn (fun () -> { who = "Ada"; count = 7 }))
+  in
+  Fennec_hunt_unit.check "typed value falls back until seeded" (Data.value r = model_demo_fallback);
+  match Data.local_source "/api/demo_local" with
+  | Some produce ->
+    (* the producer emits EXACTLY what Sift.encode_json would — the same bytes the route + seed carry *)
+    let expected = Sift.encode_json model_demo_codec { who = "Ada"; count = 7 } in
+    Fennec_hunt_unit.check "producer encodes via the codec" (produce () = expected);
+    (* and the typed resource decodes that very payload back through the seed *)
+    Data.clear_seed ();
+    Data.put_seed "/api/demo_local" (produce ());
+    let r2 = Data.model_local model_demo_codec "demo_local" ~fallback:model_demo_fallback (Data.Server_only.fn (fun () -> model_demo_fallback)) in
+    let v = Data.value r2 in
+    Fennec_hunt_unit.check "seed decodes back to the typed value" (v.who = "Ada" && v.count = 7);
+    Data.clear_seed ()
+  | None -> Fennec_hunt_unit.check "typed producer registered" false
+
+let%test_unit "Data.local_sources lists registered co-located sources for the framework to drain" =
+  ignore (Data.local "drain_test" ~fallback:"f" (Data.Server_only.fn (fun () -> "v")));
+  let found = List.exists (fun (p, produce) -> p = "/api/drain_test" && produce () = "v") (Data.local_sources ()) in
+  Fennec_hunt_unit.check "registered source appears in local_sources" found
 
 let%test_unit "to_script assigns global" =
   Data.clear_seed (); Data.put_seed "u" "ok";
