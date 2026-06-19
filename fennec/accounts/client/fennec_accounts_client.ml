@@ -288,18 +288,17 @@ let current_user_publication = "__currentUser"
 let live_back_user t =
   ignore (Ddp_client.subscribe t.ddp ~name:current_user_publication ());
   let live = Ddp_client.find t.ddp current_user_collection () in
-  let stop = ref (fun () -> ()) in
-  stop :=
-    Fur.watch (fun () ->
-        match Fur.get live with
-        | [||] -> () (* loading / logged out / no DDP — do not clobber what the verbs set *)
-        | docs -> (
-          match decode_user docs.(0) with
-          | Ok user ->
-            Fur.set t.user_sig (Some user);
-            Fur.set t.user_id_sig (Some user.id)
-          | Error _ -> () (* a malformed/foreign doc never crashes the live signal *)));
-  ignore !stop
+  (* the watch lives for the client's lifetime (page-scoped, like the client itself) *)
+  ignore
+    (Fur.watch (fun () ->
+         match Fur.get live with
+         | [||] -> () (* loading / logged out / no DDP — do not clobber what the verbs set *)
+         | docs -> (
+           match decode_user docs.(0) with
+           | Ok user ->
+             Fur.set t.user_sig (Some user);
+             Fur.set t.user_id_sig (Some user.id)
+           | Error _ -> () (* a malformed/foreign doc never crashes the live signal *))))
 
 let of_ddp ?(token_key = Some default_token_key) ddp =
   let t =
