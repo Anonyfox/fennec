@@ -2,11 +2,25 @@
    a signal in a component's setup is LOCAL (per-instance); a signal in a shared
    module is GLOBAL. get subscribes, set/update notify. One primitive, scoped by
    where you define it. *)
-type reaction = { run : unit -> unit; mutable deps : psig list }
+(* A reaction carries scheduler bookkeeping beyond its [run]/[deps]:
+   - [dirty]: already enqueued for the next flush (dedup — a diamond marks it once);
+   - [alive]: cleared by [dispose] so a queued-then-disposed reaction is skipped, not run;
+   - [epoch]/[runs]: a per-flush execution counter that bounds re-entrancy — a self-writing
+     effect re-marks itself but can only re-run [reentry_cap] times within one flush, so it
+     terminates instead of stack-overflowing or spinning forever. *)
+type reaction =
+  { run : unit -> unit; mutable deps : psig list;
+    mutable dirty : bool; mutable alive : bool; mutable epoch : int; mutable runs : int }
 and 'a signal = { mutable v : 'a; mutable subs : reaction list; eq : 'a -> 'a -> bool }
 and psig = P : 'a signal -> psig
 
 let current : reaction option ref = ref None
+let mk_reaction run = { run; deps = []; dirty = false; alive = true; epoch = 0; runs = 0 }
+
+(* platform flag: the client entrypoint flips this true; native SSR leaves it false. Defined
+   here (above the scheduler) because the flush-timing decision reads it. *)
+let is_browser = ref false
+
 (* [eq] decides whether a [set] is a real change (and thus notifies). Defaults to
    structural equality; pass ~eq:(fun _ _ -> false) to always notify, or a custom
    one for values structural-compare can't handle (e.g. closures). *)
@@ -22,14 +36,71 @@ let run_effect e =
   e.deps <- [];
   let prev = !current in current := Some e;
   Fun.protect ~finally:(fun () -> current := prev) e.run
-let set s v = if not (s.eq v s.v) then (s.v <- v; List.iter run_effect (List.rev s.subs))
+
+(* ──── batched effect scheduler ────
+   A [set] writes the value SYNCHRONOUSLY (so [get] right after [set] sees the new value), then
+   marks each subscriber dirty into a dedup'd FIFO and requests ONE flush — it never re-runs an
+   effect inline. So N writes in one turn collapse to a single render pass, and a diamond (two
+   signals feeding one effect) re-runs that effect once.
+
+   FLUSH TIMING: inside an open [batch]/[flush_sync] the flush is deferred to the outermost close.
+   Otherwise, on the browser it is a microtask (one per turn, via [Platform.schedule]) so a whole
+   event handler's writes coalesce; on native (SSR / tests) it runs immediately — keeping the
+   long-standing synchronous-after-[set] behavior the unit tests and the one-shot SSR render rely
+   on. [Platform.schedule] is itself synchronous on native, so even a test that flips [is_browser]
+   stays deterministic. *)
+let pending : reaction Queue.t = Queue.create ()
+let batch_depth = ref 0
+let flush_scheduled = ref false   (* a microtask flush is already queued (browser) *)
+let flushing = ref false          (* re-entrancy guard: a flush is in progress *)
+let flush_epoch = ref 0
+let reentry_cap = 100             (* max re-runs of one reaction within a single flush *)
+
+let mark e =
+  if e.alive && not e.dirty then (e.dirty <- true; Queue.add e pending)
+
+let flush () =
+  if not !flushing then begin
+    flushing := true;
+    incr flush_epoch;
+    let ep = !flush_epoch in
+    Fun.protect ~finally:(fun () -> flushing := false; flush_scheduled := false) (fun () ->
+      while not (Queue.is_empty pending) do
+        let e = Queue.pop pending in
+        e.dirty <- false;
+        if e.alive then begin
+          if e.epoch <> ep then (e.epoch <- ep; e.runs <- 0);
+          e.runs <- e.runs + 1;
+          (* a self-writing effect re-marks itself; stop re-running it past the cap so the
+             flush terminates (bounded), rather than spinning or overflowing the stack *)
+          if e.runs <= reentry_cap then run_effect e
+        end
+      done)
+  end
+
+let request_flush () =
+  if !batch_depth > 0 then ()                 (* deferred to the batch close *)
+  else if !is_browser then
+    (if not !flush_scheduled then (flush_scheduled := true; Platform.schedule flush))
+  else flush ()                               (* native: synchronous *)
+
+let set s v = if not (s.eq v s.v) then (s.v <- v; List.iter mark s.subs; request_flush ())
 let update s f = set s (f (peek s))
+
+(* Run [f] with writes batched: every [set] inside defers its flush to the outermost close,
+   so a transaction of N writes renders once. The flush at close is SYNCHRONOUS (React
+   flushSync-style) — when [f] returns, every dependent effect has already re-run and the DOM
+   reflects the final state. Nestable (depth-counted). [batch] is the alias for grouping
+   without the synchronous-flush emphasis; both share one body. *)
+let flush_sync f =
+  incr batch_depth;
+  Fun.protect ~finally:(fun () -> decr batch_depth; if !batch_depth = 0 then flush ()) f
+let batch f = flush_sync f
+
 let dispose e =  (* unmount: unsubscribe from everything so it never re-runs *)
+  e.alive <- false; e.dirty <- false;
   List.iter (fun (P s) -> s.subs <- List.filter (fun e' -> e' != e) s.subs) e.deps;
   e.deps <- []
-
-(* platform flag: the client entrypoint flips this true; native SSR leaves it false *)
-let is_browser = ref false
 
 (* IMPORTANT — per-request isolation (the concurrency seam).
    Several pieces below keep PER-RENDER state in MODULE GLOBALS: Head.sources, the
@@ -79,10 +150,37 @@ let flush_mounts () =
    when a signal it read changes, auto-disposed on the owning component's unmount.
    Returns a stop handle. (Named [watch] because [effect] is an OCaml 5 keyword.) *)
 let watch f =
-  let e = { run = f; deps = [] } in
+  let e = mk_reaction f in
   run_effect e;
   on_cleanup (fun () -> dispose e);
   fun () -> dispose e
+
+(* ──── memo: a cached, derived signal ────
+   A memo is a plain {!signal} whose value tracks a pure computation [f] over other signals.
+   Because it returns a [signal], reads go through the ordinary {!get}/{!peek} — there is no
+   custom getter — so the value must already be fresh when read; the memo refreshes eagerly within
+   the effect flush, but each refresh costs at most one [f] per flush.
+
+   One internal tracker reaction runs [f] under dependency tracking and pushes the result into the
+   value signal [out] with the [eq] short-circuit (so downstream readers re-run only on a real
+   change). A dependency change enqueues the tracker; the flush runs it ONCE — deduped by the
+   reaction's dirty bit, so a diamond of deps recomputes [f] once — and BEFORE any dependent reader
+   that was enqueued after it (glitch-free). Reading the memo many times between changes is free: a
+   bare [get out], no recomputation. The tracker is seeded once at construction and, like {!watch},
+   auto-disposed on the owning component's unmount. *)
+let memo (type a) ?(eq = (( = ) : a -> a -> bool)) (f : unit -> a) : a signal =
+  let out : a signal = { v = Obj.magic (); subs = []; eq } in
+  let seeded = ref false in
+  let tracker =
+    mk_reaction (fun () ->
+        let v = f () in
+        (* first computation writes [out] directly (no spurious notify, no eq on the junk seed);
+           later recomputes go through [set] so observers are marked + the eq guard applies *)
+        if not !seeded then (out.v <- v; seeded := true) else set out v)
+  in
+  run_effect tracker;                          (* seed: compute now, track deps from the start *)
+  on_cleanup (fun () -> dispose tracker);
+  out
 
 (* ---- ambient current event ----
    Handlers stay [unit -> unit]; these accessors read the event being dispatched via
@@ -263,14 +361,13 @@ module Head = struct
     let id = !counter in
     incr counter;
     let eff =
-      { run = (fun () ->
+      mk_reaction (fun () ->
           let tags = f () in
           let cur = peek sources in
           set sources
             (if List.mem_assoc id cur
              then List.map (fun (i, t) -> if i = id then (i, tags) else (i, t)) cur
-             else cur @ [ (id, tags) ]));
-        deps = [] }
+             else cur @ [ (id, tags) ]))
     in
     run_effect eff;
     (* on unmount: stop reacting AND drop this slot so its tags disappear *)
@@ -532,8 +629,12 @@ module Router = struct
   let ext fmt = Printf.sprintf fmt
 
   (* navigation: push history via the linked platform, sync the path, run mounts.
-     [sync_path] is the popstate path (already navigated; no push). No runtime hook. *)
-  let sync_path abs = set_path (current ()) abs; flush_mounts ()
+     [sync_path] is the popstate path (already navigated; no push). No runtime hook.
+     The path-set is wrapped in [flush_sync] so the outlet re-renders SYNCHRONOUSLY and the new
+     page's components mount (queuing their [on_mount]s) BEFORE [flush_mounts] runs them — under
+     the batched scheduler a bare [set] would defer the re-render to a microtask, leaving the new
+     mounts unflushed. *)
+  let sync_path abs = flush_sync (fun () -> set_path (current ()) abs); flush_mounts ()
   let navigate abs = Platform.push_state abs; sync_path abs
 
   (* the routed outlet: a component that reactively renders the matched page,
@@ -653,14 +754,13 @@ module Reconcile (B : BACKEND) = struct
       MElem { tag; key; node; attrs; children; handlers }
 
   and mk_effect ~first sub =
-    { run = (fun () -> match !sub with `R (render, m) ->
+    mk_reaction (fun () -> match !sub with `R (render, m) ->
         let v = render () in
         (match m with
          | None -> sub := `R (render, Some (first v))
          | Some old -> (match B.parent (mnode old) with
              | Some p -> sub := `R (render, Some (reconcile ~parent:p old v))
-             | None -> sub := `R (render, Some old))));
-      deps = [] }
+             | None -> sub := `R (render, Some old))))
 
   and instantiate ~first (c : comp) =
     let cleanups = ref [] in
@@ -738,14 +838,13 @@ module Reconcile (B : BACKEND) = struct
      [mount_root_disposable] and disposes on teardown. *)
   let mount_root_disposable container (render : unit -> vnode) =
     let mounted = ref None in
-    let eff = { run = (fun () ->
+    let eff = mk_reaction (fun () ->
         let vnode = render () in
         match !mounted with
         | None -> (match B.first_child container with
             | Some first -> mounted := Some (hydrate first vnode)
             | None -> let m = create vnode in B.append container (mnode m); mounted := Some m)
-        | Some m -> mounted := Some (reconcile ~parent:container m vnode));
-       deps = [] } in
+        | Some m -> mounted := Some (reconcile ~parent:container m vnode)) in
     run_effect eff;
     fun () ->
       dispose eff;
@@ -1156,6 +1255,89 @@ let%test "on_mount watch does not accumulate across N mount/unmount cycles" =
   for _ = 1 to 50 do cycle () done;
   is_browser := saved_browser;
   List.length s.subs = base
+
+(* ──── batching / re-entrancy / flush_sync ──── *)
+
+(* the value write is synchronous even though the effect flush is batched: [get]/[peek] right
+   after [set] must observe the new value (only the re-render is deferred). *)
+let%test "get right after set sees the new value (write is synchronous)" =
+  let s = signal 0 in
+  set s 7;
+  peek s = 7 && (let seen = ref (-1) in flush_sync (fun () -> set s 9; seen := peek s); !seen = 9)
+
+(* K writes in ONE batch (= one handler turn) re-render a subscribing component exactly ONCE,
+   not K times. We count renders via the reconcile render thunk over the Fake backend. *)
+let%test "K writes in one batch render the subscriber once" =
+  let n = signal 0 in
+  let renders = ref 0 in
+  let render () = incr renders; h "p" [] [ text (string_of_int (get n)) ] in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  let after_mount = !renders in
+  flush_sync (fun () -> for i = 1 to 20 do set n i done);
+  let one_batch = !renders - after_mount in
+  one_batch = 1 && (match (List.hd root.Fake.kids).Fake.kids with t :: _ -> t.Fake.text = "20" | [] -> false)
+
+(* diamond de-dup: two signals both feed one component; setting BOTH in a batch re-renders the
+   component ONCE (the shared reaction is marked once, not once per path). *)
+let%test "diamond: two signals into one component, both set in a batch, render once" =
+  let a = signal 0 and b = signal 0 in
+  let renders = ref 0 in
+  let render () = incr renders; h "p" [] [ text (string_of_int (get a + get b)) ] in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  let after_mount = !renders in
+  flush_sync (fun () -> set a 1; set b 1);
+  !renders - after_mount = 1
+  && (match (List.hd root.Fake.kids).Fake.kids with t :: _ -> t.Fake.text = "2" | [] -> false)
+
+(* re-entrancy guard: an effect that SETs a signal it GETs must terminate (bounded), not recurse
+   into a stack overflow or spin forever. After it settles, the signal advanced by the cap and the
+   effect ran a bounded number of times. *)
+let%test "self-writing effect terminates (bounded, no overflow)" =
+  let c = signal 0 in
+  let runs = ref 0 in
+  let _ = watch (fun () -> incr runs; let v = get c in if v < 1_000_000 then set c (v + 1)) in
+  (* it must have stopped on its own; the cap bounds both the run count and the value *)
+  !runs <= reentry_cap + 1 && peek c <= reentry_cap + 1 && peek c > 0
+
+(* flush_sync forces a synchronous flush: after it returns, a pending re-render has ALREADY run,
+   even though a bare batched write would otherwise defer. Here the effect's side effect (a ref)
+   is observable immediately after flush_sync, with no extra flush. *)
+let%test "flush_sync forces a synchronous flush" =
+  let s = signal 0 in
+  let mirror = ref 0 in
+  let _ = watch (fun () -> mirror := get s) in
+  flush_sync (fun () -> set s 42);
+  !mirror = 42
+
+(* ──── memo ──── *)
+
+(* a memo caches between reads (f runs at most once per change) and recomputes once per batch even
+   when several deps change together; downstream observers see the fresh value. *)
+let%test "memo caches between reads and recomputes once per batch" =
+  let a = signal 2 and b = signal 3 in
+  let calls = ref 0 in
+  let m = memo (fun () -> incr calls; get a + get b) in
+  let seed_calls = !calls in                       (* 1: seeded at construction *)
+  let r1 = peek m and r2 = peek m and r3 = peek m in
+  let cached = !calls in                           (* still seed_calls — reads don't recompute *)
+  flush_sync (fun () -> set a 10; set b 20);        (* two deps in one batch → ONE recompute *)
+  let after_batch_calls = !calls in
+  seed_calls = 1 && r1 = 5 && r2 = 5 && r3 = 5 && cached = 1
+  && peek m = 30 && after_batch_calls = 2
+
+(* a memo is glitch-free with batching: an effect that reads the memo sees the post-batch value
+   once, not an intermediate value per dep write. *)
+let%test "memo is glitch-free: observer sees one consistent update per batch" =
+  let a = signal 1 and b = signal 1 in
+  let m = memo (fun () -> get a + get b) in
+  let observed = ref [] in
+  let _ = watch (fun () -> observed := get m :: !observed) in   (* initial run records 2 *)
+  flush_sync (fun () -> set a 5; set b 5);                       (* one update to 10 *)
+  (* the observer ran once at creation (2) and once for the batched memo change (10) — never on a
+     half-applied intermediate like 6 *)
+  !observed = [ 10; 2 ]
 
 (* per-request Head isolation: each render context (a [Platform.with_data_context] binding — fiber-local
    on the concurrent server, the reset fallback outside Eio) gets its OWN Head registry, so one render's

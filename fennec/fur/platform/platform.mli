@@ -47,6 +47,15 @@ val local_remove : string -> unit
     No-op in SSR (path changes are handled by the router's signal directly). *)
 val push_state : string -> unit
 
+(** {1 Scheduling} *)
+
+(** [schedule f] runs [f] on the next microtask in the browser ([queueMicrotask]), so a whole
+    event handler's signal writes coalesce into one effect flush. On native it runs [f]
+    immediately (synchronous), so SSR and the unit tests keep their deterministic, synchronous
+    after-[set] behavior. The Fur scheduler calls this only in browser contexts; the native
+    implementation exists for symmetry. *)
+val schedule : (unit -> unit) -> unit
+
 (** {1 Per-request SSR data context} *)
 
 (** [with_data_context f] runs [f] with a fresh, isolated per-request data context (the seed table +

@@ -60,6 +60,29 @@ val update : 'a signal -> ('a -> 'a) -> unit
     detach the effect permanently. *)
 val watch : (unit -> unit) -> (unit -> unit)
 
+(** [flush_sync f] runs [f] with signal writes batched, then SYNCHRONOUSLY flushes every pending
+    re-render before returning (React [flushSync]-style). Inside [f] each {!set} only marks its
+    dependents dirty and defers; when [f] returns, all dependent effects have re-run and the DOM
+    reflects the final state. Use it when code must observe the post-write DOM in the same tick
+    (otherwise the browser flush is a microtask). Nestable: only the outermost call flushes.
+
+    Writes that re-render the same component collapse to a single pass — so [flush_sync] is also
+    the explicit way to batch N writes (e.g. resetting several fields) into one render. *)
+val flush_sync : (unit -> unit) -> unit
+
+(** [batch f] groups the signal writes in [f] so dependents re-render once, like {!flush_sync}
+    but read as "batch these writes" rather than "force a synchronous flush". Identical behavior;
+    nestable. *)
+val batch : (unit -> unit) -> unit
+
+(** [memo ?eq f] is a derived, cached signal: [f] is a pure computation over other signals, and
+    {!get} on the result returns its last value, recomputing lazily on first read after any
+    dependency changed. Reading the memo many times between changes recomputes [f] at most once,
+    and with batching it recomputes once per flush — so it is glitch-free and cheaper than a bare
+    [get] that re-derives every read. [eq] (default structural) suppresses downstream re-runs when
+    the recomputed value is unchanged. *)
+val memo : ?eq:('a -> 'a -> bool) -> (unit -> 'a) -> 'a signal
+
 (** [s += n] — increment an int signal by [n]. Sugar for [update s (( + ) n)]. *)
 val ( += ) : int signal -> int -> unit
 

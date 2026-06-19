@@ -8,6 +8,9 @@ let local_get _ = None
 let local_set _ _ = ()
 let local_remove _ = ()
 let push_state _ = ()
+(* native: no event loop — run the flush immediately so SSR / one-shot renders + the unit tests
+   keep their synchronous-after-[set] behavior *)
+let schedule f = f ()
 
 (* Per-request render context, FIBER-LOCAL on the concurrent server so simultaneous SSR renders never
    share state. [seed]/[source] are the Data context; [locals] is a generic map for the Fur.core

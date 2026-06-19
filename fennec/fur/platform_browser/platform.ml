@@ -22,6 +22,19 @@ let push_state abs =
   ignore (Js.Unsafe.meth_call (Js.Unsafe.get Dom_html.window (Js.string "history"))
             "pushState" [| Js.Unsafe.inject Js.null; Js.Unsafe.inject (Js.string ""); Js.Unsafe.inject (Js.string abs) |])
 
+(* microtask: batch an event handler's signal writes into one effect flush. queueMicrotask is
+   universally available in browsers + Node; fall back to a resolved-Promise .then(), and as a
+   last resort run synchronously (still correct, just unbatched). *)
+let schedule (f : unit -> unit) =
+  let cb = Js.Unsafe.inject (Js.wrap_callback f) in
+  let g = Js.Unsafe.global in
+  if Js.Optdef.test (Js.Unsafe.get g (Js.string "queueMicrotask")) then
+    ignore (Js.Unsafe.fun_call (Js.Unsafe.get g (Js.string "queueMicrotask")) [| cb |])
+  else if Js.Optdef.test (Js.Unsafe.get g (Js.string "Promise")) then
+    let p = Js.Unsafe.meth_call (Js.Unsafe.get g (Js.string "Promise")) "resolve" [||] in
+    ignore (Js.Unsafe.meth_call p "then" [| cb |])
+  else f ()
+
 (* per-request data context — one document, single-threaded, so a single global suffices *)
 let _seed : (string, string) Hashtbl.t = Hashtbl.create 16
 let _source : (string -> (string -> unit) -> unit) ref = ref (fun _ _ -> ())
