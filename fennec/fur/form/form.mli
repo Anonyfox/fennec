@@ -22,8 +22,8 @@
                   name="email" value=((Form.value f).email)
                   onInput=(Form.update f (fun d -> { d with email = target_value () })) />
            (match Form.field_error f Signup.Fields.email with
-            | Some msg -> <p className="err">(msg)</p> | None -> <span/>)
-           <button disabled=(not (Form.valid f))>"Sign up"</button>
+            | Some msg -> <p className="err">{msg}</p> | None -> <span/>)
+           <button disabled=(not (Form.valid f))>Sign up</button>
          </form> ]} *)
 
 (** A reactive form over a codec ['a Sift.t]: the typed draft plus its live error list. *)

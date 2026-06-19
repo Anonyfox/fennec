@@ -3,7 +3,7 @@
 
     {[ (* render an "update available — reload?" affordance off the signal *)
        if Fur.get (Pwa_client.update_available ()) then
-         <button onClick=(fun _ -> Pwa_client.apply_update ())>"Reload to update"</button> ]} *)
+         <button onClick=(fun _ -> Pwa_client.apply_update ())>Reload to update</button> ]} *)
 
 (** Flips to [true] once a NEW build's service worker is installed and waiting. Render the "update
     available — reload?" affordance off this. *)

@@ -19,14 +19,15 @@
     emits the [fun () ->] wrapper — there is NO manual render-thunk split:
 
     {[
-      (* the .mlx source — what userland writes: setup above, render JSX trailing *)
+      (* the .mlx source — what userland writes: setup above, render JSX trailing. The markup is
+         JSX-identical: bare text is text, {expr} interpolates a value, <Component/> nests. *)
       let make ?(label = "count") () =
         let count = signal 0 in              (* SETUP — runs once per <Counter/> *)
         <span className="counter">           (* RENDER — re-runs on `count` change *)
-          (label ^ ": ")
-          <button onClick=(count -= 1)>"−"</button>
-          <span className="count">(!count)</span>
-          <button onClick=(count += 1)>"+"</button>
+          {label ^ ": "}
+          <button onClick=(count -= 1)>−</button>
+          <span className="count">{!count}</span>
+          <button onClick=(count += 1)>+</button>
         </span>
     ]}
 
@@ -45,18 +46,29 @@
     {!memo}. The ppx emits a non-fatal warning on exactly that pattern (a setup binding whose RHS
     is a bare tracking read [get s] / [!s]); {!peek} (a deliberate snapshot) never warns.
 
-    {2 JSX sugar in a [.mlx] component file}  (all pure ppx, no type-safety loss)
-    - a [ "string" ] literal between tags is TEXT (handles any punctuation, [<], [(] …);
-    - a parenthesized [ (expr) ] between tags is a VALUE child — auto-wrapped in {!node}, so
-      an [int]/[float]/[string]/[vnode] all render and userland never writes [node];
+    {2 JSX surface in a [.mlx] component file}  (JSX-identical; pure ppx + pre-pass, no type-safety loss)
+
+    The markup is the React/Svelte surface a frontend developer already knows — bare text, [{expr}]
+    interpolation, [<Component/>], scoped [[%%style]] — with full OCaml type safety underneath:
+    - {b bare text is text}: [<h1>Welcome to Fennec 🦊</h1>], [<a>Sign in</a>] ([in] is an OCaml
+      keyword, yet it reads fine — a fennec-owned [.mlx] pre-pass [fennec-mlx-pp] quotes child text
+      BEFORE the parser, see [fennec/fur/prepass/]). Whitespace collapses/trims like JSX (source
+      indentation between elements is dropped; inline runs collapse to one space).
+    - {b [{expr}] interpolates a VALUE} (JSX-identical) — auto-wrapped in {!node}, so an
+      [int]/[float]/[string]/[vnode] all render and userland never writes [node]:
+      [<span>{!count}</span>], [<span>{label ^ ":"}</span>], [<h3>{(Data.value info).name}</h3>].
     - a child that evaluates to a [vnode list] (an [each] / [List.map]) auto-wraps in {!frag},
-      so the idiom is a bare [(each xs (fun x -> …))] — no [frag], no [Array.to_list] for a list;
+      so the idiom is a bare [(each xs (fun x -> …))] — no [frag], no [Array.to_list] for a list.
+    - {b the [(expr)] paren form still works} (backward-compatible) and is the way to nest a
+      list/conditional whose body is itself JSX: [(if !ready then <ul>…</ul> else <p>…</p>)].
+    - {b [ "string" ] quoted text is the escape hatch} for text that must contain a literal [{], [(],
+      [<], or significant edge/double whitespace (e.g. ["✉  Dev mailbox"], ["(localStorage)"]).
     - [!s] reads a signal — the sugar for [(get s)] (writes stay explicit: [set]/[+=]/[-=]);
     - [attrs=(expr)] on a plain element SPREADS an [attr list] into the element's attributes (React's
       [{...spread}]) — e.g. [<input attrs=(Form.input_attrs Fields.email) name="email" />] drops the
       codec-driven HTML5 constraints ([required]/[maxlength]/[type=email]) straight onto the input.
       Repeatable; the spread merges after the element's own labeled attrs. (On a {!comp} it stays a
-      normal [attrs] prop.)
+      normal [attrs] prop.) Attribute values accept [{expr}] too: [<input value={draft} />].
 
     The component above desugars to the runtime API below ([h]/{!node}/{!comp}/{!get}) — the ppx
     emits the [fun () ->] render thunk that wraps the trailing JSX:
