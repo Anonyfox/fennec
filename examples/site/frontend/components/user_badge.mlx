@@ -48,7 +48,7 @@ let make () =
     (match !user with
      | None ->
        <span className="ub-anon">
-         "Guest"<a className="ub-signin" href="/login">"Sign in"</a>
+         Guest<a className="ub-signin" href="/login">Sign in</a>
        </span>
-     | Some u -> <span className="ub-hello">("Hello, " ^ name u)</span>)
+     | Some u -> <span className="ub-hello">{"Hello, " ^ name u}</span>)
   </span>

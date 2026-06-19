@@ -22,7 +22,7 @@ let compute_greeting () = "Hello from the server 👋 (FENNEC_COLOCATED_FETCHER)
 let g = Data.local "greeting" ~fallback:"…" (Data.Server_only.fn (fun () -> compute_greeting ()))
 let view =
   <div className="greeting">
-    <p className="msg">(Data.value g)</p>
-    <span className="gstatus">(if Data.loading g then " (loading)" else " (ready)")</span>
-    <button className="grefetch" id="refetch" onClick=(Data.refetch g)>"refetch"</button>
+    <p className="msg">{Data.value g}</p>
+    <span className="gstatus">{if Data.loading g then " (loading)" else " (ready)"}</span>
+    <button className="grefetch" id="refetch" onClick=(Data.refetch g)>refetch</button>
   </div>

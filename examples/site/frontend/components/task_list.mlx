@@ -38,11 +38,11 @@ let make () =
     ignore (Pulse.call Site_methods.add_task ("Task " ^ string_of_int added.contents))
   in
   <div className="tasks">
-    <h2>"Live tasks"</h2>
+    <h2>Live tasks</h2>
     (if !ready then
        <ul className="task-items">
-         (each (Array.to_list !tasks) (fun t -> <li>(t#title)</li>))
+         (each (Array.to_list !tasks) (fun t -> <li>{t#title}</li>))
        </ul>
-     else <p className="loading">"Loading tasks…"</p>)
-    <button className="add-task" onClick=(add_task ())>"Add task"</button>
+     else <p className="loading">Loading tasks…</p>)
+    <button className="add-task" onClick=(add_task ())>Add task</button>
   </div>

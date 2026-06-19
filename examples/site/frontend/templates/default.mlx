@@ -9,13 +9,13 @@ let make ctx =
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      (Doc.head ctx)
+      {Doc.head ctx}
       <link rel="stylesheet" href="/_apps/web/main.css" />
-      <style>(Doc.styles ctx)</style>
+      <style>{Doc.styles ctx}</style>
     </head>
     <body className="web">
-      <div id="app">(Doc.outlet ctx)</div>
-      (Doc.data ctx)
+      <div id="app">{Doc.outlet ctx}</div>
+      {Doc.data ctx}
       <script src="/_apps/web/main.js" defer=true></script>
     </body>
   </html>

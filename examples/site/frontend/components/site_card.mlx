@@ -18,8 +18,8 @@ let info = Data.model Site_info.codec "/api/site-info" ~fallback:Site_info.empty
 let view =
   <div className="site-card">
     (* (Data.value info) is a typed Site_info.t — field access is compile-checked *)
-    <h3>((Data.value info).name)</h3>
-    <p className="sc-tag">((Data.value info).tagline)</p>
-    <p className="sc-stars">("★ " ^ string_of_int (Data.value info).stars)</p>
-    <button className="sc-refetch" id="sc-refetch" onClick=(Data.refetch info)>"refetch"</button>
+    <h3>{(Data.value info).name}</h3>
+    <p className="sc-tag">{(Data.value info).tagline}</p>
+    <p className="sc-stars">{"★ " ^ string_of_int (Data.value info).stars}</p>
+    <button className="sc-refetch" id="sc-refetch" onClick=(Data.refetch info)>refetch</button>
   </div>

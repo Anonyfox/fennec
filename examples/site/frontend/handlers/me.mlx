@@ -53,26 +53,25 @@ let load conn =
    seed — byte-identical, already personalized. Sees only [t]; never names Accounts or the Conn. *)
 let view (p : t) =
   <main className="me" id="me">
-    <h1>("Signed in as " ^ p.username)</h1>
-    <p className="me-sub">"This page was rendered for you on the server, then hydrated from its seed."</p>
+    <h1>{"Signed in as " ^ p.username}</h1>
+    <p className="me-sub">This page was rendered for you on the server, then hydrated from its seed.</p>
 
-    <h2>"Roles"</h2>
+    <h2>Roles</h2>
     (match p.roles with
-     | [] -> <p className="me-empty">"no roles granted"</p>
-     | roles -> <ul>(each roles (fun r -> <li>(r)</li>))</ul>)
+     | [] -> <p className="me-empty">no roles granted</p>
+     | roles -> <ul>(each roles (fun r -> <li>{r}</li>))</ul>)
 
-    <h2>"Emails"</h2>
+    <h2>Emails</h2>
     (match p.emails with
-     | [] -> <p className="me-empty">"no emails on file"</p>
+     | [] -> <p className="me-empty">no emails on file</p>
      | emails ->
        <ul>
          (each emails (fun (e : Email.t) ->
             <li>
-              (e.address)" — "
-              (if e.verified then <span className="me-verified">"verified"</span>
-               else <span className="me-unverified">"unverified"</span>)
+              {e.address} — {if e.verified then <span className="me-verified">verified</span>
+               else <span className="me-unverified">unverified</span>}
             </li>))
        </ul>)
 
-    <a className="me-logout" href="/logout">"Sign out"</a>
+    <a className="me-logout" href="/logout">Sign out</a>
   </main>

@@ -11,5 +11,5 @@
 let make ~links () =
   <nav className="nav">
     (each links (fun (href, label) ->
-      <a className="nav-link" key=href href=href>(label)</a>))
+      <a className="nav-link" key=href href=href>{label}</a>))
   </nav>

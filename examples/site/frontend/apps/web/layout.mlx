@@ -15,5 +15,5 @@ let view =
        fills in "Hello, …" after hydration once the session re-scopes. See User_badge / the README
        section "SSR + the reactive user". *)
     <User_badge />
-    (outlet ())
+    {outlet ()}
   </div>

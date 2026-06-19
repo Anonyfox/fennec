@@ -20,8 +20,8 @@
 let make ?(label = "count") ?(start = 0) () =
   let count = signal start in
   <span className="counter">
-    <span className="clabel">(label ^ ":")</span>
-    <button className="cbtn dec" onClick=(count -= 1)>"−"</button>
-    <span className="count">(!count)</span>
-    <button className="cbtn inc" onClick=(count += 1)>"+"</button>
+    <span className="clabel">{label ^ ":"}</span>
+    <button className="cbtn dec" onClick=(count -= 1)>−</button>
+    <span className="count">{!count}</span>
+    <button className="cbtn inc" onClick=(count += 1)>+</button>
   </span>

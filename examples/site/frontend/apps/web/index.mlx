@@ -8,8 +8,8 @@ let () = Head.description "The marketing home page, server-rendered then hydrate
 let () = Head.og "og:title" "Fennec Site"
 let view =
   <main className="page">
-    <h1>"Welcome to the Fennec site 🦊"</h1>
-    <p>"One component tree, server-rendered then hydrated."</p>
+    <h1>Welcome to the Fennec site 🦊</h1>
+    <p>One component tree, server-rendered then hydrated.</p>
     <Counter label="clicks" />
     <Greeting />
     <Site_card />

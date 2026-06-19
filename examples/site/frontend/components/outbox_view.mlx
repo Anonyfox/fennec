@@ -45,12 +45,12 @@ let make () =
   <div className="devmail">
     <header className="devmail-bar">
       <span className="devmail-logo">"✉  Dev mailbox"</span>
-      <span className="devmail-count">(string_of_int (Array.length !mails) ^ " captured")</span>
+      <span className="devmail-count">{string_of_int (Array.length !mails) ^ " captured"}</span>
     </header>
-    (if not !ready then <p className="devmail-status">"Connecting to /ddp…"</p>
+    (if not !ready then <p className="devmail-status">Connecting to /ddp…</p>
      else if Array.length !mails = 0 then
        <p className="devmail-status">
-         "No mail captured yet. Trigger a send — sign-up, password reset, … — and it shows up here live."
+         No mail captured yet. Trigger a send — sign-up, password reset, … — and it shows up here live.
        </p>
      else
        <div className="devmail-grid">
@@ -58,20 +58,20 @@ let make () =
            (each (Array.to_list !mails) (fun m ->
               <li className=(if !selected = m.id then "mrow mrow-on" else "mrow")
                   onClick=(set selected m.id)>
-                <div className="mrow-subj">(subj m)</div>
-                <div className="mrow-meta">(m.recipients ^ "  ·  " ^ m.received)</div>
+                <div className="mrow-subj">{subj m}</div>
+                <div className="mrow-meta">{m.recipients ^ "  ·  " ^ m.received}</div>
               </li>))
          </ul>
          <section className="devmail-view">
            (match Array.find_opt (fun m -> m.id = !selected) !mails with
-            | None -> <p className="devmail-hint">"Select a message to read it."</p>
+            | None -> <p className="devmail-hint">Select a message to read it.</p>
             | Some m ->
               <article>
                 <table className="msg-head"><tbody>
-                  <tr><th>"From"</th><td>(m.sender)</td></tr>
-                  <tr><th>"To"</th><td>(m.recipients)</td></tr>
-                  <tr><th>"Subject"</th><td>(subj m)</td></tr>
-                  <tr><th>"Date"</th><td>(m.received)</td></tr>
+                  <tr><th>From</th><td>{m.sender}</td></tr>
+                  <tr><th>To</th><td>{m.recipients}</td></tr>
+                  <tr><th>Subject</th><td>{subj m}</td></tr>
+                  <tr><th>Date</th><td>{m.received}</td></tr>
                 </tbody></table>
                 (* the typed <iframe> has no srcdoc/sandbox — drop to the raw [h]/[attr] builder. sandbox=""
                    is the maximally-restricted iframe (scripts + same-origin off): the email's own HTML/CSS
@@ -81,7 +81,7 @@ let make () =
                      [ attr "class" "msg-html"; attr "sandbox" ""; attr "srcdoc" m.html;
                        attr "title" "message html body" ]
                      []
-                 else <pre className="msg-text">(m.text)</pre>)
+                 else <pre className="msg-text">{m.text}</pre>)
               </article>)
          </section>
        </div>)

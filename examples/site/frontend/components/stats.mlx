@@ -4,4 +4,4 @@
 .stats { margin: .6rem 0; color: #555; font-size: .9em }
 |scss}]
 
-let view = <div className="stats">"todos in store: "(List.length !Store.todos)</div>
+let view = <div className="stats">todos in store: {List.length !Store.todos}</div>

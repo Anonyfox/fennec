@@ -13,6 +13,6 @@ let mounted = signal false
 let () = on_mount (fun () -> set mounted true)
 let view =
   <div className="browser-box">
-    <p className="bdata">(Data.value b)</p>
-    <p className="mounted">(if !mounted then "mounted ✓" else "not mounted (ssr)")</p>
+    <p className="bdata">{Data.value b}</p>
+    <p className="mounted">{if !mounted then "mounted ✓" else "not mounted (ssr)"}</p>
   </div>

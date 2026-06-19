@@ -20,14 +20,14 @@ let codec = Hello_form.codec
 
 let view (f : Form.ctx) =
   <main className="page">
-    <h1>"Say hello"</h1>
-    (Form.flash f)
+    <h1>Say hello</h1>
+    {Form.flash f}
     <form method_="post" action="">
-      (Form.csrf f)
+      {Form.csrf f}
       <input type_="text" name="name" attrs=(Form.input_attrs Hello_form.Fields.name)
              value=(Form.value f "name") placeholder="Your name" />
-      (Form.error f "name")
-      <button type_="submit">"Greet"</button>
+      {Form.error f "name"}
+      <button type_="submit">Greet</button>
     </form>
   </main>
 

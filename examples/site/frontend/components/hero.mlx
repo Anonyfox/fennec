@@ -11,7 +11,7 @@
    setup here (no signals/state), so the whole [make] is one function returning JSX. *)
 let make ~title ~subtitle () =
   <section className="hero">
-    <h1 className="hero-title">(title)</h1>
-    <p className="hero-subtitle">(subtitle)</p>
-    <a className="hero-cta" href="/about">"Learn more"</a>
+    <h1 className="hero-title">{title}</h1>
+    <p className="hero-subtitle">{subtitle}</p>
+    <a className="hero-cta" href="/about">Learn more</a>
   </section>

@@ -4,10 +4,10 @@
 let () = Head.title "Products — Fennec Site"
 let view =
   <main className="page">
-    <h1>"Products"</h1>
+    <h1>Products</h1>
     <ul className="plinks">
-      <li><a className="p7" href=(Paths.products_id ~id:"7")>"Product 7"</a></li>
-      <li><a className="p9" href=(Paths.products_id ~id:"9")>"Product 9"</a></li>
+      <li><a className="p7" href={Paths.products_id ~id:"7"}>Product 7</a></li>
+      <li><a className="p9" href={Paths.products_id ~id:"9"}>Product 9</a></li>
     </ul>
     <Stats />
     <Todo_list />
