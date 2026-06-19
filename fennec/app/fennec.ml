@@ -73,6 +73,34 @@ let both (f : unit -> 'a) (g : unit -> 'b) : 'a * 'b =
   Eio.Fiber.both (fun () -> a := Some (f ())) (fun () -> b := Some (g ()));
   (Option.get !a, Option.get !b)
 
+(* ── CO-LOCATED data: auto-mount the refetch routes ────────────────────────────────────────────
+   A component that declares [Fur.Data.local key ~fallback (Server_only.fn fetch)] registers [fetch] in
+   the [Fur.Data] process registry. The SSR driver already drains that registry for the fast-render SEED
+   (Fur_ssr.handler chains it). The OTHER half of the old three-place split is the HTTP refetch route —
+   and THIS is where it gets mounted, with zero server.ml wiring: [serve] prepends ONE paw per endpoint
+   that, on a GET, looks up the request path in the registry and answers with the SAME bytes the seed
+   carries (text/plain for a string [local], application/json for a typed [model_local]); any other path
+   it DECLINES (falls through to the app's own routes / SSR). Prepended (not appended) so a data path is
+   matched BEFORE an SSR app's catch-all would render it as a page.
+
+   The lookup is DYNAMIC (per request) by design: a co-located resource registers when its component's
+   SETUP first runs — i.e. on the FIRST SSR render of any page that mounts it. In the real lifecycle the
+   page is server-rendered (registering the source) strictly before the client bundle can refetch, so the
+   route is always live by the time a refetch arrives. A direct API hit before ANY page render of that
+   component sees a 404 until the first render registers it — the one ordering caveat, not a concern for
+   the page→hydrate→refetch flow. Mounted on EVERY endpoint, exactly as a Pulse publication is
+   server-wide. With no co-located resources the registry is empty and this paw always declines (no-op). *)
+let data_route_paw : Paw.t =
+ fun c ->
+  match Conn.meth c with
+  | Http.GET -> (
+    match Fur.Data.local_source (Conn.path c) with
+    | Some src ->
+      let body = Fur.Data.src_produce src in
+      if Fur.Data.src_is_json src then Paw.json body c else Paw.text body c
+    | None -> c (* decline: not a co-located data path *))
+  | _ -> c
+
 (* A web root for an app: dev reads the assembled webroot/ dir next to the exe
    (the per-app dune assembly), prod serves the embedded map. [name] disambiguates
    per-app dev webroots ("webroot_web", "webroot_admin"). *)
@@ -144,6 +172,13 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error
   let endpoints =
     List.map (fun e -> Endpoint.prepend (Accounts.native_paw ()) e) endpoints
   in
+  (* auto-mount the co-located data refetch routes (Fur.Data.local / model_local) on every endpoint:
+     one paw that, per request, answers any registered data path from the process registry — no
+     server.ml route wiring. Prepended so a data path is matched before an SSR app's catch-all. The
+     registry is warmed at boot below; an empty registry ⇒ the paw always declines (no-op). *)
+  let endpoints =
+    List.map (fun e -> Endpoint.prepend data_route_paw e) endpoints
+  in
   let endpoints =
     if livereload_on then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints
     else endpoints
@@ -170,6 +205,12 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error
      request. Opt-in is preserved: no MONGO_URL ⇒ the no-op store, and a request with no session cookie
      resolves to [user_id = None] without touching the database. *)
   Accounts.boot ();
+  (* warm the co-located data registry: render each recorded SSR app once (throwaway) so every
+     component's [Fur.Data.local] fetcher registers NOW — before the first request. This makes the
+     auto-mounted refetch routes ([data_route_paw]) deterministic from boot (no 404 on a direct API hit
+     before any page render). Runs after the data layer is up (a component's setup may subscribe). With
+     no Fur SSR app (or no co-located resource) this is a cheap no-op. *)
+  Fur_ssr.warm_data ();
   (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
      clean up after) we'd otherwise keep the port and make the next `fennec dev` fail to bind.
      The supervisor (our direct parent) passes its pid as FENNEC_DEV_PARENT; we exit the moment

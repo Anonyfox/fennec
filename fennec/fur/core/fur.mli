@@ -398,15 +398,26 @@ module Data : sig
 
   (** {3 The registry the framework drains (not userland)} *)
 
+  (** One registered co-located source: an opaque handle the framework's route mounter + SSR source
+      read through {!src_produce} / {!src_is_json}. *)
+  type local_src
+
+  (** Run a source's inline fetcher and return its bytes (the seed value / the route body). *)
+  val src_produce : local_src -> string
+
+  (** [true] when the source's bytes are JSON ({!model_local}) — the auto-mounted route serves
+      [application/json]; [false] is the plain-string {!local}, served [text/plain]. *)
+  val src_is_json : local_src -> bool
+
   (** Derive the served path from a name + optional [~path] (the rule {!local}/{!model_local} use). *)
   val local_path : ?path:string -> string -> string
 
-  (** All registered co-located sources as [(path, produce)] pairs: each is one auto-mounted refetch
-      route AND one SSR seed source. {!Fennec.serve} and the SSR driver drain this at boot. *)
-  val local_sources : unit -> (string * (unit -> string)) list
+  (** All registered co-located sources as [(path, src)] pairs: each is one auto-mounted refetch route
+      AND one SSR seed source. {!Fennec.serve} and the SSR driver drain this at boot. *)
+  val local_sources : unit -> (string * local_src) list
 
-  (** The producer registered for a path, if any — the SSR driver's in-process source consults this. *)
-  val local_source : string -> (unit -> string) option
+  (** The source registered for a path, if any — the SSR driver's in-process source consults this. *)
+  val local_source : string -> local_src option
 
   (** The current resolved value of a resource (the fallback while loading). *)
   val value : 'a t -> 'a

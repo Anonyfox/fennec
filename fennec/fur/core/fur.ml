@@ -512,12 +512,17 @@ module Data = struct
     let run (Fetch f : 'a t) : 'a = f ()
   end
 
-  (* the process registry: path -> a producer that runs the inline fetcher and yields its JSON string.
-     Server-only in effect (the producer closes over the {!Server_only.fn} thunk); on the client every
-     [local]/[model_local] lowers to a stripped [string]/[model], so nothing is registered there. A
-     [Hashtbl] keyed by path is idempotent under a re-declared key (last registration wins — module init
-     runs once per process anyway). *)
-  let _local_sources : (string, unit -> string) Hashtbl.t = Hashtbl.create 16
+  (* one registered co-located source: how to produce its bytes + whether they are JSON (so the
+     auto-mounted route picks the content-type — application/json for {!model_local}, text/plain for the
+     string {!local}). [produce] runs the inline {!Server_only.fn} fetcher; the SSR seed source and the
+     refetch route both call it. *)
+  type local_src = { produce : unit -> string; json : bool }
+
+  (* the process registry: path -> source. Server-only in effect (the producer closes over the
+     {!Server_only.fn} thunk); on the client every [local]/[model_local] lowers to a stripped
+     [string]/[model], so nothing is registered there. A [Hashtbl] keyed by path is idempotent under a
+     re-declared key (last registration wins — module init runs once per process anyway). *)
+  let _local_sources : (string, local_src) Hashtbl.t = Hashtbl.create 16
 
   (* derive the served path from a bare name: ["greeting"] -> ["/api/greeting"]. An explicit [~path]
      (already absolute) is used verbatim, so a resource can sit anywhere. A name already starting with
@@ -528,14 +533,19 @@ module Data = struct
     | None -> if String.length name > 0 && name.[0] = '/' then name else "/api/" ^ name
 
   (* register a co-located source under [path] (server side). Idempotent per path. *)
-  let register_local ~path (produce : unit -> string) = Hashtbl.replace _local_sources path produce
+  let register_local ~path ~json (produce : unit -> string) =
+    Hashtbl.replace _local_sources path { produce; json }
 
   (* the framework drains these at boot ({!Fennec.serve} / the SSR driver): each entry is one
      auto-mounted refetch route AND one SSR seed source, both keyed by the path. *)
-  let local_sources () = Hashtbl.fold (fun path produce acc -> (path, produce) :: acc) _local_sources []
+  let local_sources () = Hashtbl.fold (fun path src acc -> (path, src) :: acc) _local_sources []
 
-  (* look up the producer for a path (the SSR driver's in-process source consults this first). *)
+  (* look up a source by path (the SSR driver's in-process source consults this first). *)
   let local_source path = Hashtbl.find_opt _local_sources path
+
+  (* accessors over an opaque {!local_src} (the registry value), for the framework's route mounter *)
+  let src_produce (s : local_src) = s.produce ()
+  let src_is_json (s : local_src) = s.json
 
   (* [local name ?path ~fallback fetch] — a STRING resource whose SERVER fetcher [fetch] is declared
      INLINE. The path is [~path] or ["/api/" ^ name]; the resource reads the SSR seed + refetches that
@@ -543,7 +553,7 @@ module Data = struct
      so server.ml needs no [api_source] arm and no [Paw.get]. On the client the ppx strips [fetch]. *)
   let local name ?path ~(fallback : string) (fetch : string Server_only.t) : string t =
     let path = local_path ?path name in
-    register_local ~path (fun () -> Server_only.run fetch);
+    register_local ~path ~json:false (fun () -> Server_only.run fetch);
     string path ~fallback ()
 
   (* [model_local codec name ?path ~fallback fetch] — the TYPED twin of {!local}: the inline server
@@ -552,7 +562,7 @@ module Data = struct
      drives the registered SSR seed AND the mounted route, so wire shape = model shape on both surfaces. *)
   let model_local codec name ?path ~(fallback : 'a) (fetch : 'a Server_only.t) : 'a t =
     let path = local_path ?path name in
-    register_local ~path (fun () -> Sift.encode_json codec (Server_only.run fetch));
+    register_local ~path ~json:true (fun () -> Sift.encode_json codec (Server_only.run fetch));
     model codec path ~fallback ()
 
   (* reactive readers (each subscribes via get) *)
@@ -1256,9 +1266,10 @@ let%test_unit "Data.local registers a producer that runs the inline fetcher (ser
   Fennec_hunt_unit.check "value starts at fallback (no seed/source yet)" (Data.value r = "…");
   (* registration happened under the derived path, and the producer runs the fetcher lazily *)
   (match Data.local_source "/api/greet_test" with
-   | Some produce ->
-     Fennec_hunt_unit.check "producer runs the fetcher" (produce () = "hi from server");
-     Fennec_hunt_unit.check "fetcher actually invoked" (!calls = 1)
+   | Some src ->
+     Fennec_hunt_unit.check "producer runs the fetcher" (Data.src_produce src = "hi from server");
+     Fennec_hunt_unit.check "fetcher actually invoked" (!calls = 1);
+     Fennec_hunt_unit.check "string source is served as text (not json)" (not (Data.src_is_json src))
    | None -> Fennec_hunt_unit.check "producer registered" false)
 
 let%test_unit "Data.model_local encodes the typed value through the codec for the seed/route" =
@@ -1268,13 +1279,14 @@ let%test_unit "Data.model_local encodes the typed value through the codec for th
   in
   Fennec_hunt_unit.check "typed value falls back until seeded" (Data.value r = model_demo_fallback);
   match Data.local_source "/api/demo_local" with
-  | Some produce ->
+  | Some src ->
     (* the producer emits EXACTLY what Sift.encode_json would — the same bytes the route + seed carry *)
     let expected = Sift.encode_json model_demo_codec { who = "Ada"; count = 7 } in
-    Fennec_hunt_unit.check "producer encodes via the codec" (produce () = expected);
+    Fennec_hunt_unit.check "producer encodes via the codec" (Data.src_produce src = expected);
+    Fennec_hunt_unit.check "typed source is served as json" (Data.src_is_json src);
     (* and the typed resource decodes that very payload back through the seed *)
     Data.clear_seed ();
-    Data.put_seed "/api/demo_local" (produce ());
+    Data.put_seed "/api/demo_local" (Data.src_produce src);
     let r2 = Data.model_local model_demo_codec "demo_local" ~fallback:model_demo_fallback (Data.Server_only.fn (fun () -> model_demo_fallback)) in
     let v = Data.value r2 in
     Fennec_hunt_unit.check "seed decodes back to the typed value" (v.who = "Ada" && v.count = 7);
@@ -1283,7 +1295,7 @@ let%test_unit "Data.model_local encodes the typed value through the codec for th
 
 let%test_unit "Data.local_sources lists registered co-located sources for the framework to drain" =
   ignore (Data.local "drain_test" ~fallback:"f" (Data.Server_only.fn (fun () -> "v")));
-  let found = List.exists (fun (p, produce) -> p = "/api/drain_test" && produce () = "v") (Data.local_sources ()) in
+  let found = List.exists (fun (p, src) -> p = "/api/drain_test" && Data.src_produce src = "v") (Data.local_sources ()) in
   Fennec_hunt_unit.check "registered source appears in local_sources" found
 
 let%test_unit "to_script assigns global" =
