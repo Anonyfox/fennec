@@ -135,6 +135,44 @@ let mapper = object
     in
     if !in_mlx && is_bang_get e then bang_get ~loc:e.pexp_loc e else e
 end
+
+(* ---- CO-LOCATED data: strip the inline SERVER fetcher from the CLIENT (jsoo) build ----
+   A component declares its server fetcher inline as [Data.local key ~fallback (Server_only.fn body)]
+   (or [Data.model_local] / [Data.Server_only.fn] / [Fur.Data.Server_only.fn]). The fetcher BODY is
+   server-only — it may read secrets, hit the DB, call [compute_*]. Components compile ONCE into a
+   shared lib that is ALSO linked into the jsoo bundle, so to keep server logic out of the bundle the
+   CLIENT build of that lib runs with [-data-client], and this pass replaces every [Server_only.fn body]
+   with [Server_only.client_inert] — dropping [body] (and everything it references) from the client AST
+   entirely. It is the component mirror of a handler's [-conn-client] stripping [load]: the only
+   thing that crosses to the client is the resource's key/path; the value's computation never does.
+
+   We key on the CONSTRUCTOR path [Server_only.fn] (any prefix: bare / [Data.] / [Fur.Data.]), not on
+   the surrounding [Data.local] call — robust to [~path], the typed twin, and aliasing. The replacement
+   keeps the SAME prefix so the inert constructor resolves under whatever open the file uses. *)
+let data_client = ref false
+let () = Driver.add_arg "-data-client" (Stdlib.Arg.Set data_client)
+    ~doc:"strip inline Data.local/model_local server fetchers (the client/jsoo build of a component lib)"
+
+(* is this longident a [Server_only.fn] reference (any module prefix: bare / [Data.] / [Fur.Data.])? *)
+let is_server_only_fn (lid : Longident.t) : bool =
+  match lid with
+  | Ldot (Ldot (_, "Server_only"), "fn") | Ldot (Lident "Server_only", "fn") -> true
+  | _ -> false
+
+let strip_server_only = object
+  inherit Ast_traverse.map as super
+  method! expression e =
+    let e = super#expression e in
+    match e.pexp_desc with
+    | Pexp_apply (({ pexp_desc = Pexp_ident { txt; _ }; _ } as fn), [ (Nolabel, _body) ]) when is_server_only_fn txt ->
+      (* keep [Server_only.fn] (it is the public constructor, abstract [t]) but DROP its server body:
+         replace the argument with an inert thunk. The original closure — and everything it references
+         ([compute_*], secrets, DB calls) — is no longer in the client AST, so jsoo never links it. The
+         placeholder is never invoked client-side (the client installs no source that runs it). *)
+      let loc = e.pexp_loc in
+      { e with pexp_desc = Pexp_apply (fn, [ (Nolabel, [%expr fun () -> failwith "Server_only.fn: stripped from the client build"]) ]) }
+    | _ -> e
+end
 (* ---- THE component shape: ONE function body, no manual render thunk ----
 
    A Fur component is, at the runtime level, a SETUP thunk that returns a RENDER thunk
@@ -521,6 +559,10 @@ let impl str =
   else if !handler_mode && List.exists (item_defines "submit") str then
     Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks (desugar_form_handler str)))
   else
+    (* the CLIENT (jsoo) build of a component lib (-data-client): strip the inline server fetcher body
+       from every [Data.local]/[model_local] so no server logic reaches the bundle (the component mirror
+       of a handler's [load] strip). The server build leaves it untouched. *)
+    let str = if !data_client then strip_server_only#structure str else str in
     Fennec_hunt_ppx_rules.expand_doctests (componentize (inject_params (mapper#structure (desugar_blocks str))))
 (* register the MLX transform (whole-structure) + the inline test rules (context-free) in
    ONE driver, so a library using (pps fennec.fur.ppx) pays ONE ppx process for both *)

@@ -1,0 +1,44 @@
+; The -data-client STRIP proof: the SAME probe.mlx compiled TWO ways.
+;   server (plain fennec.fur.ppx)         — keeps the inline Server_only.fn body, so the unique token
+;                                            FENNEC_STRIP_PROBE_7Q is embedded in the binary.
+;   client (fennec.fur.ppx -data-client)  — strips the fetcher body, so the token is ABSENT.
+; A native exe embeds its string literals (exactly check_lean's mechanism), so grepping each built
+; binary for the token proves the strip — no jsoo needed. The client lib lives in a subdir via
+; copy_files#, mirroring how site_handlers_client is the -conn-client mirror of site_handlers.
+
+(library
+ (name strip_server)
+ (modules probe)
+ (libraries fennec.fur fennec.fur.html fennec.pulse.sift)
+ (preprocess
+  (pps fennec.fur.ppx))
+ (flags
+  (:standard -w -a -open Fur)))
+
+(subdir
+ client
+ (copy_files#
+  (files ../probe.mlx))
+ (library
+  (name strip_client)
+  (modules probe)
+  (libraries fennec.fur fennec.fur.html fennec.pulse.sift)
+  (preprocess
+   (pps fennec.fur.ppx -data-client))
+  (flags
+   (:standard -w -a -open Fur))))
+
+; the proof runner: force-references both libs (so both probe modules link), reads its own binary,
+; and asserts the token survives the server module but not the client one.
+(executable
+ (name run_strip)
+ (modules run_strip)
+ (libraries strip_server strip_client)
+ (flags
+  (:standard -w -a)))
+
+(rule
+ (alias runtest)
+ (deps run_strip.exe)
+ (action
+  (run %{exe:run_strip.exe} %{dep:run_strip.exe})))

@@ -510,10 +510,6 @@ module Data = struct
 
     let fn (f : unit -> 'a) : 'a t = Fetch f
     let run (Fetch f : 'a t) : 'a = f ()
-
-    (* the client placeholder the ppx swaps the body for — never invoked (the client has no source to run
-       it), so it only needs to typecheck and be inert. *)
-    let client_inert : 'a t = Fetch (fun () -> failwith "Server_only.fn: stripped from the client build")
   end
 
   (* the process registry: path -> a producer that runs the inline fetcher and yields its JSON string.

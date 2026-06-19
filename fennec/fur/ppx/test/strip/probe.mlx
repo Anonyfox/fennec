@@ -1,0 +1,13 @@
+(* A co-located-data fixture compiled BOTH ways to prove the -data-client strip. The inline server
+   fetcher body holds a UNIQUE token (FENNEC_STRIP_PROBE_7Q): it must survive the SERVER build (the
+   producer can return it) and be ABSENT from the -data-client (jsoo) build (stripped from the AST). *)
+let g =
+  Data.local "probe" ~fallback:"…"
+    (Data.Server_only.fn (fun () -> "FENNEC_STRIP_PROBE_7Q" ^ string_of_int (String.length "x")))
+
+(* a typed twin too, to prove model_local strips the same way *)
+let card =
+  Data.model_local Sift.(seal (record (fun s -> s) |> field (req "s" string) (fun s -> s))) "probe2"
+    ~fallback:"f" (Data.Server_only.fn (fun () -> "FENNEC_STRIP_PROBE_TYPED_9Z"))
+
+let view = <p>(Data.value g)</p>
