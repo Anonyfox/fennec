@@ -144,9 +144,15 @@ let () =
   t ~name:"whitespace-only between elements is dropped (newlines re-emitted)"
     "let v =\n  <div>\n    <p>(a)</p>\n    <p>(b)</p>\n  </div>"
     "let v =\n  <div>\n    <p>(a)</p>\n    <p>(b)</p>\n  </div>";
-  t ~name:"single inline space between elements is preserved"
-    "let v = <div><a/> <b/></div>"
-    ("let v = <div><a/>" ^ q ^ " " ^ q ^ "<b/></div>");
+  (* mlx makes NO whitespace child — `<a/> <b/>` lexes to [a; b], the space is a mere token
+     separator. So the pre-pass leaves the inter-element space VERBATIM (mlx then drops it), never
+     quoting it into a `" "` child. *)
+  id ~name:"inter-element whitespace is left verbatim (mlx drops it, no space child)"
+    "let v = <div><a/> <b/></div>";
+  id ~name:"inter-element whitespace before a comment is left verbatim"
+    "let v = <span>(a)   (* trailing trivia *)</span>";
+  id ~name:"comment between children is trivia (no stray text child)"
+    ("let v = <span>" ^ q ^ "x" ^ q ^ "  (* c *)  " ^ q ^ "y" ^ q ^ "</span>");
 
   (* RECURSION — JSX nested inside a (…) / {…} escape gets the SAME bare-text treatment, to any depth.
      This is the common real shape: a list/conditional escape whose body is JSX with bare children. *)

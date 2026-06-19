@@ -246,7 +246,16 @@ let strip_trailing_blanks s =
   while !j > 0 && is_hblank s.[!j - 1] do decr j done;
   String.sub s 0 !j
 
+let is_ws c = is_hblank c || c = '\n' || c = '\r'
+
 let collapse_text text =
+  (* A run with NO non-whitespace char is pure inter-child trivia — and mlx makes NO whitespace child
+     (its lexer treats blanks/newlines purely as token separators, even a single space between two
+     elements: `<a/> <b/>` lexes to [a; b], never [a; " "; b]). So drop it (the caller re-emits the
+     bytes verbatim, which mlx then skips — preserving source positions). This also covers the blank
+     line between elements. Only a run with real text survives the Babel collapse below. *)
+  if String.for_all is_ws text then None
+  else
   (* split on \n, tolerating a \r before it (CRLF) *)
   let raw_lines = String.split_on_char '\n' text in
   let lines = List.map (fun l ->
