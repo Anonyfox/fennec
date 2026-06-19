@@ -33,10 +33,29 @@ let () =
   check "nav: home link" (has nav "href=\"/\"");
   check "nav: about label" (has nav "About");
 
-  (* data: with no SSR source set, Data renders the fallback + loading + refetch button *)
+  (* CO-LOCATED data (Data.local): with no SSR source set, Greeting renders the fallback + loading +
+     refetch button — exactly like the old Data.string form (the migration kept the client behaviour). *)
+  Fur.Data.clear_seed ();
   let greeting = render (Greeting.make ()) in
   check "greeting: fallback shown" (has greeting "…");
   check "greeting: refetch button" (has greeting "id=\"refetch\"");
+
+  (* PROOF #1 — the co-located SSR seed: declaring Greeting REGISTERED its inline server fetcher under
+     /api/greeting (no server.ml api_source arm). The SSR driver runs that registered source between
+     render passes; here we replay exactly that — fetch the registered producer, seed it, re-render — and
+     the value appears with NO loading flash (the "(ready)" frame, not "(loading)"). This is the seed half
+     of the kill: the value reached SSR straight from the component's inline declaration. *)
+  (match Fur.Data.local_source "/api/greeting" with
+   | Some src ->
+     check "greeting (Data.local): producer registered under the derived path" true;
+     check "greeting (Data.local): producer is text (not json)" (not (Fur.Data.src_is_json src));
+     Fur.Data.clear_seed ();
+     Fur.Data.put_seed "/api/greeting" (Fur.Data.src_produce src);   (* what the SSR driver seeds *)
+     let seeded = render (Greeting.make ()) in
+     check "greeting (Data.local): SSR seed shows the server value (no loading flash)"
+       (has seeded "Hello from the server" && has seeded "(ready)" && not (has seeded "(loading)"));
+     Fur.Data.clear_seed ()
+   | None -> check "greeting (Data.local): producer registered under /api/greeting" false);
 
   (* TYPED resource (Data.model): seed exactly what the server's Sift.encode_json emits, then render —
      the card decodes the seed through Site_info.codec and shows the TYPED fields (name/tagline/stars),

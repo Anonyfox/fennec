@@ -22,4 +22,12 @@ let%http "site api (http)" = fun () ->
      Sift.encode_json Site_info.codec produced — the typed field shape the client decodes back *)
   check "typed resource endpoint: Sift.encode_json shape over the codec" (fun () ->
     get "/api/site-info"
-      ~expect:[ status 200; is_json; json_path_is "name" "Fennec"; json_path_is "stars" "1280" ])
+      ~expect:[ status 200; is_json; json_path_is "name" "Fennec"; json_path_is "stars" "1280" ]);
+
+  (* PROOF #2/#3 — the CO-LOCATED resource's AUTO-MOUNTED route. /api/greeting has NO server.ml route:
+     it is mounted by the framework from greeting.mlx's [Data.local] declaration (path derived from the
+     name). The client's refetch hits this very path (the resource key = /api/greeting), so this same
+     request IS the refetch round-trip. It serves the inline fetcher's value as text/plain — proving the
+     auto-mount works cold (the boot warm-up registered it before the first request). *)
+  check "co-located Data.local: auto-mounted /api/greeting serves the inline fetcher's value" (fun () ->
+    get "/api/greeting" ~expect:[ status 200; body_contains "Hello from the server" ])

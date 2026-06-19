@@ -1,0 +1,13 @@
+; PROOF #5 — a Server_only secret in a Data.local fetcher is a COMPILE error (leak-proof by type, like a
+; handler's Server_only). leak.ml attempts to leak the wrapped secret; merlin/ocaml must REJECT it. We
+; assert that by type-checking the file under (with-accepted-exit-codes (not 0)): the rule SUCCEEDS only
+; when the compile FAILS. A green build of leak.ml would be the regression that fails this test.
+(rule
+ (alias runtest)
+ (deps
+  leak.ml
+  (package fennec))
+ (action
+  (with-accepted-exit-codes
+   (not 0)
+   (run %{bin:ocamlfind} ocamlc -package fennec.fur -c %{dep:leak.ml} -o leak.cmo))))
