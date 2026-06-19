@@ -481,4 +481,11 @@ module Reconcile : functor (B : BACKEND) -> sig
   (** [mount_root node render] — attach a reactive render loop at [node]. [render] is called
       once; its result is re-evaluated on signal changes and diffed against the previous tree. *)
   val mount_root : B.node -> (unit -> vnode) -> unit
+
+  (** Like {!mount_root}, but returns a disposer. Calling it stops the root render effect (so a
+      later signal write never re-renders this tree) and unmounts the whole tree — running every
+      mounted component's {!on_cleanup} callbacks and disposing its nested {!watch}/effect
+      subscriptions. Idempotent. Use when an embedder owns a sub-tree's lifetime and must tear it
+      down deterministically; {!mount_root} is this with the handle dropped. *)
+  val mount_root_disposable : B.node -> (unit -> vnode) -> (unit -> unit)
 end

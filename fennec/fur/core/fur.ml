@@ -43,16 +43,6 @@ let is_browser = ref false
    Head.use/Router stay identical; only WHERE their backing store lives changes.
    Every such global below is tagged `IMPORTANT: per-request state`. *)
 
-(* on_mount: a browser-only side effect (à la Vue's onMounted / React useEffect[]).
-   Registered during setup, run once AFTER the initial client render adopts the SSR
-   DOM. A no-op on the server, so SSR never executes browser-only handlers. *)
-let mount_queue : (unit -> unit) list ref = ref []
-let on_mount f = if !is_browser then mount_queue := f :: !mount_queue
-let flush_mounts () =
-  let q = List.rev !mount_queue in
-  mount_queue := [];
-  List.iter (fun f -> f ()) q
-
 (* Effect scope: cleanups registered during a component's setup/first render are
    tied to THAT instance and run on its unmount. The DOM runtime points
    [current_cleanups] at the mounting instance's accumulator (save/restore per
@@ -61,6 +51,29 @@ let flush_mounts () =
    server (SSR never unmounts). *)
 let current_cleanups : (unit -> unit) list ref ref = ref (ref [])
 let on_cleanup f = let r = !current_cleanups in r := f :: !r
+
+(* on_mount: a browser-only side effect (à la Vue's onMounted / React useEffect[]).
+   Registered during setup, run once AFTER the initial client render adopts the SSR
+   DOM. A no-op on the server, so SSR never executes browser-only handlers.
+
+   OWNER SCOPE: each queued callback captures the cleanups ref of the component that
+   registered it (= [!current_cleanups] at registration, which [instantiate] has
+   pointed at the owning instance). [flush_mounts] rebinds [current_cleanups] to that
+   ref while running the callback, so a [watch]/subscription started inside on_mount —
+   the documented place to subscribe — registers its disposer on the OWNING component
+   and is torn down on its unmount. Without the pairing the disposer would land on
+   whatever scope happened to be current at flush time (the root) and leak for the
+   page's life; over list/row churn that is unbounded. *)
+let mount_queue : ((unit -> unit) list ref * (unit -> unit)) list ref = ref []
+let on_mount f = if !is_browser then mount_queue := (!current_cleanups, f) :: !mount_queue
+let flush_mounts () =
+  let q = List.rev !mount_queue in
+  mount_queue := [];
+  let saved = !current_cleanups in
+  List.iter (fun (owner, f) ->
+      current_cleanups := owner;
+      Fun.protect ~finally:(fun () -> current_cleanups := saved) f)
+    q
 
 (* reactive side-effect (à la Solid createEffect / MobX autorun): runs now, re-runs
    when a signal it read changes, auto-disposed on the owning component's unmount.
@@ -717,8 +730,13 @@ module Reconcile (B : BACKEND) = struct
     List.iter (fun m -> match key_of_m m with Some k when not (Hashtbl.mem used k) -> unmount m; B.remove parent (mnode m) | _ -> ()) olds;
     result
 
-  (* hydrate or render under [container]: first run adopts the SSR root, later runs diff *)
-  let mount_root container (render : unit -> vnode) =
+  (* hydrate or render under [container]: first run adopts the SSR root, later runs diff.
+     Returns a disposer that stops the root render effect (so it never re-runs on a later
+     signal write) AND unmounts the whole tree — running every component's cleanups + the
+     nested effect disposals. Idempotent. [mount_root] is this with the handle dropped, so
+     its public type is unchanged; an embedder that owns a sub-tree's lifetime calls
+     [mount_root_disposable] and disposes on teardown. *)
+  let mount_root_disposable container (render : unit -> vnode) =
     let mounted = ref None in
     let eff = { run = (fun () ->
         let vnode = render () in
@@ -728,7 +746,12 @@ module Reconcile (B : BACKEND) = struct
             | None -> let m = create vnode in B.append container (mnode m); mounted := Some m)
         | Some m -> mounted := Some (reconcile ~parent:container m vnode));
        deps = [] } in
-    run_effect eff
+    run_effect eff;
+    fun () ->
+      dispose eff;
+      (match !mounted with Some m -> unmount m | None -> ());
+      mounted := None
+  let mount_root container render = ignore (mount_root_disposable container render)
 end
 
 (* ──── signals ──── *)
@@ -1090,6 +1113,49 @@ let%test_unit "attr patched in place" =
   set t_ "b";
   Fennec_hunt_unit.check_eq "attr patched in place"
     ~expected:"b" ~got:(Option.value ~default:"" (List.assoc_opt "data-x" (List.hd r2.Fake.kids).Fake.attrs))
+
+(* on_mount OWNER SCOPE (the leak regression): a [watch] started inside on_mount — the documented
+   place to subscribe — must register its disposer on the OWNING component, so it is torn down on
+   that component's unmount, not leaked for the page's life. We mount a comp whose on_mount watches
+   a shared signal, flush mounts, then unmount the root: the signal's subscriber count must return to
+   baseline. Pre-fix, flush_mounts ran the callback under the root cleanups, so the watch's disposer
+   landed on the root and the subscription survived the comp's unmount. *)
+let%test "on_mount watch is scoped to its component and disposes on unmount" =
+  let saved_browser = !is_browser in
+  is_browser := true;
+  let s = signal 0 in
+  let base = List.length s.subs in
+  let comp_v = comp ~cid:"mounter" (fun () ->
+      on_mount (fun () -> ignore (watch (fun () -> ignore (get s))));
+      fun () -> text "x") in
+  let root = Fake.create_element "" in
+  let dispose_root = D.mount_root_disposable root (fun () -> comp_v) in
+  flush_mounts ();
+  let after_mount = List.length s.subs in
+  dispose_root ();
+  let after_unmount = List.length s.subs in
+  is_browser := saved_browser;
+  after_mount = base + 1 && after_unmount = base
+
+(* …and no accumulation across many mount/unmount cycles (the unbounded-over-row-churn shape): each
+   cycle's watch must come and go, so the subscriber count is flat, not climbing by one per cycle. *)
+let%test "on_mount watch does not accumulate across N mount/unmount cycles" =
+  let saved_browser = !is_browser in
+  is_browser := true;
+  let s = signal 0 in
+  let base = List.length s.subs in
+  let cycle () =
+    let comp_v = comp ~cid:"mounter" (fun () ->
+        on_mount (fun () -> ignore (watch (fun () -> ignore (get s))));
+        fun () -> text "x") in
+    let root = Fake.create_element "" in
+    let dispose_root = D.mount_root_disposable root (fun () -> comp_v) in
+    flush_mounts ();
+    dispose_root ()
+  in
+  for _ = 1 to 50 do cycle () done;
+  is_browser := saved_browser;
+  List.length s.subs = base
 
 (* per-request Head isolation: each render context (a [Platform.with_data_context] binding — fiber-local
    on the concurrent server, the reset fallback outside Eio) gets its OWN Head registry, so one render's
