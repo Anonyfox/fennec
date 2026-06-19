@@ -1,0 +1,14 @@
+; The `fennec-mlx-pp` dialect preprocessor: runs the fennec pre-pass, pipes the result through the
+; real mlx-pp, and rewrites the embedded source filename back to the original .mlx path. Installed
+; with a public_name so the workspace dialect can invoke it by bare name (like mlx-pp from PATH).
+;
+; Depends on compiler-libs (Parsetree/Ast_mapper/Config) only to swap the filename in mlx-pp's binary
+; AST — a value-level rewrite, robust to marshalling layout. This is a BUILD tool, never linked into
+; the shipped framework runtime.
+
+(executable
+ (name fennec_mlx_pp)
+ (public_name fennec-mlx-pp)
+ (package fennec-cli)
+ (modules fennec_mlx_pp)
+ (libraries fennec_mlx_prepass unix compiler-libs.common))

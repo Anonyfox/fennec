@@ -19,13 +19,22 @@
 ; livereload, and Fennec.Fur — the isomorphic UI runtime (signals + SSR + jsoo
 ; hydration; no Melange, no React). The MLX dialect is declared here once so .mlx
 ; components compile in any package.
+;
+; The preprocessor is fennec-mlx-pp (NOT the bare mlx-pp): a fennec-owned PRE-PASS that turns the
+; fennec-flavoured .mlx surface — bare JSX text children + {expr} interpolation, JSX-identical — into
+; the quoted-text + (expr) form mlx-pp accepts, then pipes it through mlx-pp (which does the real
+; parse). It is byte-identical to plain mlx-pp on any file that does not use the new bare-text syntax
+; (the pre-pass is a no-op there), so it is a safe drop-in. See fennec/fur/prepass/.
+; Merlin keeps the stock `mlx` reader: it tolerates the (expr) escapes and most markup, and bare text
+; degrades to a local, recoverable parse error in-editor only — the dune BUILD always runs the
+; pre-pass, so compilation and type-checking are unaffected.
 (dialect
  (name mlx)
  (implementation
   (extension mlx)
   (merlin_reader mlx)
   (preprocess
-   (run mlx-pp %{input-file}))))
+   (run fennec-mlx-pp %{input-file}))))
 
 (package
  (name fennec)
