@@ -93,6 +93,85 @@ a fixed-slot badge that renders "Sign in" for SSR and "Hello, …" after hydrati
 (mounted in the web app's `layout.mlx`; its SSR `None`-frame is asserted in
 `examples/site/frontend_test/test_components.ml`).
 
+That is **Mode A** — a file-tree SPA page (`Paw.app (Fur_ssr.handler …)`), which is Conn-blind by
+design. There is a second mode for the pages a classical server-rendered, authenticated app is built
+from, and it makes the *opposite* trade.
+
+### Mode B — the personalized server handler (seeded, no snap)
+
+A **standalone handler** (`frontend/handlers/<name>.mlx`, mounted with `Paw.get "/path"
+Handler.serve`) is the other half of the story. Unlike a Mode-A page, its server entry point —
+`load : conn -> 'p outcome` — **has the Conn**. So it can read the request user *server-side*, render
+the page **already personalized**, and **seed exactly that payload**; the client then decodes the same
+seed and hydrates **byte-identical — no anonymous frame, no snap**. (`load` is server-only: the
+`-handler` ppx strips it from the jsoo bundle, so the Conn/Accounts code never reaches the client.)
+
+The contract, end to end:
+
+> **A Mode-B `load` reads the userId off the Conn, renders personalized server-side, and seeds the
+> payload — so the first paint is already the user's, and hydration is byte-identical.**
+
+Inside `load`, both `Accounts.user_id conn` and `Accounts.current_user (Accounts.current ()) conn`
+(*"a convenience for SSR/handlers"*) are in scope. The blessed protected-handler idiom is the
+`Handler.guard` combinator — `match Accounts.user_id conn with Some uid -> … | None -> redirect login`,
+named:
+
+```ocaml
+(* frontend/handlers/me.mlx — a personalized dashboard, authored as ONE .mlx *)
+module Email = struct
+  type t = { address : string; verified : bool } [@@deriving model]
+end
+
+(* the payload is EXACTLY the user-scoped data the page shows — this is what gets seeded + hydrated *)
+type t = { username : string; roles : string list; emails : Email.t list } [@@deriving model]
+
+(* SERVER ONLY (stripped from the client bundle). [guard] bounces anonymous requests to /login; past
+   it, load the record and seed the trimmed payload via [render]. *)
+let load conn =
+  guard conn ~user:Accounts.user_id ~login:"/login" @@ fun _uid ->
+  match Accounts.current_user (Accounts.current ()) conn with
+  | Ok (Some u) ->
+    let emails =
+      List.map (fun (e : Accounts.email) -> { Email.address = e.address; verified = e.verified }) u.emails
+    in
+    render
+      { username = Option.value u.username ~default:"(no username)";
+        roles = Accounts.Roles.role_names u.roles;
+        emails }
+  | Ok None | Error _ -> redirect "/login"
+
+(* ISOMORPHIC: payload -> vnode. SSRs on the server AND hydrates from the seed — sees only [t]. *)
+let view (p : t) = (* … render p.username / p.roles / p.emails … *)
+```
+
+`guard` (like `render` / `redirect`) is part of the handler runtime the `-handler` ppx opens inside
+`load`, so userland writes it bare. Its Conn type is abstract, so the caller passes the id extractor
+(`~user:Accounts.user_id`). On `Some uid` it runs the body, on `None` it `redirect`s to `login` — a
+server-side bounce *before* any personalized `render`.
+
+**Mode A vs Mode B — the decision.**
+
+| | **Mode A** — file-tree SPA page | **Mode B** — standalone handler |
+|---|---|---|
+| wired | `Paw.app (Fur_ssr.handler …)` | `Paw.get "/p" Handler.serve` |
+| SSR sees | no Conn (user-blind) | the **Conn** (the request user) |
+| first paint | anonymous, **cacheable** shell | **personalized**, authorized |
+| personalization | reactive **snap** on hydration | **seeded** in the payload, no snap |
+| use for | content / marketing / app-shells | dashboards / authed pages / classical SSR apps |
+
+The nuance that ties the two together: in Mode B, **put user-scoped data in the payload** — that is
+what is rendered personalized *and* seeded for byte-identical hydration; reactive subscriptions
+(`Fennec_accounts_client`, the `__currentUser` signal) remain the **Mode-A** post-hydration mechanism
+and stay the right tool for data that changes *live after* first paint. Pick Mode B when the page is
+private and must be correct on the first byte; pick Mode A when the shell is public and the
+personalization can fill in a beat later.
+
+A worked, runnable example is
+[`examples/site/frontend/handlers/me.mlx`](../../examples/site/frontend/handlers/me.mlx) (mounted at
+`/me` in `examples/site/server.ml`, alongside the `/login` + `/logout` routes that make it live; its
+personalized SSR frame is asserted next to the Mode-A one in
+`examples/site/frontend_test/test_components.ml`).
+
 ---
 
 ## The DX: one declarative config object
