@@ -712,6 +712,9 @@ module type BACKEND = sig
   val set_prop : node -> string -> string -> unit   (* value/checked as live property *)
   val get_prop : node -> string -> string
   val append : node -> node -> unit                 (* parent child *)
+  (* insert [child] before [ref] under [parent]; [ref = None] appends. The DOM insertBefore — the
+     minimal-move primitive keyed reconciliation needs to reorder without re-appending every node. *)
+  val insert_before : node -> node -> node option -> unit
   val remove : node -> node -> unit                 (* parent child *)
   val replace : node -> node -> node -> unit        (* parent new old *)
   val parent : node -> node option
@@ -724,6 +727,41 @@ module type BACKEND = sig
   val node_tag : node -> string option
   val is_text : node -> bool
 end
+
+(* Longest-increasing-subsequence mask for keyed reconciliation (the Vue3/Inferno trick). Given
+   [old_idx], where [old_idx.(i)] is the previous position of the i-th new child (or [-1] for a
+   freshly-created child that has no previous position), return a boolean array marking the indices
+   that form a longest increasing run of the kept items' old positions. Those nodes are already in
+   the correct relative order and can stay put; every other node is moved into place. O(n log n).
+   [-1] entries are never part of the sequence (new nodes always need inserting). *)
+let lis_mask (old_idx : int array) : bool array =
+  let n = Array.length old_idx in
+  let mask = Array.make n false in
+  (* [tails.(len)] = index (into old_idx) of the smallest tail of an increasing subseq of length
+     len+1; [prev] = predecessor links to reconstruct the chain. *)
+  let tails = Array.make n 0 in
+  let prev = Array.make n (-1) in
+  let len = ref 0 in
+  for i = 0 to n - 1 do
+    if old_idx.(i) >= 0 then begin
+      (* binary search for the first tail whose value >= old_idx.(i) (strictly-increasing LIS) *)
+      let lo = ref 0 and hi = ref !len in
+      while !lo < !hi do
+        let mid = (!lo + !hi) / 2 in
+        if old_idx.(tails.(mid)) < old_idx.(i) then lo := mid + 1 else hi := mid
+      done;
+      let pos = !lo in
+      if pos > 0 then prev.(i) <- tails.(pos - 1);
+      tails.(pos) <- i;
+      if pos = !len then incr len
+    end
+  done;
+  (* walk back from the last tail of the longest chain *)
+  if !len > 0 then begin
+    let k = ref tails.(!len - 1) in
+    while !k >= 0 do mask.(!k) <- true; k := prev.(!k) done
+  end;
+  mask
 
 module Reconcile (B : BACKEND) = struct
   type melem = { tag : string; key : string option; node : B.node;
@@ -839,15 +877,38 @@ module Reconcile (B : BACKEND) = struct
     | o :: os, [] -> unmount o; B.remove parent (mnode o); positional ~parent os []
     | [], [] -> []
   and keyed ~parent olds news =
+    (* index olds by key -> (mounted, old position) *)
     let map = Hashtbl.create 16 in
-    List.iter (fun m -> match key_of_m m with Some k -> Hashtbl.replace map k m | None -> ()) olds;
+    List.iteri (fun i m -> match key_of_m m with Some k -> Hashtbl.replace map k (m, i) | None -> ()) olds;
     let used = Hashtbl.create 16 in
-    let result = List.map (fun vn -> match key_of_v vn with
-        | Some k when Hashtbl.mem map k -> Hashtbl.replace used k (); reconcile ~parent (Hashtbl.find map k) vn
-        | _ -> create vn) news in
-    List.iter (fun m -> B.append parent (mnode m)) result;
-    List.iter (fun m -> match key_of_m m with Some k when not (Hashtbl.mem used k) -> unmount m; B.remove parent (mnode m) | _ -> ()) olds;
-    result
+    let news = Array.of_list news in
+    let n = Array.length news in
+    let result = Array.make n (MText (B.create_text "")) in
+    let old_idx = Array.make n (-1) in     (* previous position of each new child, -1 if fresh *)
+    Array.iteri (fun i vn ->
+        match key_of_v vn with
+        | Some k when Hashtbl.mem map k ->
+          let (m, oi) = Hashtbl.find map k in
+          Hashtbl.replace used k ();
+          result.(i) <- reconcile ~parent m vn;
+          old_idx.(i) <- oi
+        | _ -> result.(i) <- create vn (* fresh or unkeyed: old_idx stays -1 *)) news;
+    (* remove the olds that no longer appear *)
+    List.iter (fun m -> match key_of_m m with
+        | Some k when not (Hashtbl.mem used k) -> unmount m; B.remove parent (mnode m)
+        | _ -> ()) olds;
+    (* place into final order with MINIMAL moves: nodes whose old positions already form an
+       increasing run (the LIS) are in correct relative order and stay put; everything else —
+       fresh nodes and out-of-order kept nodes — is inserted before its right neighbour. Right to
+       left so the reference node [result.(i+1)] is already in its final position. *)
+    let stay = lis_mask old_idx in
+    for i = n - 1 downto 0 do
+      if not (i >= 0 && old_idx.(i) >= 0 && stay.(i)) then begin
+        let ref_node = if i + 1 < n then Some (mnode result.(i + 1)) else None in
+        B.insert_before parent (mnode result.(i)) ref_node
+      end
+    done;
+    Array.to_list result
 
   (* hydrate or render under [container]: first run adopts the SSR root, later runs diff.
      Returns a disposer that stops the root render effect (so it never re-runs on a later
@@ -1161,7 +1222,22 @@ module Fake = struct
   let set_prop n k v = set_attr n k v
   let get_prop n k = Option.value ~default:"" (get_attr n k)
   let detach c = match c.par with Some p -> p.kids <- List.filter (fun x -> x != c) p.kids; c.par <- None | None -> ()
-  let append p c = detach c; p.kids <- p.kids @ [ c ]; c.par <- Some p
+  (* test instrumentation: count true MOVES (repositioning a node already under [p]) separately
+     from fresh inserts, so a test can assert keyed reconciliation moves only displaced rows.
+     [already_under p c] uses physical node equality — NOT [c.par == Some p], which would compare
+     freshly-boxed options and never match. *)
+  let moves = ref 0
+  let reset_moves () = moves := 0
+  let already_under p c = match c.par with Some par -> par == p | None -> false
+  let append p c = (if already_under p c then incr moves); detach c; p.kids <- p.kids @ [ c ]; c.par <- Some p
+  let insert_before p c r =
+    if already_under p c then incr moves;
+    detach c;
+    (match r with
+     | None -> p.kids <- p.kids @ [ c ]
+     | Some r ->
+       p.kids <- List.concat_map (fun x -> if x == r then [ c; r ] else [ x ]) p.kids);
+    c.par <- Some p
   let remove _ c = detach c
   let replace p nw od = detach nw;
     p.kids <- List.concat_map (fun x -> if x == od then [ nw ] else [ x ]) p.kids;
@@ -1217,6 +1293,61 @@ let%test "no orphans after diff" =
   let _ = D.mount_root root render in
   set model [ 3; 1; 2 ]; set model [ 3; 2 ]; set model [ 3; 2; 4 ];
   List.length (List.hd root.Fake.kids).Fake.kids = 3
+
+(* ──── keyed MINIMAL moves (the append-storm fix) ──── *)
+
+(* a keyed list renderer + a model signal, with a helper that re-renders and reports how many
+   already-attached nodes were repositioned. Pre-fix [keyed] re-appended EVERY child on any update
+   (N moves to shuffle one row); now only displaced nodes move. *)
+let keyed_move_count initial next =
+  let model = signal initial in
+  let render () = h "ul" [] (each (get model) (fun i -> h ~key:(string_of_int i) "li" [] [ text (string_of_int i) ])) in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  Fake.reset_moves ();
+  set model next;                         (* native: synchronous reconcile *)
+  let order = texts_ (List.hd root.Fake.kids) in
+  (!Fake.moves, order)
+
+(* rotate one element to the front of 3: only that element moves (the other two are the LIS). *)
+let%test "keyed reorder [1;2;3]->[3;1;2] performs exactly 1 move" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3 ] [ 3; 1; 2 ] in
+  moves = 1 && order = "3,1,2"
+
+(* move one element out of a run of 5: displacement is 1, not 5. *)
+let%test "keyed reorder [1;2;3;4;5]->[1;2;5;3;4] performs exactly 1 move" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3; 4; 5 ] [ 1; 2; 5; 3; 4 ] in
+  moves = 1 && order = "1,2,5,3,4"
+
+(* re-rendering the SAME order must move nothing (no append-storm on a no-op update). *)
+let%test "keyed same order performs 0 moves" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3; 4 ] [ 1; 2; 3; 4 ] in
+  moves = 0 && order = "1,2,3,4"
+
+(* a full reversal of 4 has an LIS of length 1, so the minimal move count is n-1 = 3 — and the
+   result is still correct. (This is the worst case; it must not exceed n-1.) *)
+let%test "keyed reversal [1;2;3;4]->[4;3;2;1] performs n-1 moves, correctly" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3; 4 ] [ 4; 3; 2; 1 ] in
+  moves = 3 && order = "4,3,2,1"
+
+(* a swap of the two ends keeps the middle in place: [1;2;3;4;5]->[5;2;3;4;1]. The LIS is the
+   middle run 2,3,4, so only the two ends move (2 moves), not 5. *)
+let%test "keyed end-swap moves only the two ends" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3; 4; 5 ] [ 5; 2; 3; 4; 1 ] in
+  moves = 2 && order = "5,2,3,4,1"
+
+(* a FRESH node inserted in the middle is placed correctly (insert_before with a ref node), and
+   the surrounding kept nodes don't move — the original code only ever appended, so mid-insert is
+   the path most prone to mis-positioning. *)
+let%test "keyed mid-insert positions the new node without moving the kept ones" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3 ] [ 1; 9; 2; 3 ] in
+  moves = 0 && order = "1,9,2,3"
+
+(* combined: prepend a new node AND rotate — [1;2;3]->[3;0;1;2]: 0 is fresh, 3 moves to front,
+   1 and 2 stay (the LIS). Order correct, only the rotated node counts as a move. *)
+let%test "keyed insert + reorder together" =
+  let (moves, order) = keyed_move_count [ 1; 2; 3 ] [ 3; 0; 1; 2 ] in
+  moves = 1 && order = "3,0,1,2"
 
 let%test_unit "text patched in place" =
   let t_ = signal "a" in

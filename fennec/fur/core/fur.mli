@@ -490,6 +490,12 @@ module type BACKEND = sig
   val set_prop : node -> string -> string -> unit
   val get_prop : node -> string -> string
   val append : node -> node -> unit
+
+  (** [insert_before parent child ref] inserts [child] before [ref] (or appends when [ref] is
+      [None]) — the DOM [insertBefore]. Used by keyed reconciliation to move only out-of-position
+      nodes instead of re-appending every child. *)
+  val insert_before : node -> node -> node option -> unit
+
   val remove : node -> node -> unit
   val replace : node -> node -> node -> unit
   val parent : node -> node option

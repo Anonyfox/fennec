@@ -21,6 +21,9 @@ module Jsoo : Fur.BACKEND with type node = Dom.node Js.t = struct
     else Js.Unsafe.set n (Js.string k) (Js.string v)
   let get_prop n k = (try Js.to_string (Js.Unsafe.get n (Js.string k)) with _ -> "")
   let append p c = Dom.appendChild p c
+  let insert_before p c r = match r with
+    | Some r -> Dom.insertBefore p c (Js.some r)
+    | None -> Dom.appendChild p c
   let remove p c = Dom.removeChild p c
   let replace p nw od = Dom.replaceChild p nw od
   let parent n = Js.Opt.to_option n##.parentNode
