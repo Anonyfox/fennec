@@ -180,13 +180,31 @@ module Dynamic = struct
      drives Live's change-stream daemons. *)
   let mongo_url_env = Runtime.mongo_url_env
 
+  (* Shared in-memory collections, keyed by the SAME (db, name) identity the on-disk/native backends
+     alias by — so two [collection ~name] opens of "accounts_users" return ONE [Minimongo.t], exactly
+     as burrow (one engine per dir, one sub-coll per name) and mongod (one server, one namespace) do.
+     Without this, [:memory:] minted a fresh isolated store per open, so an observer's handle and the
+     writer's handle were different objects and writes were invisible across them — a dev/test-only
+     divergence from prod. The db comes from {!Runtime.db} ([FENNEC_DB] or "fennec"), so a per-suite
+     [FENNEC_DB] still isolates (its own key space), matching the other backends precisely. *)
+  let mem_collections : (string * string, Minimongo.t) Hashtbl.t = Hashtbl.create 16
+
+  let mem_collection ~name =
+    let key = (Runtime.db (), name) in
+    match Hashtbl.find_opt mem_collections key with
+    | Some m -> m
+    | None ->
+      let m = Minimongo.create () in
+      Hashtbl.replace mem_collections key m;
+      m
+
   (* the single MONGO_URL parser ({!Runtime.backend}) picks the engine: minimongo (:memory:), the
      embedded Burrow engine (burrow://, data dir = base/db from the URL path), or the native driver
      (mongodb://). The db comes from the URL, not from app code. *)
   let from_env ?poll ~sw ~name () =
     match Runtime.backend () with
     | Runtime.Missing -> missing (Runtime.unavailable_message ())
-    | Runtime.Memory -> mem (Minimongo.create ())
+    | Runtime.Memory -> mem (mem_collection ~name)
     | Runtime.Burrow { base; db; _ } -> Embedded (embedded_collection ~sw ~dir:(Filename.concat base db) ~name)
     | Runtime.Mongo { uri; db } -> real ?poll ~sw (connect uri) ~db ~name
 
