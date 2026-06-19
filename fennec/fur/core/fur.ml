@@ -718,6 +718,11 @@ module type BACKEND = sig
   val listen : node -> string -> (unit -> unit) ref -> unit  (* attach a handler over the ref *)
   val child : node -> int -> node option            (* nth child (hydration) *)
   val first_child : node -> node option
+  (* hydration validation: the kind of an adopted SSR node, so hydrate can detect SSR/CSR drift
+     instead of blindly adopting the wrong node. [node_tag] is the element's tag name LOWERCASED
+     ([Some "div"]), or [None] for a non-element (text/comment); [is_text] is true for a text node. *)
+  val node_tag : node -> string option
+  val is_text : node -> bool
 end
 
 module Reconcile (B : BACKEND) = struct
@@ -775,18 +780,32 @@ module Reconcile (B : BACKEND) = struct
     MComp { mcid = c.cid; mckey = c.ckey; msub = m; meff = eff; cleanups }
   and mount_comp c = instantiate ~first:create c
 
+  (* the adopted SSR node [dom] doesn't match what this vnode expects (SSR/CSR drift): build the
+     node fresh and swap it in over the wrong one, so a [<div>] vnode never silently adopts a
+     [<span>] and patches the wrong node. *)
+  and hydrate_recover dom vnode =
+    let m = create vnode in
+    (match B.parent dom with Some p -> B.replace p (mnode m) dom | None -> ());
+    m
+
   and hydrate dom = function
-    | Text _ -> MText dom
+    | Text _ as v ->
+      (* the adoptee must be a text node; a drifted element here would be patched as text *)
+      if B.is_text dom then MText dom else hydrate_recover dom v
     | Comp c -> instantiate ~first:(fun v -> hydrate dom v) c
     | Fragment _ -> MText dom
-    | Elem { tag; key; attrs; children } ->
-      let handlers = Hashtbl.create 4 in
-      List.iter (function Handler (ev, f) -> ensure_handler handlers dom ev f | Attr _ -> ()) attrs;
-      let children = List.mapi (fun i ch ->
-        match B.child dom i with
-        | Some d -> hydrate d ch
-        | None -> let m = create ch in B.append dom (mnode m); m) (flatten children) in
-      MElem { tag; key; node = dom; attrs; children; handlers }
+    | (Elem { tag; key; attrs; children }) as v ->
+      (* tag must match; otherwise adopt-in-place would corrupt the tree on the first patch *)
+      if B.node_tag dom <> Some (String.lowercase_ascii tag) then hydrate_recover dom v
+      else begin
+        let handlers = Hashtbl.create 4 in
+        List.iter (function Handler (ev, f) -> ensure_handler handlers dom ev f | Attr _ -> ()) attrs;
+        let children = List.mapi (fun i ch ->
+          match B.child dom i with
+          | Some d -> hydrate d ch
+          | None -> let m = create ch in B.append dom (mnode m); m) (flatten children) in
+        MElem { tag; key; node = dom; attrs; children; handlers }
+      end
 
   and unmount = function
     | MComp mc -> List.iter (fun f -> f ()) !(mc.cleanups); dispose mc.meff; unmount mc.msub
@@ -1127,11 +1146,13 @@ let%test_unit "ext raw" =
 (* ──── reconcile (fake backend) ──── *)
 
 module Fake = struct
+  (* [tag = None] models a text node, [Some t] an element — so the fake backend can answer the
+     hydration-validation queries ([node_tag]/[is_text]) the way the real DOM does. *)
   type node = { mutable text : string; mutable attrs : (string * string) list;
-                mutable kids : node list; mutable par : node option }
-  let mk () = { text = ""; attrs = []; kids = []; par = None }
+                mutable kids : node list; mutable par : node option; tag : string option }
+  let mk () = { text = ""; attrs = []; kids = []; par = None; tag = None }
   let create_text s = let n = mk () in n.text <- s; n
-  let create_element _ = mk ()
+  let create_element t = { (mk ()) with tag = Some t }
   let get_text n = n.text
   let set_text n s = n.text <- s
   let get_attr n k = List.assoc_opt k n.attrs
@@ -1149,6 +1170,8 @@ module Fake = struct
   let listen _ _ _ = ()
   let child n i = List.nth_opt n.kids i
   let first_child n = match n.kids with x :: _ -> Some x | [] -> None
+  let node_tag n = Option.map String.lowercase_ascii n.tag
+  let is_text n = n.tag = None
 end
 
 module D = Reconcile (Fake)
@@ -1338,6 +1361,64 @@ let%test "memo is glitch-free: observer sees one consistent update per batch" =
   (* the observer ran once at creation (2) and once for the batched memo change (10) — never on a
      half-applied intermediate like 6 *)
   !observed = [ 10; 2 ]
+
+(* ──── hydration tag-validation (SSR/CSR drift recovery) ──── *)
+
+(* helper: a Fake DOM element with the given tag, parented under a fresh container, as if SSR
+   emitted it — the adoptee hydrate will be handed *)
+let drifted_container child = let c = Fake.create_element "root" in Fake.append c child; c
+
+(* a <div> vnode hydrating against an SSR <span> must NOT adopt the span and then patch the wrong
+   node — it creates the div fresh and swaps it in. Pre-fix, hydrate adopted childNodes[i] with no
+   tag check, so the live node would be a <span> wearing div attributes. *)
+let%test "hydrate recovers from element tag drift (div vnode vs span dom)" =
+  let container = drifted_container (Fake.create_element "span") in
+  let _ = D.mount_root container (fun () -> h "div" [ attr "id" "x" ] [ text "hi" ]) in
+  (match container.Fake.kids with
+   | [ only ] -> only.Fake.tag = Some "div" && List.assoc_opt "id" only.Fake.attrs = Some "x"
+   | _ -> false)
+
+(* a text vnode hydrating against an SSR element must recover to a real text node (not adopt the
+   element and call set_text on it). *)
+let%test "hydrate recovers from text-vs-element drift" =
+  let container = drifted_container (Fake.create_element "p") in
+  let _ = D.mount_root container (fun () -> text "plain") in
+  (match container.Fake.kids with
+   | [ only ] -> Fake.is_text only && only.Fake.text = "plain"
+   | _ -> false)
+
+(* an element vnode hydrating against an SSR text node likewise recovers to a real element. *)
+let%test "hydrate recovers from element-vs-text drift" =
+  let container = drifted_container (Fake.create_text "stray") in
+  let _ = D.mount_root container (fun () -> h "section" [] [ text "ok" ]) in
+  (match container.Fake.kids with
+   | [ only ] -> only.Fake.tag = Some "section"
+   | _ -> false)
+
+(* a correct outer shell with a DRIFTED nested child: the parent is adopted in place, only the
+   wrong child is recovered locally — drift recovery is surgical, not a whole-subtree teardown. *)
+let%test "hydrate recovers a drifted nested child while keeping the matching parent" =
+  let inner_wrong = Fake.create_element "b" in
+  let outer = Fake.create_element "ul" in
+  Fake.append outer inner_wrong;
+  let container = drifted_container outer in
+  let adopted_outer = List.hd container.Fake.kids in
+  let _ = D.mount_root container (fun () -> h "ul" [] [ h "li" [] [ text "1" ] ]) in
+  let outer' = List.hd container.Fake.kids in
+  (* same parent node object adopted (identity preserved), but its child is now an <li>, not <b> *)
+  outer' == adopted_outer && outer'.Fake.tag = Some "ul"
+  && (match outer'.Fake.kids with [ li ] -> li.Fake.tag = Some "li" | _ -> false)
+
+(* a MATCHING shell still adopts in place (no needless re-create): the same node object is reused,
+   its text patched — the drift guard must not regress the happy path. *)
+let%test "hydrate still adopts a matching node in place" =
+  let p = Fake.create_element "p" in
+  Fake.append p (Fake.create_text "old");
+  let container = drifted_container p in
+  let adopted = List.hd container.Fake.kids in
+  let _ = D.mount_root container (fun () -> h "p" [] [ text "old" ]) in
+  let p' = List.hd container.Fake.kids in
+  p' == adopted && p'.Fake.tag = Some "p"
 
 (* per-request Head isolation: each render context (a [Platform.with_data_context] binding — fiber-local
    on the concurrent server, the reset fallback outside Eio) gets its OWN Head registry, so one render's

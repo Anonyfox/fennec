@@ -496,6 +496,13 @@ module type BACKEND = sig
   val listen : node -> string -> (unit -> unit) ref -> unit
   val child : node -> int -> node option
   val first_child : node -> node option
+
+  (** The tag name of an element node, LOWERCASED ([Some "div"]); [None] for a non-element such as
+      a text or comment node. Used by hydration to detect SSR/CSR drift before adopting a node. *)
+  val node_tag : node -> string option
+
+  (** [true] when the node is a text node. Used by hydration to validate a {!text} vnode's adoptee. *)
+  val is_text : node -> bool
 end
 
 (** The virtual DOM reconciler parameterized over a {!BACKEND}. Diffs the previous vnode

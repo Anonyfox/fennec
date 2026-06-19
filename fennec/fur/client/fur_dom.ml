@@ -30,6 +30,14 @@ module Jsoo : Fur.BACKEND with type node = Dom.node Js.t = struct
         Fun.protect ~finally:Dispatch.clear (fun () -> !r ()); Js._true)) Js._false)
   let child n i = Js.Opt.to_option (n##.childNodes##item i)
   let first_child n = Js.Opt.to_option n##.firstChild
+  (* hydration validation: use the typed nodeType coercions. An element exposes tagName (lowered);
+     a text node coerces via CoerceTo.text. Drift (e.g. a <div> vnode over an SSR <span>) is then
+     detected by the reconciler and recovered instead of corrupting the tree. *)
+  let node_tag n =
+    Js.Opt.case (Dom.CoerceTo.element n)
+      (fun () -> None)
+      (fun el -> Some (String.lowercase_ascii (Js.to_string el##.tagName)))
+  let is_text n = Js.Opt.test (Dom.CoerceTo.text n)
 end
 
 module D = Fur.Reconcile (Jsoo)
