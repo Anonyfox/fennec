@@ -1,0 +1,22 @@
+; Exhaustive (input → expected-output) table for the .mlx pre-pass, plus a pass (parses_through_mlx)
+; that feeds normalised outputs through the REAL mlx-pp binary and asserts each parses. Stdlib-only.
+
+(test
+ (name test_prepass)
+ (modules test_prepass)
+ (libraries fennec_mlx_prepass))
+
+; A second proof: the transform must emit SYNTACTICALLY-VALID mlx, not just a string we like. This
+; exe transforms a battery of bare-text inputs and shells out to mlx-pp on each, failing if any does
+; not parse. mlx-pp is resolved from PATH (the mlx package installs it); the test is a no-op-skip if
+; it is absent, so it never blocks a build that lacks the optional mlx dev dependency.
+(executable
+ (name parses_through_mlx)
+ (modules parses_through_mlx)
+ (libraries fennec_mlx_prepass unix))
+
+(rule
+ (alias runtest)
+ (deps parses_through_mlx.exe)
+ (action
+  (run %{exe:parses_through_mlx.exe})))
