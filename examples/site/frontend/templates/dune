@@ -6,3 +6,18 @@
   (pps fennec.fur.ppx))
  (flags
   (:standard -w -a -open Fur)))
+
+; CLIENT mirror (see ../components/dune): templates carry no [Data.local], but the app's client lib
+; (web_app/client) links a -data-client closure end to end, so a stripped twin keeps that closure pure.
+(subdir
+ client
+ (copy_files#
+  (files ../*.mlx))
+ (library
+  (name site_templates_client)
+  (wrapped false)
+  (libraries fennec.fur fennec.fur.html)
+  (preprocess
+   (pps fennec.fur.ppx -data-client))
+  (flags
+   (:standard -w -a -open Fur))))

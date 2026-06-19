@@ -16,20 +16,22 @@ module Paw = Fennec.Paw
 module Conn = Fennec.Conn
 module Accounts = Fennec.Accounts
 
-(* The app's data: ONE place defines each value, used by BOTH the SSR source (in-process,
-   for fast-render seeds) and the HTTP route (what the client fetches on refetch / for
-   client-only data) — so server render and client agree byte-for-byte. *)
-let greeting = "Hello from the server 👋"
+(* The app's data. [/api/greeting] is GONE from here — it is now CO-LOCATED in the component
+   (frontend/components/greeting.mlx, via [Data.local]): the value, the SSR seed source AND the refetch
+   route all live in that one file, auto-registered by the framework. No api_source arm, no Paw.get here.
+
+   The remaining keys are the OTHER demo shapes: [browser-only] (client-only data, no SSR seed) and the
+   typed [site-info] (still wired the classic way to show the additive [Data.model] path coexisting with
+   the new co-located [Data.local]/[Data.model_local] one). *)
 let browser_only = "fetched live in the browser 🌐"
 
 (* a TYPED isomorphic payload: ONE value, encoded with Site_info.codec for BOTH the SSR seed (api_source
    below) and the /api/site-info HTTP route — so the client's [Data.model Site_info.codec …] decodes the
-   exact same bytes the server produced. The typed twin of the string [greeting] above. *)
+   exact same bytes the server produced. *)
 let site_info : Site_info.t = { name = "Fennec"; tagline = "OCaml, end to end."; stars = 1280 }
 let site_info_json = Fennec.Sift.encode_json Site_info.codec site_info
 
 let api_source = function
-  | "/api/greeting" -> Some greeting
   | "/api/browser-only" -> Some browser_only
   | "/api/site-info" -> Some site_info_json   (* the typed resource's SSR seed (relaxed JSON) *)
   | _ -> None
@@ -172,7 +174,8 @@ let web =
   |> Paw.use realtime_ddp
   |> Paw.pipe common
   |> Paw.get "/api/health" (fun c -> c |> Paw.json {|{"ok":true,"app":"web"}|})
-  |> Paw.get "/api/greeting" (fun c -> c |> Paw.text greeting)
+  (* NOTE: no [/api/greeting] route here — it is auto-mounted by the framework from the co-located
+     [Data.local] declaration in greeting.mlx (the SSR seed + refetch route both come from that one file). *)
   |> Paw.get "/api/browser-only" (fun c -> c |> Paw.text browser_only)
   (* the typed resource's refetch endpoint: the SAME bytes the SSR seed carries — Site_info.codec encodes
      once, both surfaces serve it, the client's Data.model decodes it back to the typed Site_info.t *)

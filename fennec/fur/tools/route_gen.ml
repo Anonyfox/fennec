@@ -157,11 +157,17 @@ let emit_app_bundles apps_dir out_dir rel_frontend =
   Buffer.add_string b "; GENERATED — do not edit. One isolated jsoo bundle (+ css) per frontend/apps/<app>/.\n";
   app_dirs apps_dir
   |> List.iter (fun n ->
-         let lib = mangle n ^ "_app" in
+         (* the bundle links the app's CLIENT MIRROR (<app>_app_client) — the SAME .mlx tree compiled
+            with the fur ppx's -data-client, so every inline [Data.local]/[model_local] server fetcher
+            body is STRIPPED from the jsoo bundle (the component analog of a handler's -conn-client mirror).
+            The mirror is a fixed convention next to the bundle wiring (client/apps/<app>_client/); the
+            server links the un-stripped <app>_app. *)
+         let lib = mangle n ^ "_app_client" in
+         let lib_mod = String.capitalize_ascii (mangle n) ^ "_app_client" in
          Buffer.add_string b
            (Printf.sprintf
               "(rule\n (target %s.ml)\n (action (with-stdout-to %s.ml (echo \"let () = Fur_csr.start [ %s.Routes.mount ]\"))))\n(executable\n (name %s)\n (modules %s)\n (modes js)\n (libraries %s fennec.fur.client fennec.pulse.live.client.browser)\n (preprocess (pps js_of_ocaml-ppx))\n (flags (:standard -w -a)))\n"
-              n n (lib_mod n) n n lib);
+              n n lib_mod n n lib);
          if Sys.file_exists (Filename.concat (Filename.concat apps_dir n) "main.scss") then
            Buffer.add_string b
              (Printf.sprintf

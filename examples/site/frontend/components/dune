@@ -18,3 +18,30 @@
   (pps fennec.fur.ppx))
  (flags
   (:standard -w -a -open Fur)))
+
+; the CLIENT mirror — the SAME component .mlx, compiled with -data-client so every inline
+; [Data.local]/[Data.model_local] server fetcher body is STRIPPED (the jsoo bundle never sees
+; [compute_*]/secrets — only the resource path crosses). copy_files# keeps it inside this folder
+; (no parallel components_client dir); the app-bundle client mirror (web_app/client) links this lib.
+; This is the component analog of site_handlers_client (the -conn-client mirror of site_handlers).
+(subdir
+ client
+ (copy_files#
+  (files ../*.mlx))
+ (library
+  (name site_components_client)
+  (wrapped false)
+  (libraries
+   fennec.fur
+   fennec.fur.html
+   fennec.fur.form
+   site_store
+   fennec.pulse.live.client
+   fennec.accounts.client
+   fennec-mongo.bson
+   fennec.pulse.sift
+   fennec.pulse.sift.mongo)
+  (preprocess
+   (pps fennec.fur.ppx -data-client))
+  (flags
+   (:standard -w -a -open Fur))))

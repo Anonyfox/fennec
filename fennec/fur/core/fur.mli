@@ -396,6 +396,14 @@ module Data : sig
       the registered SSR seed and the mounted route, so wire shape = model shape on both surfaces. *)
   val model_local : 'a Sift.t -> string -> ?path:string -> fallback:'a -> 'a Server_only.t -> 'a t
 
+  (** The CLIENT lowering of {!local}/{!model_local}, emitted by the fur ppx ([-data-client]) — NOT for
+      userland. They take no fetcher (it is stripped) and skip the server-only registration, so a
+      co-located resource compiles on the client to exactly the bare {!string}/{!model} over the derived
+      path: zero client growth versus the un-co-located form. *)
+  val local_client : string -> ?path:string -> fallback:string -> unit -> string t
+
+  val model_local_client : 'a Sift.t -> string -> ?path:string -> fallback:'a -> unit -> 'a t
+
   (** {3 The registry the framework drains (not userland)} *)
 
   (** One registered co-located source: an opaque handle the framework's route mounter + SSR source

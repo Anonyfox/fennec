@@ -138,25 +138,44 @@ end
 
 (* ---- CO-LOCATED data: strip the inline SERVER fetcher from the CLIENT (jsoo) build ----
    A component declares its server fetcher inline as [Data.local key ~fallback (Server_only.fn body)]
-   (or [Data.model_local] / [Data.Server_only.fn] / [Fur.Data.Server_only.fn]). The fetcher BODY is
-   server-only — it may read secrets, hit the DB, call [compute_*]. Components compile ONCE into a
-   shared lib that is ALSO linked into the jsoo bundle, so to keep server logic out of the bundle the
-   CLIENT build of that lib runs with [-data-client], and this pass replaces every [Server_only.fn body]
-   with [Server_only.client_inert] — dropping [body] (and everything it references) from the client AST
-   entirely. It is the component mirror of a handler's [-conn-client] stripping [load]: the only
-   thing that crosses to the client is the resource's key/path; the value's computation never does.
+   (or [Data.model_local]). The fetcher BODY is server-only — it may read secrets, hit the DB, call
+   [compute_*]. Components compile ONCE into a shared lib that is ALSO linked into the jsoo bundle, so
+   to keep server logic out of the bundle the CLIENT build of that lib runs with [-data-client], and
+   this pass rewrites the WHOLE co-located call to its CLIENT LOWERING:
 
-   We key on the CONSTRUCTOR path [Server_only.fn] (any prefix: bare / [Data.] / [Fur.Data.]), not on
-   the surrounding [Data.local] call — robust to [~path], the typed twin, and aliasing. The replacement
-   keeps the SAME prefix so the inert constructor resolves under whatever open the file uses. *)
+     Data.local       NAME [~path P] ~fallback FB (Server_only.fn body)  ->  Data.local_client       NAME [~path P] ~fallback FB
+     Data.model_local C NAME [~path P] ~fallback FB (Server_only.fn body)  ->  Data.model_local_client C NAME [~path P] ~fallback FB
+
+   It DROPS the trailing [Server_only.fn body] argument entirely — so [body] (and everything it
+   references) never enters the client AST — and redirects to the [_client] variant, which is exactly the
+   bare seeded + refetchable {!Data.string}/{!Data.model} over the derived path. Result: zero client
+   growth (the co-located form compiles identically to the un-co-located one) AND zero server logic. It
+   is the component mirror of a handler's [-conn-client] stripping [load].
+
+   We key on the call HEAD [local]/[model_local] (any prefix: bare / [Data.] / [Fur.Data.]) and drop the
+   single trailing positional argument (the fetcher), keeping every labeled arg ([~path], [~fallback]) and
+   the leading positional ones (the name, and for [model_local] the codec) untouched. *)
 let data_client = ref false
 let () = Driver.add_arg "-data-client" (Stdlib.Arg.Set data_client)
     ~doc:"strip inline Data.local/model_local server fetchers (the client/jsoo build of a component lib)"
 
-(* is this longident a [Server_only.fn] reference (any module prefix: bare / [Data.] / [Fur.Data.])? *)
-let is_server_only_fn (lid : Longident.t) : bool =
-  match lid with
-  | Ldot (Ldot (_, "Server_only"), "fn") | Ldot (Lident "Server_only", "fn") -> true
+(* is this longident a co-located [local]/[model_local] head (any module prefix)? return the client
+   lowering's longident (same prefix, [_client] suffix). *)
+let colocated_client_head (lid : Longident.t) : Longident.t option =
+  let lower base = function
+    | Lident b when b = base -> Some (Lident (b ^ "_client"))
+    | Ldot (p, b) when b = base -> Some (Ldot (p, b ^ "_client"))
+    | _ -> None
+  in
+  match lower "local" lid with
+  | Some _ as r -> r
+  | None -> lower "model_local" lid
+
+(* is [e] the trailing fetcher arg we drop — a [Server_only.fn …] application (any prefix)? Restricting
+   the drop to exactly this shape keeps the rewrite from mangling an unrelated [local]-named function. *)
+let is_server_only_fn_arg e =
+  match e.pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = (Ldot (Ldot (_, "Server_only"), "fn") | Ldot (Lident "Server_only", "fn")); _ }; _ }, _) -> true
   | _ -> false
 
 let strip_server_only = object
@@ -164,13 +183,18 @@ let strip_server_only = object
   method! expression e =
     let e = super#expression e in
     match e.pexp_desc with
-    | Pexp_apply (({ pexp_desc = Pexp_ident { txt; _ }; _ } as fn), [ (Nolabel, _body) ]) when is_server_only_fn txt ->
-      (* keep [Server_only.fn] (it is the public constructor, abstract [t]) but DROP its server body:
-         replace the argument with an inert thunk. The original closure — and everything it references
-         ([compute_*], secrets, DB calls) — is no longer in the client AST, so jsoo never links it. The
-         placeholder is never invoked client-side (the client installs no source that runs it). *)
-      let loc = e.pexp_loc in
-      { e with pexp_desc = Pexp_apply (fn, [ (Nolabel, [%expr fun () -> failwith "Server_only.fn: stripped from the client build"]) ]) }
+    | Pexp_apply (({ pexp_desc = Pexp_ident ({ txt; _ } as id); _ } as f), args) -> (
+      match colocated_client_head txt with
+      | Some client_txt ->
+        (* drop the LAST positional arg iff it is the [Server_only.fn …] fetcher; redirect to [_client]
+           and append a trailing [()] (so the [_client] variant's optional [?path] erases). *)
+        (match List.rev args with
+         | (Nolabel, last) :: rest_rev when is_server_only_fn_arg last ->
+           let loc = e.pexp_loc in
+           let f' = { f with pexp_desc = Pexp_ident { id with txt = client_txt } } in
+           { e with pexp_desc = Pexp_apply (f', List.rev rest_rev @ [ (Nolabel, [%expr ()]) ]) }
+         | _ -> e (* not a co-located fetcher call — leave it *))
+      | None -> e)
     | _ -> e
 end
 (* ---- THE component shape: ONE function body, no manual render thunk ----

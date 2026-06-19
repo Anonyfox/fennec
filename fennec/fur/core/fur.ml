@@ -565,6 +565,15 @@ module Data = struct
     register_local ~path ~json:true (fun () -> Sift.encode_json codec (Server_only.run fetch));
     model codec path ~fallback ()
 
+  (* the CLIENT lowering of {!local}/{!model_local}: the fur ppx (-data-client) rewrites a co-located
+     call to these — they take NO fetcher (the server fetcher is stripped) and NO registration (the
+     registry is server-only), so on the client a co-located resource compiles to EXACTLY the bare
+     seeded + refetchable {!string}/{!model} over the derived path — byte-for-byte the un-co-located form,
+     i.e. ZERO client growth. The trailing [unit] (the ppx appends [()]) lets the optional [?path] erase.
+     Never written by userland; only the ppx emits them. *)
+  let local_client name ?path ~(fallback : string) () : string t = string (local_path ?path name) ~fallback ()
+  let model_local_client codec name ?path ~(fallback : 'a) () : 'a t = model codec (local_path ?path name) ~fallback ()
+
   (* reactive readers (each subscribes via get) *)
   let status r = get r.st
   let value r = match get r.st with Ready v -> v | _ -> r.fallback  (* fallback until ready *)

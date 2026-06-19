@@ -1,0 +1,23 @@
+; The ADMIN app's CLIENT mirror — same .mlx, compiled with -data-client (see ../web_client/dune). The
+; admin app has no co-located [Data.local] today, but the bundle links the stripped mirror UNIFORMLY so
+; any future co-located fetcher in an admin page is stripped from its bundle too. No nested route folders
+; here, so a single copy_files# suffices.
+
+(copy_files#
+ (files %{project_root}/examples/site/frontend/apps/admin/*.mlx))
+
+(library
+ (name admin_app_client)
+ (libraries fennec.fur fennec.fur.html site_components_client site_templates_client)
+ (preprocess
+  (pps fennec.fur.ppx -data-client))
+ (flags
+  (:standard -w -a -open Fur)))
+
+(rule
+ (deps
+  (glob_files *.mlx)
+  %{project_root}/fennec/fur/tools/route_gen.exe)
+ (targets routes.ml paths.ml)
+ (action
+  (run %{project_root}/fennec/fur/tools/route_gen.exe --glue . .)))
