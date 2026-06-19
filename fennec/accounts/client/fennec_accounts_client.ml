@@ -268,6 +268,39 @@ let complete_login_step_up_backup t ~mfa_token ~user_id ~code =
   let raw = Ddp_client.call_result t.ddp ~name:"completeLoginStepUp" ~params () in
   observe t raw decode_login_result (apply_login_result t)
 
+(* The collection the always-on [__currentUser] publication ships the user document over — the same
+   name the server-side Accounts store opens ("accounts_users"). The live sub holds 0 or 1 doc: the
+   current user, scoped by the server to the connection's identity. *)
+let current_user_collection = "accounts_users"
+let current_user_publication = "__currentUser"
+
+(* Back [user_sig]/[user_id_sig] with the live [__currentUser] subscription: subscribe once, then
+   derive the signals from the live merged user document. A server-side change to the user (set_profile
+   / set_roles / add email, or a roles grant) flows accounts-write → shared accounts_users handle →
+   observe → DDP delta → merge store → this signal, so [Accounts.user] is live over the DOCUMENT, not
+   just auth transitions — Meteor's null-publication behaviour.
+
+   It only ever WRITES the signals from a delivered doc; it never clears them on an empty collection.
+   That is deliberate: the auth verbs (login/logout) set the signals immediately for latency
+   compensation, and [refresh_user] is the cold-start / no-DDP fallback — so a not-yet-ready or absent
+   subscription (SSR/native stub, plain-HTTP app, a dropped socket) never wipes [user] to None. Logout
+   clears via its own verb; the now-empty sub simply stops feeding. *)
+let live_back_user t =
+  ignore (Ddp_client.subscribe t.ddp ~name:current_user_publication ());
+  let live = Ddp_client.find t.ddp current_user_collection () in
+  let stop = ref (fun () -> ()) in
+  stop :=
+    Fur.watch (fun () ->
+        match Fur.get live with
+        | [||] -> () (* loading / logged out / no DDP — do not clobber what the verbs set *)
+        | docs -> (
+          match decode_user docs.(0) with
+          | Ok user ->
+            Fur.set t.user_sig (Some user);
+            Fur.set t.user_id_sig (Some user.id)
+          | Error _ -> () (* a malformed/foreign doc never crashes the live signal *)));
+  ignore !stop
+
 let of_ddp ?(token_key = Some default_token_key) ddp =
   let t =
     {
@@ -282,6 +315,8 @@ let of_ddp ?(token_key = Some default_token_key) ddp =
   in
   ignore (refresh_user t);
   (match load_token t with Some token when String.trim token <> "" -> ignore (login_with_token t token) | _ -> ());
+  (* go live over the user document — keeps user/user_id fresh on server-side mutations *)
+  live_back_user t;
   t
 
 let connect ?path ?persist ?chrome ?token_key () =
@@ -340,3 +375,42 @@ let%test "decode_session accepts canonical session payload" =
       } ->
     true
   | _ -> false
+
+(* STEP 4: the live __currentUser sub backs user_sig/user_id_sig. On the native (SSR) Ddp_client the
+   publication's SSR fetcher seeds the merge store, [find] reads it reactively, and [live_back_user]'s
+   watch decodes the user doc into the signals — so a server-side change to the user document updates
+   [Accounts.user] without any auth verb firing. We drive that exact path: register the __currentUser
+   fetcher over a mutable doc, build the client (of_ddp wires live_back_user), assert the signals
+   derive from the doc, then CHANGE the doc + re-seed and assert the signals follow. *)
+let%test "live __currentUser sub derives user/user_id and tracks a server-side document change" =
+  let user_doc profile =
+    B.doc
+      [ ("_id", B.str "live-u");
+        ("username", B.str "ada");
+        ("emails", B.array [ B.doc [ ("address", B.str "ada@example.com"); ("verified", B.bool true) ] ]);
+        ("roles", B.array [ B.str "user" ]);
+        ("profile", profile) ]
+  in
+  let current = ref (user_doc (B.doc [ ("displayName", B.str "Ada") ])) in
+  (* the SSR fetcher returns the current doc, grouped under the accounts_users collection — exactly the
+     shape the server-side Pulse.publish SSR seed produces for __currentUser *)
+  Ddp_client.publish ~name:"__currentUser" (fun _params -> [ ("accounts_users", [ !current ]) ]);
+  let t = of_ddp ~token_key:None (Ddp_client.connect ()) in
+  (* the initial subscribe (inside live_back_user) seeded the doc → the signals derived from it *)
+  let id_ok = Fur.peek t.user_id_sig = Some "live-u" in
+  let initial_profile_ok =
+    match Fur.peek t.user_sig with
+    | Some { id = "live-u"; username = Some "ada"; profile = Some p; _ } -> B.get_string p "displayName" = Some "Ada"
+    | _ -> false
+  in
+  (* a SERVER-SIDE change to the user document: a new profile, re-seeded over the same sub (params vary
+     so the native stub re-runs the fetcher and re-merges the changed doc into accounts_users) *)
+  current := user_doc (B.doc [ ("displayName", B.str "Ada Lovelace"); ("theme", B.str "dark") ]);
+  ignore (Ddp_client.subscribe t.ddp ~name:"__currentUser" ());
+  let changed_profile_ok =
+    match Fur.peek t.user_sig with
+    | Some { id = "live-u"; profile = Some p; _ } ->
+      B.get_string p "displayName" = Some "Ada Lovelace" && B.get_string p "theme" = Some "dark"
+    | _ -> false
+  in
+  id_ok && initial_profile_ok && changed_profile_ok
