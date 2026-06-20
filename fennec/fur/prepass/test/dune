@@ -49,3 +49,18 @@
  (deps reader_delegation.exe ../bin/ocamlmerlin_fennec_mlx.exe)
  (action
   (run %{exe:reader_delegation.exe} %{dep:../bin/ocamlmerlin_fennec_mlx.exe})))
+
+; A FOURTH proof — the DRIVER (fennec-mlx-pp) end to end over its stdin rewrite path: a hard mlx-pp
+; syntax error must point at the ORIGINAL .mlx (not `*stdin*`), and the rewrite-path success case must
+; still emit a valid binary AST with a clean stderr. Stdlib-only; it execs the built driver (passed as
+; argv.(1), a dune dep so it is built first) and needs `mlx-pp` on PATH, SKIPPING if it is absent.
+
+(executable
+ (name driver_diagnostics)
+ (modules driver_diagnostics))
+
+(rule
+ (alias runtest)
+ (deps driver_diagnostics.exe ../bin/fennec_mlx_pp.exe)
+ (action
+  (run %{exe:driver_diagnostics.exe} %{dep:../bin/fennec_mlx_pp.exe})))

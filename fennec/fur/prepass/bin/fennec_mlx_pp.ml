@@ -25,7 +25,26 @@
          <ast_impl_magic_number : 12 raw bytes> <output_value fname : string> <output_value structure>
      and we reproduce it with the original filename + remapped locations.
 
-   If `mlx-pp` is missing or errors, we propagate its exit code / stderr unchanged. *)
+   If `mlx-pp` is missing or errors, we propagate its exit code / stderr unchanged.
+
+   ── PERF VERDICT (measured, macOS arm64) ──────────────────────────────────────────────────────────
+   The standalone tax over plain mlx-pp is ~3.4 ms, and it is almost ENTIRELY this binary's OWN process
+   startup, NOT a foldable spawn: a bare OCaml exe starts in ~1.7 ms (the fork+exec+runtime floor), +unix
+   ~2.0 ms, +compiler-libs.common ~3.4 ms (the Parsetree/Ast_mapper/Config we need for the rewrite path).
+   So:
+     • FAST path: execv removed the only foldable cost (the child-spawn + byte-copy) — ~0.25 ms recovered;
+       what remains is this binary having to START (and load compiler-libs) before it can decide it is the
+       fast path. Splitting a stdlib-only front off to dodge compiler-libs would recover ~1.3 ms HERE, but
+       only for non-bare-text files, and is rejected: it is invisible in the dev loop (below) and adds a
+       second installed binary + a double pre-pass for a cold-build-only gain — not worth the surface.
+     • REWRITE path: stuck at ~2 process startups (this binary + an mlx-pp CHILD) because we must
+       POST-PROCESS mlx-pp's AST (remap locations) — that child cannot be execv'd away. Same speed as the
+       old temp-file design, now with column-exact errors. In-process would need mlx's 49K-line parser as
+       a library (it is not one — do NOT vendor it), so it is not on the table.
+   The dev-server WARM REBUILD (the king metric) is pre-pass-INSENSITIVE: dune re-preprocesses only the
+   changed file, ~8 ms against a ~125 ms incremental OCaml recompile (~6 %), so before/after are within
+   noise (median 129 → 126 ms). The win here is correctness (column-exact) + a leaner fast path + no temp
+   file, not a dev-loop speedup — which the measurements show is not available without in-process linking. *)
 
 let read_all_in ic =
   let bufsz = 65536 in
@@ -67,27 +86,53 @@ let rewrite_locations (fname : string) (pm : Fennec_mlx_prepass.Posmap.t)
   let mapper = { default_mapper with location = (fun _ l -> map_loc l) } in
   mapper.structure mapper str
 
+(* Replace mlx-pp's stdin name `*stdin*` with [fname] in a captured stderr diagnostic, so a HARD
+   syntax error from mlx-pp itself (which never yields an AST to remap) points at the user's real .mlx
+   rather than at `*stdin*`. mlx prints the OCaml-standard `File "…", line L, …`, so we rewrite the
+   token inside the quotes. (Line is exact — the pre-pass is line-preserving; a column inside a quoted
+   prose run may be off by the inserted bytes, the documented limit. This is strictly better than the
+   old temp-file design, whose syntax errors pointed at a /tmp path.) *)
+let stdin_name = "*stdin*"
+let rewrite_stderr_fname (fname : string) (err : string) : string =
+  (* replace every occurrence of the quoted `"*stdin*"` (and the bare token, belt-and-braces). *)
+  let replace_all hay needle rep =
+    if needle = "" then hay else
+    let b = Buffer.create (String.length hay) in
+    let nl = String.length needle in
+    let i = ref 0 and n = String.length hay in
+    while !i < n do
+      if !i + nl <= n && String.sub hay !i nl = needle then (Buffer.add_string b rep; i := !i + nl)
+      else (Buffer.add_char b hay.[!i]; incr i)
+    done;
+    Buffer.contents b
+  in
+  err |> (fun e -> replace_all e ("\"" ^ stdin_name ^ "\"") ("\"" ^ fname ^ "\""))
+      |> (fun e -> replace_all e stdin_name fname)
+
 (* Spawn `mlx-pp` reading the pre-passed source from STDIN, returning its full stdout (binary AST). We
    FORK a writer child that streams [src] into mlx-pp's stdin and exits, while WE read mlx-pp's stdout —
    so a large AST (which can exceed the 64 KiB pipe buffer before the writer finishes) never deadlocks.
-   Propagates mlx-pp's exit code / stderr unchanged on failure. *)
-let run_mlx_pp_stdin (src : string) : string =
-  (* Both pipes are CLOEXEC so the spawned mlx-pp does NOT inherit the ends it must not hold: it would
-     otherwise keep a copy of [in_w] (its own stdin write-end) open and never see EOF → hang forever.
-     [create_process] dups [in_r]→fd0 and [out_w]→fd1 in the child; dup clears cloexec on those, so
-     mlx-pp keeps its std fds, while [in_w]/[out_r] stay cloexec and vanish at its exec. (The writer
-     fork below does NOT exec, so cloexec is irrelevant to it — it keeps [in_w] across the fork.) *)
+   On failure we re-emit mlx-pp's stderr with `*stdin*` rewritten to [orig_fname] and exit its code. *)
+let run_mlx_pp_stdin ~(orig_fname : string) (src : string) : string =
+  (* All three non-std pipe ends are CLOEXEC so the spawned mlx-pp does NOT inherit (and hold open) ends
+     it must not — most importantly its own stdin write-end [in_w], which would otherwise keep stdin
+     from ever reaching EOF → hang forever. [create_process] dups [in_r]→fd0, [out_w]→fd1, [err_w]→fd2
+     in the child; dup clears cloexec on those, so mlx-pp keeps its std fds while the parent-side ends
+     vanish at its exec. (The writer fork does NOT exec, so cloexec is irrelevant to it.) *)
   let (in_r, in_w) = Unix.pipe ~cloexec:true () in     (* mlx-pp's stdin  : the writer fork writes in_w *)
   let (out_r, out_w) = Unix.pipe ~cloexec:true () in   (* mlx-pp's stdout : we read out_r *)
+  let (err_r, err_w) = Unix.pipe ~cloexec:true () in   (* mlx-pp's stderr : we read err_r, rewrite, re-emit *)
   let mlx_pid =
-    Unix.create_process "mlx-pp" [| "mlx-pp" |] in_r out_w Unix.stderr
+    Unix.create_process "mlx-pp" [| "mlx-pp" |] in_r out_w err_w
   in
   Unix.close in_r;
   Unix.close out_w;
-  (* writer fork: close the read end of stdout we don't need, stream src, then exit hard. *)
+  Unix.close err_w;
+  (* writer fork: close the read ends we don't need, stream src, then exit hard. *)
   let writer_pid = Unix.fork () in
   if writer_pid = 0 then begin
     (try Unix.close out_r with _ -> ());
+    (try Unix.close err_r with _ -> ());
     let oc = Unix.out_channel_of_descr in_w in
     set_binary_mode_out oc true;
     (try output_string oc src; flush oc with _ -> ());
@@ -95,16 +140,24 @@ let run_mlx_pp_stdin (src : string) : string =
     Stdlib.exit 0
   end;
   Unix.close in_w;   (* parent holds no write end → only the fork can keep stdin open *)
+  (* read stdout AND stderr. mlx-pp's stderr is tiny (one diagnostic) and only written on error, so a
+     sequential read — stdout fully, then stderr fully — cannot deadlock: on success stderr is empty;
+     on failure mlx-pp closes stdout (EOF here) before/around writing the small stderr, which fits the
+     64 KiB pipe buffer unread. *)
   let ic = Unix.in_channel_of_descr out_r in
   set_binary_mode_in ic true;
   let out = read_all_in ic in
   close_in_noerr ic;
+  let ec = Unix.in_channel_of_descr err_r in
+  let err = read_all_in ec in
+  close_in_noerr ec;
   ignore (Unix.waitpid [] writer_pid);
   let _, status = Unix.waitpid [] mlx_pid in
   (match status with
    | Unix.WEXITED 0 -> ()
-   | Unix.WEXITED code -> exit code   (* mlx-pp already printed its diagnostic to our stderr *)
-   | _ -> exit 1);
+   | Unix.WEXITED code ->
+     output_string stderr (rewrite_stderr_fname orig_fname err); flush stderr; exit code
+   | _ -> output_string stderr (rewrite_stderr_fname orig_fname err); flush stderr; exit 1);
   out
 
 let () =
@@ -130,7 +183,7 @@ let () =
   end;
 
   (* REWRITE PATH — feed the pre-passed source to mlx-pp via stdin (no temp file), then remap the AST. *)
-  let out = run_mlx_pp_stdin pre in
+  let out = run_mlx_pp_stdin ~orig_fname:input_file pre in
 
   (* parse the binary AST: magic (raw) ++ output_value fname ++ output_value structure, then remap the
      locations to the original .mlx (column/line-exact via [pm]) + rewrite the filename, and re-emit. *)
