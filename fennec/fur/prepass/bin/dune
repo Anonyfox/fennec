@@ -1,19 +1,8 @@
-; Two BUILD/EDITOR tools over the one fennec `.mlx` pre-pass (fennec_mlx_prepass). Both are tiny
-; wrappers; neither is ever linked into the shipped framework runtime.
-
-; ── fennec-mlx-pp : the dialect PREPROCESSOR (drives the BUILD) ──────────────────────────────────
-; Runs the fennec pre-pass, pipes the result through the real mlx-pp, and rewrites the embedded
-; source filename back to the original .mlx path. Installed with a public_name so the workspace
-; dialect's (preprocess (run fennec-mlx-pp …)) can invoke it by bare name (like mlx-pp from PATH).
-; Depends on compiler-libs (Parsetree/Ast_mapper/Config) only to swap the filename in mlx-pp's binary
-; AST — a value-level rewrite, robust to marshalling layout.
-
-(executable
- (name fennec_mlx_pp)
- (public_name fennec-mlx-pp)
- (package fennec-cli)
- (modules fennec_mlx_pp)
- (libraries fennec_mlx_prepass unix compiler-libs.common))
+; The EDITOR tool over the fennec `.mlx` pre-pass (fennec_mlx_prepass) + the vendored parser. The
+; BUILD preprocessor is no longer a separate binary here — it is folded into `fennec mlx-pp` (the
+; CLI's internal subcommand, engine in fennec/fur/prepass/cli/fennec_mlx_cli.ml), which dune runs via
+; %{bin:fennec} from the dialect stanza. Only the merlin reader stays its own executable, because
+; Merlin invokes a reader by a FIXED binary name (`ocamlmerlin-<reader>`), not as a CLI subcommand.
 
 ; ── ocamlmerlin-fennec-mlx : the dialect MERLIN READER (fixes the EDITOR) ────────────────────────
 ; The dialect's (merlin_reader fennec-mlx) makes Merlin spawn `ocamlmerlin-fennec-mlx` as the

@@ -15,7 +15,6 @@ depends: [
   "fennec"
   "fennec-cli"
   "fennec-hunt"
-  "mlx" {>= "0.11"}
   "odoc" {with-doc}
 ]
 build: [

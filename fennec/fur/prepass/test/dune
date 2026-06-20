@@ -50,10 +50,11 @@
  (action
   (run %{exe:reader_delegation.exe} %{dep:../bin/ocamlmerlin_fennec_mlx.exe})))
 
-; A FOURTH proof — the DRIVER (fennec-mlx-pp) end to end over its stdin rewrite path: a hard mlx-pp
-; syntax error must point at the ORIGINAL .mlx (not `*stdin*`), and the rewrite-path success case must
-; still emit a valid binary AST with a clean stderr. Stdlib-only; it execs the built driver (passed as
-; argv.(1), a dune dep so it is built first) and needs `mlx-pp` on PATH, SKIPPING if it is absent.
+; A FOURTH proof — `fennec mlx-pp` end to end (the IN-PROCESS preprocessor): a syntax error must point
+; at the ORIGINAL .mlx with the OCaml-standard File/line report (never `*stdin*` / tmp), and the success
+; case must emit a valid binary AST with a clean stderr. Stdlib-only; it runs the `fennec` binary
+; (resolved via %{bin:fennec}, a dune dep so it is built first). Self-contained — the parser is vendored
+; into `fennec`, so it never SKIPs for a missing toolchain (only if argv.(1) is absent).
 
 (executable
  (name driver_diagnostics)
@@ -61,6 +62,6 @@
 
 (rule
  (alias runtest)
- (deps driver_diagnostics.exe ../bin/fennec_mlx_pp.exe)
+ (deps driver_diagnostics.exe %{bin:fennec})
  (action
-  (run %{exe:driver_diagnostics.exe} %{dep:../bin/fennec_mlx_pp.exe})))
+  (run %{exe:driver_diagnostics.exe} %{bin:fennec})))
