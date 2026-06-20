@@ -1,0 +1,9 @@
+; Warm-worker fixture, version 1. A lib whose module is named Widget (NOT wrapped) and whose
+; top-level prints its version + the cross-file marker. The v2 sibling defines a Widget too — loading
+; v1's Widget.cmo then v2's Widget.cmo in ONE worker proves the changed-module reload crux (a module
+; name re-Dynlinked with no conflict, because each RUN forks). depends on wwfix_dep ⇒ cross-file chain.
+(library
+ (name wwfix_v1)
+ (modes byte)
+ (wrapped false)
+ (libraries wwfix_dep))

@@ -1,0 +1,7 @@
+; Warm-worker test fixture: a tiny dependency lib so the worker-drive test can prove a CROSS-FILE
+; chain (this .cma is Dynlinked BEFORE the leaf module that references it). Bytecode (the worker
+; Dynlinks .cma/.cmo). wrapped false so the module is plain Ww_marker.
+(library
+ (name wwfix_dep)
+ (modes byte)
+ (wrapped false))

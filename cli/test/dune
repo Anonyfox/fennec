@@ -11,4 +11,41 @@
   test_pool
   test_reaper
   test_mongo_rs)
+ (modules
+  test_dune_watch
+  test_pidfile
+  test_assets
+  test_tty
+  test_pool
+  test_reaper
+  test_mongo_rs)
  (libraries fennec_dev fennec-paw fennec_testcmd unix))
+
+; The PRIMARY proof for the warm test worker: a direct socket drive (no dev server). It spawns the
+; worker and runs the example's test_components chain + the wwfix reload fixtures, asserting 42 checks
+; at low ms, a cross-file chain, changed-module reload across one worker, and the kill→fallback path.
+; Its own executable (it takes %{workspace_root} as an arg and needs explicit artifact deps), driven
+; by the rule below so `dune runtest` exercises it.
+(executable
+ (name test_warm_worker)
+ (modules test_warm_worker)
+ (libraries fennec_dev unix))
+
+(rule
+ (alias runtest)
+ (deps
+  ; the worker binary the client spawns
+  %{project_root}/cli/dev/worker/fennec_test_worker.bc
+  ; the example's app libs (the Dynlinked chain) + its test .cmo (built via the .bc target)
+  %{project_root}/examples/site/frontend/store/site_store.cma
+  %{project_root}/examples/site/frontend/components/site_components.cma
+  %{project_root}/examples/site/frontend/styles/site_styles.cma
+  %{project_root}/examples/site/frontend/handlers/site_handlers.cma
+  %{project_root}/examples/site/frontend_test/test_components.bc
+  ; the reload + cross-file fixtures
+  wwfix/dep/wwfix_dep.cma
+  wwfix/v1/wwfix_v1.cma
+  wwfix/v2/wwfix_v2.cma
+  test_warm_worker.exe)
+ (action
+  (run %{exe:test_warm_worker.exe})))

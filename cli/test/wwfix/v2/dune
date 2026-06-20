@@ -1,0 +1,6 @@
+; Warm-worker fixture, version 2 — same module name (Widget) as v1, different body. See v1/dune.
+(library
+ (name wwfix_v2)
+ (modes byte)
+ (wrapped false)
+ (libraries wwfix_dep))
