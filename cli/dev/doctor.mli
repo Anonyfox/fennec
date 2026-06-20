@@ -1,12 +1,13 @@
 (** [fennec doctor] — the one command a stuck beginner (or AI agent) runs when a frontend Fennec app
     won't build or the editor's [.mlx] IntelliSense is dead.
 
-    It verifies the whole [.mlx] dialect toolchain reaches the user's machine: the two fennec-owned
-    binaries ([fennec-mlx-pp] the build preprocessor, [ocamlmerlin-fennec-mlx] the editor reader),
-    the two stock mlx tools they delegate to ([mlx-pp], [ocamlmerlin-mlx]), the JS runtime the
-    bundler can use ([node]), AND that the project's [dune-project] declares the
-    [(dialect (name mlx) …)] stanza. For every MISSING piece it prints the exact remedy to paste; when
-    everything is present it prints a single green "toolchain OK".
+    It verifies the whole [.mlx] dialect toolchain reaches the user's machine — now SELF-CONTAINED in
+    [fennec-cli] (the mlx parser is vendored): the [fennec] binary itself (the build preprocessor is
+    [fennec mlx-pp]), [ocamlmerlin-fennec-mlx] (the editor reader), the JS runtime the bundler can use
+    ([node], optional), the OPTIONAL [ocamlmerlin-mlx] (an editor error-recovery upgrade — the reader
+    works without it), AND that the project's [dune-project] declares the [(dialect (name mlx) …)]
+    stanza. For every MISSING piece it prints the exact remedy to paste; when everything required is
+    present it prints a single green "toolchain OK".
 
     The report-building is pure (given the probe results), so it is unit-tested without touching the
     filesystem or PATH; {!run} wires the real probes and returns a process exit code. *)

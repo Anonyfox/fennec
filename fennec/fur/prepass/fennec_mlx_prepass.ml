@@ -1,10 +1,11 @@
 (* ════════════════════════════════════════════════════════════════════════════════════════
-   fennec-mlx-pp PRE-PASS — bare JSX text for fennec .mlx, as a source-to-source transform.
+   fennec .mlx PRE-PASS — bare JSX text for fennec .mlx, as a source-to-source transform.
 
-   This is NOT a fork of mlx OCaml parser. It is a small, fennec-owned LEXER that transforms a
+   This is NOT a fork of the mlx OCaml parser. It is a small, fennec-owned LEXER that transforms a
    fennec-flavoured .mlx (React/Svelte-style: bare text children + brace interpolation) into the
-   exact form today mlx-pp already accepts (quoted-string children + paren escapes). The driver
-   (pp.ml) runs THIS first, then hands the result to mlx-pp — so mlx does the real parse.
+   exact form the mlx grammar accepts (quoted-string children + paren escapes). `fennec mlx-pp`
+   (Fennec_mlx_cli) runs THIS first, then hands the result to the VENDORED mlx parser (Fennec_mlx,
+   in fennec/fur/prepass/vendor/) — so mlx does the real parse, entirely in-process.
 
    ────────────────────────────────────────────────────────────────────────────────────────
    WHY a lexer (not a regex, not a parser)

@@ -60,8 +60,9 @@
       ( ) and prose punctuation      → plain text (no escape — JSX adds none either)
     v}
     - {b bare text is text}: [<h1>Welcome to Fennec 🦊</h1>], [<a>Sign in</a>] ([in] is an OCaml
-      keyword, yet it reads fine — a fennec-owned [.mlx] pre-pass [fennec-mlx-pp] quotes child text
-      BEFORE the parser, see [fennec/fur/prepass/]). A literal [(] is text like any other character:
+      keyword, yet it reads fine — a fennec-owned [.mlx] pre-pass quotes child text BEFORE the parser,
+      run in-process by [fennec mlx-pp] over a vendored mlx parser, see [fennec/fur/prepass/]). A
+      literal [(] is text like any other character:
       [<p>Call us (now) — it's free!</p>] needs no quoting. Whitespace collapses/trims like JSX (source
       indentation between elements is dropped; inline runs collapse to one space).
     - {b [{expr}] interpolates a VALUE} (JSX-identical) — auto-wrapped in {!node}, so an

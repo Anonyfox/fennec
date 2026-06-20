@@ -15,7 +15,8 @@ type tool = {
 type project = { dune_project : string option; dialect_ok : bool }
 
 (* The verbatim stanza we tell the user to paste — kept identical to the workspace's own dune-project
-   and to what `fennec new` emits, so "what doctor prints" and "what works" can never drift. *)
+   and to what `fennec new` emits, so "what doctor prints" and "what works" can never drift. The
+   preprocessor is the `fennec` binary itself (`fennec mlx-pp`), resolved by dune via %{bin:fennec}. *)
 let stanza =
   "(dialect\n\
   \ (name mlx)\n\
@@ -23,7 +24,7 @@ let stanza =
   \  (extension mlx)\n\
   \  (merlin_reader fennec-mlx)\n\
   \  (preprocess\n\
-  \   (run fennec-mlx-pp %{input-file}))))"
+  \   (run %{bin:fennec} mlx-pp %{input-file}))))"
 
 (* ── PURE: does a dune-project text declare the mlx dialect? ──────────────────────────────────────
    We do not parse s-expressions (no sexp lib in this library, and a substring scan is robust enough):
@@ -172,24 +173,25 @@ let rec find_dune_project dir =
 
 let read_file path = try In_channel.with_open_bin path In_channel.input_all with _ -> ""
 
-(* the tools we check, with their fennec-specific remedies *)
+(* the tools we check, with their fennec-specific remedies. The `.mlx` toolchain is now SELF-CONTAINED
+   in fennec-cli (the parser is vendored): the BUILD preprocessor is `fennec mlx-pp` (so it is the
+   `fennec` binary itself), and the editor reader is `ocamlmerlin-fennec-mlx` — both from fennec-cli,
+   no external `mlx` package. `ocamlmerlin-mlx` is now OPTIONAL: the reader works without it (in-process
+   vendored parse), and present only buys richer editor error-recovery. *)
 let probe_tools () : tool list =
-  [ { name = "fennec-mlx-pp"; required = true;
-      purpose = "the .mlx build preprocessor";
-      found = which "fennec-mlx-pp";
-      remedy = "opam install fennec-cli   (ships fennec-mlx-pp + ocamlmerlin-fennec-mlx)" };
+  [ { name = "fennec"; required = true;
+      purpose = "the .mlx build preprocessor (`fennec mlx-pp`) + the CLI";
+      found = which "fennec";
+      remedy = "opam install fennec-cli   (the `fennec` binary IS the .mlx build toolchain — parser vendored)" };
     { name = "ocamlmerlin-fennec-mlx"; required = true;
       purpose = "the editor merlin reader for .mlx";
       found = which "ocamlmerlin-fennec-mlx";
-      remedy = "opam install fennec-cli   (ships fennec-mlx-pp + ocamlmerlin-fennec-mlx)" };
-    { name = "mlx-pp"; required = true;
-      purpose = "the stock mlx parser (fennec-mlx-pp pipes through it)";
-      found = which "mlx-pp";
-      remedy = "opam install mlx" };
-    { name = "ocamlmerlin-mlx"; required = true;
-      purpose = "the stock mlx editor reader (delegated to)";
+      remedy = "opam install fennec-cli   (ships fennec + ocamlmerlin-fennec-mlx)" };
+    { name = "ocamlmerlin-mlx"; required = false;
+      purpose = "OPTIONAL: richer .mlx editor error-recovery (the reader works without it)";
       found = which "ocamlmerlin-mlx";
-      remedy = "opam install mlx" };
+      remedy = "opam install ocamlmerlin-mlx — optional upgrade: the fennec reader already parses .mlx \
+                in-process, this only adds partial-tree recovery while you type" };
     { name = "node"; required = false;
       purpose = "JS runtime esbuild can use for npm deps";
       found = which "node";
@@ -213,7 +215,7 @@ let%test "dialect detector accepts the canonical stanza" =
 
 let%test "dialect detector accepts the workspace-style multiline stanza" =
   let t =
-    "(lang dune 3.16)\n(generate_opam_files true)\n\n(dialect\n (name mlx)\n (implementation\n  (extension mlx)\n  (merlin_reader fennec-mlx)\n  (preprocess\n   (run fennec-mlx-pp %{input-file}))))\n\n(package (name foo))"
+    "(lang dune 3.16)\n(generate_opam_files true)\n\n(dialect\n (name mlx)\n (implementation\n  (extension mlx)\n  (merlin_reader fennec-mlx)\n  (preprocess\n   (run %{bin:fennec} mlx-pp %{input-file}))))\n\n(package (name foo))"
   in
   text_declares_dialect t
 
@@ -232,8 +234,8 @@ let%test "dialect detector handles dialect-before-name with other names between"
 
 (* render: all present, with a dialect stanza → OK + green verdict *)
 let all_present_tools =
-  [ { name = "fennec-mlx-pp"; found = true; required = true; purpose = "p"; remedy = "r" };
-    { name = "mlx-pp"; found = true; required = true; purpose = "p"; remedy = "opam install mlx" };
+  [ { name = "fennec"; found = true; required = true; purpose = "p"; remedy = "r" };
+    { name = "ocamlmerlin-fennec-mlx"; found = true; required = true; purpose = "p"; remedy = "opam install fennec-cli" };
     { name = "node"; found = true; required = false; purpose = "p"; remedy = "r" } ]
 
 let%test "render: all present + dialect ⇒ all_ok=true, says toolchain OK" =
@@ -241,14 +243,14 @@ let%test "render: all present + dialect ⇒ all_ok=true, says toolchain OK" =
   ok && (let re s = let n = String.length s and m = String.length text in let rec go i = i + n <= m && (String.sub text i n = s || go (i+1)) in go 0 in re "toolchain OK")
 
 (* render: a required tool missing ⇒ not ok, remedy printed *)
-let%test "render: missing required mlx-pp ⇒ all_ok=false + prints `opam install mlx`" =
+let%test "render: missing required fennec ⇒ all_ok=false + prints `opam install fennec-cli`" =
   let tools =
-    [ { name = "fennec-mlx-pp"; found = true; required = true; purpose = "p"; remedy = "opam install fennec-cli" };
-      { name = "mlx-pp"; found = false; required = true; purpose = "p"; remedy = "opam install mlx" } ]
+    [ { name = "fennec"; found = false; required = true; purpose = "p"; remedy = "opam install fennec-cli" };
+      { name = "ocamlmerlin-fennec-mlx"; found = true; required = true; purpose = "p"; remedy = "opam install fennec-cli" } ]
   in
   let text, ok = render Tty.plain ~tools ~project:{ dune_project = Some "/x/dune-project"; dialect_ok = true } in
   let re s = let n = String.length s and m = String.length text in let rec go i = i + n <= m && (String.sub text i n = s || go (i+1)) in go 0 in
-  (not ok) && re "opam install mlx" && re "INCOMPLETE"
+  (not ok) && re "opam install fennec-cli" && re "INCOMPLETE"
 
 (* render: dialect stanza missing ⇒ not ok, the verbatim stanza is printed *)
 let%test "render: missing dialect stanza ⇒ all_ok=false + prints the paste-in stanza" =
@@ -256,19 +258,29 @@ let%test "render: missing dialect stanza ⇒ all_ok=false + prints the paste-in 
   let re s = let n = String.length s and m = String.length text in let rec go i = i + n <= m && (String.sub text i n = s || go (i+1)) in go 0 in
   (not ok) && re "(merlin_reader fennec-mlx)" && re "(dialect"
 
-(* render: an OPTIONAL tool missing does NOT fail the verdict *)
+(* render: an OPTIONAL tool missing does NOT fail the verdict (e.g. node, or the optional ocamlmerlin-mlx) *)
 let%test "render: missing optional node ⇒ still all_ok=true" =
   let tools =
-    [ { name = "mlx-pp"; found = true; required = true; purpose = "p"; remedy = "opam install mlx" };
+    [ { name = "fennec"; found = true; required = true; purpose = "p"; remedy = "opam install fennec-cli" };
       { name = "node"; found = false; required = false; purpose = "p"; remedy = "install node" } ]
   in
   let _text, ok = render Tty.plain ~tools ~project:{ dune_project = Some "/x/dune-project"; dialect_ok = true } in
   ok
 
-(* render: identical remedies are de-duplicated (fennec-mlx-pp + ocamlmerlin both say install fennec-cli) *)
+(* render: the optional ocamlmerlin-mlx missing does NOT fail the verdict (it is an editor upgrade) *)
+let%test "render: missing optional ocamlmerlin-mlx ⇒ still all_ok=true, noted as optional" =
+  let tools =
+    [ { name = "fennec"; found = true; required = true; purpose = "p"; remedy = "r" };
+      { name = "ocamlmerlin-mlx"; found = false; required = false; purpose = "p"; remedy = "opam install ocamlmerlin-mlx" } ]
+  in
+  let text, ok = render Tty.plain ~tools ~project:{ dune_project = Some "/x/dune-project"; dialect_ok = true } in
+  let re s = let n = String.length s and m = String.length text in let rec go i = i + n <= m && (String.sub text i n = s || go (i+1)) in go 0 in
+  ok && re "toolchain OK" && re "ocamlmerlin-mlx"
+
+(* render: identical remedies are de-duplicated (fennec + ocamlmerlin-fennec-mlx both say install fennec-cli) *)
 let%test "render: duplicate remedies appear once" =
   let tools =
-    [ { name = "fennec-mlx-pp"; found = false; required = true; purpose = "p"; remedy = "opam install fennec-cli" };
+    [ { name = "fennec"; found = false; required = true; purpose = "p"; remedy = "opam install fennec-cli" };
       { name = "ocamlmerlin-fennec-mlx"; found = false; required = true; purpose = "p"; remedy = "opam install fennec-cli" } ]
   in
   let text, _ok = render Tty.plain ~tools ~project:{ dune_project = Some "/x/dune-project"; dialect_ok = true } in

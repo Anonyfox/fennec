@@ -1,10 +1,11 @@
 ; The fennec `.mlx` PRE-PASS: a source→source lexer that turns fennec-flavoured JSX (bare text
-; children + {expr} interpolation) into the quoted-text + (expr) form today's mlx-pp accepts, then
-; the `fennec-mlx-pp` driver pipes the result through mlx-pp. Stdlib-only (no ppxlib, no mlx link —
-; mlx's parser is not a public library), so it stays tiny and fast on the per-file hot path.
+; children + {expr} interpolation) into the quoted-text + (expr) form the mlx grammar accepts. The
+; in-process `fennec mlx-pp` (../prepass/cli, Fennec_mlx_cli) runs this, then parses the result with
+; the VENDORED mlx parser (../prepass/vendor). Stdlib-only (no ppxlib, no parser link), so this leaf
+; stays tiny and fast on the per-file hot path.
 ;
 ; Kept as its OWN leaf library (fennec_mlx_prepass) so the exhaustive unit-test suite can link the
-; transform directly, and the driver executable is a thin wrapper over it.
+; transform directly, and both the CLI engine and the merlin reader build on it.
 
 (library
  (name fennec_mlx_prepass)

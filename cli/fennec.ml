@@ -558,8 +558,9 @@ let new_cmd =
     [ `S Manpage.s_description;
       `P
         "Create a new directory $(i,NAME) containing the smallest WORKING frontend Fennec app: its \
-         own $(b,dune-project) (with the $(b,.mlx) dialect stanza + the $(b,fennec)/$(b,fennec-cli)/\
-         $(b,mlx) deps), a $(b,server.ml) that renders a $(b,.mlx) component to HTML, and a starter \
+         own $(b,dune-project) (with the $(b,.mlx) dialect stanza + the $(b,fennec)/$(b,fennec-cli) \
+         deps — no external $(b,mlx), the parser is vendored), a $(b,server.ml) that renders a \
+         $(b,.mlx) component to HTML, and a starter \
          $(b,frontend/hello.mlx). Immediately after, $(b,cd NAME && dune build) compiles and \
          $(b,fennec dev) serves it with livereload — and the editor lights up on the $(b,.mlx) with \
          no hand-assembly.";
@@ -579,13 +580,14 @@ let doctor_cmd =
   let man =
     [ `S Manpage.s_description;
       `P
-        "Verify that the whole $(b,.mlx) dialect toolchain reached your machine: the two \
-         fennec-owned binaries ($(b,fennec-mlx-pp) the build preprocessor, \
-         $(b,ocamlmerlin-fennec-mlx) the editor reader), the two stock mlx tools they delegate to \
-         ($(b,mlx-pp), $(b,ocamlmerlin-mlx)), $(b,node) (only needed if a bundle imports npm \
-         packages), AND that this project's $(b,dune-project) declares the \
-         $(b,\\(dialect \\(name mlx\\) …\\)) stanza. For each missing piece it prints the exact \
-         remedy to run or paste; when everything is present it prints a green $(b,toolchain OK).";
+        "Verify that the whole $(b,.mlx) dialect toolchain reached your machine — now self-contained \
+         in $(b,fennec-cli) (the mlx parser is vendored): the $(b,fennec) binary itself (the build \
+         preprocessor is $(b,fennec mlx-pp)), $(b,ocamlmerlin-fennec-mlx) (the editor reader), \
+         $(b,node) (only needed if a bundle imports npm packages), the OPTIONAL $(b,ocamlmerlin-mlx) \
+         (an editor error-recovery upgrade — the reader works without it), AND that this project's \
+         $(b,dune-project) declares the $(b,\\(dialect \\(name mlx\\) …\\)) stanza. For each missing \
+         piece it prints the exact remedy to run or paste; when everything required is present it \
+         prints a green $(b,toolchain OK).";
       `P
         "This is the first thing to run when a frontend Fennec app fails to build with a cryptic \
          preprocessor error, or when $(b,.mlx) IntelliSense is dead in the editor. Exit status is \

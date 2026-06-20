@@ -12,9 +12,9 @@
    WHY this exists
    ────────────────────────────────────────────────────────────────────────────────────────
    The fennec `.mlx` surface adds bare JSX text children + `{expr}` interpolation on top of mlx.
-   The BUILD already handles it: the dialect's `(preprocess (run fennec-mlx-pp …))` runs the fennec
-   PRE-PASS (`Fennec_mlx_prepass.transform`) — quoting bare text + normalising `{expr}` → `(expr)` —
-   before piping to `mlx-pp`, which does the real parse. So `dune build` is perfect.
+   The BUILD already handles it: the dialect's `(preprocess (run %{bin:fennec} mlx-pp …))` runs the
+   fennec PRE-PASS (`Fennec_mlx_prepass.transform`) — quoting bare text + normalising `{expr}` →
+   `(expr)` — then parses with the VENDORED mlx parser in-process. So `dune build` is perfect.
 
    The EDITOR is a separate path. Merlin does NOT run the dialect's `(preprocess …)`; for syntax it
    runs the dialect's `(merlin_reader …)` — an external "reader" subprocess that Merlin feeds the raw
@@ -138,8 +138,9 @@ let error_structure (msg : string) : R.parsetree =
   R.Structure [ item ]
 
 let no_stock_reader_msg =
-  "fennec: ocamlmerlin-mlx is not installed, so .mlx syntax cannot be resolved in the editor. \
-   The build is unaffected (it uses fennec-mlx-pp). Install it with: opam install ocamlmerlin-mlx"
+  "fennec: this .mlx buffer could not be parsed (the in-process vendored parser found a syntax error \
+   and the optional ocamlmerlin-mlx error-recovery reader is not installed). The build is unaffected \
+   (it uses `fennec mlx-pp`). For richer in-editor recovery, install: opam install ocamlmerlin-mlx"
 
 module Fennec_reader : R.V0 = struct
   (* Per-buffer internal state: whether the child stock reader is available, the position map for the

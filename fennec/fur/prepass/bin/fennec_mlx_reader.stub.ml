@@ -16,5 +16,5 @@ let main () =
   prerr_endline
     "ocamlmerlin-fennec-mlx: built without merlin-extend (it was not installed at build time), so \
      the fennec .mlx reader is unavailable. Install merlin / ocaml-lsp-server (which provide \
-     merlin-extend) and rebuild. The dune BUILD is unaffected — it uses fennec-mlx-pp.";
+     merlin-extend) and rebuild. The dune BUILD is unaffected — it uses `fennec mlx-pp`.";
   exit 1

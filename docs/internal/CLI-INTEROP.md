@@ -10,7 +10,7 @@ the rule wins — change the design, not the rule (or change this doc deliberate
 | --- | --- | --- |
 | **dune** | (the build tool) | The build graph. The **only** source-tree watcher. Builds everything — the native OCaml server, the js_of_ocaml client bundle (Fennec.Fur), and assets (CSS/JS) — because assets are dune rules that call the CLI. |
 | **CLI** (`fennec`) | `cli/`, package `fennec-cli` | Two things dune doesn't do (see § The CLI's command surface): **bundle assets** (`fennec build`, invoked *by* dune rules) and **orchestrate the lifecycle** (`fennec dev` watches via dune + supervises the server; `fennec test` builds via dune + runs the suites, incl. the `docs` doc-coverage cut). Never watches source or owns the build graph. Internal plumbing (`__esbuild-worker`, `gen-doctests`) is machine-facing only. Distributed as a prebuilt binary. |
-| **`.mlx` dialect tools** | `fennec-mlx-pp` + `ocamlmerlin-fennec-mlx`, **also** package `fennec-cli` | The third CLI role, and the one exception to "delete the CLI and it still builds": `fennec-mlx-pp` is the **build-time preprocessor** dune runs on every `.mlx` (declared in `dune-project`'s `(dialect …)`), and `ocamlmerlin-fennec-mlx` is the **editor's merlin reader** for `.mlx`. Both ship in `fennec-cli`'s `.install` and delegate to the stock `mlx` tools. Unlike `build`/`dev`/`test` (pure convenience), these are a **hard build/editor dependency** for any project containing a `.mlx` — `dune build` invokes `fennec-mlx-pp` by name. (`fennec doctor` verifies they reached the machine.) |
+| **`.mlx` dialect tools** | `fennec mlx-pp` (the `fennec` binary itself) + `ocamlmerlin-fennec-mlx`, package `fennec-cli` | The third CLI role, and the one exception to "delete the CLI and it still builds": the **build-time preprocessor** is `fennec mlx-pp` — the `fennec` binary itself, run by dune on every `.mlx` via `%{bin:fennec}` (declared in `dune-project`'s `(dialect …)`) — and `ocamlmerlin-fennec-mlx` is the **editor's merlin reader** for `.mlx`. The mlx parser is **vendored into `fennec-cli`** (no external `mlx` opam package); both parse `.mlx` in-process. Unlike `build`/`dev`/`test` (pure convenience), this is a **hard build/editor dependency** for any project containing a `.mlx` — `dune build` invokes `%{bin:fennec} mlx-pp`. (`fennec doctor` verifies it reached the machine.) |
 | **Framework** (`fennec`) | `fennec/`, package `fennec` | The runtime: HTTP core, Eio server, and the livereload **relay** (holds the browser sockets; the CLI drives it). Watches nothing itself. Shipped to opam. |
 | **User app** | e.g. `examples/site/` | A **plain dune project**. Depends on the framework lib; uses dune rules that call the CLI for assets. Knows nothing about the CLI's existence at the code level. |
 
@@ -62,12 +62,15 @@ convenience and quality on top, never a replacement for dune.
 
 **The one caveat — the `.mlx` dialect.** A project that contains any `.mlx` file *does* depend on
 the CLI package at build time: `dune-project` declares `(dialect (name mlx) (… (preprocess (run
-fennec-mlx-pp …))))`, so `dune build` shells out to `fennec-mlx-pp` (and the editor to
-`ocamlmerlin-fennec-mlx`) — both binaries from `fennec-cli`'s `.install`. So "delete the CLI and
-`dune build` still works" holds for a pure-`.ml`/`.mli` project, but **not** for a `.mlx` frontend:
-there the dialect preprocessor is a genuine build dependency (and the merlin reader a genuine editor
-dependency). This is by design — the dialect is the one place the CLI package is load-bearing rather
-than convenience. `opam install fennec-cli` installs all of it; `fennec doctor` checks it.
+%{bin:fennec} mlx-pp …))))`, so `dune build` runs `fennec mlx-pp` (and the editor runs
+`ocamlmerlin-fennec-mlx`) — the `fennec` binary itself plus one reader binary, both from
+`fennec-cli`. So "delete the CLI and `dune build` still works" holds for a pure-`.ml`/`.mli` project,
+but **not** for a `.mlx` frontend: there the dialect preprocessor is a genuine build dependency (and
+the merlin reader a genuine editor dependency). This is by design — the dialect is the one place the
+CLI package is load-bearing rather than convenience. But it is now a **zero-external-dependency**
+toolchain: the mlx parser is **vendored into `fennec-cli`** (same model as the vendored Go esbuild /
+Rust Lightning CSS), so `fennec mlx-pp` parses `.mlx` in-process — no `mlx` opam package, no separate
+dialect binary on PATH. `opam install fennec-cli` installs all of it; `fennec doctor` checks it.
 
 ## Touchpoints (the entire interface surface)
 
@@ -151,11 +154,12 @@ mode, so a prod build ships none of it.
   browser via the reconnect loop. You lose the *automation* — auto-restart and CSS
   hot-swap — because all output-watching lived in the CLI, by design. ← decoupling proof.
   **Exception: a `.mlx` frontend.** This holds for the *automation* layer, but the `fennec-cli`
-  package also ships the `.mlx` dialect preprocessor `fennec-mlx-pp`, which `dune build` invokes
-  on every `.mlx` (per the `(dialect …)` stanza). So a project with any `.mlx` file does NOT build
-  with the CLI package uninstalled — the dialect tools are a real build/editor dependency, not
-  automation (see § The CLI's command surface → "the one caveat"). A pure-`.ml` project is fully
-  decoupled; a `.mlx` one depends on `fennec-cli` at build time.
+  package IS the `.mlx` dialect preprocessor (`fennec mlx-pp`), which `dune build` invokes on every
+  `.mlx` (per the `(dialect …)` stanza). So a project with any `.mlx` file does NOT build with the
+  CLI package uninstalled — the dialect is a real build/editor dependency, not automation (see § The
+  CLI's command surface → "the one caveat"). A pure-`.ml` project is fully decoupled; a `.mlx` one
+  depends on `fennec-cli` at build time — but on `fennec-cli` *alone*: the mlx parser is vendored, so
+  there is no further external `mlx` dependency to satisfy.
 - **Delete dev mode** → it's all behind `FENNEC_ENV`; the prod server contains no
   livereload code, no watcher, no injected script.
 - **No file acrobatics** → the user's source is never rewritten on disk.

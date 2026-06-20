@@ -92,7 +92,7 @@ let readme ~name ~comp_lib:_ =
      A minimal frontend Fennec app (server-rendered).\n\n\
      ## Run\n\n\
      ```sh\n\
-     dune build      # compile (the .mlx is preprocessed by fennec-mlx-pp)\n\
+     dune build      # compile (the .mlx is preprocessed by `fennec mlx-pp`)\n\
      fennec dev      # run with livereload — it prints the local URL to open\n\
      ```\n\n\
      ## Layout\n\n\
@@ -115,9 +115,9 @@ let files ~(name : string) : (string * string) list =
   let dune_project_text =
     Printf.sprintf
       "(lang dune 3.16)\n\n\
-       ; The .mlx dialect: this stanza is what makes `.mlx` files compile (via fennec-mlx-pp) and\n\
+       ; The .mlx dialect: this stanza is what makes `.mlx` files compile (via `fennec mlx-pp`) and\n\
        ; light up in the editor (via the ocamlmerlin-fennec-mlx reader). Do not remove it. If `.mlx`\n\
-       ; IntelliSense ever dies or the build can't find fennec-mlx-pp, run `fennec doctor`.\n\
+       ; IntelliSense ever dies or the build can't find `fennec`, run `fennec doctor`.\n\
        %s\n\n\
        (package\n\
       \ (name %s)\n\
@@ -126,10 +126,9 @@ let files ~(name : string) : (string * string) list =
       \  (dune (>= 3.16))\n\
       \  ; the runtime framework (Fennec.serve, Fur, Paw)\n\
       \  fennec\n\
-      \  ; the CLI + the .mlx dialect toolchain (fennec / fennec-mlx-pp / ocamlmerlin-fennec-mlx);\n\
-      \  ; pulls `mlx` (mlx-pp / ocamlmerlin-mlx) transitively\n\
-      \  fennec-cli\n\
-      \  (mlx (>= 0.11))))\n"
+      \  ; the CLI + the .mlx dialect toolchain (the `fennec` binary IS `fennec mlx-pp`, plus the\n\
+      \  ; ocamlmerlin-fennec-mlx editor reader). The mlx parser is VENDORED — no external `mlx` dep.\n\
+      \  fennec-cli))\n"
       Doctor.stanza (lib_name_of name)
   in
   [ ("dune-project", dune_project_text);
@@ -207,9 +206,12 @@ let contains hay needle =
 let%test "files: dune-project carries the dialect stanza" =
   contains (find_file "demo" "dune-project") "(merlin_reader fennec-mlx)"
 
-let%test "files: dune-project declares fennec-cli + mlx deps" =
+let%test "files: dune-project declares fennec + fennec-cli, and NO external mlx dep" =
   let dp = find_file "demo" "dune-project" in
-  contains dp "fennec-cli" && contains dp "(mlx (>= 0.11))" && contains dp "fennec"
+  contains dp "fennec-cli" && contains dp "fennec" && not (contains dp "(mlx ")
+
+let%test "files: dune-project dialect runs `fennec mlx-pp` (the vendored in-process preprocessor)" =
+  contains (find_file "demo" "dune-project") "(run %{bin:fennec} mlx-pp %{input-file})"
 
 let%test "files: dune-project package name = the project name" =
   contains (find_file "my-app" "dune-project") "(name my_app)"

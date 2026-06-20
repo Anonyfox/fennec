@@ -42,12 +42,11 @@ jobs:
         run: |
           set -eux
           mkdir -p out
-          # The release ships the WHOLE `.mlx` dialect toolchain, not just `fennec`: a
-          # frontend Fennec app needs the build preprocessor (fennec-mlx-pp) and the editor
-          # merlin reader (ocamlmerlin-fennec-mlx) on PATH too, both produced by fennec-cli.
-          # (The stock mlx tools — mlx-pp / ocamlmerlin-mlx — come via `opam install mlx`,
-          # which the curl-the-binary user installs alongside; see docs/getting-started.)
-          for bin in fennec fennec-mlx-pp ocamlmerlin-fennec-mlx; do
+          # The release ships the `.mlx` dialect toolchain with ZERO external dependency: the
+          # `fennec` binary IS the build preprocessor (`fennec mlx-pp`, mlx parser vendored in),
+          # and the editor merlin reader is `ocamlmerlin-fennec-mlx` (also self-contained — it
+          # parses .mlx in-process). No `mlx` opam package, no `mlx-pp` / `ocamlmerlin-mlx`.
+          for bin in fennec ocamlmerlin-fennec-mlx; do
             # dune installs each exe under _build; cp follows the symlink to the real
             # binary, producing a standalone, self-contained executable.
             cp "_build/install/default/bin/${bin}" "out/${bin}-${{ matrix.target }}"

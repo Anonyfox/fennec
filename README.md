@@ -58,29 +58,30 @@ is the full tour). Prefer to build the CLI yourself (adds Go + Rust)? See
 
 ## Start your own frontend app
 
-A Fennec frontend uses the `.mlx` dialect (JSX-identical: bare text + `{expr}`). Two binaries make it
-work — `fennec-mlx-pp` (the **build** preprocessor `dune` runs on every `.mlx`) and
-`ocamlmerlin-fennec-mlx` (the **editor** reader) — plus the stock `mlx` tools they delegate to. The
-fastest way to get the lot is opam, which installs all four in one step:
+A Fennec frontend uses the `.mlx` dialect (JSX-identical: bare text + `{expr}`). The whole `.mlx`
+toolchain is **`fennec-cli` and nothing else** — no external `mlx` package. The `fennec` binary IS
+the **build** preprocessor (`fennec mlx-pp`, which `dune` runs on every `.mlx`), with the mlx parser
+vendored straight into it; `ocamlmerlin-fennec-mlx` is the **editor** reader (also self-contained — it
+parses `.mlx` in-process). One install gets the lot:
 
 ```sh
-opam install fennec-cli   # fennec + fennec-mlx-pp + ocamlmerlin-fennec-mlx, and pulls mlx (mlx-pp + ocamlmerlin-mlx)
+opam install fennec-cli   # the whole .mlx toolchain: fennec (= fennec mlx-pp) + ocamlmerlin-fennec-mlx
 ```
 
-(The prebuilt `fennec` download above also ships `fennec-mlx-pp` and `ocamlmerlin-fennec-mlx`
-alongside it; you still need `opam install mlx` for the stock tools they call.)
+(The prebuilt `fennec` download above ships `ocamlmerlin-fennec-mlx` alongside it — that's everything;
+there is no stock `mlx` to install.)
 
 **Scaffold a working app** — one command, then build and run, editor already lit up:
 
 ```sh
 fennec new hello-fennec
 cd hello-fennec
-dune build      # compiles; the .mlx is preprocessed by fennec-mlx-pp
+dune build      # compiles; the .mlx is preprocessed by `fennec mlx-pp`
 fennec dev      # runs with livereload — prints the local URL to open
 ```
 
 **Or wire it by hand.** A `.mlx` app is a plain dune project with **one** extra stanza in its
-`dune-project` — paste this verbatim (it tells dune to run `fennec-mlx-pp` on `.mlx` and use the
+`dune-project` — paste this verbatim (it tells dune to run `fennec mlx-pp` on `.mlx` and use the
 fennec merlin reader in the editor):
 
 ```lisp
@@ -90,18 +91,20 @@ fennec merlin reader in the editor):
   (extension mlx)
   (merlin_reader fennec-mlx)
   (preprocess
-   (run fennec-mlx-pp %{input-file}))))
+   (run %{bin:fennec} mlx-pp %{input-file}))))
 ```
 
-…and declare `fennec` + `fennec-cli` + `(mlx (>= 0.11))` in the package's `(depends …)`. That's the
-whole setup — the dialect is the only fennec-specific thing in the build.
+…and declare `fennec` + `fennec-cli` in the package's `(depends …)` — no `mlx`. That's the whole
+setup; the dialect is the only fennec-specific thing in the build, and `%{bin:fennec}` resolves it
+exactly like the asset bundler.
 
 **Editor (VS Code / any LSP).** The OCaml Platform extension / `ocamllsp` picks up
 `ocamlmerlin-fennec-mlx` from your opam switch automatically — no settings to change — so `.mlx`
-files get hover, completion, and jump-to-definition. **If `.mlx` IntelliSense is dead, or a build
-fails with a cryptic preprocessor error, run `fennec doctor`:** it checks every piece of the
-toolchain (both fennec binaries, both stock `mlx` tools, the `(dialect …)` stanza) and prints the
-exact fix for anything missing.
+files get hover, completion, and jump-to-definition. The reader works off `fennec-cli` alone; the
+optional `opam install ocamlmerlin-mlx` only adds richer error-recovery while you type. **If `.mlx`
+IntelliSense is dead, or a build fails with a cryptic preprocessor error, run `fennec doctor`:** it
+checks every piece of the toolchain (the `fennec` binary, the editor reader, the `(dialect …)`
+stanza) and prints the exact fix for anything missing.
 
 ## AI-first loop
 
