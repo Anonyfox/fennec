@@ -61,5 +61,10 @@ val notice : t -> level -> string -> unit
 (** Relay a line the dev server itself printed (the user's app logs), kept above the region. *)
 val app : t -> string -> unit
 
+(** Render one finished HTTP request. Ambient traffic (2xx–4xx) is a dim, status-coloured line shown
+    only in the interactive view; an error (the funnel set [error], or any 5xx) is a prominent red line
+    plus its message, shown in every mode so a piped agent sees runtime failures. Always append-only. *)
+val http : t -> Paw.Access.t -> unit
+
 (** Clean-shutdown sign-off with a terse session summary. *)
 val stopped : t -> unit

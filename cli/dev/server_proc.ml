@@ -11,9 +11,13 @@ type t = { pid : int; fd : Unix.file_descr; carry : Buffer.t }
 type parsed =
   | Urls of (string * string) list (* the server bound and reported its dev URLs, as (name, url) pairs *)
   | Port_busy of int (* the server could not bind: this port is held *)
+  | Http of Paw.Access.t (* one finished HTTP request, framed by the app's dev-mode logger *)
   | Chatter (* the server's own framework noise (or a blank line) — ignore *)
   | App_log of string (* the user's application output — relay verbatim *)
 
+(* ORDER MATTERS: an [fennec:http] line must be tried BEFORE the chatter fallthrough. Its prefix
+   ([fennec:http]) shares a stem with the chatter prefix ([fennec]) but is NOT a prefix-match of it
+   (they diverge at the ':' vs ']'), so without this arm it would fall through to App_log, not Chatter. *)
 let classify_line raw =
   let line = String.trim raw in
   match Dev_proto.parse_urls_line line with
@@ -21,7 +25,10 @@ let classify_line raw =
   | None -> (
     match Dev_proto.parse_port_busy line with
     | Some p -> Port_busy p
-    | None -> if line = "" || Dev_proto.starts_with line Dev_proto.chatter_prefix then Chatter else App_log line)
+    | None -> (
+      match Dev_proto.parse_http_line line with
+      | Some access -> Http access
+      | None -> if line = "" || Dev_proto.starts_with line Dev_proto.chatter_prefix then Chatter else App_log line))
 
 (* ──── tests: classify_line ──── *)
 
@@ -47,6 +54,22 @@ let%test "an app log -> App_log (trimmed)" =
 
 let%test "leading/trailing space on a urls line still parses" =
   classify_line "  [fennec:urls] web=http://x  " = Urls [ ("web", "http://x") ]
+
+let%test "a structured http line -> Http (round-trips the access event)" =
+  let a : Paw.Access.t =
+    { ts = 0.; meth = "GET"; path = "/health"; status = 200; dur_us = 1234; bytes = 17;
+      ip = Some "127.0.0.1"; req_id = None; error = None; version = "HTTP/1.1"; host = "localhost" }
+  in
+  match classify_line (Paw.Dev_proto.http_line a) with
+  | Http b -> b.meth = "GET" && b.path = "/health" && b.status = 200 && b.dur_us = 1234 && b.bytes = 17
+  | _ -> false
+
+let%test "an http line is NOT mistaken for chatter" =
+  let a : Paw.Access.t =
+    { ts = 0.; meth = "POST"; path = "/x"; status = 500; dur_us = 9; bytes = 0; ip = None;
+      req_id = None; error = Some "boom"; version = "HTTP/1.1"; host = "" }
+  in
+  match classify_line (Paw.Dev_proto.http_line a) with Http _ -> true | _ -> false
 
 let start ~exe ~env =
   try

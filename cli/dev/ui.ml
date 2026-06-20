@@ -198,6 +198,75 @@ let notice t level msg =
 
 let app t line = log t line (* relay a server line verbatim, above the region *)
 
+(* ---- live HTTP traffic ---- *)
+
+(* status-class colour, mirroring the event glyphs: 2xx green · 3xx cyan · 4xx yellow · 5xx red *)
+let status_paint t code = if code >= 500 then red t else if code >= 400 then yellow t else if code >= 300 then cyan t else green t
+
+(* a duration in the smallest unit that stays readable: µs under 1ms, ms under 1s, else s *)
+let fmt_dur_us us =
+  if us < 1000 then Printf.sprintf "%dµs" us
+  else if us < 1_000_000 then Printf.sprintf "%.1fms" (float_of_int us /. 1000.)
+  else Printf.sprintf "%.2fs" (float_of_int us /. 1_000_000.)
+
+let fmt_bytes n =
+  if n < 1024 then Printf.sprintf "%dB" n
+  else if n < 1024 * 1024 then Printf.sprintf "%.1fKB" (float_of_int n /. 1024.)
+  else Printf.sprintf "%.1fMB" (float_of_int n /. 1024. /. 1024.)
+
+(* one finished request. The user chose "all requests, dim + colored": ambient traffic is dim with the
+   status code carrying the colour, shown only in the interactive human view (it's pure noise piped to
+   an agent). An error — the funnel set [error], OR any 5xx — is promoted to a prominent red line plus
+   the message, and shown in BOTH modes so a piped agent sees runtime failures too. Always an
+   append-only log line, never the live problem region (that's reserved for the build verdict). *)
+let http t (a : Paw.Access.t) =
+  let dur = fmt_dur_us a.dur_us and size = fmt_bytes a.bytes in
+  if a.error <> None || a.status >= 500 then begin
+    log t (Printf.sprintf "  %s  %s  %s %s   %s  %s" (red t "✗") (red t (Printf.sprintf "%3d" a.status)) a.meth a.path (dim t dur) (dim t size));
+    match a.error with Some msg when msg <> "" -> log t (Printf.sprintf "        %s" (red t msg)) | _ -> ()
+  end else if t.caps.interactive then
+    log t (Printf.sprintf "  %s  %s  %s   %s  %s"
+      (status_paint t a.status (Printf.sprintf "%3d" a.status))
+      (dim t (Printf.sprintf "%-6s" a.meth)) (dim t a.path) (dim t dur) (dim t size))
+
+(* ──── tests: http rendering ──── *)
+
+let access_sample : Paw.Access.t =
+  { ts = 0.; meth = "GET"; path = "/health"; status = 200; dur_us = 1234; bytes = 17; ip = None;
+    req_id = None; error = None; version = "HTTP/1.1"; host = "" }
+
+(* render [a] through a captured-output Ui at the given caps; return exactly what was printed *)
+let render_http ~interactive a =
+  let b = Buffer.create 128 in
+  let t = create ~out:(Buffer.add_string b) ~caps:{ Tty.plain with interactive } () in
+  http t a;
+  Buffer.contents b
+
+let has s sub = Dune_watch.find_sub s sub <> None
+
+let%test "ambient 2xx renders interactively (status · verb · path · ms)" =
+  let s = render_http ~interactive:true access_sample in
+  has s "200" && has s "GET" && has s "/health" && has s "1.2ms"
+
+let%test "ambient traffic is suppressed when piped (pure noise for an agent)" =
+  render_http ~interactive:false access_sample = ""
+
+let%test "a 5xx is promoted and shown EVEN when piped" =
+  let a = { access_sample with status = 503; meth = "POST"; path = "/api" } in
+  let s = render_http ~interactive:false a in
+  has s "✗" && has s "503" && has s "POST" && has s "/api"
+
+let%test "a funnel error message gets its own indented line" =
+  let a = { access_sample with status = 500; error = Some "TLS handshake failed" } in
+  has (render_http ~interactive:false a) "TLS handshake failed"
+
+let%test "a sub-millisecond request reports microseconds" =
+  has (render_http ~interactive:true { access_sample with dur_us = 850 }) "850µs"
+
+let%test "a 4xx is ambient (interactive-only), never promoted" =
+  let a = { access_sample with status = 404 } in
+  render_http ~interactive:false a = "" && has (render_http ~interactive:true a) "404"
+
 (* ---- lifecycle bookends ---- *)
 let start t ~dir =
   t.dir <- dir;

@@ -189,6 +189,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
         emit_verdict (Verdict.Ready { url = gateway_url; dir = (match targets with t :: _ -> Filename.dirname t | [] -> ".") })
       end
     | Server_proc.Port_busy p -> ( match !server with Up up -> up.busy_port <- Some p | Down -> ())
+    | Server_proc.Http access -> Ui.http ui access
     | Server_proc.Chatter -> ()
     | Server_proc.App_log line -> Ui.app ui line
   in

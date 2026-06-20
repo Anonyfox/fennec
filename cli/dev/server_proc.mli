@@ -10,6 +10,7 @@ type t
 type parsed =
   | Urls of (string * string) list  (** the server bound and reported its dev URLs, as (name, url) pairs *)
   | Port_busy of int  (** the server could not bind: this port is held *)
+  | Http of Paw.Access.t  (** one finished HTTP request, framed by the app's dev-mode logger *)
   | Chatter  (** the server's own framework noise, or a blank line — ignore *)
   | App_log of string  (** the user's application output — relay verbatim *)
 
