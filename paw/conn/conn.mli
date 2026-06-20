@@ -99,6 +99,15 @@ val set_error : t -> string -> t
 (** The recorded access-log error message, if any (see {!set_error}). *)
 val error : t -> string option
 
+(** [request_access_log c sink] installs a per-request access-log [sink] that the server invokes with
+    the FINAL (post-finalize) {!Access} event — so the line carries the real post-gzip body size even
+    though the logger paw runs before finalize. The {!Logger} paw uses this; setting it twice keeps the
+    latest. Purely observational (not an answerer). *)
+val request_access_log : t -> (Access.t -> unit) -> t
+
+(** The installed per-request access-log sink, if any (the server reads this after finalize). *)
+val access_sink : t -> (Access.t -> unit) option
+
 (** A request header, case-insensitive (the first value if repeated). *)
 val req_header : t -> string -> string option
 

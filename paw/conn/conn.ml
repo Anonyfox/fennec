@@ -66,6 +66,12 @@ type t = {
                                                               failed through the funnel (handler
                                                               exception / timeout); read into the
                                                               {!Access} event for the log *)
+  mutable access_sink : (Access.t -> unit) option;         (* a per-request access-log sink the
+                                                              {!Logger} paw installs; the server calls
+                                                              it with the FINAL (post-finalize)
+                                                              {!Access} event, so the log line carries
+                                                              the real post-gzip size even though the
+                                                              paw itself runs before finalize *)
 }
 
 (* a fresh conn for an incoming request *)
@@ -73,7 +79,7 @@ let make (req : H.request) : t =
   { req; started_at = Access.now (); status = 200; resp_headers = []; resp_body = ""; state = Unset;
     upgrade = None; stream = None; before_send = []; assigns = Assigns.empty; query_params = None;
     cookies = None; body_params = None; files = None; meth_override = None; ip_override = None;
-    scheme_override = None; path_params = []; error = None }
+    scheme_override = None; path_params = []; error = None; access_sink = None }
 
 (* ============================ server-facing consumption ====================== *)
 (* What the server reads off a finished conn to write the response. Not usually
@@ -128,6 +134,12 @@ let elapsed_us (c : t) : int = Access.elapsed_us ~start:c.started_at
    handler raises or times out). Not an answerer — purely observational. *)
 let set_error (c : t) (msg : string) : t = c.error <- Some msg; c
 let error (c : t) : string option = c.error
+
+(* install / read a per-request access-log sink. The {!Logger} paw sets one; the server invokes it
+   with the final post-finalize {!Access} event (so the line gets the real post-gzip size). Setting
+   it twice keeps the latest (a single logger per pipeline is the norm). Not an answerer. *)
+let request_access_log (c : t) (sink : Access.t -> unit) : t = c.access_sink <- Some sink; c
+let access_sink (c : t) : (Access.t -> unit) option = c.access_sink
 
 (* a request header, case-insensitive (the first value if repeated) *)
 let req_header (c : t) (k : string) : string option = Headers.get c.req.H.headers k

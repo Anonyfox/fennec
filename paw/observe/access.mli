@@ -60,3 +60,20 @@ val dur_ms : t -> float
 
 (** The status class: [2] for 2xx, [3] for 3xx, … (the axis colour and grouping key on). *)
 val status_class : t -> int
+
+(** {1 Compact JSON (hand-rolled, prod-lean — no yojson)}
+
+    One flat object, shared by the NDJSON log format ({!Logger}) and the dev wire frame
+    ({!Dev_proto.http_line}); encoder + parser live together so the wire shape and its inverse never
+    drift. Absent optionals ([ip]/[req_id]/[error]) are omitted from the object. *)
+
+(** Encode the event as a compact one-line JSON object. *)
+val to_compact_json : t -> string
+
+(** Parse the object {!to_compact_json} produced back into a [t]; [None] if a mandatory field
+    (method/path/status/dur_us/bytes) is missing or malformed. Round-trips {!to_compact_json}. *)
+val of_compact_json : string -> t option
+
+(** Escape a string for a JSON double-quoted literal (controls + quote/backslash). Exposed for the
+    other formats' string fields. *)
+val json_escape : string -> string

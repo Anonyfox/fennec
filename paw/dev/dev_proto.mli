@@ -72,6 +72,12 @@ val port_busy_prefix : string
 (** Prefix of the server's own human chatter; the CLI suppresses such lines (its UI says it better). *)
 val chatter_prefix : string
 
+(** Prefix of a structured per-request access line (["[fennec:http] {json}"]), emitted under
+    [FENNEC_DEV_UI] for the supervisor's pretty HTTP view. Shares the ["[fennec"] stem with
+    {!chatter_prefix} but diverges at [':'], so [starts_with line chatter_prefix] is [false] for an
+    http line — the supervisor must try {!parse_http_line} BEFORE the chatter fallthrough. *)
+val http_prefix : string
+
 (** The dev-URL report the server prints (after a successful bind) for the CLI's banner: a list of
     [(endpoint name, url)] pairs rendered as ["name=url"] tokens. *)
 val urls_line : (string * string) list -> string
@@ -84,6 +90,13 @@ val port_busy_line : int -> string
 
 (** [Some port] iff [line] is a port-conflict report; [None] otherwise. Inverse of {!port_busy_line}. *)
 val parse_port_busy : string -> int option
+
+(** The structured access line for one finished request (["[fennec:http] {compact-json}"]); the
+    payload is {!Access.to_compact_json}, so the shape lives in {!Access} and this is just the framing. *)
+val http_line : Access.t -> string
+
+(** [Some event] iff [line] is a structured access line; [None] otherwise. Inverse of {!http_line}. *)
+val parse_http_line : string -> Access.t option
 
 (** [starts_with s prefix] — prefix test, exposed for the CLI's line classifier. *)
 val starts_with : string -> string -> bool

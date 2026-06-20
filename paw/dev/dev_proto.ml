@@ -47,6 +47,12 @@ let port_in_use_exit = 98
 let urls_prefix = "[fennec:urls]"
 let port_busy_prefix = "fennec: port "
 let chatter_prefix = "[fennec]" (* the server's own human chatter; the CLI suppresses it (its UI says it better) *)
+let http_prefix = "[fennec:http]" (* a structured per-request access line for the dev supervisor's
+                                     pretty HTTP view. DISTINGUISHABLE from [chatter_prefix]: the byte
+                                     after "[fennec" is ':' here vs ']' there, so [starts_with line
+                                     chatter_prefix] is FALSE for an http line — the supervisor must
+                                     test [parse_http_line] BEFORE the chatter fallthrough or the line
+                                     would be misread as an app log (never silently dropped). *)
 
 (** [starts_with s pfx] is [true] iff [s] begins with [pfx].
     {@ocaml[
@@ -84,6 +90,22 @@ let parse_port_busy (line : string) : int option =
       incr i
     done;
     if !i > 0 then int_of_string_opt (String.sub s 0 !i) else None
+
+(* ── structured HTTP access line (server → CLI, for the pretty dev HTTP view) ───────────────────
+   Under FENNEC_DEV_UI the server frames each finished request as "[fennec:http] {compact-json}" and
+   the supervisor parses it back into an {!Access.t} to render. The payload is {!Access.to_compact_json}
+   — one flat object — so the shape lives in ONE place (Access) and this is just the framing. Like the
+   urls line, it round-trips, guarded by a test below. *)
+let http_line (a : Access.t) : string = http_prefix ^ " " ^ Access.to_compact_json a
+
+let parse_http_line (line : string) : Access.t option =
+  if not (starts_with line http_prefix) then None
+  else
+    (* drop the prefix + the single space, then hand the JSON to Access's parser *)
+    let lp = String.length http_prefix in
+    let rest = String.sub line lp (String.length line - lp) in
+    let rest = if String.length rest > 0 && rest.[0] = ' ' then String.sub rest 1 (String.length rest - 1) else rest in
+    Access.of_compact_json rest
 
 (* ──── env constants ──── *)
 let%test "env_mode name"        = env_mode = "FENNEC_ENV"
@@ -139,3 +161,23 @@ let%test "parse_port rejects an app log"   = parse_port_busy "listening on somet
 (* ──── chatter_prefix ──── *)
 let%test "urls line is NOT chatter"   = not (starts_with (urls_line [("web", "x")]) chatter_prefix)
 let%test "chatter IS chatter"         = starts_with "[fennec] serving" chatter_prefix
+
+(* ──── http_line / parse_http_line ──── *)
+let http_sample_ : Access.t =
+  { Access.ts = 1_700_000_000.0; meth = "GET"; path = "/users/42"; status = 200; dur_us = 1402;
+    bytes = 2150; ip = Some "203.0.113.7"; req_id = Some "ab12-7"; error = None; version = "HTTP/1.1"; host = "example.com" }
+
+let%test "http_line carries the http prefix" = starts_with (http_line http_sample_) http_prefix
+
+let%test "http line round-trips" = parse_http_line (http_line http_sample_) = Some http_sample_
+
+let%test "http line round-trips an error event" =
+  let a = { http_sample_ with Access.status = 500; ip = None; req_id = None; error = Some {|boom "quoted"|} } in
+  parse_http_line (http_line a) = Some a
+
+(* the http line must NOT be mistaken for chatter (it shares the "[fennec" stem but diverges at ':') *)
+let%test "http line is NOT chatter"        = not (starts_with (http_line http_sample_) chatter_prefix)
+let%test "parse_http rejects a chatter line" = parse_http_line "[fennec] serving 2 endpoint(s)" = None
+let%test "parse_http rejects a urls line"    = parse_http_line (urls_line [("web", "http://x")]) = None
+let%test "parse_urls rejects an http line"   = parse_urls_line (http_line http_sample_) = None
+let%test "parse_http rejects an app log"     = parse_http_line "hello from the app" = None

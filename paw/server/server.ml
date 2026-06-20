@@ -530,12 +530,16 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?(on_access 
          status (e.g. a 304). [dur_us] is read here (after the work), from the conn's single start
          stamp. Effect-isolated: a throwing sink never breaks the connection. *)
       let emit_access ~status ~bytes =
-        try
-          on_access
-            (Access.make ~meth:(CH.string_of_meth req.CH.meth) ~path:req.CH.path ~status
-               ~dur_us:(Conn.elapsed_us conn) ~bytes ~ip:(Conn.remote_ip conn) ~req_id:(Request_id.current conn)
-               ~error:(Conn.error conn) ~version:req.CH.version ~host:req.CH.host ())
-        with _ -> ()
+        let a =
+          Access.make ~meth:(CH.string_of_meth req.CH.meth) ~path:req.CH.path ~status
+            ~dur_us:(Conn.elapsed_us conn) ~bytes ~ip:(Conn.remote_ip conn) ~req_id:(Request_id.current conn)
+            ~error:(Conn.error conn) ~version:req.CH.version ~host:req.CH.host ()
+        in
+        (* the generic structured seam (a metrics shipper / custom sink) AND the per-request sink the
+           Logger paw installed (so a [Paw.use (Logger.make ())] line gets the accurate post-gzip
+           size with no server wiring). Both effect-isolated. *)
+        (try on_access a with _ -> ());
+        (match Conn.access_sink conn with Some f -> (try f a with _ -> ()) | None -> ())
       in
       match Conn.upgrade_handler conn with
       | Some setup when is_ws_upgrade p ->
@@ -715,6 +719,44 @@ let%test "on_access: a throwing handler is logged as a 500 with the error messag
   match access_of_ ~env ~ep "GET /boom HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" with
   | None -> false
   | Some a -> a.Access.status = 500 && (match a.Access.error with Some m -> contains m "kaboom" | None -> false)
+
+(* ──── back-compat: the Logger PAW logs via the server even with NO ~on_access wired ──── *)
+
+(* drive a request through an endpoint that has [Logger.make ~sink:buf ()] mounted (the SAME shape
+   as the 6 call sites: [Paw.use (Paw.Logger.make ())]) and NO server-level ~on_access. The logger
+   paw installs a per-conn sink; the server's emit invokes it after finalize. This proves the back-
+   compat wiring: a mounted logger still produces a line, now with the size + µs, with zero server
+   wiring. *)
+let%test_unit "back-compat: a mounted Logger paw logs (post-finalize) with no on_access" =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env and clock = Eio.Stdenv.clock env and fs = Eio.Stdenv.fs env in
+  let now () = Eio.Time.now clock in
+  let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) 5.0 in
+  let buf = Buffer.create 128 in
+  (* mount the logger exactly as userland does, forcing Logfmt + the test sink so the assertion is
+     format-stable and capture-able *)
+  let ep =
+    Endpoint.make ~name:"t" ~hosts:[ "*" ] ()
+    |> Endpoint.use (Logger.make ~format:Logger.Logfmt ~sink:(Buffer.add_string buf) ())
+    |> Endpoint.get "/p" (fun c -> Conn.text c "hello logger")
+  in
+  let resolve ~host:_ = [ Endpoint.handler ep ] in
+  let sock = Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let port = match Eio.Net.listening_addr sock with `Tcp (_, p) -> p | _ -> 0 in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Net.accept_fork ~sw sock ~on_error:(fun _ -> ()) (fun flow addr ->
+          (* NOTE: no ~on_access — the only logging path is the conn sink the paw installed *)
+          handle_conn ~now ~clock ~timeout ~request_timeout:5.0 ~fs ~on_error:default_on_error ~scheme:"http" ~resolve flow addr));
+  let raw = Eio.Net.connect ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, port)) in
+  Eio.Flow.copy_string "GET /p HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" raw;
+  let _ = Eio.Buf_read.take_all (Eio.Buf_read.of_flow raw ~max_size:65536) in
+  let out = Buffer.contents buf in
+  Fennec_hunt_unit.check "the logger emitted a line" (String.length out > 0);
+  Fennec_hunt_unit.check "line carries method=GET" (contains out "method=GET");
+  Fennec_hunt_unit.check "line carries path=/p" (contains out "path=/p");
+  Fennec_hunt_unit.check "line carries status=200" (contains out "status=200");
+  Fennec_hunt_unit.check "line carries the byte count" (contains out (Printf.sprintf "bytes=%d" (String.length "hello logger")))
 
 (* Run a {!Host_router} table, blocking. In PROD the whole table is served on ONE port
    ([FENNEC_PORT], default 80) and selected per request by Host pattern — one process, arbitrary
