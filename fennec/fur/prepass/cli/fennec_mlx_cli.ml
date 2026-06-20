@@ -36,6 +36,17 @@
 module Conv =
   Ppxlib_ast.Convert (Ppxlib_ast__Versions.OCaml_501) (Ppxlib_ast.Compiler_version)
 
+(* Parse an ALREADY-TRANSFORMED .mlx buffer (post fennec pre-pass) with the vendored mlx parser and
+   bridge it to the running compiler's [Parsetree.structure] via ppxlib's Convert. [fname] is stamped
+   onto the lexbuf so the parsed locations carry it. Raises the parser's exception on a syntax error
+   (the caller decides how to surface it). This is the in-process core shared by `fennec mlx-pp` (the
+   build) and the merlin reader's vendored-parse fallback (the editor) — both feed it pre-passed text
+   and a filename, and get the SAME parser mlx-pp used. *)
+let parse_transformed ~(fname : string) (pre : string) : Parsetree.structure =
+  let lexbuf = Lexing.from_string pre in
+  Lexing.set_filename lexbuf fname;
+  Conv.copy_structure (Fennec_mlx.Parse.implementation lexbuf)
+
 let read_all_in ic =
   let bufsz = 65536 in
   let buf = Buffer.create bufsz in
@@ -108,11 +119,9 @@ let report_error_and_exit (pm : Fennec_mlx_prepass.Posmap.t) (fname : string) (e
 let preprocess_to_stdout (input_file : string) : unit =
   let src = read_file input_file in
   let pre, pm = Fennec_mlx_prepass.transform_with_map src in
-  let lexbuf = Lexing.from_string pre in
-  Lexing.set_filename lexbuf input_file;
   let structure =
-    match Fennec_mlx.Parse.implementation lexbuf with
-    | str -> Conv.copy_structure str
+    match parse_transformed ~fname:input_file pre with
+    | str -> str
     | exception exn -> report_error_and_exit pm input_file exn
   in
   (* FAST PATH — the pre-pass changed nothing ([pre = src]: every pure-OCaml .mlx, and any already in

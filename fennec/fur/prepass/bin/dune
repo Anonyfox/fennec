@@ -37,8 +37,14 @@
  (public_name ocamlmerlin-fennec-mlx)
  (package fennec-cli)
  (modules ocamlmerlin_fennec_mlx fennec_mlx_reader)
+ ; fennec_mlx_cli brings the IN-PROCESS vendored parser (Fennec_mlx_cli.parse_transformed) so the
+ ; reader can parse a .mlx buffer itself when the stock `ocamlmerlin-mlx` is absent — the editor
+ ; then WORKS off fennec-cli alone (the old behaviour was a single dead error node). It links the
+ ; vendored fennec_mlx / fennec_mlx_rt transitively. compiler-libs.common precedes the select so it
+ ; links before merlin-extend (which depends on Config).
  (libraries
   fennec_mlx_prepass
+  fennec_mlx_cli
   compiler-libs.common
   (select fennec_mlx_reader.ml from
    (merlin-extend -> fennec_mlx_reader.real.ml)

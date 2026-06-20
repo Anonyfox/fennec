@@ -13,6 +13,10 @@
      3. POSITION FIDELITY: on the bare-text fixture the fennec parsetree's locations stay within the
         buffer and the top-level binding lands on its real line (line-exact, per the line-preserving
         pre-pass).
+     4. COLUMN-EXACT remap through the reader on a bare-text run + `{expr}` on one line.
+     5. THE VENDORED-PARSE FALLBACK: with `ocamlmerlin-mlx` hidden from PATH, the fennec reader STILL
+        returns a real, non-empty, error-free parsetree for bare text — the in-process vendored parser,
+        not the old dead error node. This is the proof the editor works off `fennec-cli` alone.
 
    It is an EDITOR-tool test: it links `merlin-extend` to speak the protocol, so it is the
    merlin-extend-PRESENT branch of a dune `(select reader_delegation_impl.ml …)`; when merlin-extend is
@@ -33,6 +37,10 @@ let on_path name = Sys.command (Printf.sprintf "command -v %s >/dev/null 2>&1" n
    by the bare name `ocamlmerlin-<reader>`, so we symlink the built exe into a temp dir under exactly
    that name and prepend the dir to PATH. *)
 let stage_fennec_reader exe_path =
+  (* Resolve to an ABSOLUTE path: dune passes the reader exe as a RELATIVE dep path; a symlink to a
+     relative target resolves against the SYMLINK's dir (the temp dir below), where it would not exist
+     → ENOENT at exec. Absolutising fixes the staged symlink regardless of the spawner's cwd/PATH. *)
+  let exe_path = if Filename.is_relative exe_path then Filename.concat (Sys.getcwd ()) exe_path else exe_path in
   let dir = Filename.temp_file "fennec_reader_bin_" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
@@ -43,7 +51,8 @@ let stage_fennec_reader exe_path =
      let ic = open_in_bin exe_path and oc = open_out_bin link in
      (try while true do output_char oc (input_char ic) done with End_of_file -> ());
      close_in ic; close_out oc; Unix.chmod link 0o755);
-  Unix.putenv "PATH" (dir ^ ":" ^ Sys.getenv "PATH")
+  Unix.putenv "PATH" (dir ^ ":" ^ Sys.getenv "PATH");
+  dir   (* return the staged dir so the fallback section can strip PATH down to JUST it *)
 
 (* ── drive a reader over the protocol; return its parsetree (+ a marshalled-bytes view) ──────── *)
 
@@ -108,8 +117,8 @@ let check name cond = if not cond then (incr fail; Printf.printf "FAIL: %s\n" na
                       else Printf.printf "ok:   %s\n" name
 
 let run (fennec_reader_exe : string) =
-  (* stage the reader-under-test on PATH under its exact merlin-invocation name *)
-  stage_fennec_reader fennec_reader_exe;
+  (* stage the reader-under-test on PATH under its exact merlin-invocation name; keep the staged dir *)
+  let fennec_dir = stage_fennec_reader fennec_reader_exe in
 
   (* the stock reader must be present, else SKIP (editor-only dependency) *)
   if not (on_path "ocamlmerlin-mlx") then begin
@@ -180,6 +189,30 @@ let run (fennec_reader_exe : string) =
      check "fennec reader remaps 'List.length' to its ORIGINAL column (not the byte-shifted one)"
        (got = want)
    | None, _ -> check "fennec reader found 'List.length' ident" false);
+
+  (* 5. THE VENDORED-PARSE FALLBACK — the editor WORKS off fennec-cli ALONE (no ocamlmerlin-mlx).
+     We hide the stock reader by running the fennec reader with a PATH that contains ONLY the fennec
+     reader's own dir (so its child-spawn of `ocamlmerlin-mlx` fails → the in-process vendored parser
+     takes over). We assert it still returns a REAL, non-empty parsetree with ZERO errors for the
+     bare-text fixture — i.e. NOT the old dead "install ocamlmerlin-mlx" error node. (Saved PATH is
+     restored after, so the earlier sections are unaffected — they ran already, but be tidy.) *)
+  let saved_path = Sys.getenv "PATH" in
+  (* PATH = ONLY the dir holding the fennec reader symlink, so `ocamlmerlin-mlx` is unreachable but the
+     fennec reader itself is still spawnable (its symlink lives there). *)
+  Unix.putenv "PATH" fennec_dir;
+  (* sanity: with this PATH the stock reader must indeed be gone, else the test proves nothing *)
+  check "fallback precondition: ocamlmerlin-mlx is NOT reachable on the stripped PATH"
+    (not (on_path "ocamlmerlin-mlx"));
+  let fennec_fallback = parse_with ~reader_name:"fennec-mlx" ~text:bare in
+  Unix.putenv "PATH" saved_path;
+  Printf.printf "  fallback (no ocamlmerlin-mlx): fennec=%d items/%d errors\n"
+    (List.length fennec_fallback) (count_errors fennec_fallback);
+  check "fallback: fennec reader returns a NON-EMPTY parsetree off fennec-cli alone"
+    (List.length fennec_fallback > 0);
+  check "fallback: fennec reader parses bare text with ZERO errors (vendored parser, not the dead node)"
+    (count_errors fennec_fallback = 0);
+  check "fallback: it is NOT the single install-ocamlmerlin-mlx error node"
+    (not (List.length fennec_fallback = 1 && count_errors fennec_fallback = 1));
 
   Printf.printf "reader_delegation: %s\n" (if !fail = 0 then "ALL CHECKS PASSED" else "FAILURES");
   if !fail > 0 then exit 1

@@ -65,14 +65,18 @@
    that may be a few columns off inside quoted prose.
 
    ────────────────────────────────────────────────────────────────────────────────────────
-   GRACEFUL DEGRADATION
+   GRACEFUL DEGRADATION — the in-process VENDORED-PARSE FALLBACK
    ────────────────────────────────────────────────────────────────────────────────────────
    If the stock `ocamlmerlin-mlx` is not installed (it is an editor-only opam dev dependency, never a
-   build dependency), spawning the child fails. We then fall back to acting as a TRANSPARENT identity
-   reader — but a reader still has to return a parsetree, and we have no parser of our own, so instead
-   we report a single, clearly-worded error node telling the user to install `ocamlmerlin-mlx`. This
-   keeps the editor functional (one informative diagnostic) rather than crashing the LSP. The dune
-   BUILD never depends on any of this.
+   build dependency), spawning the child fails. We then parse the buffer OURSELVES, in-process, with
+   the SAME vendored mlx parser the build uses (`Fennec_mlx_cli.parse_transformed` over the vendored
+   `Fennec_mlx`), remapping its locations back to the original buffer through the posmap. So the editor
+   WORKS off `fennec-cli` alone — valid buffers and bare-text `.mlx` parse, hover/jump/complete resolve
+   over the real tree, and there are NO false syntax errors. This has no error-RECOVERY (the stock
+   reader, when present, still wins — it reconstructs a partial tree from a buffer that is broken
+   mid-edit), so on a genuine syntax error the vendored parser raises and we degrade to a single,
+   clearly-worded error node (the old behaviour). The difference is a working editor vs a dead one when
+   only `fennec-cli` is installed. The dune BUILD never depends on any of this.
    ════════════════════════════════════════════════════════════════════════════════════════ *)
 
 module P = Extend_protocol
@@ -115,9 +119,10 @@ let remap_parsetree (pm : Fennec_mlx_prepass.Posmap.t) (pt : R.parsetree) : R.pa
   end
 
 (* Synthesise a one-item structure carrying a single syntax-error extension node at the very start
-   of the buffer. Used only on the degraded path (no stock reader). [Extend_helper.syntax_error]
-   builds exactly the node Merlin renders as a diagnostic, so the editor shows one informative
-   message instead of crashing the LSP. *)
+   of the buffer. The LAST-RESORT degraded result: reached only when there is no stock reader AND the
+   in-process vendored fallback itself failed to parse (a genuinely broken buffer mid-edit).
+   [Extend_helper.syntax_error] builds exactly the node Merlin renders as a diagnostic, so the editor
+   shows one informative message instead of crashing the LSP. *)
 let error_structure (msg : string) : R.parsetree =
   let ext = Extend_helper.syntax_error msg Location.none in
   let item =
@@ -137,11 +142,16 @@ let no_stock_reader_msg =
    The build is unaffected (it uses fennec-mlx-pp). Install it with: opam install ocamlmerlin-mlx"
 
 module Fennec_reader : R.V0 = struct
-  (* Per-buffer internal state: whether the child stock reader is available, and the position map for
-     the buffer last loaded (so [parse]/[for_completion] can remap the child's AST locations back to the
-     ORIGINAL editor buffer — column- and line-exact). When the child is absent, every callback returns
-     the degraded result (one informative error node / empty), keeping the LSP up. *)
-  type t = { have_child : bool; posmap : Fennec_mlx_prepass.Posmap.t }
+  (* Per-buffer internal state: whether the child stock reader is available, the position map for the
+     buffer last loaded (so [parse]/[for_completion] can remap AST locations back to the ORIGINAL
+     editor buffer — column- and line-exact), the TRANSFORMED buffer text + its path (so the
+     vendored-parse fallback can parse it in-process when there is no child), and the bare path. *)
+  type t = {
+    have_child : bool;
+    posmap : Fennec_mlx_prepass.Posmap.t;
+    transformed : string;   (* the post-pre-pass buffer — fed to the in-process vendored parser *)
+    path : string;          (* the buffer path — stamped onto the fallback parse's locations *)
+  }
 
   (* Forward a request to the child, or signal that there is no child. *)
   let to_child (req : R.request) : R.response option =
@@ -149,27 +159,42 @@ module Fennec_reader : R.V0 = struct
     | Ok drv -> Some (Extend_driver.reader drv req)
     | Error _ -> None
 
-  (* [load]: TRANSFORM the buffer text (capturing the position map), then hand the transformed buffer
-     to the child's [Req_load]. This is the whole point — everything downstream (parse/completion/ident)
-     then operates on a buffer the stock reader can actually parse, and we remap its locations back to
-     the original buffer using the captured map. *)
+  (* The VENDORED-PARSE FALLBACK (no stock reader): parse the transformed buffer in-process with the
+     SAME vendored mlx parser the build uses ([Fennec_mlx_cli.parse_transformed]), then remap its
+     locations back to the original editor buffer through the posmap. So the editor gets a REAL
+     parsetree off fennec-cli alone — valid buffers + bare text resolve, no false errors — instead of
+     the dead error node. On a genuine syntax error (an actually-broken buffer mid-edit) the vendored
+     parser raises; we then degrade to a single informative error node, exactly as before, so the LSP
+     stays up. This has no error-RECOVERY (the stock reader, when present, is still better — it
+     recovers partial trees), but it is the difference between a working editor and a dead one. *)
+  let fallback_parse (t : t) : R.parsetree =
+    match Fennec_mlx_cli.parse_transformed ~fname:t.path t.transformed with
+    | structure -> remap_parsetree t.posmap (R.Structure structure)
+    | exception _ -> error_structure no_stock_reader_msg
+
+  (* [load]: TRANSFORM the buffer text (capturing the position map + the transformed text for the
+     fallback), then hand the transformed buffer to the child's [Req_load]. Everything downstream
+     (parse/completion/ident) then operates on a buffer the stock reader can parse (if present) — and
+     we remap its locations back to the original buffer using the captured map. When no child is
+     present we keep the transformed text + path so [parse] can run the in-process vendored fallback. *)
   let load (buf : R.buffer) : t =
     let text', posmap = transform_buf buf.R.text in
+    let base = { have_child = true; posmap; transformed = text'; path = buf.R.path } in
     let buf' = { buf with R.text = text' } in
     match to_child (R.Req_load buf') with
-    | Some R.Res_loaded -> { have_child = true; posmap }
-    | Some _ -> { have_child = true; posmap } (* unexpected, but the child accepted a load *)
-    | None -> { have_child = false; posmap }
+    | Some R.Res_loaded -> base
+    | Some _ -> base (* unexpected, but the child accepted a load *)
+    | None -> { base with have_child = false }
 
   let parse (t : t) : R.parsetree =
-    if not t.have_child then error_structure no_stock_reader_msg
+    if not t.have_child then fallback_parse t
     else
       match to_child R.Req_parse with
       | Some (R.Res_parse pt) -> remap_parsetree t.posmap pt
-      | _ -> error_structure no_stock_reader_msg
+      | _ -> fallback_parse t
 
   let for_completion (t : t) (pos : Lexing.position) : R.complete_info * R.parsetree =
-    if not t.have_child then ({ R.complete_labels = true }, error_structure no_stock_reader_msg)
+    if not t.have_child then ({ R.complete_labels = true }, fallback_parse t)
     else
       (* the completion POSITION Merlin gives us is in ORIGINAL-buffer coordinates; the child expects
          TRANSFORMED-buffer coordinates. Map it forward (original → transformed) before asking, then
@@ -179,7 +204,7 @@ module Fennec_reader : R.V0 = struct
       let pos' = Fennec_mlx_prepass.Posmap.fwd_pos t.posmap pos in
       match to_child (R.Req_parse_for_completion pos') with
       | Some (R.Res_parse_for_completion (info, pt)) -> (info, remap_parsetree t.posmap pt)
-      | _ -> ({ R.complete_labels = true }, error_structure no_stock_reader_msg)
+      | _ -> ({ R.complete_labels = true }, fallback_parse t)
 
   (* [parse_line] is a user-typed expression (merlin's "type this expression" / locate-on-input),
      NOT `.mlx` markup — pass the text through unmodified to the child. *)
