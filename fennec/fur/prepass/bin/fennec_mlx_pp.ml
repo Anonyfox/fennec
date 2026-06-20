@@ -92,6 +92,14 @@ let rewrite_locations (fname : string) (pm : Fennec_mlx_prepass.Posmap.t)
    token inside the quotes. (Line is exact — the pre-pass is line-preserving; a column inside a quoted
    prose run may be off by the inserted bytes, the documented limit. This is strictly better than the
    old temp-file design, whose syntax errors pointed at a /tmp path.) *)
+(* One-line breadcrumb on stderr when `mlx-pp` cannot be found (ENOENT). The dialect runs us from
+   inside dune, so without this the failure surfaces as a bare "No such file or directory" with no
+   hint at what to install. We emit this BEFORE propagating the exit code, so the dune error carries
+   a fix. Only for ENOENT — a present-but-failing mlx-pp already prints its own (rewritten) stderr. *)
+let mlx_pp_missing_hint () =
+  prerr_endline
+    "fennec-mlx-pp: `mlx-pp` not found — run `opam install mlx` (or `fennec doctor`)"
+
 let stdin_name = "*stdin*"
 let rewrite_stderr_fname (fname : string) (err : string) : string =
   (* replace every occurrence of the quoted `"*stdin*"` (and the bare token, belt-and-braces). *)
@@ -123,7 +131,11 @@ let run_mlx_pp_stdin ~(orig_fname : string) (src : string) : string =
   let (out_r, out_w) = Unix.pipe ~cloexec:true () in   (* mlx-pp's stdout : we read out_r *)
   let (err_r, err_w) = Unix.pipe ~cloexec:true () in   (* mlx-pp's stderr : we read err_r, rewrite, re-emit *)
   let mlx_pid =
-    Unix.create_process "mlx-pp" [| "mlx-pp" |] in_r out_w err_w
+    (* On some platforms create_process resolves PATH in the parent and raises ENOENT here when
+       mlx-pp is absent; on others the child's exec fails and we see WEXITED 127 below. Cover both:
+       emit the install hint and exit 127 on a parent-side ENOENT. *)
+    try Unix.create_process "mlx-pp" [| "mlx-pp" |] in_r out_w err_w
+    with Unix.Unix_error (Unix.ENOENT, _, _) -> mlx_pp_missing_hint (); exit 127
   in
   Unix.close in_r;
   Unix.close out_w;
@@ -156,6 +168,9 @@ let run_mlx_pp_stdin ~(orig_fname : string) (src : string) : string =
   (match status with
    | Unix.WEXITED 0 -> ()
    | Unix.WEXITED code ->
+     (* 127 with an empty stderr is the classic "child could not exec mlx-pp" (it was not on PATH):
+        the failed exec leaves no diagnostic, so add the install breadcrumb before propagating. *)
+     if code = 127 && String.trim err = "" then mlx_pp_missing_hint ();
      output_string stderr (rewrite_stderr_fname orig_fname err); flush stderr; exit code
    | _ -> output_string stderr (rewrite_stderr_fname orig_fname err); flush stderr; exit 1);
   out
@@ -178,6 +193,9 @@ let () =
   if String.equal pre src then begin
     (try Unix.execvp "mlx-pp" [| "mlx-pp"; input_file |]
      with Unix.Unix_error (e, _, _) ->
+       (* ENOENT = mlx-pp is not on PATH (the `mlx` opam package is not installed). Lead with the
+          actionable hint, then the raw error, then exit 127 (the conventional "command not found"). *)
+       if e = Unix.ENOENT then mlx_pp_missing_hint ();
        Printf.eprintf "fennec-mlx-pp: could not exec mlx-pp: %s\n" (Unix.error_message e);
        exit 127)
   end;

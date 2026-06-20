@@ -126,12 +126,20 @@
 ; links the native bundlers (esbuild, Lightning CSS, grass). It is released as a
 ; prebuilt binary per platform via GitHub Releases, so end users never compile
 ; Go/Rust. fennec_buildkit is an internal, unpublished library (the CLI's engine).
+;
+; fennec-cli ALSO owns the two `.mlx` dialect binaries — `fennec-mlx-pp` (the build-time
+; preprocessor) and `ocamlmerlin-fennec-mlx` (the editor's merlin reader) — both installed
+; from this package's bin section. They DELEGATE to the stock mlx toolchain (the pre-pass
+; pipes through `mlx-pp`; the reader delegates to `ocamlmerlin-mlx`), so `mlx` is a hard
+; dependency: `opam install fennec-cli` then pulls the WHOLE `.mlx` toolchain (all four
+; binaries) in one step, and a frontend `.mlx` app builds + lights up the editor with no
+; arcane extra install. (Run `fennec doctor` if a piece is missing.)
 
 (package
  (name fennec-cli)
  (synopsis "Native JavaScript and CSS build tooling in a single self-contained binary")
  (description
-  "The `fennec` command-line tool bundles JavaScript (esbuild) and compiles and\noptimizes CSS and SCSS (Lightning CSS + grass) from one statically-linked binary.\nNo Node, no separate toolchain: download the binary and build. `fennec build`\ndrives both engines in a single pass, routing each input to the right tool by its\nfile extension. Distributed as a prebuilt per-platform binary (GitHub Releases, and\nHomebrew later) — its build links Go + Rust archives, so it is not an opam-install-\nfrom-source package; the .opam exists only so dune knows the package locally.")
+  "The `fennec` command-line tool bundles JavaScript (esbuild) and compiles and\noptimizes CSS and SCSS (Lightning CSS + grass) from one statically-linked binary.\nNo Node, no separate toolchain: download the binary and build. `fennec build`\ndrives both engines in a single pass, routing each input to the right tool by its\nfile extension. It also ships the `.mlx` dialect toolchain — `fennec-mlx-pp` (the\nbuild preprocessor) and `ocamlmerlin-fennec-mlx` (the editor reader) — which delegate\nto the stock `mlx` tools, so installing this package pulls everything a frontend Fennec\napp needs. Distributed as a prebuilt per-platform binary (GitHub Releases, and Homebrew\nlater) — its build links Go + Rust archives, so it is not an opam-install-from-source\npackage; the .opam exists only so dune knows the package locally.")
  (tags
   ("build" "javascript" "css" "esbuild" "bundler" "cli"))
  (depends
@@ -146,6 +154,11 @@
   fennec
   fennec-mongo
   fennec-hunt
+  ; the `.mlx` dialect toolchain fennec-mlx-pp / ocamlmerlin-fennec-mlx delegate to: mlx-pp
+  ; (the real parser) and ocamlmerlin-mlx (the editor reader). Declaring it here means
+  ; `opam install fennec-cli` installs the COMPLETE toolchain, never a half-wired one.
+  (mlx
+   (>= 0.11))
   (eio
    (>= 1.0))
   eio_main
