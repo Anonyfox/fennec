@@ -4,13 +4,9 @@
 ; so Counter/Nav/Hero are top-level modules). site_handlers: the Mode-B [Me.view]
 ; whose personalized SSR frame is the mirror of user_badge's anonymous one.
 
-; (modes byte exe): native .exe is what `fennec test` / @runtest run (execution-bound, native
-; wins). The byte .bc + per-module .cmo are what the warm test worker Dynlinks per edit in the
-; `fennec dev` loop — see cli/dev/test_worker.ml + cli/dev/worker/. Adding byte costs only a
-; bytecode link; it never changes what the native gate runs.
+; The native test — what `fennec test` / @runtest run (execution-bound, native wins). Unchanged.
 (test
  (name test_components)
- (modes byte exe)
  (modules test_components)
  (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))
 
@@ -20,3 +16,19 @@
  (name snapshot_html)
  (modules snapshot_html)
  (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))
+
+; The BYTECODE mirror the warm test worker Dynlinks per edit in the `fennec dev` loop (see
+; cli/dev/test_worker.ml + cli/dev/worker/). The SAME test source, compiled byte-only into a sibling
+; dir so it is NOT a (test) — `@runtest`/`fennec test` never run it (running a byte test there would
+; need CAML_LD_LIBRARY_PATH and double-run the suite). The worker loads its
+; .test_components.eobjs/byte/dune__exe__Test_components.cmo after Dynlinking the app .cma's. copy_files
+; keeps it colocated (the same pattern the components' client/ mirror uses).
+(subdir
+ byte
+ (copy_files
+  (files ../test_components.ml))
+ (executable
+  (name test_components)
+  (modes byte)
+  (modules test_components)
+  (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers)))

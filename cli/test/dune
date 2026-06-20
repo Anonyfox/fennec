@@ -36,12 +36,12 @@
  (deps
   ; the worker binary the client spawns
   %{project_root}/cli/dev/worker/fennec_test_worker.bc
-  ; the example's app libs (the Dynlinked chain) + its test .cmo (built via the .bc target)
+  ; the example's app libs (the Dynlinked chain) + the test's byte-mirror .bc (→ its .cmo)
   %{project_root}/examples/site/frontend/store/site_store.cma
   %{project_root}/examples/site/frontend/components/site_components.cma
   %{project_root}/examples/site/frontend/styles/site_styles.cma
   %{project_root}/examples/site/frontend/handlers/site_handlers.cma
-  %{project_root}/examples/site/frontend_test/test_components.bc
+  %{project_root}/examples/site/frontend_test/byte/test_components.bc
   ; the reload + cross-file fixtures
   wwfix/dep/wwfix_dep.cma
   wwfix/v1/wwfix_v1.cma

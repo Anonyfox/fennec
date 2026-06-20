@@ -177,6 +177,9 @@ let drop_conn t = match t.conn with Some fd -> (try Unix.close fd with _ -> ());
    CAML_LD_LIBRARY_PATH, which spawned children inherit). The worker is bytecode, so it is run through
    ocamlrun implicitly by its shebang/header — Unix.create_process on the .bc works directly. *)
 let spawn ?worker_exe ~root () =
+  (* writing to the worker's socket after it dies (e.g. a SHUTDOWN/PING racing its exit) would deliver
+     SIGPIPE and kill US; ignore it so those writes fail as catchable EPIPE → fallback instead. *)
+  (try Sys.set_signal Sys.sigpipe Sys.Signal_ignore with _ -> ());
   let exe = match worker_exe with Some e -> Some e | None -> find_worker_exe ~root in
   match exe with
   | None -> None

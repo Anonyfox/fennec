@@ -50,13 +50,13 @@ let str_contains hay needle =
   let rec go i = if i + nn > nh then false else if String.sub hay i nn = needle then true else go (i + 1) in
   nn = 0 || go 0
 
-(* ── the example test_components chain (dependency order, then the test .cmo) ──────────────────── *)
+(* ── the example test_components chain (dependency order, then the test .cmo from the byte mirror) ── *)
 let example_chain =
   [ bp "examples/site/frontend/store/site_store.cma";
     bp "examples/site/frontend/components/site_components.cma";
     bp "examples/site/frontend/styles/site_styles.cma";
     bp "examples/site/frontend/handlers/site_handlers.cma";
-    bp "examples/site/frontend_test/.test_components.eobjs/byte/dune__exe__Test_components.cmo" ]
+    bp "examples/site/frontend_test/byte/.test_components.eobjs/byte/dune__exe__Test_components.cmo" ]
 
 let () =
   (* The worker dlopens the project C stubs (dllpaw_stubs, …) via CAML_LD_LIBRARY_PATH. Stublibs walks
