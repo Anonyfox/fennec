@@ -547,6 +547,32 @@ let agent_cmd =
   let doc = "Agent-facing hook helpers for fennec dev --agent" in
   Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook ]
 
+let new_cmd =
+  let name_arg =
+    let doc = "Name of the new app (becomes the project directory + package name)." in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"NAME" ~doc)
+  in
+  let go name = Fennec_dev.New_app.run name in
+  let doc = "Scaffold a minimal working frontend app" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Create a new directory $(i,NAME) containing the smallest WORKING frontend Fennec app: its \
+         own $(b,dune-project) (with the $(b,.mlx) dialect stanza + the $(b,fennec)/$(b,fennec-cli)/\
+         $(b,mlx) deps), a $(b,server.ml) that renders a $(b,.mlx) component to HTML, and a starter \
+         $(b,frontend/hello.mlx). Immediately after, $(b,cd NAME && dune build) compiles and \
+         $(b,fennec dev) serves it with livereload — and the editor lights up on the $(b,.mlx) with \
+         no hand-assembly.";
+      `P
+        "The scaffold is server-rendered (a plain route renders the component), so the generated \
+         project is tiny and has no client-bundle wiring. For a full isomorphic SPA (client \
+         hydration, signals after load), see the $(b,examples/site) tree in the Fennec repo.";
+      `S Manpage.s_examples;
+      `Pre "  fennec new hello-fennec     # scaffold ./hello-fennec";
+      `Pre "  cd hello-fennec && dune build && fennec dev" ]
+  in
+  Cmd.v (Cmd.info "new" ~doc ~man) Term.(const go $ name_arg)
+
 let doctor_cmd =
   let go () = Fennec_dev.Doctor.run () in
   let doc = "Check the .mlx toolchain (the thing to run when a frontend app won't build)" in
@@ -771,6 +797,6 @@ let main_cmd =
   let default =
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
+  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)
