@@ -1,0 +1,53 @@
+; The resident warm test worker — a standalone BYTECODE binary the `fennec dev` supervisor spawns
+; once and drives over a Unix socket (see ../test_worker.ml). It links the stable frontend-test
+; FRAMEWORK with -linkall so every framework unit is present for the child's Dynlink to resolve
+; against; the app's own libs + the test module are Dynlinked per edit in a fresh fork, never linked
+; here. Bytecode only — Dynlink loads .cmo/.cma, and bytecode pays the macOS new-Mach-O dyld/code-sign
+; tax just once (at boot), which is the entire point.
+;
+; The library list is the example frontend-test framework CLOSURE (computed from `dune describe`): the
+; set of project framework libs any fur SSR test transitively needs, MINUS the watched app libs (those
+; are the Dynlinked ones). It is mirrored by Test_worker.preloaded so Test_chain can pre-emptively
+; decide warm-vs-cold; a test_worker inline test asserts the two stay in sync.
+;
+; fennec.pulse.live.client is a VIRTUAL library; we pin its .native implementation explicitly so
+; -linkall + the fennec umbrella cannot drag the .browser impl in (its top-level Js_of_ocaml code
+; aborts a native bytecode process with `caml_pure_js_expr`).
+(executable
+ (name fennec_test_worker)
+ (modes byte)
+ (link_flags (-linkall))
+ (libraries
+  unix
+  dynlink
+  fennec
+  fennec-paw
+  fennec-mongo.bson
+  fennec-mongo.bson_json
+  fennec-mongo.driver
+  fennec-mongo.query
+  fennec-mongo.minimongo
+  fennec-mongo.burrow
+  fennec-mongo.backend
+  fennec-mongo.dynamic
+  fennec-mongo.json
+  fennec-mongo.wire
+  fennec.accounts
+  fennec.accounts.client
+  fennec.accounts.features
+  fennec.accounts.primitives
+  fennec.ddp
+  fennec.mail
+  fennec.web
+  fennec.fur
+  fennec.fur.form
+  fennec.fur.handler
+  fennec.fur.html
+  fennec.fur.platform
+  fennec.fur.server
+  fennec.pulse.live
+  fennec.pulse.live.client
+  fennec.pulse.live.client.native
+  fennec.pulse.method
+  fennec.pulse.sift
+  fennec.pulse.sift.mongo))
