@@ -1,0 +1,17 @@
+; ── fennec_mlx_cli — the IN-PROCESS .mlx preprocessor engine ──────────────────────────────────────
+; The logic behind `fennec mlx-pp` (cli/fennec.ml registers the subcommand; this lib does the work)
+; and the merlin reader's vendored-parse fallback. It runs the fennec PRE-PASS (fennec_mlx_prepass),
+; parses with the VENDORED mlx parser (fennec_mlx, from ../vendor) entirely in-process — no spawn, no
+; external `mlx` package — remaps locations to the original .mlx, and marshals mlx-pp's exact on-disk
+; AST format. Kept its OWN library (separate from the lean stdlib-only fennec_mlx_prepass) so the
+; heavy compiler-libs + vendored-parser deps stay off the pre-pass leaf, and so both the `fennec`
+; binary and the reader exe can link this one engine.
+;
+; Does NOT -open Astlib at the library level: it references Fennec_mlx.Parse fully-qualified and uses
+; ppxlib's Convert to bridge the vendored OCaml_501 AST to the running compiler's Parsetree, over
+; which compiler-libs' Ast_mapper / Config / Location operate. -w -a silences upstream-shaped warnings.
+(library
+ (name fennec_mlx_cli)
+ (flags
+  (:standard -w -a))
+ (libraries fennec_mlx_prepass fennec_mlx ppxlib compiler-libs.common))

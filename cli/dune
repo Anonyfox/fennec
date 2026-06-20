@@ -17,4 +17,6 @@
   fennec_testcmd
   fennec_docs
   fennec_discover
+  ; the in-process `.mlx` dialect preprocessor (vendored mlx parser) behind `fennec mlx-pp`
+  fennec_mlx_cli
   fennec-mongo.mongod))

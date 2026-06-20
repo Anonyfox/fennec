@@ -660,6 +660,29 @@ let worker_cmd =
   let doc = "(internal) persistent esbuild build worker used by fennec dev" in
   Cmd.v (Cmd.info "__esbuild-worker" ~doc ~docs:"INTERNAL COMMANDS") Term.(const go $ socket_arg)
 
+(* Internal: the `.mlx` dialect preprocessor. The dialect stanza in dune-project runs
+   `%{bin:fennec} mlx-pp %{input-file}` on every `.mlx`; we parse it in-process with the VENDORED
+   mlx parser (no external `mlx` package, no separate binary) and write mlx-pp's exact binary-AST
+   format to stdout. This is the CLI's third role — a real build dependency for any `.mlx` project,
+   not convenience — folded into the one `fennec` binary. Not run by hand. *)
+let mlx_pp_cmd =
+  let input_arg =
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"INPUT-FILE"
+           ~doc:"The .mlx file to preprocess to a binary AST on stdout.")
+  in
+  let go input = Fennec_mlx_cli.main [| "mlx-pp"; input |] in
+  let doc = "(internal) the .mlx dialect build preprocessor (run by dune)" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Preprocess a $(b,.mlx) file to a binary OCaml AST on stdout — the build step dune's \
+         $(b,\\(dialect \\(name mlx\\) …\\)) stanza invokes as $(b,%{bin:fennec} mlx-pp \
+         %{input-file}). It runs the fennec pre-pass (bare JSX text + $(b,{expr}) interpolation) \
+         then parses with the vendored mlx parser entirely in-process: no external $(b,mlx) opam \
+         package and no separate preprocessor binary. Not for direct use." ]
+  in
+  Cmd.v (Cmd.info "mlx-pp" ~doc ~man ~docs:"INTERNAL COMMANDS") Term.(const go $ input_arg)
+
 (* Run + verify the app across five cuts. The default (no SUITE) is the fast unit gate;
    $(b,http) and $(b,browser) each boot a dedicated, isolated app instance per suite (its own
    port — and, later, its own database) so stateful suites run in parallel deterministically;
@@ -797,6 +820,6 @@ let main_cmd =
   let default =
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
+  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)
