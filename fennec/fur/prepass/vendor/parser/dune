@@ -1,0 +1,40 @@
+; ── fennec_mlx — the VENDORED mlx parser proper (lib 3 of 3) ──────────────────────────────────────
+; Vendored from mlx 0.11: lexer.mll, parser.mly, and parse.ml(.mli) (mlx's fork of OCaml's parser,
+; extended with the JSX productions). `Fennec_mlx.Parse.implementation : Lexing.lexbuf -> structure`
+; is the entry point `fennec mlx-pp` and the merlin reader call in-process — no spawn, no external
+; `mlx` opam package. This is mlx's SAME parser source, so the marshalled AST is byte-identical to
+; what the stock mlx-pp would have produced.
+;
+; WRAPPED, depends on ../rt (the OCaml-grammar leaves) and ../shim. -open Fennec_mlx_rt makes the
+; grammar see Syntaxerr/Docstrings/Jsx_helper/Ast_helper unqualified; -open Mlx_shim provides the
+; compiler-libs bridge under the Astlib shadow.
+;
+; CRITICAL: the parser is REGENERATED from parser.mly here (the (menhir …) stanza), NOT copied from
+; mlx's promoted parser.ml — that promoted file is version-locked to menhir 20201216 (it calls
+; MenhirLib.StaticVersion.require_20201216, unbound against this switch's newer menhirLib). We also
+; drop --strict: this switch's menhir would turn mlx's deliberately-unused lexer tokens
+; (COMMENT/DOCSTRING/EOL/GREATERRBRACKET/LESSSLASH) into hard errors; --unused-token silences the
+; resulting warnings instead. (Re-sync this whole vendor/ tree on an OCaml/menhir version bump.)
+(library
+ (name fennec_mlx)
+ (flags
+  (:standard -w -a -open Astlib -open Astlib.Ast_501 -open Mlx_shim -open Fennec_mlx_rt))
+ (libraries ppxlib ocaml-compiler-libs.shadow menhirLib mlx_shim fennec_mlx_rt))
+
+(ocamllex lexer)
+
+(menhir
+ (flags
+  --lalr
+  -lg=1
+  -la=1
+  --fixed-exception
+  --table
+  --strategy
+  simplified
+  --unused-token COMMENT
+  --unused-token DOCSTRING
+  --unused-token EOL
+  --unused-token GREATERRBRACKET
+  --unused-token LESSSLASH)
+ (modules parser))

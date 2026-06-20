@@ -15,6 +15,11 @@
 ; (dir ...) rule target served as one tree.
 (using directory-targets 0.1)
 
+; The vendored mlx parser (fennec/fur/prepass/vendor/) regenerates its menhir
+; grammar from parser.mly via a (menhir …) stanza, so the `.mlx` toolchain needs
+; no external `mlx` opam package — the parser is fennec-owned, dune-resolved.
+(using menhir 2.1)
+
 ; The runtime framework shipped to opam: portable HTTP core + Eio server with
 ; livereload, and Fennec.Fur — the isomorphic UI runtime (signals + SSR + jsoo
 ; hydration; no Melange, no React). The MLX dialect is declared here once so .mlx

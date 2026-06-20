@@ -1,0 +1,13 @@
+; Smoke proof that the vendored fennec_mlx parser builds + parses JSX and survives the same
+; ppxlib Convert that the build pipeline (fennec mlx-pp) runs. Not installed; runtest-only.
+(executable
+ (name proof_parse)
+ (modules proof_parse)
+ (flags
+  (:standard -w -a -open Astlib -open Astlib.Ast_501))
+ (libraries ppxlib fennec_mlx))
+
+(rule
+ (alias runtest)
+ (action
+  (run %{exe:proof_parse.exe})))

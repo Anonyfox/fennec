@@ -1,0 +1,14 @@
+; ── mlx_shim — the VENDORED mlx parser's compiler-libs shim (lib 1 of 3) ─────────────────────────
+; Vendored verbatim from mlx 0.11 (mlx/mlx_shim.ml). It re-exports the handful of compiler-libs
+; values the OCaml-grammar files reach for under the Astlib-shadowed AST (Location.error, mkloc,
+; Longident.last, Pprintast.tyvar), bridging ppxlib's Astlib view to Ocaml_common.
+;
+; Kept as its OWN unwrapped library: a single wrapped library hits the compiler's "Warnings is
+; dangling" shadow snag, and folding the shim into the wrapped parser library hits a menhir
+; "Parser depends on the wrapper" cycle. The shim-as-leaf + rt + parser split (see ../rt, ../parser)
+; sidesteps both. -w -a silences the upstream OCaml-stdlib warnings we do not own.
+(library
+ (name mlx_shim)
+ (flags
+  (:standard -w -a -open Astlib -open Astlib.Ast_501))
+ (libraries ppxlib ocaml-compiler-libs.shadow))

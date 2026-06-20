@@ -1,0 +1,15 @@
+; ── fennec_mlx_rt — the VENDORED mlx parser's OCaml-grammar leaves (lib 2 of 3) ───────────────────
+; Vendored verbatim from mlx 0.11: the compiler-parsing support modules the grammar needs —
+; warnings.ml, syntaxerr.ml(.mli), ast_helper.ml(.mli), docstrings.ml(.mli), and mlx's own
+; jsx_helper.ml (which lowers a parsed JSX element to the `Pexp_apply … [@JSX]` the Fur ppx expects).
+;
+; WRAPPED (the default): these are leaves with no menhir-generated module among them, so the wrapper
+; is harmless here — and wrapping keeps the names (Warnings, Syntaxerr, …) from colliding with the
+; compiler-libs modules of the same name at link time. The parser library (../parser) opens this one
+; (-open Fennec_mlx_rt) so the grammar sees `Syntaxerr`, `Docstrings`, `Jsx_helper`, `Ast_helper`
+; unqualified, exactly as in upstream mlx.
+(library
+ (name fennec_mlx_rt)
+ (flags
+  (:standard -w -a -open Astlib -open Astlib.Ast_501 -open Mlx_shim))
+ (libraries ppxlib ocaml-compiler-libs.shadow mlx_shim))
