@@ -14,6 +14,7 @@ let render () =
       "fennec test all                # unit -> http -> browser -> system -> docs";
       "fennec test docs               # doc coverage, warn-only by default";
       "fennec build INPUT...          # native JS/CSS/SCSS bundling";
+      "fennec doctor                  # check the .mlx toolchain when a frontend app won't build";
       "```";
       "";
       "The project remains a normal dune project. `fennec` adds source-backed task discovery, restart/livereload, native asset bundling, app test orchestration, doc coverage, and agent-facing feedback.";

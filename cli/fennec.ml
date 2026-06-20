@@ -547,6 +547,28 @@ let agent_cmd =
   let doc = "Agent-facing hook helpers for fennec dev --agent" in
   Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook ]
 
+let doctor_cmd =
+  let go () = Fennec_dev.Doctor.run () in
+  let doc = "Check the .mlx toolchain (the thing to run when a frontend app won't build)" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Verify that the whole $(b,.mlx) dialect toolchain reached your machine: the two \
+         fennec-owned binaries ($(b,fennec-mlx-pp) the build preprocessor, \
+         $(b,ocamlmerlin-fennec-mlx) the editor reader), the two stock mlx tools they delegate to \
+         ($(b,mlx-pp), $(b,ocamlmerlin-mlx)), $(b,node) (only needed if a bundle imports npm \
+         packages), AND that this project's $(b,dune-project) declares the \
+         $(b,\\(dialect \\(name mlx\\) …\\)) stanza. For each missing piece it prints the exact \
+         remedy to run or paste; when everything is present it prints a green $(b,toolchain OK).";
+      `P
+        "This is the first thing to run when a frontend Fennec app fails to build with a cryptic \
+         preprocessor error, or when $(b,.mlx) IntelliSense is dead in the editor. Exit status is \
+         non-zero when something required is missing, so it doubles as a CI / setup gate.";
+      `S Manpage.s_examples;
+      `Pre "  fennec doctor                  # check the toolchain in the current project" ]
+  in
+  Cmd.v (Cmd.info "doctor" ~doc ~man) Term.(const go $ const ())
+
 let skill_cmd =
   let go () =
     print_string (Fennec_dev.Skill_doc.render ());
@@ -749,6 +771,6 @@ let main_cmd =
   let default =
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; discover_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
+  Cmd.group info ~default [ build_cmd; dev_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)
