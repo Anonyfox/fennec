@@ -1,3 +1,8 @@
+(* See README.md (the package map). [Verdict] is the ONE dev-loop outcome as a sum type: what the
+   server did (restart / reload / css / nothing), whether tests ran and how, or a build failure with
+   parsed diagnostics. {!agent_event} encodes it for the agent journal ({!Agent_event}). One type, so
+   the human UI and the agent journal can never disagree about what just happened. *)
+
 type served_change = Backend_restart | Full_reload | Css_only | No_served_change
 
 (* warm test worker timing, present when every re-run test took the warm path: the child's

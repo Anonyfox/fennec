@@ -1,3 +1,7 @@
+(* See README.md (the package map). [Affected] infers WHICH surface a build's changed files touch —
+   backend, web app(s), component(s), route(s), styles, assets, config, or test(s) — purely from the
+   trigger paths {!Dune_watch} reports. The dev loop attaches this classification to every agent
+   verdict, so a hook/agent learns the blast radius of its edit without re-deriving it. Pure + total. *)
 type t = {
   paths : string list;
   components : string list;

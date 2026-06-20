@@ -58,6 +58,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
   Stublibs.ensure ();
 
+  (* ═══════════ boot: children (esbuild + warm test worker), dune --watch, backend, agent journal ═══════════ *)
+
   (* warm esbuild worker BEFORE dune, so even the first build delegates to it *)
   let worker_socket = tmp_socket "fennec-esb" in
   let worker_pid = start_esbuild_worker worker_socket in
@@ -177,6 +179,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   in
   let serving () = match !server with Up _ -> true | Down -> false in
 
+  (* ═══════════ reacting to the server child's output ═══════════ *)
+
   (* the EFFECT of each classified server line ({!Server_proc} does the pure parsing): the dev-URL
      report drives the ready banner; a port-busy line is remembered ON THE INSTANCE so the crash
      handler can reclaim/name the holder; chatter is dropped; anything else is the user's app log. *)
@@ -202,6 +206,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      foreign holder. The "is it ours" gate is pure + anchored + unit-tested there (it's a kill). *)
   let reclaim_port port = Port.reclaim ~exe port in
   let foreign_holder port = Port.foreign_holder ~exe port in
+
+  (* ═══════════ server lifecycle: (re)start, then graceful shutdown ═══════════ *)
 
   let start_or_restart label =
     (* don't disturb the running server while the artifact is mid-write; the next settle restarts *)
@@ -256,6 +262,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     (* only meaningful while a worker is up; and ignore the test targets themselves *)
     !test_worker <> None && triggers <> [] && not (List.exists trigger_under_watch_root triggers)
   in
+
+  (* ═══════════ build outcomes: a green settle (restart / reload / css / tests) or a failure ═══════════ *)
 
   let on_build_ok triggers dur =
     Crash_limiter.reset limiter;
@@ -366,6 +374,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
            affected = Affected.classify triggers })
   in
 
+  (* ═══════════ failure recovery: watcher exit, code crash, a held dev port ═══════════ *)
+
   let on_dune_exit () =
     incr dune_exits;
     (* a healthy dune --watch never exits on its own; if it keeps dying, the build environment is
@@ -426,6 +436,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
             | Crash_limiter.Give_up -> Ui.notice ui Ui.Error "the dev port is in use — free it and save any file to retry"
             | Crash_limiter.Retry backoff -> Unix.sleepf backoff; start_or_restart (fun () -> Ui.notice ui Ui.Warn "port freed — restarted")))
   in
+
+  (* ═══════════ the loop: drain → check the child → poll the watcher → handle (total) ═══════════ *)
 
   let handle = function
     | Dune_watch.Settled_build { outcome = Dune_watch.Ok; triggers; duration_ms; _ } -> on_build_ok triggers duration_ms
