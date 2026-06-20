@@ -86,8 +86,33 @@ let child : (Extend_driver.t, exn) result Lazy.t =
   lazy (try Ok (Extend_driver.run "mlx") with exn -> Error exn)
 
 (* The one place the fennec surface is normalised: bare text → quoted, `{expr}` → `(expr)`. Pure,
-   total, line-preserving. Identity on any already-quoted / non-JSX buffer (so delegation is exact). *)
-let transform_text (text : string) : string = Fennec_mlx_prepass.transform text
+   total, line-preserving. Identity on any already-quoted / non-JSX buffer (so delegation is exact).
+   Returns the transformed buffer AND a {!Fennec_mlx_prepass.Posmap.t} that maps any byte offset in the
+   transformed text back to the ORIGINAL editor buffer — so we can remap the child reader's AST
+   locations to column- (and line-) EXACT original positions before handing them to Merlin. *)
+let transform_buf (text : string) : string * Fennec_mlx_prepass.Posmap.t =
+  Fennec_mlx_prepass.transform_with_map text
+
+(* Remap every location in a returned parsetree back to the original buffer through [pm]. A GHOST /
+   dummy position (Lexing.dummy_pos, pos_cnum < 0) is left as-is (only Location.none nodes carry it);
+   only REAL positions are remapped. When [pm] is the identity (already-quoted / non-JSX buffer) this
+   is skipped wholesale, so faithful delegation stays byte-exact. The pre-pass shifts the filename not
+   at all (we never rewrote the path), so — unlike the build driver — we touch ONLY the offsets here. *)
+let remap_parsetree (pm : Fennec_mlx_prepass.Posmap.t) (pt : R.parsetree) : R.parsetree =
+  if Fennec_mlx_prepass.Posmap.is_identity pm then pt
+  else begin
+    let open Ast_mapper in
+    let map_pos (p : Lexing.position) =
+      if p.Lexing.pos_cnum < 0 then p else Fennec_mlx_prepass.Posmap.remap_pos pm p
+    in
+    let map_loc (l : Location.t) =
+      { l with Location.loc_start = map_pos l.loc_start; loc_end = map_pos l.loc_end }
+    in
+    let m = { default_mapper with location = (fun _ l -> map_loc l) } in
+    match pt with
+    | R.Structure s -> R.Structure (m.structure m s)
+    | R.Signature s -> R.Signature (m.signature m s)
+  end
 
 (* Synthesise a one-item structure carrying a single syntax-error extension node at the very start
    of the buffer. Used only on the degraded path (no stock reader). [Extend_helper.syntax_error]
@@ -112,9 +137,11 @@ let no_stock_reader_msg =
    The build is unaffected (it uses fennec-mlx-pp). Install it with: opam install ocamlmerlin-mlx"
 
 module Fennec_reader : R.V0 = struct
-  (* Per-buffer internal state: whether the child stock reader is available. When it is not, every
-     callback returns the degraded result (one informative error node / empty), keeping the LSP up. *)
-  type t = { have_child : bool }
+  (* Per-buffer internal state: whether the child stock reader is available, and the position map for
+     the buffer last loaded (so [parse]/[for_completion] can remap the child's AST locations back to the
+     ORIGINAL editor buffer — column- and line-exact). When the child is absent, every callback returns
+     the degraded result (one informative error node / empty), keeping the LSP up. *)
+  type t = { have_child : bool; posmap : Fennec_mlx_prepass.Posmap.t }
 
   (* Forward a request to the child, or signal that there is no child. *)
   let to_child (req : R.request) : R.response option =
@@ -122,28 +149,36 @@ module Fennec_reader : R.V0 = struct
     | Ok drv -> Some (Extend_driver.reader drv req)
     | Error _ -> None
 
-  (* [load]: TRANSFORM the buffer text, then hand the transformed buffer to the child's [Req_load].
-     This is the whole point — everything downstream (parse/completion/ident) then operates on a
-     buffer the stock reader can actually parse. *)
+  (* [load]: TRANSFORM the buffer text (capturing the position map), then hand the transformed buffer
+     to the child's [Req_load]. This is the whole point — everything downstream (parse/completion/ident)
+     then operates on a buffer the stock reader can actually parse, and we remap its locations back to
+     the original buffer using the captured map. *)
   let load (buf : R.buffer) : t =
-    let buf' = { buf with R.text = transform_text buf.R.text } in
+    let text', posmap = transform_buf buf.R.text in
+    let buf' = { buf with R.text = text' } in
     match to_child (R.Req_load buf') with
-    | Some R.Res_loaded -> { have_child = true }
-    | Some _ -> { have_child = true } (* unexpected, but the child accepted a load *)
-    | None -> { have_child = false }
+    | Some R.Res_loaded -> { have_child = true; posmap }
+    | Some _ -> { have_child = true; posmap } (* unexpected, but the child accepted a load *)
+    | None -> { have_child = false; posmap }
 
   let parse (t : t) : R.parsetree =
     if not t.have_child then error_structure no_stock_reader_msg
     else
       match to_child R.Req_parse with
-      | Some (R.Res_parse pt) -> pt
+      | Some (R.Res_parse pt) -> remap_parsetree t.posmap pt
       | _ -> error_structure no_stock_reader_msg
 
   let for_completion (t : t) (pos : Lexing.position) : R.complete_info * R.parsetree =
     if not t.have_child then ({ R.complete_labels = true }, error_structure no_stock_reader_msg)
     else
-      match to_child (R.Req_parse_for_completion pos) with
-      | Some (R.Res_parse_for_completion (info, pt)) -> (info, pt)
+      (* the completion POSITION Merlin gives us is in ORIGINAL-buffer coordinates; the child expects
+         TRANSFORMED-buffer coordinates. Map it forward (original → transformed) before asking, then
+         map the returned AST back. Forward-mapping is the inverse of the pre-pass shift: for a position
+         at/after a quoted run the transformed offset is larger. We approximate it well enough for
+         completion by walking the same replaced-run deltas — see {!Posmap.fwd_pos}. *)
+      let pos' = Fennec_mlx_prepass.Posmap.fwd_pos t.posmap pos in
+      match to_child (R.Req_parse_for_completion pos') with
+      | Some (R.Res_parse_for_completion (info, pt)) -> (info, remap_parsetree t.posmap pt)
       | _ -> ({ R.complete_labels = true }, error_structure no_stock_reader_msg)
 
   (* [parse_line] is a user-typed expression (merlin's "type this expression" / locate-on-input),

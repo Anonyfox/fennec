@@ -147,5 +147,39 @@ let run (fennec_reader_exe : string) =
   check "fennec locations stay within the buffer (no out-of-range lines)" (m <= nlines);
   check "fennec locations are real (the binding spans past line 1)" (m >= 2);
 
+  (* 4. COLUMN-EXACT remap THROUGH THE READER. A bare-text run followed by `{expr}` on the SAME line
+     shifts every later column in the transformed buffer (the added quotes), so WITHOUT the reader's
+     position-map the identifier inside the `{…}` would be reported a couple of columns to the right —
+     a hover/jump landing in the wrong place. Here we drive the fennec reader on such a buffer and
+     assert it reports the identifier's column EXACTLY where it sits in the ORIGINAL source. *)
+  let same_line = "let v = <div>todos in store: {List.length items}</div>" in
+  let orig_col marker =                         (* 0-based column of [marker] in [same_line] *)
+    let n = String.length same_line and m = String.length marker in
+    let r = ref (-1) and i = ref 0 in
+    while !r < 0 && !i <= n - m do (if String.sub same_line !i m = marker then r := !i); incr i done;
+    !r in
+  (* find the loc_start column of the value-identifier [name] anywhere in a parsed structure *)
+  let col_of_ident (s : Parsetree.structure) (name : string) : int option =
+    let found = ref None in
+    let module I = Ast_iterator in
+    let it = { I.default_iterator with
+      expr = (fun self e ->
+        (match e.pexp_desc with
+         | Pexp_ident lid
+           when !found = None
+                && String.concat "." (Longident.flatten lid.Location.txt) = name ->
+           let ls = e.pexp_loc.loc_start in found := Some (ls.pos_cnum - ls.pos_bol)
+         | _ -> ());
+        I.default_iterator.expr self e) } in
+    List.iter (it.structure_item it) s;
+    !found in
+  let fennec_same = parse_with ~reader_name:"fennec-mlx" ~text:same_line in
+  (match col_of_ident fennec_same "List.length", orig_col "List.length" with
+   | Some got, want ->
+     Printf.printf "  same-line: 'List.length' reported col=%d, original col=%d\n" got want;
+     check "fennec reader remaps 'List.length' to its ORIGINAL column (not the byte-shifted one)"
+       (got = want)
+   | None, _ -> check "fennec reader found 'List.length' ident" false);
+
   Printf.printf "reader_delegation: %s\n" (if !fail = 0 then "ALL CHECKS PASSED" else "FAILURES");
   if !fail > 0 then exit 1

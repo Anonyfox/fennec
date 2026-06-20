@@ -109,11 +109,21 @@ let starts_ident c = is_lower c || is_upper c
 
 (* ── output buffer + a verbatim copier ──────────────────────────────────────────────────── *)
 
+(* A REPLACED text run — the ONLY length-changing edit the pre-pass makes. A bare-text child run at
+   input bytes [in_off, in_off+in_len) is emitted as a quoted/collapsed OCaml string literal at output
+   bytes [out_off, out_off+out_len). Everywhere else the transform is byte-for-byte length-preserving
+   (a verbatim copy, a dropped-whitespace run re-emitted as-is, or a `{`→`(` / `}`→`)` swap — all 1:1),
+   so the input↔output byte correspondence is the identity SHIFTED by the cumulative (in_len − out_len)
+   of the replaced runs seen so far. {!Posmap} reconstructs the exact original byte offset (hence the
+   exact original line/column) of any output offset from this list alone — see its docs. *)
+type repl = { out_off : int; out_len : int; in_off : int; in_len : int }
+
 type st = {
   src : string;
   len : int;
   buf : Buffer.t;
   mutable i : int;            (* read cursor *)
+  mutable repls : repl list;  (* replaced text runs, in REVERSE order (newest first) *)
 }
 
 let peek st k = if st.i + k < st.len then st.src.[st.i + k] else '\000'
@@ -309,7 +319,18 @@ let rec scan_children st =
     Buffer.clear pend;
     if text = "" then ()
     else match collapse_text text with
-      | Some lit -> emit_s st lit
+      | Some lit ->
+        (* the SOLE length-changing edit: a bare-text run [in_off,in_off+in_len) → a quoted/collapsed
+           literal. Record the in↔out byte spans for {!Posmap}. Every byte added to [pend] in the loop
+           below advanced [st.i] by one (each `Buffer.add_char pend …` is paired with a `skip st`), so
+           the run started at exactly [st.i − in_len]. The output literal starts at the current buffer
+           length. (`{`→`(` rewrites are 1:1 and a dropped-whitespace run is copied verbatim — neither
+           is recorded, because neither shifts a byte.) *)
+        let in_len = String.length text in
+        let in_off = st.i - in_len in
+        let out_off = Buffer.length st.buf in
+        emit_s st lit;
+        st.repls <- { out_off; out_len = String.length lit; in_off; in_len } :: st.repls
       | None ->
         (* an all-whitespace inter-element run: mlx skips inter-child whitespace (the lexer's blank
            rule), so it is inert as a child. Copy it VERBATIM — that both preserves the source
@@ -465,8 +486,121 @@ let scan_code st =
           | None -> if try_copy_char st then () else copy st)
   done
 
-(* Public entry: transform a whole `.mlx` source string. Pure, total, allocation-light. *)
-let transform (src : string) : string =
-  let st = { src; len = String.length src; buf = Buffer.create (String.length src + 64); i = 0 } in
+(* ════════════════════════════════════════════════════════════════════════════════════════
+   POSITION MAP — remap a byte offset in the PRE-PASSED (output) source back to the ORIGINAL .mlx.
+
+   The pre-pass changes byte lengths in exactly ONE place: a bare-text child run becomes a quoted /
+   whitespace-collapsed OCaml string literal (see {!repl}). Every other edit is length-preserving
+   (`{`→`(`, `}`→`)`, verbatim copy, verbatim re-emit of dropped whitespace). So for any output byte
+   offset [o], the corresponding input offset is [o] PLUS the cumulative (in_len − out_len) of every
+   replaced run lying entirely before [o]; if [o] falls INSIDE a replaced run, it is clamped into that
+   run's input span (the interior of a synthesized string literal has no exact pre-image — but its two
+   ENDS map exactly, which is what matters: a real error never points strictly inside the quotes).
+
+   Crucially this also repairs LINE numbers: a multi-line prose run collapses to one line, so output
+   lines after it are shifted up; recomputing the line/col from the INPUT source at the remapped input
+   offset restores the true original line AND column. (When there are no replaced runs — every non-JSX
+   or already-quoted file — the map is the identity and remapping is skipped wholesale.) *)
+module Posmap = struct
+  (* replaced runs sorted ASCENDING by [out_off] (contiguous, non-overlapping by construction). *)
+  type t = {
+    repls : repl array;     (* ascending by out_off; empty ⇒ identity *)
+    src : string;           (* the ORIGINAL .mlx, for the line/col recompute *)
+  }
+
+  let is_identity (t : t) = Array.length t.repls = 0
+
+  (* output byte offset → input byte offset. Linear-ish: the array is tiny (one entry per prose run),
+     so a forward scan accumulating the shift is both simplest and cache-friendly. *)
+  let remap_cnum (t : t) (o : int) : int =
+    let n = Array.length t.repls in
+    let shift = ref 0 and k = ref 0 and result = ref o in
+    let stop = ref false in
+    while (not !stop) && !k < n do
+      let r = t.repls.(!k) in
+      if o < r.out_off then
+        (* before this run — the accumulated shift from earlier runs is final *)
+        (result := o + !shift; stop := true)
+      else if o < r.out_off + r.out_len then begin
+        (* inside the synthesized literal — clamp into the run's input span (ends map exactly) *)
+        let d = o - r.out_off in
+        result := r.in_off + (if d > r.in_len then r.in_len else d);
+        stop := true
+      end
+      else begin
+        (* past this run entirely — fold in its length delta and continue *)
+        shift := !shift + (r.in_len - r.out_len);
+        incr k;
+        result := o + !shift   (* tentative: correct if no later run precedes o *)
+      end
+    done;
+    if !result < 0 then 0 else !result
+
+  (* recompute (pos_lnum, pos_bol) for an INPUT byte offset by counting newlines in [src] up to it.
+     Returns (lnum, bol). Lines are 1-based; bol is the offset of the start of the line. Linear in the
+     offset, but only ever called on the handful of positions an AST location carries on a shifted
+     line — never on the whole file. *)
+  let line_of (t : t) (icnum : int) : int * int =
+    let s = t.src in
+    let bound = if icnum > String.length s then String.length s else icnum in
+    let lnum = ref 1 and bol = ref 0 in
+    for j = 0 to bound - 1 do
+      if String.unsafe_get s j = '\n' then (incr lnum; bol := j + 1)
+    done;
+    (!lnum, !bol)
+
+  (* remap one Lexing.position. [pos_cnum] is authoritative (an absolute byte offset); recompute
+     [pos_lnum]/[pos_bol] from the input so the column [pos_cnum − pos_bol] is the ORIGINAL column. *)
+  let remap_pos (t : t) (p : Lexing.position) : Lexing.position =
+    let cnum = remap_cnum t p.Lexing.pos_cnum in
+    let (lnum, bol) = line_of t cnum in
+    { p with Lexing.pos_cnum = cnum; pos_lnum = lnum; pos_bol = bol }
+
+  (* ── FORWARD direction: ORIGINAL byte offset → TRANSFORMED (pre-passed) byte offset. The inverse of
+     {!remap_cnum}; used by the merlin reader to translate a completion CURSOR position (which Merlin
+     gives in original-buffer coordinates) into the transformed buffer the stock child reader parses.
+     Same structure: accumulate (out_len − in_len) for every replaced run lying before the input offset;
+     a position inside a run's INPUT span clamps into that run's OUTPUT span. *)
+  let fwd_cnum (t : t) (i : int) : int =
+    let n = Array.length t.repls in
+    let shift = ref 0 and k = ref 0 and result = ref i and stop = ref false in
+    while (not !stop) && !k < n do
+      let r = t.repls.(!k) in
+      if i < r.in_off then (result := i + !shift; stop := true)
+      else if i < r.in_off + r.in_len then begin
+        let d = i - r.in_off in
+        result := r.out_off + (if d > r.out_len then r.out_len else d);
+        stop := true
+      end
+      else (shift := !shift + (r.out_len - r.in_len); incr k; result := i + !shift)
+    done;
+    if !result < 0 then 0 else !result
+
+  (* forward-remap a Lexing.position into the transformed buffer; only [pos_cnum] is consumed downstream
+     (the stock reader recomputes its own line table), but we keep [pos_lnum]/[pos_bol] coherent too by
+     recomputing them against the TRANSFORMED text the caller still holds — here we leave them as the
+     caller's (the cnum is what the child uses), which is exact for any line not touched by a collapse. *)
+  let fwd_pos (t : t) (p : Lexing.position) : Lexing.position =
+    if is_identity t then p
+    else { p with Lexing.pos_cnum = fwd_cnum t p.Lexing.pos_cnum }
+end
+
+(* shared scanner core — returns the output AND the replaced-run list (ascending). *)
+let scan (src : string) : string * repl array =
+  let st = { src; len = String.length src; buf = Buffer.create (String.length src + 64);
+             i = 0; repls = [] } in
   scan_code st;
-  Buffer.contents st.buf
+  (* [st.repls] is newest-first; the array is ascending by [out_off] ⇒ reverse. *)
+  (Buffer.contents st.buf, Array.of_list (List.rev st.repls))
+
+(* Public entry: transform a whole `.mlx` source string. Pure, total, allocation-light. The
+   position-map is discarded — callers needing column-exact error remapping use {!transform_with_map}.*)
+let transform (src : string) : string = fst (scan src)
+
+(* Like {!transform}, but also returns a {!Posmap.t} that maps any byte offset in the produced output
+   back to the original source — used by the driver / merlin reader to remap mlx's AST locations to
+   column-exact ORIGINAL positions. The map is the identity (and {!Posmap.is_identity} is true) iff no
+   bare-text run was rewritten, i.e. exactly when [transform src = src]. *)
+let transform_with_map (src : string) : string * Posmap.t =
+  let (out, repls) = scan src in
+  (out, { Posmap.repls; src })

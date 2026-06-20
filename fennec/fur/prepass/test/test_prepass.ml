@@ -318,5 +318,55 @@ let () =
     "let v = <span>(!count)</span>"
     ("let v = <span>" ^ q ^ "(!count)" ^ q ^ "</span>");
 
+  (* ──────────────────────────────────────────────────────────────────────────────────────
+     D. POSITION MAP — remap a byte offset / column in the PRE-PASSED output back to the ORIGINAL .mlx.
+
+     Quoting a bare-text run adds bytes, so any source position AFTER the run (on the same line) sits
+     at a larger column in the pre-passed text than in the original. The build driver / merlin reader
+     undo that with {!Fennec_mlx_prepass.Posmap}, so an OCaml/mlx error after a prose run points at the
+     EXACT original column (and original line — a multi-line prose run collapses, shifting later lines).
+     These assertions pin the map directly: they locate a marker in BOTH the original and the output and
+     check that remapping the OUTPUT offset reproduces the ORIGINAL offset, line and column. *)
+  let module PM = Fennec_mlx_prepass.Posmap in
+  let find s sub =                                   (* first byte index of [sub] in [s], or -1 *)
+    let n = String.length s and m = String.length sub in
+    let r = ref (-1) and i = ref 0 in
+    while !r < 0 && !i <= n - m do (if String.sub s !i m = sub then r := !i); incr i done; !r in
+  let orig_lc s cnum =                               (* (line, col) of [cnum] in [s] *)
+    let l = ref 1 and b = ref 0 in
+    for j = 0 to cnum - 1 do if s.[j] = '\n' then (incr l; b := j + 1) done; (!l, cnum - !b) in
+  let pos_ok ~name src marker =
+    let out, pm = Fennec_mlx_prepass.transform_with_map src in
+    let o = find out marker and i = find src marker in
+    if o < 0 || i < 0 then (incr fail; Printf.printf "FAIL pos:%s — marker not found\n" name)
+    else begin
+      let mapped = PM.remap_cnum pm o in
+      let (oln, ocol) = orig_lc src i in
+      let (mln, mbol) = PM.line_of pm mapped in
+      let mcol = mapped - mbol in
+      if mapped = i && mln = oln && mcol = ocol then incr pass
+      else begin
+        incr fail;
+        Printf.printf "FAIL pos:%s\n  out off %d → remap %d (want %d)  line %d/col %d (want %d/%d)\n"
+          name o mapped i mln mcol oln ocol
+      end
+    end in
+  (* same-line code after a quoted run: its column must come back EXACTLY (the canonical case). *)
+  pos_ok ~name:"ident after same-line bare text remaps to original column"
+    "let v = <div>todos in store: {List.length xs}</div>" "List.length";
+  pos_ok ~name:"second ident further along the same line"
+    "let v = <div>todos in store: {List.length zs}</div>" "zs";
+  (* a DELIBERATE type error AFTER a bare-text run (the invariant's proof case): the offending ident's
+     column is reported at the TRUE original column, not the byte-shifted one. *)
+  pos_ok ~name:"type-error site after prose: bad_ident column is original"
+    "let v = <p>Welcome aboard: </p> and bad_ident = ()" "bad_ident";
+  (* multi-line prose collapses → later lines shift UP; the map repairs BOTH line and column. *)
+  pos_ok ~name:"code after a multi-line collapsed run remaps to original LINE and column"
+    "let v =\n  <p>\n    multi line\n    indented text\n  </p>\nlet after = 1" "let after";
+  (* identity buffer (already-quoted / no rewrite): the map is the identity → remap is a no-op. *)
+  (let _, pm = Fennec_mlx_prepass.transform_with_map "let v = <p>\"hi\"</p>" in
+   if PM.is_identity pm then incr pass
+   else (incr fail; Printf.printf "FAIL pos: identity buffer should yield identity posmap\n"));
+
   Printf.printf "\nprepass unit table: %d passed, %d failed\n" !pass !fail;
   if !fail > 0 then exit 1
