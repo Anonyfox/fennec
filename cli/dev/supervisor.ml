@@ -92,7 +92,31 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   Dev_tests.prime dev_tests;
   let tests_wired = ref (initial_test_targets <> []) in
 
-  let dw = ref (Dune_watch.start (targets @ initial_test_targets)) in
+  (* The WARM TEST WORKER: a resident bytecode process that Dynlinks the freshly compiled app objects
+     per edit instead of cold-launching a relinked native test exe. Stublibs.ensure ran above, so the
+     worker inherits CAML_LD_LIBRARY_PATH for its C stubs. If the worker binary isn't present or won't
+     start, [spawn] is None and the dev loop silently stays on the cold path (Dev_tests.run_one). *)
+  let test_worker = ref None in
+  let start_test_worker () =
+    match Test_worker.spawn ~root:(Sys.getcwd ()) () with
+    | Some w -> test_worker := Some w; Dev_tests.set_worker dev_tests (Some w)
+    | None -> test_worker := None; Dev_tests.set_worker dev_tests None
+  in
+  let stop_test_worker () =
+    (match !test_worker with Some w -> Test_worker.shutdown w | None -> ());
+    test_worker := None;
+    Dev_tests.set_worker dev_tests None
+  in
+  (* a framework edit (a trigger OUTSIDE the watched app roots) means the worker's preloaded image is
+     stale; restart it so subsequent runs are warm again (a stale worker would otherwise fall back via
+     a Dynlink digest mismatch — correct, just cold). Also re-derive chains (the lib graph may shift). *)
+  let restart_test_worker () = stop_test_worker (); Dev_tests.invalidate_chains dev_tests; start_test_worker () in
+  start_test_worker ();
+  (* with a worker active, the watch must also build the bytecode test targets (.bc → the test .cmo +
+     app .cma's) so a settle has them ready for the worker to load *)
+  let warm_targets () = if !test_worker <> None then Dev_tests.byte_targets dev_tests else [] in
+
+  let dw = ref (Dune_watch.start (targets @ initial_test_targets @ warm_targets ())) in
   let control_path = tmp_socket "fennec-lr" in
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
      explicitly so the supervisor and server agree, and so the banner can show the gateway URL. *)
@@ -136,7 +160,9 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   let record_pids () =
     let mongo_pid = match mongo with Some t -> Option.to_list (Mongo_rs.pid t) | None -> [] in
     let server_pid = match !server with Up up -> [ Server_proc.pid up.proc ] | Down -> [] in
-    Pidfile.record pidfile ([ Unix.getpid (); Dune_watch.pid !dw; worker_pid ] @ mongo_pid @ server_pid)
+    let test_worker_pid = match !test_worker with Some w -> [ Test_worker.pid w ] | None -> [] in
+    Pidfile.record pidfile
+      ([ Unix.getpid (); Dune_watch.pid !dw; worker_pid ] @ test_worker_pid @ mongo_pid @ server_pid)
   in
   let serving () = match !server with Up _ -> true | Down -> false in
 
@@ -192,6 +218,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     Ui.stopped ui;
     emit_verdict Verdict.Stopped;
     (match mongo with Some t -> Mongo_rs.stop t | None -> ());
+    stop_test_worker ();
     kill (Dune_watch.pid !dw);
     kill worker_pid;
     (try Sys.remove control_path with _ -> ());
@@ -203,10 +230,25 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   Sys.set_signal Sys.sigterm (Sys.Signal_handle shutdown);
   record_pids ();
 
+  (* a trigger touches the FRAMEWORK (not the watched app) when its path lies outside every app
+     watch_root — then the worker's preloaded image is stale and must be restarted. (A trigger string
+     looks like "<path> changed"; we test path membership in a watch_root.) *)
+  let trigger_under_watch_root trg =
+    let path = match String.index_opt trg ' ' with Some i -> String.sub trg 0 i | None -> trg in
+    List.exists (fun root -> path = root || (String.length path > String.length root && String.sub path 0 (String.length root + 1) = root ^ "/")) watch_roots
+  in
+  let framework_changed triggers =
+    (* only meaningful while a worker is up; and ignore the test targets themselves *)
+    !test_worker <> None && triggers <> [] && not (List.exists trigger_under_watch_root triggers)
+  in
+
   let on_build_ok triggers dur =
     Crash_limiter.reset limiter;
     dune_exits := 0;
     last_build_ms := dur;
+    (* a framework edit invalidates the worker's once-linked image: restart it so the next test run is
+       warm again (a stale worker would otherwise just fall back via a Dynlink digest mismatch). *)
+    if framework_changed triggers then restart_test_worker ();
     let agent_success = ref None in
     let just_wired_tests = ref false in
     let remember_agent served =
@@ -257,9 +299,9 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
           tests_wired := true;
           just_wired_tests := true;
           (* restart the watcher with the expanded target list — dune now builds the runner
-             exes alongside the server, without running them *)
+             exes alongside the server, without running them (+ the .bc's the worker loads) *)
           Dune_watch.stop !dw;
-          dw := Dune_watch.start (targets @ test_targets);
+          dw := Dune_watch.start (targets @ test_targets @ warm_targets ());
           record_pids ()
         end
       end;
@@ -321,7 +363,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
       Ui.notice ui Ui.Warn "dune watcher exited — restarting";
       emit_verdict Verdict.Watcher_restart;
       Unix.sleepf 0.5;
-      dw := Dune_watch.start (targets @ (if !tests_wired then Dev_tests.targets dev_tests else []));
+      dw := Dune_watch.start (targets @ (if !tests_wired then Dev_tests.targets dev_tests @ warm_targets () else []));
       record_pids ())
   in
 

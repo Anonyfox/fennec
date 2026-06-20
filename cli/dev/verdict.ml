@@ -1,10 +1,15 @@
 type served_change = Backend_restart | Full_reload | Css_only | No_served_change
 
+(* warm test worker timing, present when every re-run test took the warm path: the child's
+   framework-.cma Dynlink time + the test-run time, summed across libs. Surfaced in the agent verdict
+   so a hook/agent sees the fork/dynlink/run cost, not just the wall test_ms. *)
+type warm_timing = { dynlink_ms : float; run_ms : float }
+
 type test_verdict =
   | Tests_not_wired
   | Tests_not_changed
-  | Tests_passed of { passed : int; libs : int; ms : float }
-  | Tests_failed of { passed : int; failed : int; libs : int; ms : float; failures : (string * string) list }
+  | Tests_passed of { passed : int; libs : int; ms : float; warm : warm_timing option }
+  | Tests_failed of { passed : int; failed : int; libs : int; ms : float; failures : (string * string) list; warm : warm_timing option }
 
 type ready = {
   url : string;
@@ -99,13 +104,22 @@ let summary = function
   | Server_restart msg -> msg
   | Stopped -> "stopped"
 
+(* warm-path fields: a "warm" marker + the child's dynlink/run split, so an agent/hook sees the worker
+   engaged and at what cost. Absent ⇒ the cold path ran (or nothing changed). *)
+let warm_fields = function
+  | None -> []
+  | Some { dynlink_ms; run_ms } ->
+    [ ("test_via", "warm"); ("test_dynlink_ms", Printf.sprintf "%.0f" dynlink_ms); ("test_run_ms", Printf.sprintf "%.0f" run_ms) ]
+
 let test_fields = function
   | Tests_not_wired -> [ ("tests", "not_wired") ]
   | Tests_not_changed -> [ ("tests", "not_changed") ]
-  | Tests_passed { passed; libs; ms } ->
+  | Tests_passed { passed; libs; ms; warm } ->
     [ ("tests", "passed"); ("tests_passed", string_of_int passed); ("tests_failed", "0"); ("test_libs", string_of_int libs); ("test_ms", Printf.sprintf "%.0f" ms) ]
-  | Tests_failed { passed; failed; libs; ms; _ } ->
+    @ warm_fields warm
+  | Tests_failed { passed; failed; libs; ms; warm; _ } ->
     [ ("tests", "failed"); ("tests_passed", string_of_int passed); ("tests_failed", string_of_int failed); ("test_libs", string_of_int libs); ("test_ms", Printf.sprintf "%.0f" ms) ]
+    @ warm_fields warm
 
 let fields = function
   | Ready { url; _ } -> [ ("url", url) ]
@@ -127,16 +141,27 @@ let agent_event = function
   | Server_restart _ as v -> ("server_restart", summary v, [], None, [])
   | Stopped as v -> ("stopped", summary v, [], None, [])
 
+(* warm timing for the verdict iff EVERY re-run lib took the warm path (summed) — else None (a mix or
+   all-cold), so the field only appears when the worker truly handled the run *)
+let warm_of_summary (s : Dev_tests.summary) =
+  let rs = s.Dev_tests.results in
+  if rs <> [] && List.for_all (fun (r : Dev_tests.result) -> r.Dev_tests.via = Dev_tests.Warm) rs then
+    Some
+      { dynlink_ms = List.fold_left (fun a (r : Dev_tests.result) -> a +. r.Dev_tests.dynlink_ms) 0. rs;
+        run_ms = List.fold_left (fun a (r : Dev_tests.result) -> a +. r.Dev_tests.run_ms) 0. rs }
+  else None
+
 let tests_of_summary = function
   | None -> Tests_not_changed
   | Some s when s.Dev_tests.total_failed = 0 ->
-    Tests_passed { passed = s.Dev_tests.total_passed; libs = List.length s.Dev_tests.results; ms = s.Dev_tests.ms }
+    Tests_passed { passed = s.Dev_tests.total_passed; libs = List.length s.Dev_tests.results; ms = s.Dev_tests.ms; warm = warm_of_summary s }
   | Some s ->
     Tests_failed
       { passed = s.Dev_tests.total_passed;
         failed = s.Dev_tests.total_failed;
         libs = List.length s.Dev_tests.results;
         ms = s.Dev_tests.ms;
+        warm = warm_of_summary s;
         failures =
           List.filter_map
             (fun (r : Dev_tests.result) -> if r.Dev_tests.failed > 0 then Some (r.Dev_tests.lib, String.trim r.Dev_tests.output) else None)
@@ -144,7 +169,7 @@ let tests_of_summary = function
 
 let%test "build ok summary includes affected surface and tests" =
   let affected = Affected.classify [ "examples/site/frontend/components/nav.mlx changed" ] in
-  let v = Build_ok { trigger = [ "examples/site/frontend/components/nav.mlx changed" ]; served = Full_reload; build_ms = Some 12.; tests = Tests_passed { passed = 3; libs = 1; ms = 4. }; affected } in
+  let v = Build_ok { trigger = [ "examples/site/frontend/components/nav.mlx changed" ]; served = Full_reload; build_ms = Some 12.; tests = Tests_passed { passed = 3; libs = 1; ms = 4.; warm = None }; affected } in
   let s = summary v in
   Fennec_hunt_unit.str_contains s "reload" && Fennec_hunt_unit.str_contains s "affected: component nav"
   && Fennec_hunt_unit.str_contains s "tests 3 passed"
@@ -154,3 +179,20 @@ let%test "build failed summary carries focused diagnostic" =
   let v = Build_failed { trigger = [ "a.ml changed" ]; diagnostics; raw = ""; last_good_serving = true; affected = Affected.classify [ "a.ml changed" ] } in
   let s = summary v in
   Fennec_hunt_unit.str_contains s "last good build still serving" && Fennec_hunt_unit.str_contains s "a.ml:2:4"
+
+let%test "warm test fields surface dynlink/run ms only when the worker engaged" =
+  let warm = test_fields (Tests_passed { passed = 42; libs = 1; ms = 9.; warm = Some { dynlink_ms = 7.; run_ms = 2. } }) in
+  let cold = test_fields (Tests_passed { passed = 42; libs = 1; ms = 380.; warm = None }) in
+  List.mem ("test_via", "warm") warm
+  && List.mem ("test_dynlink_ms", "7") warm
+  && List.mem ("test_run_ms", "2") warm
+  && not (List.mem_assoc "test_via" cold)
+
+let%test "warm_of_summary is Some only when every re-run lib was warm" =
+  let mk via : Dev_tests.result =
+    { lib = "x"; passed = 1; failed = 0; output = ""; ms = 1.; via; dynlink_ms = 5.; run_ms = 3. }
+  in
+  let all_warm : Dev_tests.summary = { results = [ mk Dev_tests.Warm; mk Dev_tests.Warm ]; total_passed = 2; total_failed = 0; ms = 2. } in
+  let mixed : Dev_tests.summary = { results = [ mk Dev_tests.Warm; mk Dev_tests.Cold ]; total_passed = 2; total_failed = 0; ms = 2. } in
+  (match warm_of_summary all_warm with Some { dynlink_ms; run_ms } -> dynlink_ms = 10. && run_ms = 6. | None -> false)
+  && warm_of_summary mixed = None

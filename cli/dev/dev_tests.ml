@@ -20,6 +20,10 @@ type t = {
   watch_roots : string list;
   mutable runners : runner list option;  (* None = not yet discovered *)
   mtimes : (string, float) Hashtbl.t;
+  (* warm-path state (all optional; absence ⇒ the cold path is used, unchanged) *)
+  mutable worker : Test_worker.t option;       (* set by the supervisor after it spawns the worker *)
+  mutable describe : string option;            (* cached `dune describe workspace`; refreshed lazily *)
+  chains : (string, (Test_chain.t, string) Stdlib.result) Hashtbl.t;  (* per-target derived chain (or why not) *)
 }
 
 (* ═══════════════════════════════════════════════════════════════════════════ *)
@@ -185,7 +189,13 @@ let discover root watch_roots =
   inline @ conventional |> List.sort_uniq (fun a b -> compare a.target b.target)
 
 let create ?(watch_roots = []) ~root () =
-  { root; watch_roots = List.map normalize_rel watch_roots |> uniq; runners = None; mtimes = Hashtbl.create 8 }
+  { root;
+    watch_roots = List.map normalize_rel watch_roots |> uniq;
+    runners = None;
+    mtimes = Hashtbl.create 8;
+    worker = None;
+    describe = None;
+    chains = Hashtbl.create 16 }
 
 (* discover lazily, returning the runner list *)
 let ensure t =
@@ -198,6 +208,20 @@ let mtime path = try (Unix.stat path).Unix.st_mtime with _ -> 0.0
 (* the targets to add to dune --watch, discovered lazily after the first build *)
 let targets t = List.map (fun (r : runner) -> r.target) (ensure t)
 
+(* the BYTECODE targets the warm worker needs built alongside the native runners: for each conventional
+   [(test)] runner (its target ends in <name>.exe), the <name>.bc — which transitively pulls the test's
+   own .cmo AND the app libs' .cma's, all in bytecode. Inline-test runners (…/inline-test-runner.exe)
+   have no .bc and are skipped (they take the cold path). Adding these to the watch means a green
+   settle has the byte artifacts ready when the worker loads them. Only meaningful when a worker is
+   active; the supervisor merges these into the watch only then. *)
+let byte_targets t =
+  ensure t
+  |> List.filter_map (fun (r : runner) ->
+         let tg = r.target in
+         if ends_with "/inline-test-runner.exe" tg || tg = "inline-test-runner.exe" then None
+         else if ends_with ".exe" tg then Some (String.sub tg 0 (String.length tg - 4) ^ ".bc")
+         else None)
+
 let prime t =
   ensure t
   |> List.iter (fun (r : runner) -> Hashtbl.replace t.mtimes r.exe (mtime r.exe))
@@ -206,10 +230,46 @@ let prime t =
 (*  Execution                                                                *)
 (* ═══════════════════════════════════════════════════════════════════════════ *)
 
-type result = { lib : string; passed : int; failed : int; output : string; ms : float }
+(* how a result was produced — for the UI/verdict + so the dev knows the warm path engaged *)
+type via = Cold | Warm
+
+type result = {
+  lib : string;
+  passed : int;
+  failed : int;
+  output : string;
+  ms : float;          (* wall time for this runner (cold: process; warm: fork→reap) *)
+  via : via;
+  dynlink_ms : float;  (* warm only: framework-.cma Dynlink time in the child (0 cold) *)
+  run_ms : float;      (* warm only: the test run (test-.cmo load) time (0 cold) *)
+}
+
 type summary = { results : result list; total_passed : int; total_failed : int; ms : float }
 
-(* run one runner, capture output, parse the tally from the last line *)
+(* parse a runner's pass/fail tally out of its captured output + exit code. Shared by the cold and
+   warm paths so both report identically. (The hunt runner prints "<n> tests passed" on success and a
+   failing tally otherwise; we also fall back to counting "ok" lines.) *)
+let parse_tally ~code ~output =
+  let lines = String.split_on_char '\n' output |> List.filter (fun s -> String.trim s <> "") in
+  let last = match List.rev lines with l :: _ -> String.trim l | [] -> "" in
+  if code = 0 then
+    match int_of_string_opt (try String.sub last 0 (String.index last ' ') with _ -> "0") with
+    | Some n when n > 0 -> (n, 0)
+    | _ ->
+      let ok_lines =
+        List.fold_left
+          (fun n line ->
+            let s = String.trim line in
+            if String.length s >= 2 && String.sub s 0 2 = "ok" then n + 1 else n)
+          0 lines
+      in
+      (ok_lines, 0)
+  else
+    let nums = String.split_on_char ' ' last |> List.filter_map int_of_string_opt in
+    match nums with f :: _ :: _ -> (0, f) | _ -> (0, 1)
+
+(* run one runner the COLD way: exec its native exe, capture output, parse the tally. This is the
+   always-available fallback; the warm worker path (run_via_worker) is tried first by run_changed. *)
 let run_one (r : runner) : result =
   let t0 = Unix.gettimeofday () in
   let tmp = Filename.temp_file "fennec-dev-test-" ".log" in
@@ -218,26 +278,150 @@ let run_one (r : runner) : result =
   let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
   let output = try In_channel.with_open_bin tmp In_channel.input_all with _ -> "" in
   (try Sys.remove tmp with _ -> ());
-  let lines = String.split_on_char '\n' output |> List.filter (fun s -> String.trim s <> "") in
-  let last = match List.rev lines with l :: _ -> String.trim l | [] -> "" in
-  let passed, failed =
-    if code = 0 then
-      (match int_of_string_opt (try String.sub last 0 (String.index last ' ') with _ -> "0") with
-       | Some n when n > 0 -> (n, 0)
-       | _ ->
-         let ok_lines =
-           List.fold_left
-             (fun n line ->
-               let s = String.trim line in
-               if String.length s >= 2 && String.sub s 0 2 = "ok" then n + 1 else n)
-             0 lines
-         in
-         (ok_lines, 0))
-    else
-      let nums = String.split_on_char ' ' last |> List.filter_map int_of_string_opt in
-      match nums with f :: _ :: _ -> (0, f) | _ -> (0, 1)
+  let passed, failed = parse_tally ~code ~output in
+  { lib = r.lib; passed; failed; output; ms; via = Cold; dynlink_ms = 0.; run_ms = 0. }
+
+(* ═══════════════════════════════════════════════════════════════════════════ *)
+(*  Warm path — try the resident worker, fall back to run_one on ANY miss       *)
+(* ═══════════════════════════════════════════════════════════════════════════ *)
+
+(* the supervisor hands us the worker handle (and clears it when the worker dies / a framework lib
+   changes). [None] ⇒ every runner takes the cold path. *)
+let set_worker t w =
+  t.worker <- w;
+  (* a fresh worker generation can change what is preloaded; the derived chains are still valid (they
+     are app-local), so we keep them — only a describe/lib-structure change invalidates, below *)
+  ()
+
+(* drop the cached describe + per-target chains. Call when a dune file or the lib graph may have
+   changed (the same trigger that restarts the worker), so the next warm run re-derives. *)
+let invalidate_chains t =
+  t.describe <- None;
+  Hashtbl.reset t.chains
+
+(* fetch `dune describe workspace` once and cache it. Honour FENNEC_DUNE_DESCRIBE (a path to a
+   pre-captured describe) for environments where plain `dune describe` can't resolve the intended root
+   (e.g. a worktree nested inside another dune project) or for tests. Runs dune the same plain way
+   Dune_watch runs `dune build --watch` (root auto-resolved from cwd). *)
+let fetch_describe t =
+  match t.describe with
+  | Some d -> Some d
+  | None ->
+    let d =
+      match Sys.getenv_opt "FENNEC_DUNE_DESCRIBE" with
+      | Some path when path <> "" -> (try Some (In_channel.with_open_text path In_channel.input_all) with _ -> None)
+      | _ -> (
+        try
+          let ic = Unix.open_process_in "dune describe workspace 2>/dev/null" in
+          let s = In_channel.input_all ic in
+          (match Unix.close_process_in ic with Unix.WEXITED 0 when String.trim s <> "" -> Some s | _ -> None)
+        with _ -> None)
+    in
+    (match d with Some _ -> t.describe <- d | None -> ());
+    d
+
+(* parse the direct (libraries …) of the stanza in [dune_text] that builds the exe named [exe].
+   Handles (test/executable (name X) …) and (tests/executables (names … X …) …). Returns [] if the
+   stanza or its libraries field isn't found (⇒ the caller can't warm-path → cold). *)
+let libraries_from_dune dune_text ~exe =
+  let n = String.length dune_text in
+  (* split [dune_text] into top-level stanzas (balanced parens) *)
+  let stanzas =
+    let rec collect acc i =
+      (* find the next '(' *)
+      match String.index_from_opt dune_text i '(' with
+      | None -> List.rev acc
+      | Some open_pos -> (
+        match find_balanced_after dune_text open_pos with
+        | None -> List.rev acc
+        | Some close_pos -> collect (String.sub dune_text open_pos (close_pos - open_pos + 1) :: acc) (close_pos + 1))
+    in
+    collect [] 0
   in
-  { lib = r.lib; passed; failed; output; ms }
+  ignore n;
+  (* does [stanza] name [exe] via (name exe) or (names … exe …)? *)
+  let names_exe stanza =
+    let field_words key =
+      match Dune_watch.find_sub stanza key with
+      | None -> []
+      | Some p ->
+        (match find_balanced_after stanza p with
+         | None -> []
+         | Some close ->
+           let inner = String.sub stanza (p + String.length key) (close - (p + String.length key)) in
+           String.split_on_char ' ' (String.map (fun c -> if c = '\n' || c = '\t' || c = ')' then ' ' else c) inner)
+           |> List.filter_map (fun w -> let w = String.trim w in if w = "" then None else Some w))
+    in
+    List.mem exe (field_words "(name") || List.mem exe (field_words "(names")
+  in
+  let lib_words stanza =
+    match Dune_watch.find_sub stanza "(libraries" with
+    | None -> []
+    | Some p ->
+      (match find_balanced_after stanza p with
+       | None -> []
+       | Some close ->
+         let inner = String.sub stanza (p + String.length "(libraries") (close - (p + String.length "(libraries")) in
+         String.split_on_char ' ' (String.map (fun c -> if c = '\n' || c = '\t' || c = ')' then ' ' else c) inner)
+         |> List.filter_map (fun w -> let w = String.trim w in if w = "" then None else Some w))
+  in
+  match List.find_opt names_exe stanzas with Some s -> lib_words s | None -> []
+
+(* derive (and cache) the runner's app-local Dynlink chain, or a string saying why we can't. *)
+let chain_for t (r : runner) : (Test_chain.t, string) Stdlib.result =
+  match Hashtbl.find_opt t.chains r.target with
+  | Some cached -> cached
+  | None ->
+    let result =
+      match fetch_describe t with
+      | None -> Error "no dune describe"
+      | Some describe -> (
+        let dune_path = Filename.concat (Filename.concat t.root (Filename.dirname r.target)) "dune" in
+        let dune_text = try In_channel.with_open_text dune_path In_channel.input_all with _ -> "" in
+        match libraries_from_dune dune_text ~exe:(Filename.remove_extension (Filename.basename r.target)) with
+        | [] -> Error "could not read the test's (libraries …)"
+        | test_libs -> (
+          match
+            Test_chain.derive ~describe ~watch_roots:t.watch_roots ~preloaded:Test_worker.preloaded ~test_libs
+              ~target:r.target
+          with
+          | Ok chain -> Ok chain
+          | Error e -> Error (Test_chain.error_to_string e)))
+    in
+    Hashtbl.replace t.chains r.target result;
+    result
+
+(* run one runner via the warm worker, or [None] to signal the caller to fall back to run_one.
+   Object paths are made absolute against the build root so the worker (whatever its cwd) resolves
+   them. A worker child exit_code <> 0 is a real test FAILURE (returned, not a fallback). *)
+let run_via_worker t (r : runner) : result option =
+  match t.worker with
+  | None -> None
+  | Some w -> (
+    if not (Test_worker.healthy w) then None
+    else
+      match chain_for t r with
+      | Error _ -> None
+      | Ok chain ->
+        let abs rel = if Filename.is_relative rel then Filename.concat (Filename.concat t.root "_build/default") rel else rel in
+        let objs = List.map abs (Test_chain.objects chain) in
+        (match Test_worker.run w ~chain:objs with
+         | None -> None
+         | Some res ->
+           let passed, failed = parse_tally ~code:res.Test_worker.exit_code ~output:res.Test_worker.output in
+           Some
+             { lib = r.lib;
+               passed;
+               failed;
+               output = res.Test_worker.output;
+               ms = res.Test_worker.total_ms;
+               via = Warm;
+               dynlink_ms = res.Test_worker.dynlink_ms;
+               run_ms = res.Test_worker.run_ms }))
+
+(* run one runner: warm if the worker can take it, else cold. NEVER fails — cold is always available. *)
+let run_one_smart t (r : runner) : result =
+  match run_via_worker t r with Some res -> res | None -> run_one r
 
 let run_changed t =
   let runners = ensure t in
@@ -251,7 +435,7 @@ let run_changed t =
   if changed = [] then None
   else begin
     let t0 = Unix.gettimeofday () in
-    let results = List.map run_one changed in
+    let results = List.map (run_one_smart t) changed in
     let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
     let total_passed = List.fold_left (fun a r -> a + r.passed) 0 results in
     let total_failed = List.fold_left (fun a r -> a + r.failed) 0 results in
@@ -287,3 +471,33 @@ let%test "discovers conventional unit test targets under watched roots" =
   (try Unix.rmdir (Filename.dirname (Filename.dirname app)) with _ -> ());
   (try Unix.rmdir root with _ -> ());
   ok
+
+let%test "libraries_from_dune reads a (test) stanza's libraries by exe name" =
+  let text =
+    "(test\n (name test_components)\n (modes byte exe)\n (modules test_components)\n (libraries fennec.fur fennec.fur.server site_components site_store))\n\
+     (executable (name snapshot_html) (libraries other_lib))\n"
+  in
+  libraries_from_dune text ~exe:"test_components"
+  = [ "fennec.fur"; "fennec.fur.server"; "site_components"; "site_store" ]
+
+let%test "libraries_from_dune picks the RIGHT stanza when several exes share a dune" =
+  let text =
+    "(test (name test_components) (libraries a b))\n(executable (name snapshot_html) (libraries c d))\n"
+  in
+  libraries_from_dune text ~exe:"snapshot_html" = [ "c"; "d" ]
+
+let%test "libraries_from_dune handles a (tests (names …)) plural stanza" =
+  let text = "(tests (names foo bar) (libraries x y))\n" in
+  libraries_from_dune text ~exe:"bar" = [ "x"; "y" ]
+
+let%test "libraries_from_dune returns [] for an unknown exe (⇒ cold fallback)" =
+  libraries_from_dune "(test (name a) (libraries z))" ~exe:"nope" = []
+
+let%test "byte_targets maps conventional .exe runners to .bc and skips inline runners" =
+  let t = create ~watch_roots:[ "x" ] ~root:"/r" () in
+  t.runners <-
+    Some
+      [ { lib = "frontend_test"; exe = "/r/_build/default/x/ft/test_components.exe"; target = "x/ft/test_components.exe" };
+        { lib = "some_lib"; exe = "/r/_build/default/x/.some_lib.inline-tests/inline-test-runner.exe";
+          target = "x/.some_lib.inline-tests/inline-test-runner.exe" } ];
+  byte_targets t = [ "x/ft/test_components.bc" ]
