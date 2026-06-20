@@ -46,6 +46,15 @@ let inputs = [
   "[%%style {scss| .hero { color: red; padding: 1rem } |scss}]\nlet v = <section className=\"hero\">Title</section>";
   "let v =\n  <p>\n    multi line\n    indented text\n  </p>";
   "let make ~title ~subtitle () =\n  <section className=\"hero\">\n    <h1 className=\"t\">{title}</h1>\n    <p className=\"s\">{subtitle}</p>\n    <a href=\"/about\">Learn more</a>\n  </section>";
+  (* literal parens in bare child text — the closed surprise; must be valid mlx (a quoted string) *)
+  "let v = <p>Call us (now) — it's free!</p>";
+  "let v = <p>f(x) = y and a (nested (deep)) b</p>";
+  "let v = <h2>Say hello (typed client form)</h2>";
+  "let v = <p>visits (localStorage): {!n}</p>";
+  (* control flow as the {…} escape (JSX-identical), with nested JSX + bare text inside *)
+  "let v = <ul>{each xs (fun x -> <li>row {x.id} (#{x.id})</li>)}</ul>";
+  "let v = <div>{if ok then <p>yes (really)</p> else <p>no</p>}</div>";
+  "let v = <span>{match x with None -> <b>none</b> | Some u -> <i>{name u}</i>}</span>";
 ]
 
 let () =

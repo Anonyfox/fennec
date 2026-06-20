@@ -49,20 +49,34 @@
     {2 JSX surface in a [.mlx] component file}  (JSX-identical; pure ppx + pre-pass, no type-safety loss)
 
     The markup is the React/Svelte surface a frontend developer already knows — bare text, [{expr}]
-    interpolation, [<Component/>], scoped [[%%style]] — with full OCaml type safety underneath:
+    interpolation, [<Component/>], scoped [[%%style]] — with full OCaml type safety underneath. The
+    child-text surface is {b exactly HTML/JSX, with no fennec-specific surprise}: whitespace collapses
+    (HTML rule), [{expr}] is the one value escape (JSX rule), a literal [{] or [<letter] must be escaped
+    or quoted (JSX rule), and a literal [(] is just text. The one-line table:
+    {v
+      whitespace collapses / trims  → HTML-standard
+      {expr} is the value escape     → JSX-standard ({} is the ONLY escape)
+      { and <letter need escaping    → JSX-standard
+      ( ) and prose punctuation      → plain text (no escape — JSX adds none either)
+    v}
     - {b bare text is text}: [<h1>Welcome to Fennec 🦊</h1>], [<a>Sign in</a>] ([in] is an OCaml
       keyword, yet it reads fine — a fennec-owned [.mlx] pre-pass [fennec-mlx-pp] quotes child text
-      BEFORE the parser, see [fennec/fur/prepass/]). Whitespace collapses/trims like JSX (source
+      BEFORE the parser, see [fennec/fur/prepass/]). A literal [(] is text like any other character:
+      [<p>Call us (now) — it's free!</p>] needs no quoting. Whitespace collapses/trims like JSX (source
       indentation between elements is dropped; inline runs collapse to one space).
     - {b [{expr}] interpolates a VALUE} (JSX-identical) — auto-wrapped in {!node}, so an
       [int]/[float]/[string]/[vnode] all render and userland never writes [node]:
       [<span>{!count}</span>], [<span>{label ^ ":"}</span>], [<h3>{(Data.value info).name}</h3>].
-    - a child that evaluates to a [vnode list] (an [each] / [List.map]) auto-wraps in {!frag},
-      so the idiom is a bare [(each xs (fun x -> …))] — no [frag], no [Array.to_list] for a list.
-    - {b the [(expr)] paren form still works} (backward-compatible) and is the way to nest a
-      list/conditional whose body is itself JSX: [(if !ready then <ul>…</ul> else <p>…</p>)].
-    - {b [ "string" ] quoted text is the escape hatch} for text that must contain a literal [{], [(],
-      [<], or significant edge/double whitespace (e.g. ["✉  Dev mailbox"], ["(localStorage)"]).
+    - {b [{expr}] is ALSO how you nest a list/conditional/match whose body is itself JSX} (JSX-identical:
+      [{}] is the single escape for values AND control flow) — a child that evaluates to a [vnode list]
+      (an [each] / [List.map]) auto-wraps in {!frag}, so the idiom is [{each xs (fun x -> …)}] — no
+      [frag], no [Array.to_list] for a list — and a conditional is [{if !ready then <ul>…</ul> else
+      <p>…</p>}], a match [{match x with … -> <span>…</span>}]. Nested JSX inside the [{…}] gets the same
+      bare-text treatment, to any depth.
+    - {b [ "string" ] quoted text is the escape hatch} for text that must contain a literal [{] or
+      [<letter] (JSX-standard), or significant edge/double whitespace (HTML collapses it, so quoting is
+      the HTML-standard way to force it — e.g. ["✉  Dev mailbox"] keeps the double space). A literal
+      [(] does NOT need it.
     - [!s] reads a signal — the sugar for [(get s)] (writes stay explicit: [set]/[+=]/[-=]);
     - [attrs=(expr)] on a plain element SPREADS an [attr list] into the element's attributes (React's
       [{...spread}]) — e.g. [<input attrs=(Form.input_attrs Fields.email) name="email" />] drops the
@@ -217,7 +231,7 @@ val raw : string -> vnode
 
 (** A fragment: multiple sibling nodes with no wrapper element. In [.mlx] the ppx inserts this
     automatically around a child that evaluates to a [vnode list] (an {!each} / [List.map]), so
-    userland writes a bare [(each xs f)] — never [frag (each xs f)]. *)
+    userland writes [{each xs f}] — never [frag (each xs f)]. *)
 val frag : vnode list -> vnode
 
 (** [h ?key tag attrs children] — an HTML element. [key] is the reconciler's stable identity
@@ -240,19 +254,19 @@ val attr : string -> string -> attr
 val class_ : string -> attr
 
 (** [node v] — coerce a heterogeneous child: pass an [int], [float], [string], or [vnode]
-    as a child of {!h} without explicit conversion. In [.mlx] the ppx inserts this at every
-    [(expr)] value-child position, so userland writes a bare [(expr)] and never spells [node]
-    (an unsupported child type is still a compile error). Idempotent: an explicit [(node x)]
-    is not re-wrapped. *)
+    as a child of {!h} without explicit conversion. In [.mlx] userland writes the value escape
+    [{expr}]; the pre-pass lowers it to a paren value-child and the ppx inserts {!node} there, so
+    userland never spells [node] (an unsupported child type is still a compile error). Idempotent:
+    an explicit [{node x}] is not re-wrapped. *)
 val node : 'a -> vnode
 
 (** [skey v] — coerce a stable key to a string ([int] or [string]). *)
 val skey : 'a -> string
 
 (** [each xs f] — [List.map f xs] accepting a mixed-type list via coercion: the one idiom for
-    rendering a dynamic list of children. In [.mlx] a child [(each xs f)] is auto-wrapped in
+    rendering a dynamic list of children. In [.mlx] a child [{each xs f}] is auto-wrapped in
     {!frag} (so no [frag]); for an array, convert at the call site with [Array.to_list]
-    ([(each (Array.to_list arr) f)]) — one [each] typed over both list and array is not
+    ([{each (Array.to_list arr) f}]) — one [each] typed over both list and array is not
     expressible in OCaml without modular implicits. *)
 val each : 'a list -> ('a -> 'b) -> 'b list
 

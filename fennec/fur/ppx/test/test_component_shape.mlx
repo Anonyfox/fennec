@@ -70,7 +70,7 @@ module Probe = struct
     let tick = signal 0 in
     probe_tick := Some tick;               (* SETUP — expose this instance's signal *)
     <span className="probe">
-      (incr render_runs; "v" ^ string_of_int (get tick))   (* RENDER — re-runs on `tick` *)
+      {incr render_runs; "v" ^ string_of_int (get tick)}   (* RENDER — re-runs on `tick` *)
     </span>
 end
 
@@ -110,14 +110,14 @@ module Unified = struct
   let make ~label () =
     let n = signal 7 in
     seen_unified := Some n;
-    <b className="u">(label ^ ":" ^ string_of_int (get n))</b>
+    <b className="u">{label ^ ":" ^ string_of_int (get n)}</b>
 end
 
 module Explicit = struct
   let make ~label () =
     let n = signal 7 in
     seen_explicit := Some n;
-    fun () -> <b className="u">(label ^ ":" ^ string_of_int (get n))</b>
+    fun () -> <b className="u">{label ^ ":" ^ string_of_int (get n)}</b>
 end
 
 let%test "unified shape renders byte-identically to the explicit `fun () ->` shape (SSR)" =
@@ -146,7 +146,7 @@ module Counter = struct
   let make () =
     let count = signal 0 in
     instances := instances.contents @ [ count ];   (* register this instance's own signal *)
-    <li className="c">("n=" ^ string_of_int (get count))</li>
+    <li className="c">{"n=" ^ string_of_int (get count)}</li>
 end
 
 let%test "two instances keep independent state (no hoisted module signal)" =
@@ -173,8 +173,8 @@ module Branch = struct
     let shown = signal false in                   (* SETUP *)
     branch_seen := Some shown;
     (match get shown with                          (* RENDER — a match is the trailing expr *)
-     | false -> <span className="off">"hidden"</span>
-     | true -> <span className="on">"shown"</span>)
+     | false -> <span className="off">hidden</span>
+     | true -> <span className="on">shown</span>)
 end
 
 let%test "a match/if as the trailing render is wrapped and re-runs reactively" =

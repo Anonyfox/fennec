@@ -35,8 +35,9 @@
                    string / paren / record / char literal after the equals is copied verbatim, and a
                    brace attribute value is normalised to a paren one (the JSX form name={x}).
      - Children — between a tag GREATER and its matching closing tag. THE ONLY mode that rewrites:
-                   bare text becomes a quoted string; a brace-escape becomes a paren-escape; a
-                   paren-escape / string / nested-tag passes through. A closing tag ends it.
+                   bare text (a literal `(` included) becomes a quoted string; a brace-escape `{expr}`
+                   — the SOLE value escape, JSX-identical — becomes a paren-escape; a string / nested
+                   tag passes through; a `(* … *)` block comment stays a comment. A closing tag ends it.
      - String   — inside a double-quoted string, honouring backslash escapes. Verbatim.
      - Comment  — inside an OCaml block comment, NESTED; a string / quoted-string / char literal
                    inside it is itself tracked so a comment-closer hidden in a literal does not end
@@ -49,24 +50,35 @@
    contains a fake tag or fake brace-escape is always inert no matter where it appears.
 
    ────────────────────────────────────────────────────────────────────────────────────────
-   THE CHILD-TEXT CONTRACT (what bare text means)  — matches JSX
+   THE CHILD-TEXT CONTRACT (what bare text means)  — EXACTLY JSX, no fennec-added surprise
    ────────────────────────────────────────────────────────────────────────────────────────
    mlx parses JSX children as a list of simple_expr. That already accepts a paren-escape, a string, a
    nested tag, and even a lone identifier — but it CANNOT accept prose (Welcome to Fennec: the word
    "to" is a keyword, a syntax error; "a b": silently two idents). So in Children we adopt the React
-   rule:
+   rule — and crucially the SAME escape surface as JSX, which has exactly one value escape (`{}`):
 
-     - a run that does not start with a brace, paren, double-quote or less-than is TEXT, collected up
-       to the next of those, whitespace-collapsed (JSX-style: inner whitespace runs collapse to one
-       space; a run touching an element edge is trimmed on that side; an all-whitespace run between
-       two elements is dropped), and emitted as a quoted OCaml string;
-     - a brace-escape is the value escape, normalised to a paren-escape (a bare brace in mlx is a
-       RECORD, never a child escape, so this rewrite is mandatory, not cosmetic);
-     - a paren-escape, a string and a nested tag pass through unchanged (so the old syntax keeps
-       working and the transform is idempotent).
+     - a run that does not start with a brace, double-quote or less-than is TEXT — and a literal `(`
+       is just text (JSX's only escape is `{}`; we add none). It is collected up to the next brace /
+       quote / tag, whitespace-collapsed (JSX-style: inner whitespace runs collapse to one space; a
+       run touching an element edge is trimmed on that side; an all-whitespace run between two
+       elements is dropped), and emitted as a quoted OCaml string — so `Call us (now) — free!` is one
+       text run, parens and dash and bang and all;
+     - a brace-escape `{expr}` is the SOLE value escape — JSX-identical — normalised to a paren-escape
+       (a bare brace in mlx is a RECORD, never a child escape, so this rewrite is mandatory, not
+       cosmetic; the downstream fur ppx then auto-wraps the `(expr)` in `node`);
+     - a string and a nested tag pass through unchanged; a `(* … *)` block comment stays a comment.
 
-   Text that must contain a brace, paren, less-than or significant edge whitespace uses the explicit
-   double-quoted-string escape hatch and is copied verbatim. This is the documented fur.mli contract.
+   The ONLY things needing care in bare text are EXACTLY JSX's: a literal `{` or a `<letter` (escape
+   them, or use the quoted form), and significant / double / edge whitespace (HTML-standard — whitespace
+   collapses, so force it with the quoted form). Text needing any of those uses the explicit
+   double-quoted-string escape hatch, copied verbatim. Zero fennec-specific surprise. This is the
+   documented fur.mli contract: collapse = HTML, `{`/`<` = JSX, `(` = text.
+
+   (Back-compat note: a pre-existing `(expr)` *child* — the old fennec syntax, before `{expr}` became
+   the one escape — now reads as literal text. That is the intended contract change; userland migrated
+   every child to `{expr}`. A `name=(expr)` ATTRIBUTE value is still a value escape: an attribute slot
+   is unambiguously an expression, not prose, so it adds no surprise and stays a back-compat alias of
+   the canonical `name={expr}`.)
 
    ────────────────────────────────────────────────────────────────────────────────────────
    POSITION / LINE PRESERVATION
@@ -339,12 +351,13 @@ let rec scan_children st =
        | Some delim -> copy_quoted_string st ~delim
        | None -> rewrite_brace_escape st)
     end
-    else if c = '(' then begin
-      (* paren escape `(expr)` — pass through verbatim (back-compat). An open-paren-star here is a
-         comment, handled first. *)
+    else if c = '(' && peek st 1 = '*' then begin
+      (* an OCaml block comment in child position is trivia, not text — copy it verbatim (it is
+         dropped by mlx as inter-child whitespace would be). Only a paren-star opens a comment; a
+         bare `(` falls through to the text branch below. Pathological-but-safe: nobody writes a
+         block comment as a JSX child, but if they do it stays a comment, exactly like in OCaml. *)
       flush ();
-      if peek st 1 = '*' then copy_comment st
-      else copy_balanced st ~op:'(' ~cl:')'
+      copy_comment st
     end
     else if c = '"' then begin
       (* explicit string child — verbatim escape hatch. *)
@@ -389,10 +402,12 @@ and scan_tag st =
   if !opened_children && not !self_closed then scan_children st
 
 (* copy a balanced delimited region `op … cl` (literal-aware), assuming cursor on the opener. Used
-   for a `(…)` paren-escape. RECURSES into a nested JSX element (a `<ident` whose `<` is not an
-   operator), so bare text inside `(each … <li>txt</li>)` is rewritten too. Returns with the cursor
-   just past the matching close. The nested element consumes its OWN `(`/`)`/`{`/`}`, so they do not
-   perturb this scanner's [depth]. *)
+   for an ATTRIBUTE `name=(expr)` value — the only place a `(…)` is still an escape (in CHILD position
+   a `(` is plain text now; the child value escape is `{expr}`, handled by {!rewrite_brace_escape}).
+   RECURSES into a nested JSX element (a `<ident` whose `<` is not an operator), so bare text inside an
+   attribute expression that itself produces JSX is rewritten too. Returns with the cursor just past
+   the matching close. The nested element consumes its OWN `(`/`)`/`{`/`}`, so they do not perturb
+   this scanner's [depth]. *)
 and copy_balanced st ~op ~cl =
   copy st (* opener *);
   let depth = ref 1 in

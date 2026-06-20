@@ -16,4 +16,4 @@ let () =
       let next = prev + 1 in
       Browser.local_set "visits" (string_of_int next);
       set n next)
-let view = <p className="visits">"visits (localStorage): "{!n}</p>
+let view = <p className="visits">visits (localStorage): {!n}</p>

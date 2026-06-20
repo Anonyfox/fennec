@@ -9,8 +9,10 @@
      B. NEGATIVE / GUARD — OCaml code (strings, char literals, nested comments, quoted-string
         extensions, the scoped-style block payload, less-than / not-equal / left-arrow operators)
         passes through BYTE-FOR-BYTE. This is where a lexer bug would corrupt a valid file.
-     C. IDEMPOTENCE — running the transform on already-normalised output is a no-op (so a half-
-        migrated file, or a second build pass, never double-rewrites).
+     C. IDEMPOTENCE / STABILITY — the transform is the identity (hence a fixed point) on inputs
+        already in the output language with no bare text / value escape — the subset the driver's
+        FAST PATH relies on. Lowering `{expr}` → `(expr)` is deliberately ONE-WAY (a literal `(` is
+        now input-text), applied exactly once by the pipeline; the family pins both facts.
 
    A second pass also feeds every expected output through the REAL mlx-pp binary (when present on
    PATH) and asserts it parses — proving we emit syntactically-valid mlx, not just a string we like.
@@ -92,6 +94,45 @@ let () =
     ("let v = <p>{g " ^ q ^ "}" ^ q ^ "}</p>")
     ("let v = <p>(g " ^ q ^ "}" ^ q ^ ")</p>");
 
+  (* ──────────────────────────────────────────────────────────────────────────────────────
+     A literal `(` in CHILD TEXT is just text — the ONE fennec-specific surprise we are closing.
+     JSX has exactly one escape (`{}`); a paren is never code in child position, so prose with
+     parentheses needs no quoting. (Pre-this-change a `(` opened a paren-escape; now it is text.)
+     ────────────────────────────────────────────────────────────────────────────────────── *)
+  t ~name:"literal paren in prose"
+    "let v = <p>Call (now)</p>"
+    ("let v = <p>" ^ q ^ "Call (now)" ^ q ^ "</p>");
+  t ~name:"function-call-looking text f(x) = y"
+    "let v = <p>f(x) = y</p>"
+    ("let v = <p>" ^ q ^ "f(x) = y" ^ q ^ "</p>");
+  t ~name:"nested parens in text"
+    "let v = <p>a (nested (deep)) b</p>"
+    ("let v = <p>" ^ q ^ "a (nested (deep)) b" ^ q ^ "</p>");
+  t ~name:"paren at the very start of a child run"
+    "let v = <p>(at start)</p>"
+    ("let v = <p>" ^ q ^ "(at start)" ^ q ^ "</p>");
+  t ~name:"the migrated name_form.mlx shape (parens + words)"
+    "let v = <h2>Say hello (typed client form)</h2>"
+    ("let v = <h2>" ^ q ^ "Say hello (typed client form)" ^ q ^ "</h2>");
+  t ~name:"em dash + parens + colon + apostrophe + emoji all bare"
+    "let v = <p>Call us (now) — it's free: 🦊</p>"
+    ("let v = <p>" ^ q ^ "Call us (now) — it's free: 🦊" ^ q ^ "</p>");
+  t ~name:"mixed: text + {expr} + text with a literal paren after the interp"
+    "let v = <p>Hi {name} (v2)!</p>"
+    ("let v = <p>" ^ q ^ "Hi " ^ q ^ "(name)" ^ q ^ " (v2)!" ^ q ^ "</p>");
+  t ~name:"the migrated visits.mlx shape (parens + trailing-space text + {expr})"
+    "let v = <p>visits (localStorage): {!n}</p>"
+    ("let v = <p>" ^ q ^ "visits (localStorage): " ^ q ^ "(!n)</p>");
+
+  (* An OCaml block comment (a paren-star opener) is STILL a comment even in child position — only a
+     `(` ALONE is text. A bare `(` not followed by a star is text; a paren-star opens a comment, which
+     is inter-child trivia (copied verbatim, like inter-element whitespace). *)
+  t ~name:"a bare paren is text; a real block comment in child position stays a comment"
+    "let v = <p>Call (now) (* a note *)</p>"
+    ("let v = <p>" ^ q ^ "Call (now) " ^ q ^ "(* a note *)</p>");
+  id ~name:"a block comment alone in child position stays a comment (trivia, no text child)"
+    "let v = <p>(* just a comment *)</p>";
+
   (* mixed text + interpolation, JSX whitespace *)
   t ~name:"text then interp keeps the inline space"
     "let v = <p>Hello {name}!</p>"
@@ -103,10 +144,17 @@ let () =
     "let v = <div>todos in store: {n}</div>"
     ("let v = <div>" ^ q ^ "todos in store: " ^ q ^ "(n)</div>");
 
-  (* existing (expr) / "str" escapes still work and pass through *)
-  id ~name:"paren escape child unchanged" "let v = <span>(get s)</span>";
+  (* {expr} is the value escape; a bare "str" child passes through. A `(expr)` CHILD is now TEXT
+     (the contract change) — the value escape is `{get s}`, which lowers to the paren form. *)
+  t ~name:"value escape {get s} -> (get s)"
+    "let v = <span>{get s}</span>"
+    "let v = <span>(get s)</span>";
+  t ~name:"a `(expr)` child is now literal text (the closed surprise)"
+    "let v = <span>(get s)</span>"
+    ("let v = <span>" ^ q ^ "(get s)" ^ q ^ "</span>");
   id ~name:"quoted string child unchanged" ("let v = <h1>" ^ q ^ "Welcome" ^ q ^ "</h1>");
-  id ~name:"mixed quoted + paren unchanged (stats.mlx today)"
+  t ~name:"text then {expr} value escape (the stats.mlx shape)"
+    "let v = <div>todos: {n}</div>"
     ("let v = <div>" ^ q ^ "todos: " ^ q ^ "(n)</div>");
 
   (* nesting + components + self-closing *)
@@ -134,7 +182,10 @@ let () =
     "let v = <input value=(draft) disabled=(not ok) />";
   id ~name:"attr punned + optional unchanged"
     "let v = <input disabled ?value />";
-  id ~name:"attr value containing a record (braces are the value, not an escape) — already paren"
+  (* attribute (expr) values are UNAMBIGUOUS (a slot, not prose) so they STAY a value escape — the
+     back-compat alias of the canonical name={expr}. Only the CHILD changed: here it is now {x}. *)
+  t ~name:"attr (expr) values stay; child uses the {expr} escape"
+    "let v = <li key=(t.id) className=(cls)>{x}</li>"
     "let v = <li key=(t.id) className=(cls)>(x)</li>";
 
   (* multi-line bare text — JSX collapse (indentation trimmed, lines joined by one space) *)
@@ -142,34 +193,39 @@ let () =
     "let v =\n  <p>\n    line one\n    line two\n  </p>"
     ("let v =\n  <p>" ^ q ^ "line one line two" ^ q ^ "</p>");
   t ~name:"whitespace-only between elements is dropped (newlines re-emitted)"
-    "let v =\n  <div>\n    <p>(a)</p>\n    <p>(b)</p>\n  </div>"
+    "let v =\n  <div>\n    <p>{a}</p>\n    <p>{b}</p>\n  </div>"
     "let v =\n  <div>\n    <p>(a)</p>\n    <p>(b)</p>\n  </div>";
   (* mlx makes NO whitespace child — `<a/> <b/>` lexes to [a; b], the space is a mere token
      separator. So the pre-pass leaves the inter-element space VERBATIM (mlx then drops it), never
      quoting it into a `" "` child. *)
   id ~name:"inter-element whitespace is left verbatim (mlx drops it, no space child)"
     "let v = <div><a/> <b/></div>";
-  id ~name:"inter-element whitespace before a comment is left verbatim"
+  t ~name:"inter-element whitespace before a comment is left verbatim"
+    "let v = <span>{a}   (* trailing trivia *)</span>"
     "let v = <span>(a)   (* trailing trivia *)</span>";
   id ~name:"comment between children is trivia (no stray text child)"
     ("let v = <span>" ^ q ^ "x" ^ q ^ "  (* c *)  " ^ q ^ "y" ^ q ^ "</span>");
 
-  (* RECURSION — JSX nested inside a (…) / {…} escape gets the SAME bare-text treatment, to any depth.
-     This is the common real shape: a list/conditional escape whose body is JSX with bare children. *)
+  (* RECURSION — JSX nested inside a {…} escape gets the SAME bare-text treatment, to any depth. This
+     is the common real shape: a list/conditional/match {…} escape whose body is JSX with bare
+     children. The {…} escape lowers to (…), and a nested <tag> inside it recurses — so userland writes
+     control flow as `{each …}` / `{if …}` / `{match …}` (JSX-identical: `{}` is the ONE escape), and a
+     literal `(` anywhere in the nested bare text stays text. (A pre-existing `(each …)` CHILD — old
+     syntax — would now be quoted as text; userland migrated all control flow to `{…}`.) *)
   t ~name:"each-escape: bare child + {expr} inside the lambda body"
-    "let v = <nav>(each links (fun (href, label) -> <a href=href>{label}</a>))</nav>"
+    "let v = <nav>{each links (fun (href, label) -> <a href=href>{label}</a>)}</nav>"
     "let v = <nav>(each links (fun (href, label) -> <a href=href>(label)</a>))</nav>";
   t ~name:"match-escape: bare text in one arm, {expr} in another"
-    ("let v = <span>(match x with None -> <b>none</b> | Some u -> <i>{name u}</i>)</span>")
+    ("let v = <span>{match x with None -> <b>none</b> | Some u -> <i>{name u}</i>}</span>")
     ("let v = <span>(match x with None -> <b>" ^ q ^ "none" ^ q ^ "</b> | Some u -> <i>(name u)</i>)</span>");
   t ~name:"if-escape: jsx branches with bare text"
-    ("let v = <div>(if ok then <p>yes</p> else <p>no</p>)</div>")
+    ("let v = <div>{if ok then <p>yes</p> else <p>no</p>}</div>")
     ("let v = <div>(if ok then <p>" ^ q ^ "yes" ^ q ^ "</p> else <p>" ^ q ^ "no" ^ q ^ "</p>)</div>");
-  t ~name:"mixed bare text + {expr} inside an each body"
-    "let v = <ul>(each xs (fun x -> <li>row {x.id}</li>))</ul>"
-    ("let v = <ul>(each xs (fun x -> <li>" ^ q ^ "row " ^ q ^ "(x.id)</li>))</ul>");
+  t ~name:"mixed bare text + {expr} inside an each body (with a literal paren in text)"
+    "let v = <ul>{each xs (fun x -> <li>row {x.id} (#{x.id})</li>)}</ul>"
+    ("let v = <ul>(each xs (fun x -> <li>" ^ q ^ "row " ^ q ^ "(x.id)" ^ q ^ " (#" ^ q ^ "(x.id)" ^ q ^ ")" ^ q ^ "</li>))</ul>");
   t ~name:"deeply nested escapes (each inside each)"
-    "let v = <div>(each rows (fun r -> <tr>(each r.cells (fun c -> <td>{c}</td>))</tr>))</div>"
+    "let v = <div>{each rows (fun r -> <tr>{each r.cells (fun c -> <td>{c}</td>)}</tr>)}</div>"
     "let v = <div>(each rows (fun r -> <tr>(each r.cells (fun c -> <td>(c)</td>))</tr>))</div>";
   t ~name:"brace-escape whose expression contains a nested element"
     "let v = <div>{wrap (<b>hi</b>)}</div>"
@@ -229,23 +285,38 @@ let () =
      \  </section>");
 
   (* ──────────────────────────────────────────────────────────────────────────────────────
-     C. IDEMPOTENCE — second pass is a no-op for every shape above
-     ────────────────────────────────────────────────────────────────────────────────────── *)
-  idem ~name:"bare prose" "let v = <h1>Welcome to Fennec</h1>";
-  idem ~name:"brace escape" "let v = <span>{!count}</span>";
-  idem ~name:"mixed text+interp" "let v = <p>Hello {name}!</p>";
+     C. IDEMPOTENCE / STABILITY
+
+     The pre-pass maps the INPUT language (bare text + `{expr}`) to a DIFFERENT output language (mlx:
+     quoted text + `(expr)`). It is therefore the identity — hence trivially idempotent — on exactly
+     the inputs that ALREADY are in the output language with no bare text and no value escape: pure
+     OCaml, fully-quoted children, nested tags, attributes. That identity subset is what the driver's
+     FAST PATH keys on (pp.ml streams mlx-pp's bytes through unchanged when `transform x = x`), so
+     these cases pin the contract the fast path relies on.
+
+     Lowering `{expr}` → `(expr)` is intentionally ONE-WAY (a literal `(` is input-text now), so a
+     SECOND pass over a lowered child re-quotes it — proven explicitly below. The pipeline applies the
+     pre-pass exactly once, so this is correct, not a bug; the round-trip we DO guarantee is that the
+     OUTPUT parses as mlx (the `parses_through_mlx` proof) and that already-mlx files are untouched. *)
+  idem ~name:"bare prose (no value escape) is a fixed point"
+    "let v = <h1>Welcome to Fennec</h1>";
+  idem ~name:"prose with a literal paren is a fixed point (quoted once, then stable)"
+    "let v = <p>Call us (now) — free!</p>";
   idem ~name:"style block" "[%%style {scss| .x { a: b } |scss}]\nlet v = <p>hi</p>";
-  idem ~name:"nested + attrs"
+  idem ~name:"nested + attrs (no child escape)"
     "let v = <div><Counter start=3 /><a href=\"/x\">go</a></div>";
   idem ~name:"multi-line text" "let v =\n  <p>\n    one\n    two\n  </p>";
-  idem ~name:"already-quoted (the pre-migration form)"
-    ("let v = <div>" ^ q ^ "todos: " ^ q ^ "(n)</div>");
-  idem ~name:"already-paren-escaped (the pre-migration form)"
-    "let v = <li>(t.text)<button onClick=(f g)>(label)</button></li>";
-  idem ~name:"recursive each-escape with bare children"
-    "let v = <ul>(each xs (fun x -> <li>row {x.id}<b>{x.k}</b></li>))</ul>";
-  idem ~name:"recursive match-escape with bare + interp arms"
-    "let v = <span>(match x with None -> <b>none</b> | Some u -> <i>{name u}</i>)</span>";
+  idem ~name:"already-quoted child + attr (expr) is a fixed point"
+    ("let v = <li key=(t.id)>" ^ q ^ "todos: " ^ q ^ "</li>");
+
+  (* the deliberate ONE-WAY lowering: `{expr}` → `(expr)` on pass 1, then `(expr)` is text on pass 2.
+     This documents WHY the value-escape forms are not in the idempotent set above. *)
+  t ~name:"pass 1: {expr} lowers to (expr)"
+    "let v = <span>{!count}</span>"
+    "let v = <span>(!count)</span>";
+  t ~name:"pass 2 over that lowered (expr) re-quotes it as text (one-way lowering)"
+    "let v = <span>(!count)</span>"
+    ("let v = <span>" ^ q ^ "(!count)" ^ q ^ "</span>");
 
   Printf.printf "\nprepass unit table: %d passed, %d failed\n" !pass !fail;
   if !fail > 0 then exit 1

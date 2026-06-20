@@ -37,7 +37,7 @@ let make () =
     | Error _ -> ()   (* the button is disabled while invalid, so this branch is belt-and-braces *)
   in
   <div className="hello-form">
-    <h2>"Say hello (typed client form)"</h2>
+    <h2>Say hello (typed client form)</h2>
     <label htmlFor="hf-name">Your name</label>
     <input id="hf-name"
            attrs=(Form.input_attrs Hello_form.Fields.name)   (* required + maxlength=40, straight off the codec *)
@@ -45,9 +45,9 @@ let make () =
            name="name"
            value=((Form.value form).name)
            onInput=(Form.update form (fun d -> { d with name = target_value () })) />
-    (match Form.field_error form Hello_form.Fields.name with
+    {match Form.field_error form Hello_form.Fields.name with
      | Some msg -> <p className="hf-err">{msg}</p>
-     | None -> <span />)
+     | None -> <span />}
     <button className="hf-submit" disabled=(not (Form.valid form)) onClick=(submit ())>Greet</button>
-    (if !greeting <> "" then <p className="hf-ok">{!greeting}</p> else <span />)
+    {if !greeting <> "" then <p className="hf-ok">{!greeting}</p> else <span />}
   </div>

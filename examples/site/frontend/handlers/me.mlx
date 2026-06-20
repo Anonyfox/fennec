@@ -57,21 +57,21 @@ let view (p : t) =
     <p className="me-sub">This page was rendered for you on the server, then hydrated from its seed.</p>
 
     <h2>Roles</h2>
-    (match p.roles with
+    {match p.roles with
      | [] -> <p className="me-empty">no roles granted</p>
-     | roles -> <ul>(each roles (fun r -> <li>{r}</li>))</ul>)
+     | roles -> <ul>{each roles (fun r -> <li>{r}</li>)}</ul>}
 
     <h2>Emails</h2>
-    (match p.emails with
+    {match p.emails with
      | [] -> <p className="me-empty">no emails on file</p>
      | emails ->
        <ul>
-         (each emails (fun (e : Email.t) ->
+         {each emails (fun (e : Email.t) ->
             <li>
               {e.address} — {if e.verified then <span className="me-verified">verified</span>
                else <span className="me-unverified">unverified</span>}
-            </li>))
-       </ul>)
+            </li>)}
+       </ul>}
 
     <a className="me-logout" href="/logout">Sign out</a>
   </main>

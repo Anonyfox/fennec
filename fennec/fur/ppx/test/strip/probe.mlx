@@ -10,4 +10,4 @@ let card =
   Data.model_local Sift.(seal (record (fun s -> s) |> field (req "s" string) (fun s -> s))) "probe2"
     ~fallback:"f" (Data.Server_only.fn (fun () -> "FENNEC_STRIP_PROBE_TYPED_9Z"))
 
-let view = <p>(Data.value g)</p>
+let view = <p>{Data.value g}</p>

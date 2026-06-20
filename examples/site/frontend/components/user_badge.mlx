@@ -45,10 +45,10 @@ let make () =
   (* ONE fixed-size slot — identical box whether anonymous or personalized, so the snap-in is a
      fill, never a layout shift. *)
   <span className="user-badge">
-    (match !user with
+    {match !user with
      | None ->
        <span className="ub-anon">
          Guest<a className="ub-signin" href="/login">Sign in</a>
        </span>
-     | Some u -> <span className="ub-hello">{"Hello, " ^ name u}</span>)
+     | Some u -> <span className="ub-hello">{"Hello, " ^ name u}</span>}
   </span>

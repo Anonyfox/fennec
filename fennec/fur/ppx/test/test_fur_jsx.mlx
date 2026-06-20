@@ -3,12 +3,13 @@
    ppx-level twin of examples/site/frontend_test: it pins that the sugar lowers to the right
    runtime calls (text/node/frag/get) by checking the OUTPUT, not the pretty-printed source.
 
-   Covered:
-     2. auto-node — a bare (expr) value child needs no `node`; int/float/string/vnode all coerce.
-     3. frag inference — a bare (each …) list child auto-wraps in a fragment (no `frag (each …)`).
+   Covered (userland writes the JSX-identical `{expr}` value escape; the .mlx pre-pass lowers it to
+   the paren value-child the ppx then desugars):
+     2. auto-node — a `{expr}` value child needs no `node`; int/float/string/vnode all coerce.
+     3. frag inference — a `{each …}` list child auto-wraps in a fragment (no `frag (each …)`).
      4. !s read sugar — `!s` in a value child / attribute / ordinary expr means `get s`.
-   Plus: idempotency (an explicit (node …)/(frag …) still works, never double-wrapped), and the
-   `"string"` text child (the backward-compatible literal text form). *)
+   Plus: idempotency (an explicit `{node …}`/`{frag …}` still works, never double-wrapped), and the
+   `"string"` text child (the escape hatch for a literal `{` / significant whitespace). *)
 
 let html (thunk : unit -> Fur.vnode) = Fur.to_html (thunk ())
 
@@ -18,16 +19,16 @@ let has hay needle =
   let rec go i = i + nn <= nh && (String.sub hay i nn = needle || go (i + 1)) in
   nn = 0 || go 0
 
-(* ---- 2. auto-node: bare value children of every coercible type, no `node` written ---- *)
+(* ---- 2. auto-node: {expr} value children of every coercible type, no `node` written ---- *)
 
 let auto_node () =
   let s = "txt" and i = 7 and f = 1.5 in
   fun () ->
     <div>
-      <span className="s">(s)</span>          (* string  *)
-      <span className="i">(i)</span>           (* int     *)
-      <span className="f">(f)</span>           (* float   *)
-      <span className="e">(s ^ "!")</span>     (* a value EXPRESSION, not a bare ident *)
+      <span className="s">{s}</span>          (* string  *)
+      <span className="i">{i}</span>           (* int     *)
+      <span className="f">{f}</span>           (* float   *)
+      <span className="e">{s ^ "!"}</span>     (* a value EXPRESSION, not a bare ident *)
     </div>
 
 let%test "auto-node: string value child" = has (html (auto_node ())) ">txt<"
@@ -35,11 +36,11 @@ let%test "auto-node: int value child coerces" = has (html (auto_node ())) ">7<"
 let%test "auto-node: float value child coerces" = has (html (auto_node ())) ">1.5<"
 let%test "auto-node: value expression child" = has (html (auto_node ())) ">txt!<"
 
-(* ---- 3. frag inference: a bare (each …) list child, no `frag` wrapper ---- *)
+(* ---- 3. frag inference: a {each …} list child, no `frag` wrapper ---- *)
 
 let each_list () =
   let xs = [ "a"; "b"; "c" ] in
-  fun () -> <ul>(each xs (fun x -> <li>(x)</li>))</ul>
+  fun () -> <ul>{each xs (fun x -> <li>{x}</li>)}</ul>
 
 let%test "each: renders every item" =
   let o = html (each_list ()) in
@@ -47,7 +48,7 @@ let%test "each: renders every item" =
 
 (* a value child that is itself a `vnode list` (not via `each`) — List.map auto-frags too *)
 let mapped () =
-  fun () -> <ul>(List.map (fun x -> <li>(x)</li>) [ "x"; "y" ])</ul>
+  fun () -> <ul>{List.map (fun x -> <li>{x}</li>) [ "x"; "y" ]}</ul>
 
 let%test "List.map list child auto-frags" =
   let o = html (mapped ()) in
@@ -60,9 +61,9 @@ let bang () =
   let cls = signal "on" in
   fun () ->
     <div>
-      <span className="c">(!count)</span>                 (* value child: !count = get count *)
-      <span className=(!cls)>"x"</span>                   (* attribute:   !cls   = get cls   *)
-      <b>(if !count > 40 then "big" else "small")</b>     (* ordinary expr inside a value child *)
+      <span className="c">{!count}</span>                 (* value child: !count = get count *)
+      <span className=(!cls)>x</span>                     (* attribute:   !cls   = get cls   *)
+      <b>{if !count > 40 then "big" else "small"}</b>     (* ordinary expr inside a value child *)
     </div>
 
 let%test "!s: value-child read" = has (html (bang ())) ">41<"
@@ -74,30 +75,32 @@ let%test "!s: ordinary-expr read" = has (html (bang ())) ">big<"
 let bang_live () =
   let n = signal 0 in
   set n 9;
-  fun () -> <span>(!n)</span>
+  fun () -> <span>{!n}</span>
 
 let%test "!s: reads the current signal value" = has (html (bang_live ())) ">9<"
 
-(* ---- idempotency: an explicit (node …)/(frag …) still compiles and is not double-wrapped ---- *)
+(* ---- idempotency: an explicit {node …}/{frag …} still compiles and is not double-wrapped ---- *)
 
 let explicit () =
   let xs = [ "p"; "q" ] in
   fun () ->
     <div>
-      <span>(node "lit")</span>
-      <ul>(frag (each xs (fun x -> <li>(node x)</li>)))</ul>
+      <span>{node "lit"}</span>
+      <ul>{frag (each xs (fun x -> <li>{node x}</li>))}</ul>
     </div>
 
 let%test "explicit node still works" = has (html (explicit ())) ">lit<"
 let%test "explicit frag (each …) still works" =
   let o = html (explicit ()) in has o "<li>p</li>" && has o "<li>q</li>"
 
-(* ---- backward-compatible "string" literal text child (handles punctuation / < / ( ) ---- *)
+(* ---- "string" literal text child: the escape hatch for content that bare text can't carry —
+   a literal `{` (JSX's escape char) and a `<` written as text. A literal `(` does NOT need it
+   (it is bare text now) — but the quoted form still carries it verbatim. ---- *)
 
-let literal () = fun () -> <p>"Loading tasks… (1 < 2)"</p>
+let literal () = fun () -> <p>"Config {key} (1 < 2)"</p>
 
-let%test "literal string text child (with punctuation)" =
-  has (html (literal ())) "Loading tasks… (1 &lt; 2)"
+let%test "literal string text child (literal brace + < + parens, all verbatim)" =
+  has (html (literal ())) "Config {key} (1 &lt; 2)"
 
 (* ---- attr-list SPREAD: [attrs=(expr)] merges an [attr list] into the element (React's {...spread}).
    This is how Form.input_attrs (codec-driven required/maxlength/type=… ) drops onto an <input>. ---- *)
