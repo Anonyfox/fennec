@@ -10,8 +10,10 @@ and built from source, so a downstream `fennec` is self-contained.
 
 - **Source:** [`ocaml-mlx/mlx`](https://github.com/ocaml-mlx/mlx), opam package `mlx.0.11`
   (`~/.opam/<switch>/.opam-switch/sources/mlx.0.11/mlx/`).
-- **Pinned to:** OCaml **5.4.1** (the parser is OCaml's own `parser.mly` / `lexer.mll`
-  fork — it tracks the compiler's AST, so it is version-coupled to the switch's OCaml).
+- **Targets:** the *frozen* `Astlib.Ast_501` parsetree — it does **not** track the live
+  compiler (`fennec mlx-pp` migrates Ast_501 → the running compiler's AST via ppxlib).
+  First vendored on OCaml **5.4.1** / mlx 0.11. See **Toolchain coupling** below: most
+  OCaml bumps need no action here.
 - **License:** `LICENSE.mlx` (LGPL 2.1 with the OCaml linking exception, © Andrey Popp,
   derived from the OCaml Core System) — kept verbatim alongside the sources.
 
@@ -30,16 +32,42 @@ The single-unwrapped-lib layout hits the compiler's "Warnings is dangling" shado
 one wrapped lib hits a menhir "Parser depends on the wrapper" cycle. The shim-as-leaf +
 rt + parser split sidesteps both.
 
-## Re-syncing on an OCaml / menhir bump
+## Toolchain coupling — why most OCaml bumps need NOTHING
 
-The parser is **regenerated from `parser.mly`** via the `(menhir …)` stanza in
-`parser/dune` (NOT mlx's promoted `parser.ml`, which is locked to menhir 20201216).
-When the switch's OCaml version changes:
+This vendor is far more version-stable than a "tracks the compiler" parser, by design.
+Three things insulate it, so a minor (and usually a major) OCaml bump just **rebuilds and
+works** — you do **not** re-vendor on version bumps:
 
-1. `opam reinstall mlx` (or fetch the mlx release matching the new OCaml).
-2. Re-copy the files in the table above from `…/sources/mlx.<v>/mlx/`.
-3. Re-copy `LICENSE.mlx` from `…/sources/mlx.<v>/`.
-4. `dune build @all @check && dune runtest` — the AST-equivalence / bundle-byte tests
-   guard that the marshalled output is unchanged.
+- **The AST is bridged, not pinned.** The parser emits the *frozen* `Astlib.Ast_501`;
+  `fennec mlx-pp` migrates it to whatever compiler is live via ppxlib's
+  `Convert(OCaml_501)(Compiler_version)`. ppxlib keeps every historical AST migration, so a
+  new OCaml → new ppxlib → still migrates Ast_501. The vendored sources don't change.
+- **menhir / ocamllex regenerate at build time** from `parser.mly` / `lexer.mll` (we do NOT
+  ship mlx's promoted `parser.ml`, which is locked to menhir 20201216), so they self-heal
+  across menhir versions.
+- **The only live-compiler touch** is `Ocaml_common.Location` + `Ocaml_common.Warnings` —
+  two of the most stable compiler-libs interfaces, unchanged for years.
+
+## When to re-vendor (rarely — and the build tells you)
+
+The guard is automatic and loud. If a new toolchain ever breaks this parser, the vendored
+libs fail to **compile**, or the parse tests go **red**: `vendor/proof_parse.ml`,
+`test/parses_through_mlx.ml`, and the 31-file AST-equivalence oracle all run under
+`dune build @all @check && dune runtest`. **Green = nothing to do, on any toolchain you
+build on.**
+
+Re-vendor ONLY when one of these actually happens:
+
+1. **The guard above goes red** on a new toolchain (a genuine compiler-libs / ppxlib break —
+   major-version territory), or
+2. **You want NEW OCaml syntax usable inside `.mlx`** files (the grammar would need mlx's
+   newer `parser.mly`).
+
+The procedure is a ~10-minute mechanical drop, not a research task:
+
+1. `opam reinstall mlx` (or fetch the mlx release matching your OCaml).
+2. Re-copy the files in the layout table from `…/sources/mlx.<v>/mlx/` + `LICENSE.mlx`.
+3. `dune build @all @check && dune runtest` — the guard confirms the marshalled AST is
+   unchanged.
 
 Do **not** hand-edit these files; treat the tree as a vendored drop.
