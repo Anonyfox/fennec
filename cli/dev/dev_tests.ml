@@ -443,9 +443,10 @@ let run_via_worker t (r : runner) : result option =
                dynlink_ms = res.Test_worker.dynlink_ms;
                run_ms = res.Test_worker.run_ms }))
 
-(* run one runner: warm if the worker can take it, else cold. NEVER fails — cold is always available. *)
+(* run one runner: warm if the worker can take it, else cold. NEVER fails — cold is always available,
+   and ANY unexpected exception on the warm path drops to cold (the feature must never break the loop). *)
 let run_one_smart t (r : runner) : result =
-  match run_via_worker t r with Some res -> res | None -> run_one r
+  match (try run_via_worker t r with _ -> None) with Some res -> res | None -> run_one r
 
 let run_changed t =
   let runners = ensure t in
