@@ -299,6 +299,14 @@ let invalidate_chains t =
   t.describe <- None;
   Hashtbl.reset t.chains
 
+(* test-only: inject a describe string directly (so an integrated test can exercise the full
+   chain→worker→tally path without spawning `dune describe`, which would deadlock under dune runtest). *)
+let set_describe_for_test t d = t.describe <- Some d; Hashtbl.reset t.chains
+
+(* test-only: set the discovered runners directly, bypassing the filesystem scan, so an integrated
+   test is hermetic about which runner runs. *)
+let set_runners_for_test t rs = t.runners <- Some rs
+
 (* fetch `dune describe workspace` once and cache it. Honour FENNEC_DUNE_DESCRIBE (a path to a
    pre-captured describe) for environments where plain `dune describe` can't resolve the intended root
    (e.g. a worktree nested inside another dune project) or for tests. Runs dune the same plain way

@@ -121,6 +121,51 @@ let () =
         check "C: reload v2 exit 0 (no module-already-loaded conflict)" (r.exit_code = 0);
         check "C: v2 body actually ran (fresh bytes, not the cached v1)" (str_contains r.output "v2"));
 
+     (* ── E. INTEGRATED dev-loop edit: Dev_tests.run_changed through the worker ──────────────────
+        The end-to-end path the supervisor uses: an edit rebuilds the test runner → run_changed sees
+        its mtime advance → derives the chain from `dune describe` + the test's (libraries …) → runs it
+        via the worker → parses the tally. We inject a hand-built describe (mirroring the real example
+        graph; spawning `dune describe` here would deadlock under dune runtest) and simulate the edit
+        by bumping the runner exe's mtime. Asserts a WARM summary of all 42 checks. *)
+     (* source_dirs use the real _build/default-relative form describe emits (Test_chain strips that
+        prefix to workspace-relative, then run_via_worker re-roots under <src_root>/_build/default). *)
+     let describe =
+       {|((root /r) (build_context _build/default)
+ (library ((name site_styles) (uid u_sty) (local true) (requires ()) (source_dir _build/default/examples/site/frontend/styles)))
+ (library ((name site_store) (uid u_sto) (local true) (requires (u_fur)) (source_dir _build/default/examples/site/frontend/store)))
+ (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_fur)) (source_dir _build/default/examples/site/frontend/components)))
+ (library ((name site_handlers) (uid u_hnd) (local true) (requires (u_cmp u_fur)) (source_dir _build/default/examples/site/frontend/handlers)))
+ (library ((name fennec.fur) (uid u_fur) (local true) (requires ()) (source_dir _build/default/fennec/fur)))
+ (library ((name fennec.fur.server) (uid u_srv) (local true) (requires (u_fur)) (source_dir _build/default/fennec/fur/server)))
+ (library ((name fennec.pulse.sift) (uid u_sft) (local true) (requires ()) (source_dir _build/default/fennec/pulse/sift))))|}
+     in
+     (* the SOURCE project root (parent of _build/default): chain_for reads the test's dune from here,
+        and run_via_worker re-roots the .cma/.cmo under <src_root>/_build/default. *)
+     let src_root = Filename.dirname (Filename.dirname bd) in
+     let watch_roots = [ "examples/site" ] in
+     let dt = Fennec_dev.Dev_tests.create ~watch_roots ~root:src_root () in
+     Fennec_dev.Dev_tests.set_worker dt (Some w);
+     Fennec_dev.Dev_tests.set_describe_for_test dt describe;
+     (* register exactly the real frontend_test runner (skip filesystem discovery so the test is
+        hermetic), prime its mtime as "seen", then bump it to simulate an edit-triggered rebuild *)
+     let exe_abs = bp "examples/site/frontend_test/test_components.exe" in
+     Fennec_dev.Dev_tests.set_runners_for_test dt
+       [ { Fennec_dev.Dev_tests.lib = "frontend_test"; exe = exe_abs; target = "examples/site/frontend_test/test_components.exe" } ];
+     Fennec_dev.Dev_tests.prime dt;
+     (let st = Unix.stat exe_abs in Unix.utimes exe_abs st.Unix.st_atime (st.Unix.st_mtime +. 5.0));
+     (match Fennec_dev.Dev_tests.run_changed dt with
+      | None -> check "E: integrated run_changed produced a result" false
+      | Some s ->
+        check "E: integrated 42 passed, 0 failed" (s.Fennec_dev.Dev_tests.total_passed = 42 && s.Fennec_dev.Dev_tests.total_failed = 0);
+        let warm = List.for_all (fun (r : Fennec_dev.Dev_tests.result) -> r.Fennec_dev.Dev_tests.via = Fennec_dev.Dev_tests.Warm) s.Fennec_dev.Dev_tests.results in
+        check "E: integrated path took the WARM worker (not cold fallback)" warm;
+        (match s.Fennec_dev.Dev_tests.results with
+         | r :: _ ->
+           Printf.printf "    [measured] integrated run_changed: via=%s total=%.1fms dynlink=%.1fms run=%.1fms\n%!"
+             (match r.Fennec_dev.Dev_tests.via with Fennec_dev.Dev_tests.Warm -> "warm" | Cold -> "cold")
+             r.Fennec_dev.Dev_tests.ms r.Fennec_dev.Dev_tests.dynlink_ms r.Fennec_dev.Dev_tests.run_ms
+         | [] -> ()));
+
      (* ── D. fallback: kill the worker, then run/healthy must give up cleanly ────────────────── *)
      (try Unix.kill (Fennec_dev.Test_worker.pid w) Sys.sigkill with _ -> ());
      Unix.sleepf 0.2;
