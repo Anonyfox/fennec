@@ -61,6 +61,11 @@ val dur_ms : t -> float
 (** The status class: [2] for 2xx, [3] for 3xx, … (the axis colour and grouping key on). *)
 val status_class : t -> int
 
+(** [is_error a] iff the request failed — the error funnel set a message, or the status is 5xx. The
+    one shared definition of "a request worth surfacing as a problem", used by both the dev UI (which
+    promotes these) and the agent error stream (which records exactly these). *)
+val is_error : t -> bool
+
 (** {1 Compact JSON (hand-rolled, prod-lean — no yojson)}
 
     One flat object, shared by the NDJSON log format ({!Logger}) and the dev wire frame

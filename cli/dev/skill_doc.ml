@@ -74,6 +74,13 @@ let render () =
       "";
       "The agent verdict includes served change, inline-test result when tests ran, inferred affected surface, timing fields, and focused compiler diagnostics with file/line/code frame when a build fails.";
       "";
+      "Runtime HTTP errors (any 5xx, or a request that fell through the error funnel) are tracked separately from build/test verdicts. New ones since your last tool are appended to the same post-tool feedback (`N runtime HTTP error(s) since your last check`), so you see async failures without polling. The full session list:";
+      "";
+      "```sh";
+      "fennec agent errors            # status · method · path · timing · message, one row per failure";
+      "fennec agent errors --after ID # only failures newer than ID";
+      "```";
+      "";
       "Recovery:";
       "";
       "```sh";

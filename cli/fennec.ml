@@ -544,8 +544,17 @@ let agent_cmd =
     in
     Cmd.v (Cmd.info "hook" ~doc:"Post-tool hook command: emit hookSpecificOutput.additionalContext JSON") Term.(const go $ dir_arg $ timeout_arg)
   in
+  let errors =
+    let go dir after =
+      print_string (Fennec_dev.Agent_event.errors_report ~dir:(state_dir dir) ?after ());
+      0
+    in
+    Cmd.v
+      (Cmd.info "errors" ~doc:"List runtime HTTP errors (5xx / error-funnel) seen by fennec dev this session")
+      Term.(const go $ dir_arg $ after_arg)
+  in
   let doc = "Agent-facing hook helpers for fennec dev --agent" in
-  Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook ]
+  Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook; errors ]
 
 let new_cmd =
   let name_arg =

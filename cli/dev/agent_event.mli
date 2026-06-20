@@ -25,6 +25,11 @@ val events_path : dir:string -> string
 (** Path to the JSONL event journal inside [dir]. Agents wait on this file; it is
     truncated on each fresh dev-session start so ids are session-local. *)
 
+val errors_path : dir:string -> string
+(** Path to the SEPARATE runtime-HTTP-error JSONL stream inside [dir]. Deliberately distinct from
+    {!events_path}: a flood of async request failures must never disturb the edit→verdict id sequence
+    that mark/wait/hook depend on. Also truncated on each fresh dev-session start. *)
+
 val status_path : dir:string -> string
 (** Path to the small status JSON file inside [dir]. This gives humans and
     agents a cheap way to see whether a dev server is attached and where events
@@ -48,6 +53,10 @@ unit
 val emit_verdict : t -> Verdict.t -> unit
 (** Append the canonical agent event for a dev-loop verdict. *)
 
+val emit_error : t -> Paw.Access.t -> unit
+(** Append one failed request ({!Paw.Access.is_error}) to the runtime-error stream ({!errors_path}).
+    Independent id space, so the edit→verdict journal is untouched. *)
+
 val latest_id : dir:string -> int option
 (** Latest event id in the journal, if any. *)
 
@@ -65,6 +74,11 @@ val hook_json : dir:string -> timeout:float -> event:string -> input:string -> s
 val status : dir:string -> string
 (** Render the current attach status JSON for [dir]. Missing files produce a
     conservative detached/dead status instead of raising. *)
+
+val errors_report : dir:string -> ?after:int -> unit -> string
+(** A terse human listing of recorded runtime HTTP errors for [dir] (one row per failure: status,
+    method, path, timing, message). Stateless — pass [~after] to page past ids already seen. Powers
+    [fennec agent errors]. *)
 
 val json_escape : string -> string
 (** Escape one string for the tiny JSON writer used by agent events. *)

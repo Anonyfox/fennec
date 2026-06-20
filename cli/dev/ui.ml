@@ -221,7 +221,7 @@ let fmt_bytes n =
    append-only log line, never the live problem region (that's reserved for the build verdict). *)
 let http t (a : Paw.Access.t) =
   let dur = fmt_dur_us a.dur_us and size = fmt_bytes a.bytes in
-  if a.error <> None || a.status >= 500 then begin
+  if Paw.Access.is_error a then begin
     log t (Printf.sprintf "  %s  %s  %s %s   %s  %s" (red t "✗") (red t (Printf.sprintf "%3d" a.status)) a.meth a.path (dim t dur) (dim t size));
     match a.error with Some msg when msg <> "" -> log t (Printf.sprintf "        %s" (red t msg)) | _ -> ()
   end else if t.caps.interactive then

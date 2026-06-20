@@ -1,10 +1,16 @@
-type t = { dir : string; events : string; mutable next_id : int }
+type t = { dir : string; events : string; errors : string; mutable next_id : int; mutable next_error_id : int }
 
 let dir t = t.dir
 let events_path ~dir = Filename.concat dir "events.jsonl"
 let status_path ~dir = Filename.concat dir "status"
 let marker_dir ~dir = Filename.concat dir "markers"
 let cursor_path ~dir = Filename.concat dir "cursor"
+
+(* The RUNTIME-ERROR stream lives in a SEPARATE file from [events.jsonl] on purpose: [events.jsonl] is
+   the edit→verdict contract (mark/wait/hook read it), and a flood of async HTTP errors must never
+   perturb that id sequence. Errors get their own id space + their own hook cursor. *)
+let errors_path ~dir = Filename.concat dir "errors.jsonl"
+let errors_cursor_path ~dir = Filename.concat dir "errors-cursor"
 
 let mkdir_p dir =
   let rec go d =
@@ -65,13 +71,16 @@ let start ?dir ?port ~root () =
   mkdir_p dir;
   mkdir_p (marker_dir ~dir);
   let events = events_path ~dir in
+  let errors = errors_path ~dir in
   let status = status_path ~dir in
   write_file events "";
+  write_file errors "";
   write_file status
-    (Printf.sprintf "pid=%d\nroot=%s\nevents=%s\nstarted_at=%.0f\n%s" (Unix.getpid ()) root events (Unix.gettimeofday ())
-       (match port with None -> "" | Some p -> Printf.sprintf "port=%d\n" p));
+    (Printf.sprintf "pid=%d\nroot=%s\nevents=%s\nerrors=%s\nstarted_at=%.0f\n%s" (Unix.getpid ()) root events errors
+       (Unix.gettimeofday ()) (match port with None -> "" | Some p -> Printf.sprintf "port=%d\n" p));
   write_file (cursor_path ~dir) "0\n";
-  { dir; events; next_id = 1 }
+  write_file (errors_cursor_path ~dir) "0\n";
+  { dir; events; errors; next_id = 1; next_error_id = 1 }
 
 let opt_field b name = function
   | None -> ()
@@ -100,6 +109,22 @@ let emit_verdict t verdict =
   match ms with
   | None -> emit t ~kind ~summary ?trigger ~fields ()
   | Some ms -> emit t ~kind ~summary ?trigger ~ms:(Some ms) ~fields ()
+
+(* append one finished-but-FAILED request to the separate error stream (see {!errors_path}). Called by
+   the dev supervisor for each request that {!Paw.Access.is_error}; its own id space keeps the
+   edit→verdict journal untouched. Effect-isolated upstream (the caller swallows any IO failure). *)
+let emit_error t (a : Paw.Access.t) =
+  let id = t.next_error_id in
+  t.next_error_id <- id + 1;
+  let b = Buffer.create 200 in
+  Buffer.add_string b
+    (Printf.sprintf "{\"id\":%d,\"time\":%.3f,\"status\":%d,\"method\":%s,\"path\":%s,\"dur_us\":%d" id
+       (Unix.gettimeofday ()) a.status (json_escape a.meth) (json_escape a.path) a.dur_us);
+  (match a.error with Some e -> Buffer.add_string b (",\"error\":" ^ json_escape e) | None -> ());
+  (match a.ip with Some ip -> Buffer.add_string b (",\"ip\":" ^ json_escape ip) | None -> ());
+  (match a.req_id with Some r -> Buffer.add_string b (",\"req_id\":" ^ json_escape r) | None -> ());
+  Buffer.add_char b '}';
+  append_line t.errors (Buffer.contents b)
 
 let find_string_field line name =
   let needle = "\"" ^ name ^ "\":\"" in
@@ -162,6 +187,69 @@ let summarize_event line =
 
 let event_id line = find_int_field line "id"
 let event_kind line = find_string_field line "kind" |> Option.map unescape_json_string
+
+(* ── runtime error stream: read + format (the inverse of {!emit_error}) ──────────────────────────
+   Read by SEPARATE short-lived CLI processes (`fennec agent errors`, `fennec agent hook`), so these
+   take [~dir] rather than the writer's [t] handle. *)
+
+(* the stored error lines with id > [after], oldest-first *)
+let read_error_lines_after ~dir ~after =
+  let path = errors_path ~dir in
+  if not (Sys.file_exists path) then []
+  else
+    In_channel.with_open_text path (fun ic ->
+      let rec loop acc =
+        match input_line ic with
+        | line -> ( match event_id line with Some id when id > after -> loop (line :: acc) | _ -> loop acc)
+        | exception End_of_file -> List.rev acc
+      in
+      loop [])
+
+(* one stored error line → a terse human row: "500 POST /api  1.2ms · <error>" *)
+let format_error_line line =
+  let status = Option.value (find_int_field line "status") ~default:0 in
+  let meth = Option.value (find_string_field line "method" |> Option.map unescape_json_string) ~default:"?" in
+  let path = Option.value (find_string_field line "path" |> Option.map unescape_json_string) ~default:"?" in
+  let dur =
+    match find_int_field line "dur_us" with
+    | Some us when us < 1000 -> Printf.sprintf "%dµs" us
+    | Some us -> Printf.sprintf "%.1fms" (float_of_int us /. 1000.)
+    | None -> ""
+  in
+  let err = match find_string_field line "error" with Some e -> " · " ^ unescape_json_string e | None -> "" in
+  Printf.sprintf "%d %s %s  %s%s" status meth path dur err
+
+let errors_cursor_after ~dir =
+  let path = errors_cursor_path ~dir in
+  if Sys.file_exists path then
+    In_channel.with_open_text path In_channel.input_all |> String.trim |> int_of_string_opt |> Option.value ~default:0
+  else 0
+
+let set_errors_cursor ~dir id = write_file (errors_cursor_path ~dir) (string_of_int id ^ "\n")
+
+(* a human listing for `fennec agent errors` — stateless (no cursor advance); paginate with [~after] *)
+let errors_report ~dir ?(after = 0) () =
+  match read_error_lines_after ~dir ~after with
+  | [] -> "no runtime HTTP errors recorded\n"
+  | lines -> String.concat "\n" (List.map format_error_line lines) ^ "\n"
+
+(* the note the post-tool hook appends so the agent passively sees async failures. Reads only what is
+   NEW since the errors cursor, then ADVANCES the cursor (so each error is reported once), and caps the
+   rows shown to keep the feedback terse. [""] when there is nothing new — existing hook output (and
+   its tests) is then byte-identical. *)
+let errors_note_for_hook ~dir =
+  let after = errors_cursor_after ~dir in
+  match read_error_lines_after ~dir ~after with
+  | [] -> ""
+  | lines ->
+    let newest = List.fold_left (fun m l -> match event_id l with Some id -> max m id | None -> m) after lines in
+    set_errors_cursor ~dir newest;
+    let n = List.length lines in
+    let cap = 5 in
+    let shown = if n > cap then List.filteri (fun i _ -> i >= n - cap) lines else lines in
+    let rows = String.concat "\n" (List.map (fun l -> "  " ^ format_error_line l) shown) in
+    let more = if n > cap then Printf.sprintf "\n  (+%d more — `fennec agent errors`)" (n - cap) else "" in
+    Printf.sprintf "\n%d runtime HTTP error(s) since your last check:\n%s%s\n" n rows more
 
 let latest_event_line ~dir =
   let events = events_path ~dir in
@@ -392,13 +480,16 @@ let hook_json ~dir ~timeout ~event ~input =
       | Some id -> id
       | None -> cursor_after ~dir)
   in
-  let summary =
+  let feedback =
     match wait_hook_next ~after ~dir ~timeout () with
     | Ok (id, s) ->
       set_cursor ~dir id;
       "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
     | Error msg -> msg ^ "\n"
   in
+  (* append any NEW runtime HTTP errors so async failures surface in the agent's normal post-tool
+     feedback — without ever entering the edit→verdict journal above. Empty unless errors accrued. *)
+  let summary = feedback ^ errors_note_for_hook ~dir in
   "{\"hookSpecificOutput\":{\"hookEventName\":" ^ json_escape event ^ ",\"additionalContext\":" ^ json_escape summary ^ "}}"
 
 let status ~dir =
@@ -496,3 +587,65 @@ let%test_unit "status reports latest id and liveness" =
       chk "status has latest summary" (contains_ s "build ok");
       chk "status has alive" (contains_ s "alive=true");
       chk "status has port" (contains_ s "port=9123"))
+
+(* ── runtime error stream ── *)
+
+let err_access ?(status = 500) ?(error = Some "boom") ?(meth = "POST") path : Paw.Access.t =
+  { ts = 0.; meth; path; status; dur_us = 1500; bytes = 0; ip = Some "127.0.0.1"; req_id = None; error;
+    version = "HTTP/1.1"; host = "" }
+
+let%test_unit "emit_error round-trips through errors_report" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit_error t (err_access ~status:500 ~error:(Some "kaboom") "/api/login");
+      let r = errors_report ~dir () in
+      chk "lists the status" (contains_ r "500");
+      chk "lists the path" (contains_ r "/api/login");
+      chk "lists the error message" (contains_ r "kaboom"))
+
+let%test_unit "runtime errors do NOT enter the edit->verdict journal" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit t ~kind:"ready" ~summary:"ready" ();
+      emit_error t (err_access "/boom");
+      chk "events latest id is unchanged by an error" (latest_id ~dir = Some 1);
+      match wait_next ~after:1 ~dir ~timeout:0.05 () with
+      | Error _ -> () (* good: the error never materialised as an edit event *)
+      | Ok (_, s) -> chk ("an error leaked into events.jsonl: " ^ s) false)
+
+let%test_unit "errors_note_for_hook reports once, then advances its own cursor" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit_error t (err_access ~error:(Some "first") "/a");
+      let note1 = errors_note_for_hook ~dir in
+      chk "first note shows the error" (contains_ note1 "first");
+      chk "first note counts it" (contains_ note1 "1 runtime");
+      chk "second note is empty (cursor advanced)" (errors_note_for_hook ~dir = "");
+      emit_error t (err_access ~error:(Some "second") "/b");
+      let note3 = errors_note_for_hook ~dir in
+      chk "a new error past the cursor is reported" (contains_ note3 "second");
+      chk "the old error is not replayed" (not (contains_ note3 "first")))
+
+let%test_unit "hook_json carries the runtime-error note alongside the edit verdict" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit t ~kind:"ready" ~summary:"ready" ();
+      emit t ~kind:"reload" ~summary:"rebuilt ok" ();
+      emit_error t (err_access ~error:(Some "downstream 503") "/api");
+      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input:"{}" in
+      chk "the edit verdict is present" (contains_ json "rebuilt ok");
+      chk "the runtime error is present" (contains_ json "downstream 503"))
+
+let%test_unit "errors_report pages past ids already seen with ~after" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit_error t (err_access ~error:(Some "old-one") "/a");
+      emit_error t (err_access ~error:(Some "new-one") "/b");
+      let r = errors_report ~dir ~after:1 () in
+      chk "shows the error after id 1" (contains_ r "new-one");
+      chk "hides the one at id 1" (not (contains_ r "old-one")))

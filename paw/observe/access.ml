@@ -73,6 +73,11 @@ let dur_ms (a : t) : float = float_of_int a.dur_us /. 1000.0
 (* the status class: 2/3/4/5 (or 1 for 1xx, 0 for anything weird) — the axis colour/grouping keys on *)
 let status_class (a : t) : int = a.status / 100
 
+(* did this request FAIL? — the error funnel set a message, OR the status is 5xx. The single shared
+   definition of "a request worth surfacing as a problem": the dev UI promotes these to a prominent
+   line and the agent error stream records exactly these. Defined here so the policy can't drift. *)
+let is_error (a : t) : bool = a.error <> None || a.status >= 500
+
 (* ── compact JSON (hand-rolled, prod-lean: no yojson) ─────────────────────────────────────────
    ONE flat object, used by both the NDJSON log format ({!Logger}) and the dev wire frame
    ({!Dev_proto.http_line}). Encoder + a tailored parser live together here so the wire shape and
