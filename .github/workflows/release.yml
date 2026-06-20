@@ -37,23 +37,31 @@ jobs:
       - name: Build release binary
         run: opam exec -- dune build --profile release
 
-      - name: Stage artifact
+      - name: Stage artifacts
         shell: bash
         run: |
           set -eux
           mkdir -p out
-          # dune installs the exe under _build; cp follows the symlink to the real
-          # binary, producing a standalone, self-contained executable.
-          cp "_build/install/default/bin/fennec" "out/fennec-${{ matrix.target }}"
-          # dune marks its build outputs read-only; make our copy writable so it
-          # can be stripped in place.
-          chmod u+w "out/fennec-${{ matrix.target }}"
-          # Strip the final binary. On Linux this drops ~16MB of DWARF debug info
-          # the OCaml/Rust/Go release link leaves behind (no-op on macOS, where
-          # debug info lives in a separate .dSYM that never ships). This is what
-          # brings the Linux artifact in line with macOS instead of ~1.8x larger.
-          strip "out/fennec-${{ matrix.target }}"
-          ( cd out && shasum -a 256 "fennec-${{ matrix.target }}" > "fennec-${{ matrix.target }}.sha256" )
+          # The release ships the WHOLE `.mlx` dialect toolchain, not just `fennec`: a
+          # frontend Fennec app needs the build preprocessor (fennec-mlx-pp) and the editor
+          # merlin reader (ocamlmerlin-fennec-mlx) on PATH too, both produced by fennec-cli.
+          # (The stock mlx tools — mlx-pp / ocamlmerlin-mlx — come via `opam install mlx`,
+          # which the curl-the-binary user installs alongside; see docs/getting-started.)
+          for bin in fennec fennec-mlx-pp ocamlmerlin-fennec-mlx; do
+            # dune installs each exe under _build; cp follows the symlink to the real
+            # binary, producing a standalone, self-contained executable.
+            cp "_build/install/default/bin/${bin}" "out/${bin}-${{ matrix.target }}"
+            # dune marks its build outputs read-only; make our copy writable so it
+            # can be stripped in place.
+            chmod u+w "out/${bin}-${{ matrix.target }}"
+            # Strip the final binary. On Linux this drops the DWARF debug info the
+            # OCaml/Rust/Go release link leaves behind (no-op on macOS, where debug
+            # info lives in a separate .dSYM that never ships). This is what brings the
+            # Linux artifact in line with macOS instead of ~1.8x larger.
+            strip "out/${bin}-${{ matrix.target }}"
+            ( cd out && shasum -a 256 "${bin}-${{ matrix.target }}" > "${bin}-${{ matrix.target }}.sha256" )
+          done
+          # smoke-check the main binary boots
           ./out/fennec-${{ matrix.target }} --version
 
       - name: Upload artifact
