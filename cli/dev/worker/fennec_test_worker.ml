@@ -22,6 +22,13 @@
 
 let () = Dynlink.allow_unsafe_modules true (* the framework .cma's were built without -unsafe guards *)
 
+(* Sentinel child-exit for "the chain could not be LOADED" (a Dynlink CRC/interface mismatch — e.g.
+   the worker's preloaded framework was built in a different profile than the app .cma's, or a new
+   opam dep the worker lacks). The supervisor maps this exact code to a COLD fallback rather than a
+   test failure, so a load problem never shows up as a false red test. A real test that happens to
+   exit 75 simply also falls back to cold (which re-runs it correctly) — safe either way. *)
+let load_failed_exit = 75
+
 (* ── tiny IO helpers (blocking, Stdlib + Unix only) ──────────────────────────────────────────── *)
 
 let write_all fd s =
@@ -110,8 +117,9 @@ let run_chain (chain : string list) : run =
     let td0 = now_us () in
     (try List.iter load_one cmas
      with
-     | Dynlink.Error e -> Printf.eprintf "dynlink error (framework): %s\n%!" (Dynlink.error_message e); code := 2
-     | e -> Printf.eprintf "exception loading framework chain: %s\n%!" (Printexc.to_string e); code := 3);
+     (* a chain that won't LOAD ⇒ load-failed sentinel ⇒ the supervisor retries cold (not a red test) *)
+     | Dynlink.Error e -> Printf.eprintf "dynlink error (framework): %s\n%!" (Dynlink.error_message e); code := load_failed_exit
+     | e -> Printf.eprintf "exception loading framework chain: %s\n%!" (Printexc.to_string e); code := load_failed_exit);
     let td1 = now_us () in
     let tr1 =
       if !code = 0 then (
@@ -119,7 +127,9 @@ let run_chain (chain : string list) : run =
          | Some p -> (
            try load_one p
            with
-           | Dynlink.Error e -> Printf.eprintf "dynlink error (test): %s\n%!" (Dynlink.error_message e); code := 2
+           (* the test .cmo not loading is also a load problem ⇒ fall back cold, not a red test *)
+           | Dynlink.Error e -> Printf.eprintf "dynlink error (test): %s\n%!" (Dynlink.error_message e); code := load_failed_exit
+           (* the test LOADED but raised while running ⇒ a genuine test error (4), reported as failed *)
            | e -> Printf.eprintf "exception running test: %s\n%!" (Printexc.to_string e); code := 4)
          | None -> ());
         now_us ())

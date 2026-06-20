@@ -37,9 +37,15 @@ val prime : t -> unit
     worker first per runner and falls back to the cold native exe on any miss. *)
 val set_worker : t -> Test_worker.t option -> unit
 
-(** Drop the cached [dune describe] + per-target chains, so the next warm run re-derives. Call when a
-    dune file or the library graph may have changed (the same trigger that restarts the worker). *)
+(** Reset the per-target chains (they re-derive from the cached [dune describe]). Call when a dune
+    file or the library graph may have changed. The describe cache is KEPT — re-fetching it fails
+    under the live [dune --watch] build lock, and a stale chain degrades safely to cold. *)
 val invalidate_chains : t -> unit
+
+(** Prime the [dune describe] cache at dev-server boot, BEFORE [dune --watch] takes the build lock
+    (after which [dune describe] errors with "build directory is locked"). Without this the warm path
+    can never derive a chain in a live dev loop. Best-effort: a failure just leaves cold-fallback. *)
+val prime_describe : t -> unit
 
 (** How a {!result} was produced: [Cold] = the native exe one-shot; [Warm] = the resident worker. *)
 type via = Cold | Warm

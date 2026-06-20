@@ -308,7 +308,10 @@ let set_worker t w =
 (* drop the cached describe + per-target chains. Call when a dune file or the lib graph may have
    changed (the same trigger that restarts the worker), so the next warm run re-derives. *)
 let invalidate_chains t =
-  t.describe <- None;
+  (* keep the boot-primed describe. Re-fetching it lazily FAILS while `dune --watch` holds the build
+     lock (only the boot window, before the watch starts, is lock-free), and dropping it would force
+     EVERY test cold. Only the per-target chains reset — they re-derive from the cached describe, and
+     a genuinely stale chain (after a dune-file edit) degrades safely to cold via the worker digest. *)
   Hashtbl.reset t.chains
 
 (* test-only: inject a describe string directly (so an integrated test can exercise the full
@@ -339,6 +342,13 @@ let fetch_describe t =
     in
     (match d with Some _ -> t.describe <- d | None -> ());
     d
+
+(* Prime the describe cache at dev-server BOOT — before `dune --watch` takes the build lock, after
+   which `dune describe` errors with "build directory is locked". The supervisor calls this once
+   before starting the watch; without it the first warm run would invoke describe under the lock,
+   fail, and fall back to cold for the whole session. Best-effort: a failure just leaves the warm
+   path to cold-fallback (safe). *)
+let prime_describe t = ignore (fetch_describe t)
 
 (* parse the direct (libraries …) of the stanza in [dune_text] that builds the exe named [exe].
    Handles (test/executable (name X) …) and (tests/executables (names … X …) …). Returns [] if the
@@ -412,6 +422,11 @@ let chain_for t (r : runner) : (Test_chain.t, string) Stdlib.result =
           | Ok chain -> Ok chain
           | Error e -> Error (Test_chain.error_to_string e)))
     in
+    (* breadcrumb: when a worker is up but a runner can't warm-path, say why ONCE (cached ⇒ once per
+       target). Makes "why did my test run cold?" debuggable instead of silent. *)
+    (match result with
+     | Error why -> Printf.eprintf "[fennec dev] %s: warm worker declined, ran cold (%s)\n%!" r.lib why
+     | Ok _ -> ());
     Hashtbl.replace t.chains r.target result;
     result
 
@@ -431,6 +446,11 @@ let run_via_worker t (r : runner) : result option =
         let objs = List.map abs (Test_chain.objects chain) in
         (match Test_worker.run w ~chain:objs with
          | None -> None
+         (* 75 = the worker's load-failed sentinel (chain couldn't Dynlink: framework CRC mismatch /
+            missing dep). Fall back to the cold native exe — never surface it as a red test. *)
+         | Some res when res.Test_worker.exit_code = 75 ->
+           Printf.eprintf "[fennec dev] %s: warm worker couldn't load the chain (CRC/dep mismatch) — running cold\n%!" r.lib;
+           None
          | Some res ->
            let passed, failed = parse_tally ~code:res.Test_worker.exit_code ~output:res.Test_worker.output in
            Some

@@ -111,11 +111,22 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      stale; restart it so subsequent runs are warm again (a stale worker would otherwise fall back via
      a Dynlink digest mismatch — correct, just cold). Also re-derive chains (the lib graph may shift). *)
   let restart_test_worker () = stop_test_worker (); Dev_tests.invalidate_chains dev_tests; start_test_worker () in
+  (* Build the worker in the dev profile NOW — lock-free, before the watch below takes the build lock —
+     so its preloaded framework matches, CRC-wise, the app .cma's the watch builds in the SAME profile.
+     A profile skew is exactly what makes the worker's Dynlink reject with "interface mismatch on …".
+     Best-effort + repo-only: downstream uses the prebuilt fennec-cli worker, and a mismatch there just
+     falls back to cold via the worker's load-failed sentinel. (Same default as Dune_watch's profile.) *)
+  let dev_profile = match Sys.getenv_opt "FENNEC_DEV_PROFILE" with Some p when p <> "" -> p | _ -> "fastdev" in
+  (try ignore (Sys.command (Printf.sprintf "dune build --profile %s cli/dev/worker/fennec_test_worker.bc >/dev/null 2>&1" dev_profile)) with _ -> ());
   start_test_worker ();
   (* with a worker active, the watch must also build the bytecode test targets (.bc → the test .cmo +
      app .cma's) so a settle has them ready for the worker to load *)
   let warm_targets () = if !test_worker <> None then Dev_tests.byte_targets dev_tests else [] in
 
+  (* prime `dune describe` NOW — the last lock-free moment. Once the watch (next line) holds the build
+     lock, `dune describe` errors ("build directory is locked"), so the warm worker could never derive
+     a test's app chain and every test would fall back to cold. Best-effort; safe if it fails. *)
+  Dev_tests.prime_describe dev_tests;
   let dw = ref (Dune_watch.start (targets @ initial_test_targets @ warm_targets ())) in
   let control_path = tmp_socket "fennec-lr" in
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
