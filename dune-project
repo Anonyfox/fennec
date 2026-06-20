@@ -25,27 +25,29 @@
 ; hydration; no Melange, no React). The MLX dialect is declared here once so .mlx
 ; components compile in any package.
 ;
-; The preprocessor is fennec-mlx-pp (NOT the bare mlx-pp): a fennec-owned PRE-PASS that turns the
-; fennec-flavoured .mlx surface — bare JSX text children + {expr} interpolation, JSX-identical — into
-; the quoted-text + (expr) form mlx-pp accepts, then pipes it through mlx-pp (which does the real
-; parse). It is byte-identical to plain mlx-pp on any file that does not use the new bare-text syntax
-; (the pre-pass is a no-op there), so it is a safe drop-in. See fennec/fur/prepass/.
+; The preprocessor is the `fennec` binary ITSELF — `fennec mlx-pp` — resolved by dune from the
+; project's deps via %{bin:fennec}, exactly like the asset bundler (`fennec build`). It runs a
+; fennec-owned PRE-PASS that turns the fennec-flavoured .mlx surface (bare JSX text children +
+; {expr} interpolation, JSX-identical) into the quoted-text + (expr) form, then parses it with the
+; VENDORED mlx parser (fennec/fur/prepass/vendor/) — IN-PROCESS, no external `mlx` opam package and
+; no separate dialect binary. The marshalled AST is byte-identical to the old fennec-mlx-pp (proven
+; over every example). So `opam install fennec-cli` alone is the whole `.mlx` build toolchain.
 ;
-; The merlin_reader is fennec-mlx (NOT the stock mlx): Merlin spawns `ocamlmerlin-fennec-mlx` as the
-; external reader for .mlx buffers in the EDITOR. It runs the SAME pre-pass over the editor buffer,
-; then DELEGATES to the stock `ocamlmerlin-mlx` reader on the transformed buffer — so bare-text .mlx
-; no longer shows FALSE in-editor syntax errors, while hover / complete / jump keep working (the
-; pre-pass is line-preserving, so positions are line-exact; only columns inside a quoted prose run
-; shift). It is an EDITOR-only tool: its `merlin-extend` dependency ships with merlin/ocaml-lsp, and
-; the executable is (optional) — absent that dependency it is simply not built and the BUILD stays
-; green (the build never depends on merlin). See fennec/fur/prepass/bin/ocamlmerlin_fennec_mlx.ml.
+; The merlin_reader is fennec-mlx: Merlin spawns `ocamlmerlin-fennec-mlx` as the external reader for
+; .mlx buffers in the EDITOR. It runs the SAME pre-pass, then — if the stock `ocamlmerlin-mlx` is
+; installed — DELEGATES to it for full error-recovery; if absent, it parses in-process with the SAME
+; vendored parser, so the editor still works off fennec-cli alone (valid buffers + bare text parse,
+; no false errors). It is an EDITOR-only tool: its `merlin-extend` dependency ships with
+; merlin/ocaml-lsp, and the executable is built via a (select) — absent that dependency it falls back
+; to a build-only stub and the BUILD stays green (the build never depends on merlin). See
+; fennec/fur/prepass/bin/ocamlmerlin_fennec_mlx.ml.
 (dialect
  (name mlx)
  (implementation
   (extension mlx)
   (merlin_reader fennec-mlx)
   (preprocess
-   (run fennec-mlx-pp %{input-file}))))
+   (run %{bin:fennec} mlx-pp %{input-file}))))
 
 (package
  (name fennec)
