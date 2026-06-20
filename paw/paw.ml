@@ -238,6 +238,10 @@ module Rate_limit = Rate_limit
 module Body_limit = Body_limit
 
 (** {2 Observability} *)
+
+(* the structured per-request event — the shared vocabulary the logger/metrics/dev-wire all speak;
+   captured once by the server (see [Server.run ~on_access]) *)
+module Access = Access
 module Logger = Logger
 
 module Request_id = Request_id

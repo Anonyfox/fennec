@@ -440,8 +440,8 @@ let run_handler ~clock ~timeout ~on_error (handler : Pipeline.t) (req : CH.reque
      is still defended at the read layer (see [loop]). *)
   match (if timeout <= 0. then attempt () else Eio.Time.with_timeout clock timeout attempt) with
   | Ok conn -> conn
-  | Error `Timeout -> Conn.respond (Conn.make req) (on_error (Handler_timeout req))
-  | Error (`Exn exn) -> Conn.respond (Conn.make req) (on_error (Handler_exception (exn, req)))
+  | Error `Timeout -> Conn.set_error (Conn.respond (Conn.make req) (on_error (Handler_timeout req))) "handler timeout"
+  | Error (`Exn exn) -> Conn.set_error (Conn.respond (Conn.make req) (on_error (Handler_exception (exn, req)))) (Printexc.to_string exn)
 
 (* ──── run_handler ──── *)
 
@@ -476,7 +476,7 @@ let%test_unit "sub-fibers cancelled at deadline" =
    connection, else "http"; it becomes [Conn.scheme] so Secure cookies / force-https work over
    in-process HTTPS with no proxy. A paw pipeline may answer with an HTTP response OR a websocket
    upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ?(allowed = fun ~host:(_ : string) ~path:(_ : string) -> []) ~(resolve : host:string -> Pipeline.t list) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?(on_access = fun (_ : Access.t) -> ()) ~scheme ?(allowed = fun ~host:(_ : string) ~path:(_ : string) -> []) ~(resolve : host:string -> Pipeline.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -497,8 +497,14 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ?(al
        buffer-grow by [timeout]; a fully-buffered / pipelined head never arms a timer. *)
     match read_request ~continue ~timeout r out with
     | Conn_eof -> ()
-    | Bad_request _ -> respond_and_close (CH.text ~status:400 "Bad Request")
-    | Too_large _ -> respond_and_close (CH.text ~status:413 "Payload Too Large")
+    | Bad_request msg ->
+      (* a malformed request never became a conn/req, but operators still want 400 spikes in the
+         access log — emit a minimal event (no method/path, the parse error as [error]) *)
+      respond_and_close (CH.text ~status:400 "Bad Request");
+      (try on_access (Access.make ~meth:"" ~path:"" ~status:400 ~dur_us:0 ~bytes:(String.length "Bad Request") ~ip:remote_ip ~error:(Some msg) ()) with _ -> ())
+    | Too_large msg ->
+      respond_and_close (CH.text ~status:413 "Payload Too Large");
+      (try on_access (Access.make ~meth:"" ~path:"" ~status:413 ~dur_us:0 ~bytes:(String.length "Payload Too Large") ~ip:remote_ip ~error:(Some msg) ()) with _ -> ())
     | Req p -> (
       (* [scheme] is the real transport: "https" when we terminated TLS in-process, else "http" — so
          Secure cookies / force-https Just Work over in-process HTTPS. Behind a TLS-terminating proxy
@@ -518,9 +524,23 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ?(al
           if Conn.answered c then c else try_each rest
       in
       let conn = try_each (resolve ~host) in
+      (* Capture the ONE structured access event for this request and hand it to [on_access]. Called
+         from each terminal path with the FINAL [status]/[bytes] — for the buffered path that is after
+         {!Responder.finalize}, so [bytes] is the real post-gzip body length and [status] the final
+         status (e.g. a 304). [dur_us] is read here (after the work), from the conn's single start
+         stamp. Effect-isolated: a throwing sink never breaks the connection. *)
+      let emit_access ~status ~bytes =
+        try
+          on_access
+            (Access.make ~meth:(CH.string_of_meth req.CH.meth) ~path:req.CH.path ~status
+               ~dur_us:(Conn.elapsed_us conn) ~bytes ~ip:(Conn.remote_ip conn) ~req_id:(Request_id.current conn)
+               ~error:(Conn.error conn) ~version:req.CH.version ~host:req.CH.host ())
+        with _ -> ()
+      in
       match Conn.upgrade_handler conn with
       | Some setup when is_ws_upgrade p ->
-        (* a paw requested a websocket upgrade *)
+        (* a paw requested a websocket upgrade — a long-lived ws, not a request/response, so it is
+           outside the access log (it never produces a finalized HTTP response) *)
         let pmd = ws_handshake w p in
         serve_ws ~sw ~pmd r w setup
       | _ -> (
@@ -532,6 +552,9 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ?(al
           let resp = try Conn.apply_before_send conn skel with _ -> skel in
           let keep_alive = want_keep_alive p in
           write_stream w flow ~fs ~resp ~keep_alive stream;
+          (* the streamed body length isn't known up front (chunked) / isn't buffered here (file), so
+             [bytes] is reported as 0 — the status + timing are still logged *)
+          emit_access ~status:resp.CH.status ~bytes:0;
           if keep_alive then loop ()
         | None ->
           (* buffered HTTP response: run before_send hooks (e.g. security headers), then
@@ -545,6 +568,8 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ?(al
           let resp = try Responder.finalize ~now:(now ()) ~req resp with _ -> resp in
           let keep_alive = want_keep_alive p in
           write_http w resp ~keep_alive;
+          (* AFTER finalize: status is final, body is post-gzip — the exact on-the-wire size *)
+          emit_access ~status:resp.CH.status ~bytes:(String.length resp.CH.body);
           (* Flush only when the read buffer is drained. A lone request (buffer empty, client waiting)
              flushes immediately — no added latency. A pipelined burst (more requests already buffered)
              keeps batching its responses into the write buffer, so N pipelined requests cost a handful
@@ -632,6 +657,65 @@ let%test "wire: an unknown path is still a 404" =
   let resp = serve_one_ ~env ~ep:(getpost_ep_ ()) "DELETE /nope HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" in
   contains resp " 404 "
 
+(* ──── on_access capture: the structured event over the wire ──── *)
+
+(* like [serve_one_] but capture the [Access.t] the server emits for the request, so the µs/bytes/
+   status/method/path capture is proven over the REAL connection loop (post-finalize), not in
+   isolation. Returns the captured event (the last one, if a keep-alive sent several). *)
+let access_of_ ~env ~ep request_str : Access.t option =
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env and clock = Eio.Stdenv.clock env and fs = Eio.Stdenv.fs env in
+  let now () = Eio.Time.now clock in
+  let timeout = Eio.Time.Timeout.seconds (Eio.Stdenv.mono_clock env) 5.0 in
+  let resolve ~host:_ = [ Endpoint.handler ep ] in
+  let allowed ~host:_ ~path = Endpoint.allowed_methods ep ~path in
+  let captured = ref None in
+  let on_access a = captured := Some a in
+  let sock = Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let port = match Eio.Net.listening_addr sock with `Tcp (_, p) -> p | _ -> 0 in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Net.accept_fork ~sw sock ~on_error:(fun _ -> ()) (fun flow addr ->
+          handle_conn ~now ~clock ~timeout ~request_timeout:5.0 ~fs ~on_error:default_on_error ~on_access ~scheme:"http" ~allowed ~resolve flow addr));
+  let raw = Eio.Net.connect ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, port)) in
+  Eio.Flow.copy_string request_str raw;
+  let _ = Eio.Buf_read.take_all (Eio.Buf_read.of_flow raw ~max_size:65536) in
+  !captured
+
+(* an endpoint that answers a known, large-enough body so we can assert the post-finalize byte count *)
+let body_ep_ body = Endpoint.make ~name:"t" ~hosts:[ "*" ] () |> Endpoint.get "/p" (fun c -> Conn.text c body)
+
+let%test_unit "on_access: method/path/status/bytes captured post-finalize" =
+  Eio_main.run @@ fun env ->
+  (* a small body (< the compress threshold) so post-finalize bytes == the body length exactly *)
+  let body = "hello access" in
+  match access_of_ ~env ~ep:(body_ep_ body) "GET /p HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" with
+  | None -> Fennec_hunt_unit.check "an access event was emitted" false
+  | Some a ->
+    Fennec_hunt_unit.check_eq "method" ~expected:"GET" ~got:a.Access.meth;
+    Fennec_hunt_unit.check_eq "path" ~expected:"/p" ~got:a.Access.path;
+    Fennec_hunt_unit.check "status 200" (a.Access.status = 200);
+    Fennec_hunt_unit.check_eq "bytes = body length (uncompressed)" ~expected:(string_of_int (String.length body)) ~got:(string_of_int a.Access.bytes);
+    Fennec_hunt_unit.check "dur_us is non-negative" (a.Access.dur_us >= 0);
+    Fennec_hunt_unit.check "host carried" (a.Access.host = "localhost");
+    Fennec_hunt_unit.check "no error on a 200" (a.Access.error = None)
+
+let%test "on_access: a large body reports the POST-GZIP size (smaller than the source)" =
+  Eio_main.run @@ fun env ->
+  (* a highly compressible body well over the 1KB compress threshold → finalize gzips it; the event's
+     bytes must reflect the compressed size, i.e. be much smaller than the source — the headline win
+     (the old before_send logger could not see this number at all) *)
+  let body = String.make 50_000 'a' in
+  match access_of_ ~env ~ep:(body_ep_ body) "GET /p HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n" with
+  | None -> false
+  | Some a -> a.Access.status = 200 && a.Access.bytes > 0 && a.Access.bytes < String.length body / 10
+
+let%test "on_access: a throwing handler is logged as a 500 with the error message" =
+  Eio_main.run @@ fun env ->
+  let ep = Endpoint.make ~name:"t" ~hosts:[ "*" ] () |> Endpoint.get "/boom" (fun _ -> failwith "kaboom") in
+  match access_of_ ~env ~ep "GET /boom HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" with
+  | None -> false
+  | Some a -> a.Access.status = 500 && (match a.Access.error with Some m -> contains m "kaboom" | None -> false)
+
 (* Run a {!Host_router} table, blocking. In PROD the whole table is served on ONE port
    ([FENNEC_PORT], default 80) and selected per request by Host pattern — one process, arbitrary
    subdomains/wildcards. In DEV the same table is served on the GATEWAY port ([FENNEC_PORT] base,
@@ -651,6 +735,9 @@ let%test "wire: an unknown path is still a 404" =
           so it is opt-in. Slowloris is defended at the read layer regardless. Set > 0 for a 503 cap.
    @param max_conns       concurrent-connection cap (default 10_000).
    @param parallelism     worker domains (per-core); auto by default, or FENNEC_PARALLELISM.
+   @param on_access       called once per finished request with its {!Access.t} (method, path, final
+          status, µs duration, post-gzip body bytes, ip, request id, error). The structured seam the
+          access log / a metrics shipper hangs off; default = a no-op (nothing logged). Effect-only.
    @param on_listen       called post-bind with the (endpoint name, url) pairs for the banner. *)
 (* peek the SNI host from a connection without consuming it (MSG_PEEK), so an on-demand handler can
    ensure that host's cert before the TLS handshake reads the same ClientHello. Fail-safe → None. *)
@@ -665,7 +752,7 @@ let peek_sni flow =
           match Unix.recv ufd b 0 (Bytes.length b) [ Unix.MSG_PEEK ] with n when n > 0 -> Sni.host_of_client_hello (Bytes.sub_string b 0 n) | _ -> None)
     with _ -> None)
 
-let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
+let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?on_access ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
   let dev = match dev with Some d -> d | None -> ( try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true) in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
@@ -767,7 +854,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parall
         try Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env) (`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
         with Unix.Unix_error (Unix.EADDRINUSE, _, _) -> raise (Port_in_use port)
       in
-      let serve_conn ~scheme flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ~scheme ~allowed ~resolve flow addr in
+      let serve_conn ~scheme flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?on_access ~scheme ~allowed ~resolve flow addr in
       let handle flow addr =
         Eio.Semaphore.acquire slots;
         Fun.protect ~finally:(fun () -> Eio.Semaphore.release slots) (fun () ->

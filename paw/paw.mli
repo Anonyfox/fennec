@@ -354,7 +354,13 @@ module Body_limit = Body_limit
 
 (** {2 Observability} *)
 
-(** One-line-per-response request logging (coloured on a TTY). *)
+(** The structured per-request access event — the shared vocabulary the logger, the metrics callback,
+    and the dev wire all speak. Captured once by the server (see [Server.run ~on_access]) with the
+    final status + post-gzip byte count + microsecond duration. *)
+module Access = Access
+
+(** One-line-per-response request logging — env-aware, multi-format (pretty / JSON / logfmt / Apache).
+    Coloured on a TTY in pretty mode. *)
 module Logger = Logger
 
 (** A correlation id per request (from [X-Request-Id] or freshly minted), stored in {!Assigns}. *)

@@ -83,6 +83,22 @@ val remote_ip : t -> string option
 (** The HTTP version string (e.g. ["HTTP/1.1"] or ["HTTP/2"]). *)
 val version : t -> string
 
+(** When this request started, epoch seconds — stamped once at {!make}. This is the single request
+    timer the logger, the metrics callback, and the response-time header all read, instead of each
+    grabbing its own clock at entry. *)
+val started_at : t -> float
+
+(** Microseconds elapsed since the request started (its duration so far), computed from the one
+    {!started_at} stamp. *)
+val elapsed_us : t -> int
+
+(** [set_error c msg] records a short error message for the access log — set by the server's error
+    funnel when a handler raises or times out. Purely observational (not an answerer). *)
+val set_error : t -> string -> t
+
+(** The recorded access-log error message, if any (see {!set_error}). *)
+val error : t -> string option
+
 (** A request header, case-insensitive (the first value if repeated). *)
 val req_header : t -> string -> string option
 

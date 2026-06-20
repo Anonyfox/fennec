@@ -1,15 +1,16 @@
-(* Metrics/telemetry — time each request and report (method, path, status, duration) once
-   the response is finalized (via a before_send hook). Declines (passes through). *)
+(* Metrics/telemetry — report (method, path, status, duration) once the response is finalized (via a
+   before_send hook). Declines (passes through). The duration comes from the ONE request timer
+   stamped on the conn at {!Conn.make} (see {!Access}) — this paw no longer grabs its own clock, so
+   the metric, the log line, and the response-time header all measure the same span. *)
 
 module Conn = Conn
 module H = Http
 
 let make (report : meth:string -> path:string -> status:int -> duration_ms:float -> unit) : Pipeline.t =
  fun c ->
-  let t0 = Unix.gettimeofday () in
   let meth = H.string_of_meth (Conn.meth c) and path = Conn.path c in
   Conn.before_send c (fun r ->
-      report ~meth ~path ~status:r.H.status ~duration_ms:((Unix.gettimeofday () -. t0) *. 1000.0);
+      report ~meth ~path ~status:r.H.status ~duration_ms:(float_of_int (Conn.elapsed_us c) /. 1000.0);
       r)
 
 (* ──── metrics tests ──── *)

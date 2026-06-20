@@ -1,8 +1,8 @@
-(* Time the request and stamp the elapsed milliseconds onto the response — a [Server-Timing] entry
-   (browsers surface it in the Network panel's Timing tab) and, with [~x_header], an [X-Response-Time]
-   header. The CLIENT-visible counterpart to {!Logger} (server log) and {!Metrics} (callback). Like any
-   timing paw it captures a per-request start, so it builds one small closure per request — inherent,
-   the start can't be known at make-time. Mount it FIRST so it spans the whole pipeline. Stamps the
+(* Stamp the elapsed milliseconds onto the response — a [Server-Timing] entry (browsers surface it
+   in the Network panel's Timing tab) and, with [~x_header], an [X-Response-Time] header. The
+   CLIENT-visible counterpart to {!Logger} (server log) and {!Metrics} (callback). The elapsed time
+   comes from the ONE request timer stamped on the conn at {!Conn.make} (see {!Access}) — no
+   per-request clock grab here. Mount it FIRST so its span covers the whole pipeline. Stamps the
    responses the pipeline answers (a pure-decline 404/405 is generated on a fresh conn downstream). *)
 
 module Conn = Conn
@@ -10,9 +10,8 @@ module H = Http
 
 let make ?(metric = "app") ?(x_header = false) () : Pipeline.t =
  fun c ->
-  let t0 = Unix.gettimeofday () in
   Conn.before_send c (fun r ->
-      let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
+      let ms = float_of_int (Conn.elapsed_us c) /. 1000.0 in
       let headers = (Printf.sprintf "%s;dur=%.1f" metric ms |> fun st -> ("server-timing", st)) :: r.H.headers in
       let headers = if x_header && not (Headers.mem r.H.headers "x-response-time") then ("x-response-time", Printf.sprintf "%.1fms" ms) :: headers else headers in
       { r with H.headers })

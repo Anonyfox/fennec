@@ -41,6 +41,10 @@ type stream =
 
 type t = {
   req : H.request;
+  started_at : float;                                    (* request start stamp (epoch s), taken
+                                                            once at [make] — the ONE request timer
+                                                            shared by the logger, metrics, and the
+                                                            response-time header (see {!Access}) *)
   mutable status : int;                                  (* response status (default 200) *)
   mutable resp_headers : (string * string) list;         (* accumulated, most-recent first *)
   mutable resp_body : string;
@@ -58,14 +62,18 @@ type t = {
   mutable ip_override : string option;                     (* real client IP, set by a trusted-proxy paw *)
   mutable scheme_override : string option;                 (* forwarded scheme, set by a trusted-proxy paw *)
   mutable path_params : (string * string) list;           (* captured by a :param / *splat route *)
+  mutable error : string option;                           (* a short error message when the request
+                                                              failed through the funnel (handler
+                                                              exception / timeout); read into the
+                                                              {!Access} event for the log *)
 }
 
 (* a fresh conn for an incoming request *)
 let make (req : H.request) : t =
-  { req; status = 200; resp_headers = []; resp_body = ""; state = Unset;
+  { req; started_at = Access.now (); status = 200; resp_headers = []; resp_body = ""; state = Unset;
     upgrade = None; stream = None; before_send = []; assigns = Assigns.empty; query_params = None;
     cookies = None; body_params = None; files = None; meth_override = None; ip_override = None;
-    scheme_override = None; path_params = [] }
+    scheme_override = None; path_params = []; error = None }
 
 (* ============================ server-facing consumption ====================== *)
 (* What the server reads off a finished conn to write the response. Not usually
@@ -107,6 +115,19 @@ let host (c : t) : string = c.req.H.host
 let scheme (c : t) : string = match c.scheme_override with Some s -> s | None -> c.req.H.scheme
 let remote_ip (c : t) : string option = match c.ip_override with Some _ as ip -> ip | None -> c.req.H.remote_ip
 let version (c : t) : string = c.req.H.version
+
+(* when this request started (epoch seconds), stamped at [make]. The single timer every timing
+   paw + the access log read, instead of each grabbing its own clock at entry. *)
+let started_at (c : t) : float = c.started_at
+
+(* microseconds elapsed since the request started — the request's duration so far, computed from
+   the one start stamp (see {!Access.elapsed_us}). *)
+let elapsed_us (c : t) : int = Access.elapsed_us ~start:c.started_at
+
+(* record / read a short error message for the access log (set by the server's error funnel when a
+   handler raises or times out). Not an answerer — purely observational. *)
+let set_error (c : t) (msg : string) : t = c.error <- Some msg; c
+let error (c : t) : string option = c.error
 
 (* a request header, case-insensitive (the first value if repeated) *)
 let req_header (c : t) (k : string) : string option = Headers.get c.req.H.headers k
