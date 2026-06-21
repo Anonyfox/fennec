@@ -104,7 +104,7 @@ let start (targets : string list) : t =
      `fennec test` forced a full rebuild. That is now solved by a per-profile BUILD DIR (see
      {!build_dir} / the [--build-dir] below): like cargo's debug/ vs release/, each profile keeps its
      own cache, so both stay warm. Override the profile with FENNEC_DEV_PROFILE. *)
-  let profile = match Sys.getenv_opt "FENNEC_DEV_PROFILE" with Some p when p <> "" -> p | _ -> "fastdev" in
+  let profile = Build_dir.profile () in
   let args = Array.of_list ("dune" :: "build" :: "--watch" :: "--profile" :: profile :: targets) in
   (* dune's status + diagnostics go to STDERR — capture those; its stdout is only progress/asset-
      copy chatter, which the supervisor's own UI replaces, so send it to /dev/null. *)

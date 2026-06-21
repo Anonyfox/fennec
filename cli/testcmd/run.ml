@@ -312,7 +312,10 @@ let run_one_suite ~server_exe ~runner_exe ~(args : string list) ~mongo ~stream ~
    flushed as one atomic block, so nothing interleaves. Serial runs stream live, in order.
    Returns the number of failed suites (0 = all passed). *)
 let orchestrate ~(cut : suite) ~dir ~base ~jobs ~limit ~mongo ~(args : string list) : int =
-  ignore (Sys.command "dune shutdown >/dev/null 2>&1"); (* stop any orphaned dev watcher → no lock clash *)
+  (* clear only a stray watcher in the DEFAULT build dir (a manual `dune build --watch`). A running
+     `fennec dev` is on its own `_build/fastdev` (see {!Fennec_dev.Build_dir}) with its own dune lock, so
+     it is NOT affected — `fennec test` and `fennec dev` run in parallel. *)
+  ignore (Sys.command "dune shutdown >/dev/null 2>&1");
   (* the per-suite instance is the bytecode server, which must dlopen its C stubs — `opam env`
      doesn't put them on CAML_LD_LIBRARY_PATH. Reuse fennec dev's fix (same as the system cut). *)
   Fennec_dev.Stublibs.ensure ();

@@ -377,8 +377,9 @@ let dev_cmd =
     Arg.(value & flag & info [ "debug" ] ~doc)
   in
   let go target exe assets dry clean port mongo agent attach agent_dir debug =
-    (* fast by default (fastdev profile, no -g — see Dune_watch.start); --debug restores -g backtraces *)
-    Unix.putenv "FENNEC_DEV_PROFILE" (if debug then "dev" else "fastdev");
+    (* fast by default (fastdev profile, no -g — see Build_dir); --debug restores -g backtraces. This is
+       the one place the dev loop opts out of the standard `dev` build dir into its isolated one. *)
+    Unix.putenv "FENNEC_DEV_PROFILE" (Fennec_dev.Build_dir.dev_loop_profile ~debug);
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =

@@ -5,8 +5,13 @@
     helpers give each profile its own build root via dune's [DUNE_BUILD_DIR], so both stay warm. All
     paths are computed from [root] (the absolute workspace root) + [FENNEC_DEV_PROFILE]. *)
 
-(** The dev-loop build profile ([FENNEC_DEV_PROFILE], default ["fastdev"]). *)
+(** The active build profile ([FENNEC_DEV_PROFILE], default ["dev"] — the standard [_build/default]).
+    Only [fennec dev] sets it to ["fastdev"]; every other entry point sees the default. *)
 val profile : unit -> string
+
+(** The profile [fennec dev] runs under: ["fastdev"] normally, ["dev"] with [~debug:true]. The dev
+    command exports this as [FENNEC_DEV_PROFILE]; the single home of the ["fastdev"] name. *)
+val dev_loop_profile : debug:bool -> string
 
 (** [Some dir] to export as [DUNE_BUILD_DIR] for the active profile, or [None] to leave dune on its
     standard [_build] (the [dev]/[default] case, which then shares with [dune build]). *)

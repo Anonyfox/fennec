@@ -17,10 +17,20 @@
      fastdev        ->  _build/fastdev/default/… (isolated; an ABSOLUTE DUNE_BUILD_DIR — dune rejects a
                                                   RELATIVE build dir nested under `_build`) *)
 
-(* the dev-loop build profile: FENNEC_DEV_PROFILE, default `fastdev` *)
-let profile () = match Sys.getenv_opt "FENNEC_DEV_PROFILE" with Some p when p <> "" -> p | _ -> "fastdev"
+(* The active build profile, from FENNEC_DEV_PROFILE. Default is `dev` — the STANDARD `_build/default`
+   that `dune build` / `dune runtest` / `fennec test` use. Only `fennec dev` opts into `fastdev` (it
+   sets FENNEC_DEV_PROFILE explicitly before booting the supervisor), so every OTHER entry point —
+   `fennec test`, the inline tests, the warm-worker drive test — resolves the default dir with no env
+   fiddling. That keeps this module the single source of truth for "which build dir am I in". *)
+let profile () = match Sys.getenv_opt "FENNEC_DEV_PROFILE" with Some p when p <> "" -> p | _ -> "dev"
 
 let is_default_profile p = p = "dev" || p = "default"
+
+(* the profile `fennec dev` runs under: `fastdev` (dev minus -g, fast relinks + isolated build dir) by
+   default, or `dev` with --debug (restores -g backtraces, shares `_build/default`). The dev command
+   exports this as FENNEC_DEV_PROFILE before booting the supervisor; {!profile} then reads it back. This
+   is the ONLY place the "fastdev" name lives. *)
+let dev_loop_profile ~debug = if debug then "dev" else "fastdev"
 
 (* what to export as DUNE_BUILD_DIR, or [None] to leave dune on its standard `_build` (the [dev] case,
    so the dev loop SHARES artifacts with `dune build`). For any other profile, an ABSOLUTE

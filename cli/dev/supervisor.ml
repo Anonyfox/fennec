@@ -125,7 +125,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      A profile skew is exactly what makes the worker's Dynlink reject with "interface mismatch on …".
      Best-effort + repo-only: downstream uses the prebuilt fennec-cli worker, and a mismatch there just
      falls back to cold via the worker's load-failed sentinel. (Same default as Dune_watch's profile.) *)
-  let dev_profile = match Sys.getenv_opt "FENNEC_DEV_PROFILE" with Some p when p <> "" -> p | _ -> "fastdev" in
+  let dev_profile = Build_dir.profile () in
   (try ignore (Sys.command (Printf.sprintf "dune build --profile %s cli/dev/worker/fennec_test_worker.bc >/dev/null 2>&1" dev_profile)) with _ -> ());
   start_test_worker ();
   (* with a worker active, the watch must also build the bytecode test targets (.bc → the test .cmo +

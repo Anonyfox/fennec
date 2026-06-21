@@ -59,10 +59,8 @@ let example_chain =
     bp "examples/site/frontend_test/byte/.test_components.eobjs/byte/dune__exe__Test_components.cmo" ]
 
 let () =
-  (* This drive test exercises the worker against the REAL `dune runtest` build, which lives in the
-     `dev` profile's `_build/default`. Pin FENNEC_DEV_PROFILE=dev so {!Build_dir} resolves there rather
-     than the dev-loop default (`fastdev` → `_build/fastdev`, which `dune runtest` never populates). *)
-  Unix.putenv "FENNEC_DEV_PROFILE" "dev";
+  (* This drive test runs against the real `dune runtest` build in `_build/default`; {!Build_dir}
+     resolves there by default (only `fennec dev` opts into `fastdev`), so nothing to set here. *)
   (* The worker dlopens the project C stubs (dllpaw_stubs, …) via CAML_LD_LIBRARY_PATH. Stublibs walks
      up from cwd to dune-project, but here cwd is inside the build tree (a dune-project is copied into
      _build/default), so we add the dll dirs explicitly from the build root [bd] we already resolved

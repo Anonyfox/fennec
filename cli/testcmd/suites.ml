@@ -24,10 +24,14 @@ let relativize ~root ~cwd =
       String.sub cwd (String.length r) (String.length cwd - String.length r)
     else ""
 
-(* the built artifact: <root>/_build/default/<reldir>/<dir>/<name>.exe (skipping empty parts) *)
+(* the built artifact: <build-context>/<reldir>/<dir>/<name>.exe (skipping empty parts). The build
+   context dir comes from {!Fennec_dev.Build_dir} — the one CLI-wide build-layout authority — so
+   `fennec test` and `fennec dev` agree on paths. `fennec test` always sees the default `_build/default`
+   (only `fennec dev` opts into `fastdev`), which is also why the two can run in parallel: disjoint dirs,
+   disjoint dune locks. *)
 let exe_path ~root ~reldir ~dir ~name =
-  let parts = List.filter (fun s -> s <> "") [ "_build/default"; reldir; dir; name ^ ".exe" ] in
-  Filename.concat root (String.concat "/" parts)
+  let parts = List.filter (fun s -> s <> "") [ reldir; dir; name ^ ".exe" ] in
+  Filename.concat (Fennec_dev.Build_dir.context_dir ~root) (String.concat "/" parts)
 
 (* the dune build target, ROOT-relative (fennec builds after chdir'ing to the workspace root,
    so a target must be relative to root, not the invocation cwd) *)
