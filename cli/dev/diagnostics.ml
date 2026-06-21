@@ -50,6 +50,24 @@ let split_at_path s =
     | Some b when b > a -> (String.sub s (a + 1) (b - a - 1), String.sub s (b + 1) (String.length s - b - 1))
     | _ -> ("", s))
 
+(* The dev authors ONE `.mlx` under `frontend/…`. The build also compiles a byte-identical
+   `copy_files#` mirror of it under the generated client tree (`client/…/<app>_client/…`, built
+   `-data-client` so server-only `Data.local` fetchers strip from the browser closure). A syntax/parse
+   error in the source therefore surfaces TWICE — once in the authored file, once in its copy, a file
+   the dev never edits. [is_client_mirror] flags the copy; [dedup_mirror_echoes] drops a mirror problem
+   when an authored (non-mirror) problem reports the SAME error (severity/line/col/message + basename),
+   so the count and the panel show the ONE place the dev can fix. A mirror problem with NO authored twin
+   (a genuinely client-only failure) is kept — real errors are never hidden. *)
+let is_client_mirror file = find_sub file "/client/" <> None || find_sub file "_client/" <> None
+
+let dedup_mirror_echoes problems =
+  let authored = List.filter (fun p -> not (is_client_mirror p.file)) problems in
+  let same_error a b =
+    a.severity = b.severity && a.line = b.line && a.col = b.col && a.message = b.message
+    && Filename.basename a.file = Filename.basename b.file
+  in
+  List.filter (fun p -> not (is_client_mirror p.file && List.exists (same_error p) authored)) problems
+
 let parse (raw : string) : problem list =
   let lines = String.split_on_char '\n' (strip_ansi raw) |> Array.of_list in
   let n = Array.length lines in
@@ -91,7 +109,7 @@ let parse (raw : string) : problem list =
     end
     else incr i
   done;
-  List.rev !problems
+  dedup_mirror_echoes (List.rev !problems)
 
 let count problems =
   List.fold_left (fun (e, w) p -> match p.severity with Error -> (e + 1, w) | Warning -> (e, w + 1)) (0, 0) problems
@@ -152,6 +170,31 @@ let%test_unit "multi-location syntax error is ONE problem" =
     chk "the secondary location is folded into related"
       (List.exists (fun s -> Fennec_hunt_unit.str_contains s "might be unmatched") p.related)
   | _ -> chk "expected one problem" false
+
+let%test_unit "a frontend error and its byte-identical client mirror echo count as ONE" =
+  let chk = Fennec_hunt_unit.check in
+  (* the exact shape the build emits when a `.mlx` syntax error hits both the authored source AND its
+     generated `copy_files#` mirror under client/…/<app>_client/ *)
+  let echoed =
+    "File \"examples/site/frontend/apps/web/layout.mlx\", line 13, characters 5-7:\n\
+     Error: Syntax error: ']' expected\n\
+     File \"examples/site/frontend/apps/web/layout.mlx\", line 7, characters 15-16:\n\
+    \  This '[' might be unmatched\n\
+     File \"examples/site/client/apps/web_client/layout.mlx\", line 13, characters 5-7:\n\
+     Error: Syntax error: ']' expected\n\
+     File \"examples/site/client/apps/web_client/layout.mlx\", line 7, characters 15-16:\n\
+    \  This '[' might be unmatched\n"
+  in
+  let ps = parse echoed in
+  chk "the mirror echo is dropped -> ONE problem" (List.length ps = 1);
+  chk "and counts as ONE error" (count ps = (1, 0));
+  match ps with
+  | [ p ] -> chk "the kept problem is the AUTHORED source, not the generated mirror" (not (is_client_mirror p.file))
+  | _ -> chk "expected one problem" false
+
+let%test "a client-mirror error with NO authored twin is kept (real errors never hidden)" =
+  let only = "File \"examples/site/client/apps/web_client/main.mlx\", line 4, characters 0-1:\nError: Unbound value x\n" in
+  count (parse only) = (1, 0)
 
 let%test "two real errors -> count (2,0)" =
   let two = "File \"a.ml\", line 1, characters 0-1:\nError: one\nFile \"b.ml\", line 2, characters 0-1:\nError: two\n" in
