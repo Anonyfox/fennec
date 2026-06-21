@@ -281,8 +281,11 @@ let tail ?(max = 2000) s =
   let n = String.length s in
   if n <= max then s else "…" ^ String.sub s (n - max) max
 
-(* run ONE scenario in a fresh sandbox and print its outcome. On failure, dump the captured
-   process output (the evidence) and KEEP the sandbox for inspection; on success, remove it. *)
+(* run ONE scenario in a fresh sandbox and print its outcome. The sandbox (its temp DB + the spawned
+   processes' [.proc-N.log] files) is ALWAYS removed afterwards — on success silently, on failure after
+   the captured process output has been printed inline as the evidence. Leaving an e2e database on disk
+   is a leak: under a tight loop or `--parallel` the stale data dirs would pile up. Set
+   [FENNEC_TEST_KEEP_FAILED=1] to retain a FAILED scenario's tree for a hands-on post-mortem instead. *)
 let run_one (sc : scenario) =
   let env = env_exn () in
   let dir = Filename.concat (tmp_base ()) (Printf.sprintf "fennec-sys-%d-%d" (Unix.getpid ()) (next_id ())) in
@@ -308,7 +311,13 @@ let run_one (sc : scenario) =
        Printf.printf "     %s\n%!" (color "2" "── captured process output ──");
        List.iter (fun s -> String.split_on_char '\n' (tail s)
                            |> List.iter (fun l -> Printf.printf "     %s %s\n%!" (color "2" "│") l)) logs);
-    Printf.printf "     %s\n%!" (color "2" (Printf.sprintf "(sandbox kept for inspection: %s)" dir))
+    (* The evidence is already captured + printed above, so default to deleting the sandbox even on
+       failure — no persisted e2e DB ever, even across tight loops / parallel runs. The opt-in keeps
+       the whole tree (DB + logs) for a post-mortem and prints its path instead. *)
+    if Sys.getenv_opt "FENNEC_TEST_KEEP_FAILED" <> None then
+      Printf.printf "     %s\n%!" (color "2" (Printf.sprintf "(sandbox kept — FENNEC_TEST_KEEP_FAILED: %s)" dir))
+    else
+      (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(Eio.Stdenv.fs env / dir) with _ -> ())
 
 (* ════════════════════════════════════════════════════════════════════════════ *)
 (*  Entry point                                                                   *)
