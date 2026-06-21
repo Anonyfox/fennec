@@ -24,8 +24,29 @@ let is_artifact ~tail t =
   let lt = String.length tail and la = String.length t in
   lt > 0 && la >= lt && String.sub t (la - lt) lt = tail && (la = lt || t.[la - lt - 1] = '/')
 
+(* `_build/<profile>/default/X` (the dev loop's ISOLATED build dir — see {!Build_dir}) -> `_build/
+   default/X` (the form a plain `dune build` uses). The dev loop runs the server out of
+   `_build/fastdev/default/…`, but a leftover may be the de-isolated `_build/default/…` (a plain build,
+   or the test harness's default-built exe) — both are the SAME logical server, so reclaim must
+   recognise either. Unchanged for a tail that is already on the default dir. *)
+let deprofile tail =
+  let p = "_build/" in
+  if not (starts_with tail p) then tail
+  else
+    let rest = String.sub tail (String.length p) (String.length tail - String.length p) in
+    match String.index_opt rest '/' with
+    | Some i when String.sub rest 0 i <> "default" ->
+      let after = String.sub rest (i + 1) (String.length rest - i - 1) in
+      if starts_with after "default/" then p ^ after else tail
+    | _ -> tail
+
 let is_ours ~exe ~cmd =
-  let tail = build_tail exe in
+  let t1 = build_tail exe in
+  let t2 = deprofile t1 in
+  (* match the holder against BOTH the dev loop's isolated tail and its de-isolated form, so a leftover
+     from either build dir is ours. [is_artifact]'s path-boundary check is preserved, so a fake
+     `…/myfake_build/…` still can't slip through. *)
+  let our t = is_artifact ~tail:t1 t || (t2 <> t1 && is_artifact ~tail:t2 t) in
   match String.split_on_char ' ' (String.trim cmd) |> List.filter (fun s -> s <> "") with
   | [] -> false
   | argv0 :: rest ->
@@ -33,7 +54,7 @@ let is_ours ~exe ~cmd =
        custom runtime), or — the common bytecode case where ps shows "/…/ocamlrun _build/…/server.bc"
        — an argument of the OCaml runtime. Requiring an ocamlrun argv[0] for the argument case is
        what separates us from "vim _build/…/server.bc" / "sh -c …", where the path is merely an arg. *)
-    is_artifact ~tail argv0 || (starts_with (basename argv0) "ocamlrun" && List.exists (is_artifact ~tail) rest)
+    our argv0 || (starts_with (basename argv0) "ocamlrun" && List.exists our rest)
 
 (* ──── tests: is_ours ──── *)
 
@@ -77,6 +98,22 @@ let%test "the bare path as argv[1] of a wrapper is NOT ours" =
 
 let%test "empty command is NOT ours" =
   not (is_ours ~exe:exe_ ~cmd:"")
+
+(* cross-build-dir: the dev loop runs the server from _build/fastdev/default/…, but a leftover (or the
+   test harness's exe) may be the plain _build/default/… form — both are the same logical server *)
+let fastdev_ = "/p/_build/fastdev/default/examples/site/server.bc"
+
+let%test "a fastdev leftover is ours to a fastdev dev (the real-operation case)" =
+  is_ours ~exe:fastdev_ ~cmd:("/x/ocamlrun " ^ fastdev_)
+
+let%test "a DEFAULT leftover is ours to a FASTDEV dev (de-isolated form)" =
+  is_ours ~exe:fastdev_ ~cmd:"/x/ocamlrun /p/_build/default/examples/site/server.bc"
+
+let%test "a fastdev near-miss (myfake_build) is still NOT ours" =
+  not (is_ours ~exe:fastdev_ ~cmd:"/foo/myfake_build/fastdev/default/examples/site/server.bc")
+
+let%test "a different app is NOT ours even across build dirs" =
+  not (is_ours ~exe:fastdev_ ~cmd:"/x/ocamlrun /p/_build/default/examples/admin/server.bc")
 
 let listeners port =
   match (try Some (Unix.open_process_in (Printf.sprintf "lsof -nP -iTCP:%d -sTCP:LISTEN -t 2>/dev/null" port)) with _ -> None) with

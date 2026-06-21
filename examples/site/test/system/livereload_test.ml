@@ -54,13 +54,19 @@ let%system "single instance, startup freshness, no-cache, edit+revert propagatio
   S.check "page is served no-cache in dev" (cache_no_cache page page_path);
   S.check "client bundle is served no-cache in dev" (cache_no_cache page bundle_path);
 
-  (* 4) edit propagation — SSR and the client bundle must both pick up an edit. The edit lives
-     INSIDE with_edit so it is reverted even on failure. *)
+  (* 4) edit propagation — an edit to a frontend source reaches the RUNNING app. We assert it on the
+     SSR'd page (what the user actually sees), which is the source-map-independent proof: `fennec dev`
+     builds in the `fastdev` profile, which drops jsoo source maps (no -g ⇒ they'd map to nothing — see
+     the top-level dune env), and Fennec hydrates static page text from the SSR'd DOM, so a static
+     string never appears as a literal in the client BUNDLE code (it lives in the HTML + the source map
+     only). So an edit shows up in the SSR, and the client — reloaded via the no-cache bundle confirmed
+     above — re-hydrates against it. The edit lives INSIDE with_edit so it is reverted even on failure. *)
   S.with_edit sb src (fun s -> replace s ~old:disk ~by:mark) (fun () ->
-      S.wait_until ~timeout:30.0 (fun () -> body_has page bundle_path mark);
-      S.check "client bundle picked up the edit" (body_has page bundle_path mark);
       S.wait_until ~timeout:30.0 (fun () -> body_has page page_path mark);
-      S.check "SSR picked up the edit" (body_has page page_path mark));
+      S.check "SSR picked up the edit" (body_has page page_path mark);
+      (* the client bundle is rebuilt + still served (a fresh one the browser reload fetches) — content
+         is bundle-format-specific, so assert it's served, not that it embeds the source text *)
+      S.check "client bundle still served after the edit" ((S.request page bundle_path).S.status = 200));
 
   (* 5) revert propagation — with_edit restored the file; reverting while dev is alive lets
      dune --watch re-sync, leaving no stale _build. Asserting it propagates guards that bug. *)

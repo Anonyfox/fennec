@@ -54,14 +54,47 @@ let describe_prefix ~root =
    builds into the per-profile root. A no-op for the [dev] profile (dune's default is already right). *)
 let export ~root = match dune_build_dir ~root with Some d -> Unix.putenv "DUNE_BUILD_DIR" d | None -> ()
 
-(* re-point a `_build/…`-relative path (e.g. the server exe the user passed, or discover found) at the
-   active build root: `_build/default/x` -> `<context_dir>/x`. Left unchanged if it isn't under
-   `_build/` or if we're on the default build dir. *)
+(* re-point a path under the standard `_build/default/` at the active build context:
+   `…/_build/default/x` -> `<context_dir>/x`. Left unchanged off the default build dir, or for a path
+   that isn't under `_build/default/`.
+
+   CRITICAL: discovery hands the supervisor an ABSOLUTE exe (`<root>/_build/default/<src>/<name>.bc`,
+   see {!Discover}) and the dev command chdirs to that same root before running, so the ABSOLUTE form
+   is the one that actually re-points the running server (and, via `dirname exe`, the webroot it
+   serves). Matching only the workspace-relative `_build/default/` form silently ran the server out of
+   `_build/default` while the watch rebuilt `_build/fastdev` — so frontend edits never reached the
+   served bundle (livereload was dead). We handle both forms. *)
 let retarget ~root path =
   match dune_build_dir ~root with
   | None -> path
   | Some _ ->
-    let pfx = "_build/default/" in
-    if String.length path > String.length pfx && String.sub path 0 (String.length pfx) = pfx then
-      Filename.concat (context_dir ~root) (String.sub path (String.length pfx) (String.length path - String.length pfx))
+    let ctx = context_dir ~root in
+    let starts_with s pfx = String.length s >= String.length pfx && String.sub s 0 (String.length pfx) = pfx in
+    let move pfx = Filename.concat ctx (String.sub path (String.length pfx) (String.length path - String.length pfx)) in
+    let abs_pfx = root ^ "/_build/default/" in
+    if starts_with path abs_pfx then move abs_pfx
+    else if starts_with path "_build/default/" then move "_build/default/"
     else path
+
+(* ──── tests ──── *)
+
+(* drive [retarget] under a chosen profile, restoring the env afterwards (inline tests share a process) *)
+let with_profile p f =
+  let saved = Sys.getenv_opt "FENNEC_DEV_PROFILE" in
+  Fun.protect
+    ~finally:(fun () -> match saved with Some v -> Unix.putenv "FENNEC_DEV_PROFILE" v | None -> Unix.putenv "FENNEC_DEV_PROFILE" "")
+    (fun () -> Unix.putenv "FENNEC_DEV_PROFILE" p; f ())
+
+let%test "retarget: ABSOLUTE _build/default exe -> active context (the livereload fix)" =
+  with_profile "fastdev" (fun () ->
+      retarget ~root:"/ws" "/ws/_build/default/examples/site/server.bc"
+      = "/ws/_build/fastdev/default/examples/site/server.bc")
+
+let%test "retarget: workspace-relative form still works" =
+  with_profile "fastdev" (fun () -> retarget ~root:"/ws" "_build/default/a/b.bc" = "/ws/_build/fastdev/default/a/b.bc")
+
+let%test "retarget: a path outside _build/default is unchanged" =
+  with_profile "fastdev" (fun () -> retarget ~root:"/ws" "/somewhere/else/x" = "/somewhere/else/x")
+
+let%test "retarget: default profile is a no-op (shares _build/default)" =
+  with_profile "dev" (fun () -> retarget ~root:"/ws" "/ws/_build/default/x.bc" = "/ws/_build/default/x.bc")
