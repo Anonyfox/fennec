@@ -1,5 +1,6 @@
 _build/
 _opam/
+.fennec/
 *.install
 *.merlin
 .DS_Store

@@ -98,7 +98,7 @@ let frontend_dune ~comp_lib =
     \  (:standard -w -a -open Fur)))\n"
     comp_lib
 
-let gitignore = "_build/\n*.install\n.merlin\n"
+let gitignore = "_build/\n.fennec/\n*.install\n.merlin\n"
 
 let readme ~name ~comp_lib:_ =
   Printf.sprintf

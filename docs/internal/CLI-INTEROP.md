@@ -291,6 +291,29 @@ other `_build/` references in the CLI are process-identity matching in `Port`, t
   no `fennec dev` need be running (each suite boots its own instance). Safe to run alongside a live
   `fennec dev` (different build dir, different lock).
 
+### Dev data & lifecycle (`fennec clean`)
+
+The embedded dev database lives at **`.fennec/db/<port>/`** — project-local, gitignored, and
+deliberately OUTSIDE `_build`, so a build clean never costs you your dev data. Keyed by base port, so
+parallel worktrees / `--port` instances stay isolated. Three **disjoint** storage areas, by design:
+
+| area | location | reset by |
+| --- | --- | --- |
+| build artifacts | `_build/{default,fastdev}` | `fennec clean` (raw `dune clean` misses `_build/fastdev`) |
+| **dev** database | `.fennec/db/<port>` (embedded), or your `MONGO_URL` | `fennec clean --db` only |
+| **test/e2e** database | `:memory:` / a per-scenario temp dir, named `fennec_test_<port>` | the test run itself (each run is fresh) |
+
+The dev-DB path is produced ONLY by `Mongo_rs.ensure_dev` (the `fennec dev` path); `fennec test` sets
+its own `:memory:`/mongod with a per-suite name. They share no code path, so **a `clean --db` reset can
+never touch a test/e2e DB, and a test run can never touch your dev data** — the e2e suites seed their
+own throwaway DBs over and over without tripping over it.
+
+`fennec clean` removes build artifacts (both profile dirs) and leaves the dev DB alone. `fennec clean
+--db` also resets the dev DB — the embedded files, or (external `MONGO_URL`) that one database dropped
+via the driver, never the `fennec_test_*` databases. It confirms before the destructive step (or takes
+`--force` in CI). Seeding stays in the app's `on_start`, so the next `fennec dev` re-seeds a fresh DB —
+no separate seed command. (`Fennec_dev.Lifecycle` owns this; `Mongo_rs.dev_embedded_dir` owns the path.)
+
 ### Dev-cycle speed (measured, `DUNE_CACHE` off, real edits)
 
 The target is **"instant" ≈ 100 ms** of *felt* latency. `dune build` pays a fixed

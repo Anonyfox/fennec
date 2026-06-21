@@ -802,6 +802,34 @@ let gen_doctests_cmd =
   in
   Cmd.v (Cmd.info "gen-doctests" ~doc ~man ~docs:"INTERNAL COMMANDS") Term.(const go $ dir_arg)
 
+let clean_cmd =
+  let db =
+    Arg.(value & flag & info [ "db" ] ~doc:"Also reset the dev database (destructive). Embedded by default; an external mongo's dev DB is dropped via the driver. Never touches test/e2e databases.")
+  in
+  let force =
+    Arg.(value & flag & info [ "force"; "f" ] ~doc:"Skip the confirmation prompt (required for --db in CI / non-interactive shells).")
+  in
+  let go db force = Fennec_dev.Lifecycle.clean ~root:(project_root (Sys.getcwd ())) ~db ~force (); 0 in
+  let doc = "Remove build artifacts; with --db, also reset the dev database" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Remove the build outputs PLUS the dev loop's isolated $(b,_build/fastdev) (which a bare \
+         $(b,dune clean) misses). The dev database is left alone — it lives outside $(b,_build) on \
+         purpose, so a clean never costs you your dev data.";
+      `P
+        "With $(b,--db) it ALSO resets the dev database: the embedded $(b,.fennec/db) by default, or — \
+         if $(b,MONGO_URL) points at a real mongo — that one database, dropped via the driver. It NEVER \
+         touches a test or e2e database (those are $(b,:memory:) / per-scenario with their own \
+         $(b,fennec_test_*) names), so it can't trip over a test run. Destructive, so it prompts to \
+         confirm (or needs $(b,--force) in CI / non-interactive shells).";
+      `S Manpage.s_examples;
+      `Pre "  fennec clean                   # drop build artifacts (both profiles); keep dev data";
+      `Pre "  fennec clean --db              # also reset the dev database (prompts to confirm)";
+      `Pre "  fennec clean --db --force      # ... without the prompt (CI)" ]
+  in
+  Cmd.v (Cmd.info "clean" ~doc ~man) Term.(const go $ db $ force)
+
 let main_cmd =
   let doc = "Native asset bundler and the Fennec framework's dev + test CLI" in
   let man =
@@ -832,6 +860,6 @@ let main_cmd =
   let default =
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
+  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

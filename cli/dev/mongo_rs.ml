@@ -71,10 +71,14 @@ let launch () =
     Printf.eprintf "--mongo: could not launch mongod — database-backed features remain unavailable.\n%s\n%!" msg;
     None
 
-(* the embedded engine's data directory for a dev session — gitignored and keyed by base port, so two
-   `fennec dev` servers (or parallel e2e instances) on different ports never share an LMDB map *)
+(* The embedded engine's data directory for a dev session. It lives at [.fennec/db/<port>] — gitignored,
+   project-local, and crucially OUTSIDE [_build], so `fennec clean` / `dune clean` never wipe your dev
+   data (only `fennec clean --db` does). Keyed by base port, so two `fennec dev` servers (or parallel
+   instances) on different ports never share an LMDB map. This is NEVER where tests ground their DB
+   (`fennec test` uses [:memory:] / a per-scenario temp dir), so a test run and a dev-DB reset cannot
+   trip over each other. See {!Fennec_dev.Lifecycle} + docs/internal/CLI-INTEROP.md § Dev data. *)
 let dev_embedded_dir ~root ~base_port =
-  Filename.concat root (Printf.sprintf "_build/.fennec/burrow/dev-%d" base_port)
+  Filename.concat root (Printf.sprintf ".fennec/db/%d" base_port)
 
 let ensure_dev ~root ~base_port () =
   match Runtime.url () with

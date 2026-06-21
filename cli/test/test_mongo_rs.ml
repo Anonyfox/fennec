@@ -9,19 +9,20 @@ let () =
   Fun.protect
     ~finally:(fun () -> Unix.putenv "MONGO_URL" (Option.value saved ~default:""))
     (fun () ->
-      (* unset -> burrow:// on loopback:27017 over a per-base-port dir, db "fennec"; nothing to own (None) *)
+      (* unset -> burrow:// on loopback:27017 over a per-base-port dir UNDER .fennec/db (NOT _build, so
+         `fennec clean` can't wipe it), db "fennec"; nothing to own (None) *)
       Unix.putenv "MONGO_URL" "";
       assert (Option.is_none (M.ensure_dev ~root:"/tmp/fennec_evt" ~base_port:4000 ()));
       assert (
         Sys.getenv_opt "MONGO_URL"
-        = Some "burrow://localhost:27017/tmp/fennec_evt/_build/.fennec/burrow/dev-4000/fennec");
+        = Some "burrow://localhost:27017/tmp/fennec_evt/.fennec/db/4000/fennec");
 
       (* a different base port -> a different dir (so parallel dev / e2e instances stay isolated) *)
       Unix.putenv "MONGO_URL" "";
       ignore (M.ensure_dev ~root:"/tmp/fennec_evt" ~base_port:4100 ());
       assert (
         Sys.getenv_opt "MONGO_URL"
-        = Some "burrow://localhost:27017/tmp/fennec_evt/_build/.fennec/burrow/dev-4100/fennec");
+        = Some "burrow://localhost:27017/tmp/fennec_evt/.fennec/db/4100/fennec");
 
       (* an explicit MONGO_URL always wins and is left untouched *)
       Unix.putenv "MONGO_URL" ":memory:";
