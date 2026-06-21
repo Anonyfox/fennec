@@ -1,0 +1,12 @@
+; The agent FASTLANE: the standalone mechanism behind `fennec dev --agent` / `--attach`. ONE generic
+; core (the verdict journal + the hook protocol an editing agent reads after each edit) and ONE
+; declarative adapter per coding harness (Claude Code, Codex, Mistral Vibe). Self-contained and
+; dev-only — linked into the `fennec` CLI, never installed/promoted as its own package. The dev
+; supervisor (fennec_dev) and the CLI plug in through this lib; nothing here depends back on them.
+(library
+ (name fennec_fastlane)
+ (libraries unix yojson digestif fennec-paw fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

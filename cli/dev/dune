@@ -8,10 +8,11 @@
  ; fennec-paw for Dev_proto — the shared CLI<->server wire (Stdlib-only, no Eio bleed). The mongo
  ; deps (Mongo_rs: --mongo launches a managed replica set, initiated via the driver) bring Eio +
  ; libmongoc in for the CLI only.
+ ; fennec_fastlane is the self-contained `fennec dev --agent` fastlane (verdict journal + harness hook
+ ; adapters); the supervisor plugs in via Journal.{start,emit,emit_error}.
  (libraries
   unix
-  digestif
-  yojson
+  fennec_fastlane
   fennec-paw
   fennec-hunt.unit
   fennec-mongo.mongod

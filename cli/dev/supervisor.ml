@@ -156,10 +156,19 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   let agent =
     match agent_dir with
     | None -> None
-    | Some dir -> Some (Agent_event.start ~dir ~port:dev_base ~root:(Sys.getcwd ()) ())
+    | Some dir -> Some (Fennec_fastlane.Journal.start ~dir ~port:dev_base ~root:(Sys.getcwd ()) ())
   in
+  (* the supervisor owns [Verdict] (shared with the human UI); encode it into the fastlane's generic
+     scalar event so the fastlane lib stays free of the verdict type. *)
   let emit_verdict verdict =
-    match agent with None -> () | Some a -> Agent_event.emit_verdict a verdict
+    match agent with
+    | None -> ()
+    | Some a ->
+      let kind, summary, trigger, ms, fields = Verdict.agent_event verdict in
+      let trigger = match trigger with [] -> None | xs -> Some xs in
+      (match ms with
+       | None -> Fennec_fastlane.Journal.emit a ~kind ~summary ?trigger ~fields ()
+       | Some m -> Fennec_fastlane.Journal.emit a ~kind ~summary ?trigger ~ms:(Some m) ~fields ())
   in
   let agent_ready_sent = ref false in
   let pending_agent_success = ref None in
@@ -215,7 +224,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     | Server_proc.Http access ->
       Ui.http ui access;
       (* failures ALSO go to the agent's separate runtime-error stream (never events.jsonl) *)
-      if Paw.Access.is_error access then (match agent with Some a -> (try Agent_event.emit_error a access with _ -> ()) | None -> ())
+      if Paw.Access.is_error access then (match agent with Some a -> (try Fennec_fastlane.Journal.emit_error a access with _ -> ()) | None -> ())
     | Server_proc.Chatter -> ()
     | Server_proc.App_log line -> Ui.app ui line
   in

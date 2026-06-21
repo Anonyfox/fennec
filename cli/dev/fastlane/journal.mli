@@ -48,10 +48,8 @@ val emit :
   ?fields:(string * string) list ->
 unit ->
 unit
-(** Append one event. [fields] values are already scalar strings. *)
-
-val emit_verdict : t -> Verdict.t -> unit
-(** Append the canonical agent event for a dev-loop verdict. *)
+(** Append one event. [fields] values are already scalar strings. The dev supervisor encodes its
+    [Verdict.t] into these scalar fields (the lib stays free of the verdict type). *)
 
 val emit_error : t -> Paw.Access.t -> unit
 (** Append one failed request ({!Paw.Access.is_error}) to the runtime-error stream ({!errors_path}).
@@ -68,8 +66,11 @@ val mark : dir:string -> input:string -> int
 (** Snapshot the current latest id and, when possible, store it under the
     harness tool/session key found in [input]. *)
 
-val hook_json : dir:string -> timeout:float -> event:string -> input:string -> string
-(** Wait and render hook JSON carrying [hookSpecificOutput.additionalContext]. *)
+val feedback_text : dir:string -> timeout:float -> input:string -> string
+(** The harness-AGNOSTIC post-tool feedback for one edit: block (up to [timeout]) for the next settled
+    verdict past the relevant lower bound (an explicit override in [input] / the pre-tool mark / the
+    read cursor), advance the cursor on delivery, then append any new runtime-HTTP-error rows. A
+    harness adapter wraps the returned text in its own injection JSON — see {!Harness.render_feedback}. *)
 
 val status : dir:string -> string
 (** Render the current attach status JSON for [dir]. Missing files produce a

@@ -103,13 +103,6 @@ let emit t ~kind ?summary ?trigger ?ms ?(fields = []) () =
   Buffer.add_char b '}';
   append_line t.events (Buffer.contents b)
 
-let emit_verdict t verdict =
-  let kind, summary, trigger, ms, fields = Verdict.agent_event verdict in
-  let trigger = match trigger with [] -> None | xs -> Some xs in
-  match ms with
-  | None -> emit t ~kind ~summary ?trigger ~fields ()
-  | Some ms -> emit t ~kind ~summary ?trigger ~ms:(Some ms) ~fields ()
-
 (* append one finished-but-FAILED request to the separate error stream (see {!errors_path}). Called by
    the dev supervisor for each request that {!Paw.Access.is_error}; its own id space keeps the
    edit→verdict journal untouched. Effect-isolated upstream (the caller swallows any IO failure). *)
@@ -126,9 +119,16 @@ let emit_error t (a : Paw.Access.t) =
   Buffer.add_char b '}';
   append_line t.errors (Buffer.contents b)
 
+(* first index of [needle] in [hay], or None — a local copy so this lib never depends back on the
+   fennec_dev supervisor it plugs into. *)
+let find_sub hay needle =
+  let lh = String.length hay and ln = String.length needle in
+  let rec go i = if ln = 0 then Some 0 else if i + ln > lh then None else if String.sub hay i ln = needle then Some i else go (i + 1) in
+  go 0
+
 let find_string_field line name =
   let needle = "\"" ^ name ^ "\":\"" in
-  match Dune_watch.find_sub line needle with
+  match find_sub line needle with
   | None -> None
   | Some i ->
     let start = i + String.length needle in
@@ -144,7 +144,7 @@ let find_string_field line name =
 
 let find_int_field line name =
   let needle = "\"" ^ name ^ "\":" in
-  match Dune_watch.find_sub line needle with
+  match find_sub line needle with
   | None -> None
   | Some i ->
     let start = i + String.length needle in
@@ -406,7 +406,7 @@ let wait_next ?after ~dir ~timeout () =
               else (
                 Buffer.add_subbytes pending buf 0 n;
                 let s = Buffer.contents pending in
-                match Dune_watch.find_sub s "\n" with
+                match find_sub s "\n" with
                 | Some i ->
                   let line = String.sub s 0 i in
                   let id = Option.value (event_id line) ~default:(after + 1) in
@@ -461,7 +461,7 @@ let wait_hook_next ~after ~dir ~timeout () =
                   else (
                     Buffer.add_subbytes pending buf 0 n;
                     let s = Buffer.contents pending in
-                    match Dune_watch.find_sub s "\n" with
+                    match find_sub s "\n" with
                     | Some i ->
                       let line = String.sub s 0 i in
                       let id = Option.value (event_id line) ~default:(after + 1) in
@@ -471,26 +471,24 @@ let wait_hook_next ~after ~dir ~timeout () =
             in
             loop ())))
 
-let hook_json ~dir ~timeout ~event ~input =
+(* The harness-AGNOSTIC feedback an editing agent should see after one tool ran: the next settled
+   verdict (or an advisory timeout / "dev not running" line), followed by any NEW runtime HTTP errors
+   since the last hook (the error stream never enters the edit→verdict journal). The lower bound is an
+   explicit override in the payload, else the id we marked before the tool, else our read cursor; a
+   delivered verdict advances the cursor so each is reported once. A harness adapter wraps this text in
+   its own injection JSON ({!Harness.render_feedback}) — the ONLY per-harness step. *)
+let feedback_text ~dir ~timeout ~input =
   let after =
     match explicit_after input with
     | Some id -> id
-    | None -> (
-      match marked_after ~dir ~input with
-      | Some id -> id
-      | None -> cursor_after ~dir)
+    | None -> ( match marked_after ~dir ~input with Some id -> id | None -> cursor_after ~dir)
   in
   let feedback =
     match wait_hook_next ~after ~dir ~timeout () with
-    | Ok (id, s) ->
-      set_cursor ~dir id;
-      "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
+    | Ok (id, s) -> set_cursor ~dir id; "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
     | Error msg -> msg ^ "\n"
   in
-  (* append any NEW runtime HTTP errors so async failures surface in the agent's normal post-tool
-     feedback — without ever entering the edit→verdict journal above. Empty unless errors accrued. *)
-  let summary = feedback ^ errors_note_for_hook ~dir in
-  "{\"hookSpecificOutput\":{\"hookEventName\":" ^ json_escape event ^ ",\"additionalContext\":" ^ json_escape summary ^ "}}"
+  feedback ^ errors_note_for_hook ~dir
 
 let status ~dir =
   let status = status_path ~dir in
@@ -553,8 +551,8 @@ let%test_unit "mark plus hook catches an event that settled before post hook sta
       let input = {|{"session_id":"s1","tool_use_id":"t1","hook_event_name":"PostToolUse"}|} in
       chk "mark snapshots id 1" (mark ~dir ~input = 1);
       emit t ~kind:"reload" ~summary:"post-edit reload" ();
-      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input in
-      chk "hook includes post-edit event" (contains_ json "post-edit reload"))
+      let text = feedback_text ~dir ~timeout:0.1 ~input in
+      chk "feedback includes the post-edit verdict" (contains_ text "post-edit reload"))
 
 let%test_unit "plain post-tool hook catches already-settled feedback without mark" =
   let chk = Fennec_hunt_unit.check in
@@ -562,20 +560,19 @@ let%test_unit "plain post-tool hook catches already-settled feedback without mar
       let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
       emit t ~kind:"ready" ~summary:"ready" ();
       emit t ~kind:"reload" ~summary:"settled before hook ran" ();
-      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input:"{}" in
-      chk "hook skips ready and returns settled event" (contains_ json "settled before hook ran");
+      let text = feedback_text ~dir ~timeout:0.1 ~input:"{}" in
+      chk "feedback skips ready and returns the settled verdict" (contains_ text "settled before hook ran");
       emit t ~kind:"idle" ~summary:"second feedback" ();
-      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input:"{}" in
-      chk "hook cursor advances" (contains_ json "second feedback");
-      chk "hook does not replay first event" (not (contains_ json "settled before hook ran")))
+      let text = feedback_text ~dir ~timeout:0.1 ~input:"{}" in
+      chk "the read cursor advances" (contains_ text "second feedback");
+      chk "a delivered verdict is not replayed" (not (contains_ text "settled before hook ran")))
 
-let%test_unit "hook timeout is advisory JSON, not a crash" =
+let%test_unit "feedback_text on timeout is an advisory line, not a crash" =
   let chk = Fennec_hunt_unit.check in
   with_temp_agent (fun dir ->
       let _t = start ~dir ~root:"/tmp/fennec-agent-test" () in
-      let json = hook_json ~dir ~timeout:0.01 ~event:"PostToolUse" ~input:"{}" in
-      chk "hook output shape" (contains_ json "hookSpecificOutput");
-      chk "timeout message visible" (contains_ json "no dev event"))
+      let text = feedback_text ~dir ~timeout:0.01 ~input:"{}" in
+      chk "timeout message visible" (contains_ text "no dev event"))
 
 let%test_unit "status reports latest id and liveness" =
   let chk = Fennec_hunt_unit.check in
@@ -629,16 +626,16 @@ let%test_unit "errors_note_for_hook reports once, then advances its own cursor" 
       chk "a new error past the cursor is reported" (contains_ note3 "second");
       chk "the old error is not replayed" (not (contains_ note3 "first")))
 
-let%test_unit "hook_json carries the runtime-error note alongside the edit verdict" =
+let%test_unit "feedback_text carries the runtime-error note alongside the edit verdict" =
   let chk = Fennec_hunt_unit.check in
   with_temp_agent (fun dir ->
       let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
       emit t ~kind:"ready" ~summary:"ready" ();
       emit t ~kind:"reload" ~summary:"rebuilt ok" ();
       emit_error t (err_access ~error:(Some "downstream 503") "/api");
-      let json = hook_json ~dir ~timeout:0.1 ~event:"PostToolUse" ~input:"{}" in
-      chk "the edit verdict is present" (contains_ json "rebuilt ok");
-      chk "the runtime error is present" (contains_ json "downstream 503"))
+      let text = feedback_text ~dir ~timeout:0.1 ~input:"{}" in
+      chk "the edit verdict is present" (contains_ text "rebuilt ok");
+      chk "the runtime error is present" (contains_ text "downstream 503"))
 
 let%test_unit "errors_report pages past ids already seen with ~after" =
   let chk = Fennec_hunt_unit.check in

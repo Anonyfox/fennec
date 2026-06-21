@@ -89,7 +89,7 @@ let summary = function
     let base =
       match b.served with
       | No_served_change -> served_text b.served
-      | _ -> Printf.sprintf "%s %s" (trigger_label b.trigger) (served_text b.served)
+      | _ -> Printf.sprintf "%s · %s" (trigger_label b.trigger) (served_text b.served)
     in
     let affected = Affected.short b.affected in
     let lines = if affected = "" then [ base ] else [ base; "affected: " ^ affected ] in

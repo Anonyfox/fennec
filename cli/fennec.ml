@@ -418,8 +418,8 @@ let dev_cmd =
       let agent = agent || attach in
       let attach_agent ~root agent_dir =
         if attach then (
-          let results = Fennec_dev.Agent_attach.install ~root ~agent_dir () in
-          Printf.printf "%s\n%!" (Fennec_dev.Agent_attach.report results))
+          let results = Fennec_fastlane.Attach.install ~root ~agent_dir () in
+          Printf.printf "%s\n%!" (Fennec_fastlane.Attach.report results))
       in
       match exe with
       | Some exe_path ->
@@ -427,7 +427,7 @@ let dev_cmd =
         let agent_dir =
           match agent_dir with
           | Some d -> Some d
-          | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root) else None
+          | None -> if agent then Some (Fennec_fastlane.Journal.default_dir ~root) else None
         in
         (match agent_dir with Some dir -> attach_agent ~root dir | None -> ());
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
@@ -446,7 +446,7 @@ let dev_cmd =
           (* Supervisor expects to run from the workspace root; discovery already scoped to the cwd *)
           Sys.chdir d.Discover.root;
           let agent_dir =
-            match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_dev.Agent_event.default_dir ~root:d.Discover.root) else None
+            match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_fastlane.Journal.default_dir ~root:d.Discover.root) else None
           in
           (match agent_dir with Some dir -> attach_agent ~root:d.Discover.root dir | None -> ());
           Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
@@ -499,18 +499,18 @@ let agent_cmd =
   let state_dir dir =
     match dir with
     | Some d -> d
-    | None -> Fennec_dev.Agent_event.default_dir ~root:(project_root (Sys.getcwd ()))
+    | None -> Fennec_fastlane.Journal.default_dir ~root:(project_root (Sys.getcwd ()))
   in
   let status =
     let go dir =
-      print_string (Fennec_dev.Agent_event.status ~dir:(state_dir dir));
+      print_string (Fennec_fastlane.Journal.status ~dir:(state_dir dir));
       0
     in
     Cmd.v (Cmd.info "status" ~doc:"Print the current agent attachment state") Term.(const go $ dir_arg)
   in
   let wait =
     let go dir timeout after =
-      match Fennec_dev.Agent_event.wait_next ?after ~dir:(state_dir dir) ~timeout () with
+      match Fennec_fastlane.Journal.wait_next ?after ~dir:(state_dir dir) ~timeout () with
       | Ok (_id, s) -> print_endline s; 0
       | Error msg -> prerr_endline msg; 1
     in
@@ -519,35 +519,46 @@ let agent_cmd =
   let mark =
     let go dir =
       let input = try In_channel.input_all stdin with _ -> "" in
-      let id = Fennec_dev.Agent_event.mark ~dir:(state_dir dir) ~input in
+      let id = Fennec_fastlane.Journal.mark ~dir:(state_dir dir) ~input in
       Printf.printf "%d\n" id;
       0
     in
     Cmd.v (Cmd.info "mark" ~doc:"Low-level: snapshot the latest event id for hook implementations") Term.(const go $ dir_arg)
   in
+  let harness_arg =
+    let doc = "Which coding harness called this hook ($(b,claude) | $(b,codex) | $(b,vibe)). Selects the injected-feedback JSON shape; baked into each installed hook. Default: claude." in
+    Arg.(value & opt string "claude" & info [ "harness" ] ~docv:"ID" ~doc)
+  in
   let hook =
-    let go dir timeout =
+    let go dir timeout harness_id =
       let input = try In_channel.input_all stdin with _ -> "" in
-      let event =
-        try
-          let name =
-            match Fennec_dev.Agent_event.find_string_field input "hook_event_name" with
-            | Some _ as v -> v
-            | None -> Fennec_dev.Agent_event.find_string_field input "hookEventName"
-          in
-          match name with
-          | Some s -> Fennec_dev.Agent_event.unescape_json_string s
-          | None -> "PostToolUse"
-        with _ -> "PostToolUse"
-      in
-      print_endline (Fennec_dev.Agent_event.hook_json ~dir:(state_dir dir) ~timeout ~event ~input);
+      let harness = Option.value (Fennec_fastlane.Registry.find harness_id) ~default:Fennec_fastlane.Claude.adapter in
+      print_endline (Fennec_fastlane.Hook.run ~harness ~dir:(state_dir dir) ~timeout ~input);
       0
     in
-    Cmd.v (Cmd.info "hook" ~doc:"Post-tool hook command: emit hookSpecificOutput.additionalContext JSON") Term.(const go $ dir_arg $ timeout_arg)
+    Cmd.v
+      (Cmd.info "hook" ~doc:"Post-tool hook: block for the next dev verdict and emit it as the calling harness's injected feedback")
+      Term.(const go $ dir_arg $ timeout_arg $ harness_arg)
+  in
+  let detach =
+    let go () =
+      let results = Fennec_fastlane.Attach.uninstall ~root:(project_root (Sys.getcwd ())) () in
+      print_endline (Fennec_fastlane.Attach.detach_report results);
+      0
+    in
+    Cmd.v (Cmd.info "detach" ~doc:"Remove the fennec fastlane hook from every coding harness (the inverse of `dev --attach`)") Term.(const go $ const ())
+  in
+  let selftest =
+    let go () =
+      let results = Fennec_fastlane.Selftest.run () in
+      List.iter (fun (id, ok) -> Printf.printf "  %s  %s\n%!" (if ok then "ok " else "FAIL") id) results;
+      if List.for_all snd results then (print_endline "all harness adapters ok"; 0) else 1
+    in
+    Cmd.v (Cmd.info "selftest" ~doc:"Exercise the emit→hook loop for every coding-harness adapter (offline)") Term.(const go $ const ())
   in
   let errors =
     let go dir after =
-      print_string (Fennec_dev.Agent_event.errors_report ~dir:(state_dir dir) ?after ());
+      print_string (Fennec_fastlane.Journal.errors_report ~dir:(state_dir dir) ?after ());
       0
     in
     Cmd.v
@@ -555,7 +566,7 @@ let agent_cmd =
       Term.(const go $ dir_arg $ after_arg)
   in
   let doc = "Agent-facing hook helpers for fennec dev --agent" in
-  Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook; errors ]
+  Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook; detach; selftest; errors ]
 
 let new_cmd =
   let name_arg =
