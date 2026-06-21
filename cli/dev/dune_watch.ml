@@ -62,6 +62,7 @@ let classify_line (raw : string) : line =
 (* ---- the IO layer: spawn dune, read its stderr, assemble events ---- *)
 
 type event =
+  | Build_started (* the watcher began a rebuild (dune's "NEW BUILD") — emitted once per cycle, before the settle *)
   | Settled_build of { outcome : outcome; triggers : string list; messages : string; duration_ms : float option }
   | Exited
 
@@ -121,7 +122,9 @@ let feed_line t (raw : string) =
   let line = if String.length raw > 0 && raw.[String.length raw - 1] = '\r' then String.sub raw 0 (String.length raw - 1) else raw in
   match classify_line line with
   | Trigger desc ->
-    if t.started = None then t.started <- Some (now ());
+    (* the FIRST trigger of a cycle starts the clock AND emits a Build_started, so a consumer learns a
+       rebuild is underway before it settles (the agent hook gates its wait on this). *)
+    if t.started = None then (t.started <- Some (now ()); Queue.push Build_started t.queue);
     t.building <- true;
     t.triggers <- desc :: t.triggers
   | Settled outcome ->

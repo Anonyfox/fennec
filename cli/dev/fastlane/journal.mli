@@ -67,10 +67,16 @@ val mark : dir:string -> input:string -> int
     harness tool/session key found in [input]. *)
 
 val feedback_text : dir:string -> timeout:float -> input:string -> string
-(** The harness-AGNOSTIC post-tool feedback for one edit: block (up to [timeout]) for the next settled
-    verdict past the relevant lower bound (an explicit override in [input] / the pre-tool mark / the
-    read cursor), advance the cursor on delivery, then append any new runtime-HTTP-error rows. A
-    harness adapter wraps the returned text in its own injection JSON — see {!Harness.render_feedback}. *)
+(** The harness-AGNOSTIC post-tool feedback for one edit, and the heart of the always-on hook.
+
+    Returns [""] — inject NOTHING — unless a dev server is live for [dir] AND it produced a settle
+    verdict for this edit. A non-fennec edit (no journal), a stopped or killed server (the functional
+    "detach"), and an INERT edit (one the watcher rebuilds nothing for — detected by no build-start
+    marker within a short grace) all stay silent; only a real verdict is reported. On a live verdict it
+    advances the read cursor (each reported once) and appends any new runtime-HTTP-error rows. The lower
+    bound is an explicit override in [input] / the pre-tool mark / the read cursor. A "building" marker
+    extends the wait to the full [timeout] so a slow build still lands on this edit. A harness adapter
+    wraps the text in its own injection JSON — see {!Harness.render_feedback}. *)
 
 val status : dir:string -> string
 (** Render the current attach status JSON for [dir]. Missing files produce a

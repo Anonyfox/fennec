@@ -13,7 +13,11 @@ let event_of_input input =
     | None -> "PostToolUse")
 
 let run ~(harness : Harness.t) ~dir ~timeout ~input =
-  harness.render_feedback ~event:(event_of_input input) ~text:(Journal.feedback_text ~dir ~timeout ~input)
+  (* Empty feedback (no live dev server, or an inert edit) → emit NOTHING, so the harness injects no
+     block at all rather than an empty wrapper. The always-on hook is invisible unless there's a verdict. *)
+  match Journal.feedback_text ~dir ~timeout ~input with
+  | "" -> ""
+  | text -> harness.render_feedback ~event:(event_of_input input) ~text
 
 let%test_unit "hook wraps the settled verdict in the harness injection shape" =
   let chk = Fennec_hunt_unit.check in

@@ -36,21 +36,23 @@ let block_end text pos =
   | Some rel -> pos + rel
   | None -> String.length text
 
-(* remove the single `[[hooks]]` block carrying our marker, if present *)
+(* remove EVERY `[[hooks]]` block carrying our marker (we install two: a before_tool mark + an
+   after_tool hook), leaving any non-fennec blocks untouched *)
 let strip_block ~marker text =
-  match Harness.find_sub text marker with
-  | None -> (text, false)
-  | Some mpos ->
-    let bstart = block_start text mpos in
-    let bend = block_end text (bstart + String.length "[[hooks]]") in
-    let kept = String.sub text 0 bstart ^ String.sub text bend (String.length text - bend) in
-    (kept, true)
+  let rec go text removed =
+    match Harness.find_sub text marker with
+    | None -> (text, removed)
+    | Some mpos ->
+      let bstart = block_start text mpos in
+      let bend = block_end text (bstart + String.length "[[hooks]]") in
+      go (String.sub text 0 bstart ^ String.sub text bend (String.length text - bend)) true
+  in
+  go text false
 
-let block ~root ~agent_dir =
-  let command = Harness.guarded_command ~harness_id:"vibe" ~root ~agent_dir in
+let block ~name ~hook_type ~command =
   Printf.sprintf
-    "[[hooks]]\nname = \"fennec-fastlane\"\ntype = \"after_tool\"\nmatch = %s\ncommand = %s\ntimeout = 15.0\ndescription = \"Fennec dev verdict after each edit\"\n"
-    (Harness.toml_basic_escape edit_match) (Harness.toml_basic_escape command)
+    "[[hooks]]\nname = %s\ntype = %s\nmatch = %s\ncommand = %s\ntimeout = 15.0\ndescription = \"Fennec dev fastlane\"\n"
+    (Harness.toml_basic_escape name) (Harness.toml_basic_escape hook_type) (Harness.toml_basic_escape edit_match) (Harness.toml_basic_escape command)
 
 (* TOML top-level keys must precede any table, so set/prepend the flag rather than append *)
 let enable_experimental text =
@@ -61,13 +63,18 @@ let enable_experimental text =
     String.sub text 0 ls ^ key ^ " = true" ^ String.sub text le (String.length text - le)
   | None -> key ^ " = true\n" ^ text
 
-let install ~root ~agent_dir =
+let install () =
   let path = hooks_path () in
-  let marker = Harness.marker ~root in
+  let marker = Harness.marker in
   let old = Option.value (Harness.read_file path) ~default:"" in
   let stripped, had = strip_block ~marker old in
   let sep = if String.trim stripped = "" then "" else (if String.ends_with ~suffix:"\n" stripped then "\n" else "\n\n") in
-  let next = stripped ^ sep ^ block ~root ~agent_dir in
+  (* a before_tool MARK (snapshot the journal pre-edit) + an after_tool HOOK (report this edit's verdict) *)
+  let blocks =
+    block ~name:"fennec-fastlane-mark" ~hook_type:"before_tool" ~command:(Harness.mark_command ())
+    ^ "\n" ^ block ~name:"fennec-fastlane" ~hook_type:"after_tool" ~command:(Harness.agent_command ~harness_id:"vibe")
+  in
+  let next = stripped ^ sep ^ blocks in
   Harness.write_file path next;
   (* enable the experimental flag (persistent) — detach never removes it (it gates ALL hooks) *)
   let cfg = config_path () in
@@ -77,9 +84,9 @@ let install ~root ~agent_dir =
   { Harness.harness = "vibe"; path; changed = next <> old;
     message = (if had then "hook config refreshed; preserved existing hooks" else "hook config installed") }
 
-let uninstall ~root =
+let uninstall () =
   let path = hooks_path () in
-  let marker = Harness.marker ~root in
+  let marker = Harness.marker in
   match Harness.read_file path with
   | None -> { Harness.harness = "vibe"; path; changed = false; message = "nothing to remove (no config)" }
   | Some text -> (
@@ -102,10 +109,11 @@ let adapter : Harness.t =
 
 (* ── tests ──────────────────────────────────────────────────────────────────────────────────────*)
 
-let%test "the hooks block is a flat [[hooks]] after_tool entry with the edit matcher" =
-  let b = block ~root:"/tmp/p" ~agent_dir:"/tmp/a" in
-  Harness.contains b "[[hooks]]" && Harness.contains b "type = \"after_tool\"" && Harness.contains b "edit|write_file"
-  && Harness.contains b "fennec-fastlane:"
+let%test "block builds a flat [[hooks]] entry of the requested type with the edit matcher + marker" =
+  let after = block ~name:"fennec-fastlane" ~hook_type:"after_tool" ~command:"c # fennec-fastlane" in
+  let before = block ~name:"fennec-fastlane-mark" ~hook_type:"before_tool" ~command:"m # fennec-fastlane" in
+  Harness.contains after "[[hooks]]" && Harness.contains after "type = \"after_tool\"" && Harness.contains after "edit|write_file"
+  && Harness.contains after "fennec-fastlane" && Harness.contains before "type = \"before_tool\""
 
 let%test "render uses snake_case hook_specific_output.additional_context" =
   let j = render_feedback ~event:"after_tool" ~text:"build ok" in
@@ -117,11 +125,16 @@ let%test "strip removes only our marked block, keeps an unrelated one" =
   let kept, had = strip_block ~marker:"fennec-fastlane:abc" (other ^ ours) in
   had && Harness.contains kept "echo keep" && not (Harness.contains kept "fennec-fastlane:abc")
 
-let%test "install then strip round-trips to no fennec block" =
-  let marker = Harness.marker ~root:"/tmp/p" in
-  let installed = "x = 1\n" ^ block ~root:"/tmp/p" ~agent_dir:"/tmp/a" in
+let%test "strip removes BOTH our blocks (before mark + after hook), keeping unrelated config" =
+  let marker = Harness.marker in
+  let installed =
+    "x = 1\n"
+    ^ block ~name:"fennec-fastlane-mark" ~hook_type:"before_tool" ~command:("m # " ^ marker)
+    ^ "\n" ^ block ~name:"fennec-fastlane" ~hook_type:"after_tool" ~command:("h # " ^ marker)
+  in
   let kept, had = strip_block ~marker installed in
   had && Harness.contains kept "x = 1" && not (Harness.contains kept marker)
+  && not (Harness.contains kept "before_tool") && not (Harness.contains kept "after_tool")
 
 let%test "enable_experimental flips an existing false and prepends when absent" =
   Harness.contains (enable_experimental "enable_experimental_hooks = false\n") "enable_experimental_hooks = true"

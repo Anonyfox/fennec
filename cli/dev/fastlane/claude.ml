@@ -13,8 +13,11 @@ let adapter : Harness.t =
         || Harness.getenv "CLAUDE_CODE_ENTRYPOINT" <> None
         || Harness.getenv "CLAUDE_SESSION_ID" <> None);
     install =
-      (fun ~root ~agent_dir ->
-        Harness.install_json_file ~harness_id:"claude" ~path:(settings_path ()) ~matcher:"Edit|Write|MultiEdit" ~root ~agent_dir);
-    uninstall = (fun ~root -> Harness.uninstall_json_file ~harness_id:"claude" ~path:(settings_path ()) ~root);
+      (fun () ->
+        let path = settings_path () and matcher = "Edit|Write|MultiEdit" in
+        let pre = Harness.install_json_file ~harness_id:"claude" ~path ~event:"PreToolUse" ~matcher ~command:(Harness.mark_command ()) in
+        let post = Harness.install_json_file ~harness_id:"claude" ~path ~event:"PostToolUse" ~matcher ~command:(Harness.agent_command ~harness_id:"claude") in
+        { post with changed = pre.changed || post.changed });
+    uninstall = (fun () -> Harness.uninstall_json_file ~harness_id:"claude" ~path:(settings_path ()));
     render_feedback = Harness.render_camel
   }

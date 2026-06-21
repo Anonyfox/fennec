@@ -4,8 +4,8 @@
     known harness so a stale config can never linger. Both are idempotent and preserve the user's
     other settings. *)
 
-val install : ?harnesses:Harness.t list -> root:string -> agent_dir:string -> unit -> Harness.result list
-val uninstall : ?harnesses:Harness.t list -> root:string -> unit -> Harness.result list
+val install : ?harnesses:Harness.t list -> unit -> Harness.result list
+val uninstall : ?harnesses:Harness.t list -> unit -> Harness.result list
 
 (** Render an install result list, with the "edit normally and consume the feedback" hint. *)
 val report : Harness.result list -> string

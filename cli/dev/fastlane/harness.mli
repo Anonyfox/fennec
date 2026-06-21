@@ -17,8 +17,8 @@ type result = { harness : string; path : string; changed : bool; message : strin
 type t = {
   id : string;                                          (** stable key: ["claude"] | ["codex"] | ["vibe"] *)
   detect : unit -> bool;                                (** env sniff so [dev --attach] self-registers *)
-  install : root:string -> agent_dir:string -> result;
-  uninstall : root:string -> result;
+  install : unit -> result;                             (** install ONE universal, project-agnostic entry *)
+  uninstall : unit -> result;
   render_feedback : event:string -> text:string -> string;
 }
 
@@ -36,20 +36,28 @@ val toml_basic_escape : string -> string
 val contains : string -> string -> bool
 val find_sub : string -> string -> int option
 
-(** A stable per-project marker baked as a trailing comment into our hook command, so install is
-    idempotent, merge-safe, and uninstall precise. *)
-val marker : root:string -> string
+(** The one constant marker baked as a trailing comment into our hook command, so install is
+    idempotent, merge-safe, and uninstall precise. Constant because the entry is now universal (one
+    per harness, project-agnostic). *)
+val marker : string
 
-(** The guarded hook command: a short python that runs [fennec agent hook --harness <id>] only when
-    the tool fired inside [root], then execs the SAME fennec binary that installed it. *)
-val guarded_command : harness_id:string -> root:string -> agent_dir:string -> string
+(** The POST-tool hook command: re-exec the installing fennec binary as [fennec agent hook --harness
+    <id>]. Project-agnostic — it derives the journal from the editing cwd and stays silent unless a dev
+    server is live there (see {!Journal.feedback_text}). No python guard, no baked root/dir. *)
+val agent_command : harness_id:string -> string
 
-(** Idempotent install of our PostToolUse entry into a nested-JSON hooks file (Claude + Codex share
-    this), preserving every other key and hook. *)
-val install_json_file : harness_id:string -> path:string -> matcher:string -> root:string -> agent_dir:string -> result
+(** The PRE-tool mark command: [fennec agent mark --quiet], run just before an edit so the post-tool
+    hook reports exactly that edit's verdict (skipping leftover/background settles). Silent + project-
+    agnostic. *)
+val mark_command : unit -> string
 
-(** Remove our marked PostToolUse entry from a JSON hooks file, leaving the rest untouched. *)
-val uninstall_json_file : harness_id:string -> path:string -> root:string -> result
+(** Idempotently install ONE (event, command) entry into a nested-JSON hooks file (Claude + Codex share
+    this), preserving every other key and hook. Adapters call it once per event — [PreToolUse] mark,
+    [PostToolUse] hook — on the same file. *)
+val install_json_file : harness_id:string -> path:string -> event:string -> matcher:string -> command:string -> result
+
+(** Remove our marked entry from EVERY event array of a JSON hooks file, leaving the rest untouched. *)
+val uninstall_json_file : harness_id:string -> path:string -> result
 
 (** The camelCase injection shape Claude Code and Codex share: [hookSpecificOutput.additionalContext]. *)
 val render_camel : event:string -> text:string -> string

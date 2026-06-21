@@ -170,6 +170,13 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
        | None -> Fennec_fastlane.Journal.emit a ~kind ~summary ?trigger ~fields ()
        | Some m -> Fennec_fastlane.Journal.emit a ~kind ~summary ?trigger ~ms:(Some m) ~fields ())
   in
+  (* a lightweight "the watcher started rebuilding" marker — agent journal ONLY (never a [Verdict], so
+     the human UI is untouched). The post-edit hook uses it to tell a real (possibly slow) build from an
+     INERT edit: a building marker ⇒ wait the full timeout for the settle (no one-edit lag); none within
+     the grace window ⇒ the edit changed nothing the watcher rebuilds, so the hook returns fast + quiet. *)
+  let emit_building () =
+    match agent with None -> () | Some a -> (try Fennec_fastlane.Journal.emit a ~kind:"building" ~summary:"building…" () with _ -> ())
+  in
   let agent_ready_sent = ref false in
   let pending_agent_success = ref None in
   let gateway_url = Printf.sprintf "http://localhost:%d" dev_base in
@@ -474,6 +481,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   (* ═══════════ the loop: drain → check the child → poll the watcher → handle (total) ═══════════ *)
 
   let handle = function
+    | Dune_watch.Build_started -> emit_building ()
     | Dune_watch.Settled_build { outcome = Dune_watch.Ok; triggers; duration_ms; _ } -> on_build_ok triggers duration_ms
     | Dune_watch.Settled_build { outcome = Dune_watch.Errors n; triggers; messages; _ } -> on_build_failed n triggers messages
     | Dune_watch.Exited -> on_dune_exit ()

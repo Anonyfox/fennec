@@ -416,9 +416,14 @@ let dev_cmd =
       if clean then (Printf.printf "fennec dev: dune clean (full rebuild)…\n%!"; ignore (Sys.command "dune clean >/dev/null 2>&1"));
       ignore mongo;
       let agent = agent || attach in
-      let attach_agent ~root agent_dir =
-        if attach then (
-          let results = Fennec_fastlane.Attach.install ~root ~agent_dir () in
+      (* Auto-install the persistent, project-agnostic fastlane hook for EVERY known harness whenever
+         the agent journal is on (--agent or --attach). The entry is universal + silent-when-idle, so
+         an already-running session picks it up transparently (Claude live; Vibe/Codex from their next
+         start) and a stopped or killed dev server just leaves it inert — no detach step needed.
+         `fennec agent detach` removes it. (--attach stays as an explicit synonym.) *)
+      let install_hooks () =
+        if agent then (
+          let results = Fennec_fastlane.Attach.install ~harnesses:Fennec_fastlane.Registry.all () in
           Printf.printf "%s\n%!" (Fennec_fastlane.Attach.report results))
       in
       match exe with
@@ -429,7 +434,7 @@ let dev_cmd =
           | Some d -> Some d
           | None -> if agent then Some (Fennec_fastlane.Journal.default_dir ~root) else None
         in
-        (match agent_dir with Some dir -> attach_agent ~root dir | None -> ());
+        install_hooks ();
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
            server's precise build targets. With no --target we watch [@@default] — broader than the
            discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
@@ -448,7 +453,7 @@ let dev_cmd =
           let agent_dir =
             match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_fastlane.Journal.default_dir ~root:d.Discover.root) else None
           in
-          (match agent_dir with Some dir -> attach_agent ~root:d.Discover.root dir | None -> ());
+          install_hooks ();
           Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
           0)
     end
@@ -514,10 +519,8 @@ let agent_cmd =
       Arg.(value & opt_all string [] & info [ "harness" ] ~docv:"ID" ~doc)
     in
     let go harness_ids =
-      let root = project_root (Sys.getcwd ()) in
-      let agent_dir = Fennec_fastlane.Journal.default_dir ~root in
       let harnesses = match harness_ids with [] -> None | ids -> Some (List.filter_map Fennec_fastlane.Registry.find ids) in
-      print_endline (Fennec_fastlane.Attach.report (Fennec_fastlane.Attach.install ?harnesses ~root ~agent_dir ()));
+      print_endline (Fennec_fastlane.Attach.report (Fennec_fastlane.Attach.install ?harnesses ()));
       0
     in
     Cmd.v
@@ -533,13 +536,18 @@ let agent_cmd =
     Cmd.v (Cmd.info "wait" ~doc:"Low-level: wait for the next fennec dev agent event") Term.(const go $ dir_arg $ timeout_arg $ after_arg)
   in
   let mark =
-    let go dir =
+    let quiet_arg =
+      Arg.(value & flag & info [ "quiet" ] ~doc:"Snapshot silently — for the pre-tool hook; do not print the id.")
+    in
+    let go dir quiet =
       let input = try In_channel.input_all stdin with _ -> "" in
       let id = Fennec_fastlane.Journal.mark ~dir:(state_dir dir) ~input in
-      Printf.printf "%d\n" id;
+      if not quiet then Printf.printf "%d\n" id;
       0
     in
-    Cmd.v (Cmd.info "mark" ~doc:"Low-level: snapshot the latest event id for hook implementations") Term.(const go $ dir_arg)
+    Cmd.v
+      (Cmd.info "mark" ~doc:"Pre-tool hook (and low-level): snapshot the latest event id so the post-tool hook reports exactly this edit's verdict")
+      Term.(const go $ dir_arg $ quiet_arg)
   in
   let harness_arg =
     let doc = "Which coding harness called this hook ($(b,claude) | $(b,codex) | $(b,vibe)). Selects the injected-feedback JSON shape; baked into each installed hook. Default: claude." in
@@ -549,7 +557,7 @@ let agent_cmd =
     let go dir timeout harness_id =
       let input = try In_channel.input_all stdin with _ -> "" in
       let harness = Option.value (Fennec_fastlane.Registry.find harness_id) ~default:Fennec_fastlane.Claude.adapter in
-      print_endline (Fennec_fastlane.Hook.run ~harness ~dir:(state_dir dir) ~timeout ~input);
+      (match Fennec_fastlane.Hook.run ~harness ~dir:(state_dir dir) ~timeout ~input with "" -> () | out -> print_endline out);
       0
     in
     Cmd.v
@@ -558,11 +566,11 @@ let agent_cmd =
   in
   let detach =
     let go () =
-      let results = Fennec_fastlane.Attach.uninstall ~root:(project_root (Sys.getcwd ())) () in
+      let results = Fennec_fastlane.Attach.uninstall () in
       print_endline (Fennec_fastlane.Attach.detach_report results);
       0
     in
-    Cmd.v (Cmd.info "detach" ~doc:"Remove the fennec fastlane hook from every coding harness (the inverse of `dev --attach`)") Term.(const go $ const ())
+    Cmd.v (Cmd.info "detach" ~doc:"Remove the fennec fastlane hook from every coding harness (the inverse of `dev --agent`)") Term.(const go $ const ())
   in
   let selftest =
     let go () =

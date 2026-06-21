@@ -280,22 +280,6 @@ let first_event_after ~dir ~after =
       in
       loop ())
 
-let first_hook_event_after ~dir ~after =
-  let events = events_path ~dir in
-  if not (Sys.file_exists events) then None
-  else
-    In_channel.with_open_text events (fun ic ->
-      let rec loop () =
-        match input_line ic with
-        | line -> (
-          match (event_id line, event_kind line) with
-          | Some id, Some "ready" when id > after -> loop ()
-          | Some id, _ when id > after -> Some (id, summarize_event line)
-          | _ -> loop ())
-        | exception End_of_file -> None
-      in
-      loop ())
-
 let find_status_field text name =
   let prefix = name ^ "=" in
   String.split_on_char '\n' text
@@ -319,25 +303,29 @@ let liveness ~dir =
 let dead_message pid =
   Printf.sprintf "fennec dev is not running (recorded pid %d is dead). Restart with `fennec dev --agent`." pid
 
+(* SESSION-level key (not session+tool): a pre-tool mark and the post-tool hook for the SAME edit must
+   land on the same key so the hook reads exactly this edit's pre-state. The two events carry the same
+   session id but not necessarily the same tool-call id (and some harnesses omit it), so keying on the
+   session is what correlates them. The pre-tool hook fires immediately before the edit, so the latest
+   mark for a session is precisely that edit's lower bound. Falls back to a tool id, else nothing. *)
 let marker_key input =
   let pick names = List.find_map (fun name -> find_string_field input name) names in
-  let session = pick [ "session_id"; "sessionId"; "conversation_id"; "conversationId" ] in
-  let tool = pick [ "tool_use_id"; "toolUseId"; "toolUseID"; "call_id"; "callId" ] in
-  match (session, tool) with
-  | Some s, Some t -> Some (sanitize (s ^ "-" ^ t))
-  | _, Some t -> Some (sanitize t)
-  | Some s, None -> Some (sanitize (s ^ "-last"))
-  | None, None -> None
+  match pick [ "session_id"; "sessionId"; "conversation_id"; "conversationId" ] with
+  | Some s -> Some (sanitize s)
+  | None -> ( match pick [ "tool_use_id"; "toolUseId"; "toolUseID"; "call_id"; "callId" ] with Some t -> Some (sanitize t) | None -> None)
 
 let marker_path ~dir key = Filename.concat (marker_dir ~dir) (key ^ ".mark")
 
 let mark ~dir ~input =
-  mkdir_p (marker_dir ~dir);
-  let id = Option.value (latest_id ~dir) ~default:0 in
-  (match marker_key input with
-  | None -> ()
-  | Some key -> write_file (marker_path ~dir key) (string_of_int id ^ "\n"));
-  id
+  (* The pre-tool mark fires on EVERY edit in EVERY project (it's the always-on pre-hook). Where there
+     is no dev journal — a non-fennec edit — do nothing and litter nothing. *)
+  if not (Sys.file_exists (events_path ~dir)) then 0
+  else begin
+    mkdir_p (marker_dir ~dir);
+    let id = Option.value (latest_id ~dir) ~default:0 in
+    (match marker_key input with None -> () | Some key -> write_file (marker_path ~dir key) (string_of_int id ^ "\n"));
+    id
+  end
 
 let marked_after ~dir ~input =
   match marker_key input with
@@ -415,61 +403,85 @@ let wait_next ?after ~dir ~timeout () =
         in
         loop ()))
 
-let wait_hook_next ~after ~dir ~timeout () =
+(* MARKER kinds: progress signals, not settled results. "ready" is the startup line; "building" is the
+   watcher having started a rebuild. Skipped when scanning for a verdict, but their presence means the
+   watcher reacted — which gates how long the hook waits (see {!wait_settle}). *)
+let is_marker_kind = function Some "ready" | Some "building" -> true | _ -> false
+
+let inert_grace = 2.5
+
+(* The post-edit hook's wait. Returns the next SETTLE verdict with id > [after], or None. None means
+   one of two things, both of which the hook treats as "say nothing":
+     - INERT edit: no marker and no settle within [grace] — the watcher rebuilds nothing for this
+       change, so blocking the full [timeout] would be pure latency on every doc/test/foreign edit;
+     - a settle that outran [timeout] (rare — a build slower than the whole budget).
+   A "building" marker (the watcher started) flips the bound from [grace] to the full [timeout], so a
+   genuinely slow build's verdict still lands on THIS edit. The cursor only advances on a real settle,
+   so a missed slow build is re-offered to the next hook rather than lost. *)
+let wait_settle ~after ~dir ~grace ~timeout () =
   let events = events_path ~dir in
-  let deadline = Unix.gettimeofday () +. timeout in
-  let rec wait_for_journal () =
-    if Sys.file_exists events then Ok ()
-    else if Unix.gettimeofday () >= deadline then
-      Error (Printf.sprintf "fennec agent: no event journal at %s; start `fennec dev --agent` first" events)
-    else (Unix.sleepf 0.05; wait_for_journal ())
+  let t0 = Unix.gettimeofday () in
+  let saw_marker = ref false in
+  let verdict_of line =
+    match event_id line with
+    | Some id when id > after ->
+      if is_marker_kind (event_kind line) then (saw_marker := true; None) else Some (id, summarize_event line)
+    | _ -> None
   in
-  match wait_for_journal () with
-  | Error _ as e -> e
-  | Ok () -> (
-    match first_hook_event_after ~dir ~after with
-    | Some found -> Ok found
-    | None -> (
-      match liveness ~dir with
-      | `Dead pid -> Error (dead_message pid)
-      | `Alive | `Unknown ->
-        let start = (Unix.stat events).Unix.st_size in
-        let rd, wr = Unix.pipe () in
-        let pid = Unix.create_process "tail" [| "tail"; "-c"; Printf.sprintf "+%d" (start + 1); "-f"; events |] Unix.stdin wr Unix.stderr in
-        Unix.close wr;
-        Fun.protect
-          ~finally:(fun () ->
-            (try Unix.kill pid Sys.sigterm with _ -> ());
-            (try ignore (Unix.waitpid [] pid) with _ -> ());
-            (try Unix.close rd with _ -> ()))
-          (fun () ->
-            let buf = Bytes.create 4096 in
-            let pending = Buffer.create 256 in
-            let rec loop () =
-              let now = Unix.gettimeofday () in
-              if now >= deadline then Error (Printf.sprintf "fennec agent: no dev event within %.0fs" timeout)
-              else
-                let wait = min 0.25 (deadline -. now) in
-                let readable, _, _ = Unix.select [ rd ] [] [] wait in
-                if readable = [] then
-                  match liveness ~dir with
-                  | `Dead pid -> Error (dead_message pid)
-                  | `Alive | `Unknown -> loop ()
-                else
-                  let n = Unix.read rd buf 0 (Bytes.length buf) in
-                  if n = 0 then Error "fennec agent: event stream ended"
-                  else (
-                    Buffer.add_subbytes pending buf 0 n;
-                    let s = Buffer.contents pending in
-                    match find_sub s "\n" with
-                    | Some i ->
-                      let line = String.sub s 0 i in
-                      let id = Option.value (event_id line) ~default:(after + 1) in
-                      if id <= after || event_kind line = Some "ready" then loop ()
-                      else Ok (id, summarize_event line)
-                    | None -> loop ())
-            in
-            loop ())))
+  (* 1) anything already on disk past [after]? (also primes [saw_marker] from an in-flight build) *)
+  let scan_existing () =
+    if not (Sys.file_exists events) then None
+    else
+      In_channel.with_open_text events (fun ic ->
+        let rec loop () =
+          match input_line ic with
+          | line -> ( match verdict_of line with Some r -> Some r | None -> loop ())
+          | exception End_of_file -> None
+        in
+        loop ())
+  in
+  match scan_existing () with
+  | Some r -> Some r
+  | None ->
+    (* 2) tail for newly-appended lines until a settle, the bound, or the server dying *)
+    let start = (try (Unix.stat events).Unix.st_size with _ -> 0) in
+    let rd, wr = Unix.pipe () in
+    let pid = Unix.create_process "tail" [| "tail"; "-c"; Printf.sprintf "+%d" (start + 1); "-f"; events |] Unix.stdin wr Unix.stderr in
+    Unix.close wr;
+    Fun.protect
+      ~finally:(fun () ->
+        (try Unix.kill pid Sys.sigterm with _ -> ());
+        (try ignore (Unix.waitpid [] pid) with _ -> ());
+        (try Unix.close rd with _ -> ()))
+      (fun () ->
+        let buf = Bytes.create 4096 and pending = Buffer.create 256 in
+        let result = ref None and stop = ref false in
+        (* pull every COMPLETE line out of [pending]; set result + stop on the first settle *)
+        let drain () =
+          let rec go () =
+            let s = Buffer.contents pending in
+            match find_sub s "\n" with
+            | None -> ()
+            | Some i ->
+              let line = String.sub s 0 i in
+              Buffer.clear pending;
+              Buffer.add_string pending (String.sub s (i + 1) (String.length s - i - 1));
+              (match verdict_of line with Some r -> result := Some r; stop := true | None -> go ())
+          in
+          go ()
+        in
+        while not !stop do
+          let elapsed = Unix.gettimeofday () -. t0 in
+          let bound = if !saw_marker then timeout else grace in
+          if elapsed >= bound then stop := true
+          else
+            let readable, _, _ = (try Unix.select [ rd ] [] [] (min 0.2 (bound -. elapsed)) with _ -> ([], [], [])) in
+            if readable = [] then (match liveness ~dir with `Dead _ -> stop := true | _ -> ())
+            else
+              let n = (try Unix.read rd buf 0 (Bytes.length buf) with _ -> 0) in
+              if n = 0 then stop := true else (Buffer.add_subbytes pending buf 0 n; drain ())
+        done;
+        !result)
 
 (* The harness-AGNOSTIC feedback an editing agent should see after one tool ran: the next settled
    verdict (or an advisory timeout / "dev not running" line), followed by any NEW runtime HTTP errors
@@ -478,17 +490,26 @@ let wait_hook_next ~after ~dir ~timeout () =
    delivered verdict advances the cursor so each is reported once. A harness adapter wraps this text in
    its own injection JSON ({!Harness.render_feedback}) — the ONLY per-harness step. *)
 let feedback_text ~dir ~timeout ~input =
-  let after =
-    match explicit_after input with
-    | Some id -> id
-    | None -> ( match marked_after ~dir ~input with Some id -> id | None -> cursor_after ~dir)
-  in
-  let feedback =
-    match wait_hook_next ~after ~dir ~timeout () with
-    | Ok (id, s) -> set_cursor ~dir id; "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
-    | Error msg -> msg ^ "\n"
-  in
-  feedback ^ errors_note_for_hook ~dir
+  (* The always-on hook fires on EVERY edit in EVERY project; it must be SILENT unless a dev server is
+     actually live for this one. [`Unknown] (no journal here — a non-fennec edit) and [`Dead] (the
+     server was stopped/killed — the functional "detach": the stale hook just no-ops) both return ""
+     so the harness injects nothing. Only [`Alive] waits for + reports a verdict. *)
+  match liveness ~dir with
+  | `Unknown | `Dead _ -> ""
+  | `Alive ->
+    let after =
+      match explicit_after input with
+      | Some id -> id
+      | None -> ( match marked_after ~dir ~input with Some id -> id | None -> cursor_after ~dir)
+    in
+    let feedback =
+      match wait_settle ~after ~dir ~grace:(Float.min inert_grace timeout) ~timeout () with
+      | Some (id, s) -> set_cursor ~dir id; "Fennec dev feedback after this tool:\n" ^ s ^ "\n"
+      (* None = an inert edit (nothing the watcher rebuilds), or a build slower than [timeout]; the
+         cursor stays put, so the next hook picks the verdict up. Stay quiet rather than nag. *)
+      | None -> ""
+    in
+    feedback ^ errors_note_for_hook ~dir
 
 let status ~dir =
   let status = status_path ~dir in
@@ -567,12 +588,39 @@ let%test_unit "plain post-tool hook catches already-settled feedback without mar
       chk "the read cursor advances" (contains_ text "second feedback");
       chk "a delivered verdict is not replayed" (not (contains_ text "settled before hook ran")))
 
-let%test_unit "feedback_text on timeout is an advisory line, not a crash" =
+(* the always-on hook must be INVISIBLE unless there is a live server with a verdict to give. *)
+let%test_unit "feedback_text is silent on an inert edit (alive, no verdict within grace)" =
   let chk = Fennec_hunt_unit.check in
   with_temp_agent (fun dir ->
-      let _t = start ~dir ~root:"/tmp/fennec-agent-test" () in
-      let text = feedback_text ~dir ~timeout:0.01 ~input:"{}" in
-      chk "timeout message visible" (contains_ text "no dev event"))
+      let _t = start ~dir ~root:"/tmp/fennec-agent-test" () in (* status pid = us ⇒ Alive *)
+      let text = feedback_text ~dir ~timeout:0.05 ~input:"{}" in
+      chk "no verdict ⇒ empty (no advisory, no crash)" (text = ""))
+
+let%test_unit "feedback_text is silent when the dev server is dead (functional detach on kill)" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit t ~kind:"reload" ~summary:"a verdict from before the server died" ();
+      write_file (status_path ~dir) "pid=999999\nroot=/tmp/x\n"; (* a pid that does not exist ⇒ Dead *)
+      let text = feedback_text ~dir ~timeout:0.1 ~input:"{}" in
+      chk "dead server ⇒ no injection" (text = ""))
+
+let%test_unit "feedback_text is silent with no journal at all (a non-fennec edit elsewhere)" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      (* no [start] ⇒ no status file ⇒ liveness Unknown *)
+      let text = feedback_text ~dir ~timeout:0.1 ~input:"{}" in
+      chk "no server here ⇒ no injection" (text = ""))
+
+let%test_unit "feedback_text skips the building marker and returns the settle past it" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_agent (fun dir ->
+      let t = start ~dir ~root:"/tmp/fennec-agent-test" () in
+      emit t ~kind:"building" ~summary:"building…" ();
+      emit t ~kind:"reload" ~summary:"index.mlx changed · backend restart" ();
+      let text = feedback_text ~dir ~timeout:0.2 ~input:"{}" in
+      chk "building marker not injected" (not (contains_ text "building"));
+      chk "the settle past it is" (contains_ text "index.mlx changed"))
 
 let%test_unit "status reports latest id and liveness" =
   let chk = Fennec_hunt_unit.check in

@@ -13,8 +13,8 @@ type result = { harness : string; path : string; changed : bool; message : strin
 type t = {
   id : string;                                              (* stable key: "claude" | "codex" | "vibe" *)
   detect : unit -> bool;                                    (* env sniff so `--attach` self-registers *)
-  install : root:string -> agent_dir:string -> result;
-  uninstall : root:string -> result;
+  install : unit -> result;                                 (* one universal, project-agnostic entry *)
+  uninstall : unit -> result;
   render_feedback : event:string -> text:string -> string;
 }
 
@@ -61,37 +61,27 @@ let absolute_exe () =
   let exe = Sys.executable_name in
   if Filename.is_relative exe then Filename.concat (Sys.getcwd ()) exe else exe
 
-(* a stable per-project marker, baked as a trailing comment into our hook command. It makes install
-   idempotent (we recognise our own entry), merge-safe (we replace only it), and uninstall precise. *)
-let marker ~root = "fennec-fastlane:" ^ Digest.to_hex (Digest.string root)
+(* ONE stable marker, baked as a trailing comment into our hook command. Constant (not per-project)
+   because the installed hook is now UNIVERSAL — a single entry per harness serves every fennec repo —
+   so the marker just identifies "our entry" for idempotent install, merge-safe replace, precise
+   uninstall. *)
+let marker = "fennec-fastlane"
 
-(* The hook command every harness installs: a short python guard that runs `fennec agent hook` ONLY
-   when the tool fired inside this project root (so one global settings file serves many repos), then
-   execs the SAME fennec binary that installed it, telling it which harness called so the feedback is
-   wrapped in the right shape (`--harness <id>`). The trailing `# fennec-fastlane:<hash>` is the marker. *)
-let guarded_command ~harness_id ~root ~agent_dir =
-  let py =
-    Printf.sprintf
-      "import json, os, sys\n\
-       root=%S\n\
-       agent_dir=%S\n\
-       exe=%S\n\
-       harness=%S\n\
-       try:\n\
-       \    data=json.load(sys.stdin)\n\
-       except Exception:\n\
-       \    data={}\n\
-       cwd=data.get('cwd') or os.getcwd()\n\
-       try:\n\
-       \    active=os.path.commonpath([os.path.realpath(root), os.path.realpath(cwd)])==os.path.realpath(root)\n\
-       except Exception:\n\
-       \    active=False\n\
-       if not active:\n\
-       \    sys.exit(0)\n\
-       os.execv(exe, [exe, 'agent', 'hook', '--harness', harness, '--dir', agent_dir, '--timeout', '12'])"
-      root agent_dir (absolute_exe ()) harness_id
-  in
-  "python3 -c " ^ Filename.quote py ^ " # " ^ marker ~root
+(* The hook command every harness installs: re-exec the SAME fennec binary that installed it as
+   `agent hook --harness <id>`. No baked root or journal dir, and no python guard — `agent hook`
+   derives this project's journal from the editing cwd at runtime and stays SILENT unless a dev server
+   is live there (see {!Journal.feedback_text}). So one global entry serves every repo, costs ~0 when
+   idle, and needs no `python3` on PATH. The trailing `# fennec-fastlane` is the marker; `--harness`
+   selects the injection shape. *)
+let agent_command ~harness_id =
+  Filename.quote (absolute_exe ()) ^ " agent hook --harness " ^ harness_id ^ " # " ^ marker
+
+(* The PRE-tool mark command: snapshot the journal's latest id just BEFORE an edit, so the post-tool
+   hook ({!agent_command}) reports exactly THAT edit's verdict and skips any leftover/background settle
+   (a file-mutating Bash command between edits, a second agent on the same server). Project-agnostic
+   and silent (no stdout), like the hook; `--quiet` keeps the pre-tool hook from emitting anything. *)
+let mark_command () =
+  Filename.quote (absolute_exe ()) ^ " agent mark --quiet # " ^ marker
 
 (* ── the JSON-hooks kit: Claude Code + Codex both use a `hooks.PostToolUse[]` JSON file ─────────────
    (Codex's `hooks.json` mirrors Claude's `settings.json` shape; only the path, matcher and a trust
@@ -108,9 +98,9 @@ let hook_entry_json ~matcher ~command =
                 ("timeout", `Int 15);
                 ("statusMessage", `String "Fennec feedback...") ] ] ) ]
 
-let hook_json ~matcher ~command =
+let hook_json ~event ~matcher ~command =
   Yojson.Basic.pretty_to_string
-    (`Assoc [ ("hooks", `Assoc [ ("PostToolUse", `List [ hook_entry_json ~matcher ~command ]) ]) ])
+    (`Assoc [ ("hooks", `Assoc [ (event, `List [ hook_entry_json ~matcher ~command ]) ]) ])
   ^ "\n"
 
 let assoc_replace key value fields =
@@ -123,7 +113,7 @@ let assoc_replace key value fields =
 
 (* parse an existing JSON config, drop our previously-marked PostToolUse entry, append the fresh one,
    and re-serialise — leaving every other key and hook untouched. *)
-let merge_hook_json text ~matcher ~command ~marker =
+let merge_hook_json text ~event ~matcher ~command ~marker =
   let open Yojson.Basic in
   match from_string text with
   | `Assoc fields ->
@@ -134,14 +124,14 @@ let merge_hook_json text ~matcher ~command ~marker =
       | Some _ -> raise (Failure "existing hooks field is not a JSON object")
     in
     let current =
-      match List.assoc_opt "PostToolUse" hooks_fields with
+      match List.assoc_opt event hooks_fields with
       | None -> []
       | Some (`List xs) -> xs
-      | Some _ -> raise (Failure "existing PostToolUse hooks field is not a JSON array")
+      | Some _ -> raise (Failure ("existing " ^ event ^ " hooks field is not a JSON array"))
     in
     let keep entry = not (contains (to_string entry) marker) in
     let post = `List (List.filter keep current @ [ hook_entry_json ~matcher ~command ]) in
-    let hooks = `Assoc (assoc_replace "PostToolUse" post hooks_fields) in
+    let hooks = `Assoc (assoc_replace event post hooks_fields) in
     Ok (pretty_to_string (`Assoc (assoc_replace "hooks" hooks fields)) ^ "\n")
   | _ -> Error "existing config is not a JSON object; left unchanged"
   | exception Yojson.Json_error msg -> Error ("existing config is not valid JSON: " ^ msg)
@@ -154,50 +144,49 @@ let strip_hook_json text ~marker =
   match from_string text with
   | `Assoc fields -> (
     match List.assoc_opt "hooks" fields with
-    | Some (`Assoc hooks_fields) -> (
-      match List.assoc_opt "PostToolUse" hooks_fields with
-      | Some (`List current) ->
-        let kept = List.filter (fun e -> not (contains (to_string e) marker)) current in
-        if List.length kept = List.length current then Ok (text, false)
-        else
-          (* drop the PostToolUse key (and then the hooks key) entirely if our removal empties it, so a
-             detach leaves no residual empty block — a fully pristine config. *)
-          let hooks_fields = if kept = [] then List.remove_assoc "PostToolUse" hooks_fields else assoc_replace "PostToolUse" (`List kept) hooks_fields in
-          let fields = if hooks_fields = [] then List.remove_assoc "hooks" fields else assoc_replace "hooks" (`Assoc hooks_fields) fields in
-          Ok (pretty_to_string (`Assoc fields) ^ "\n", true)
-      | _ -> Ok (text, false))
+    | Some (`Assoc hooks_fields) ->
+      let changed = ref false in
+      (* drop our marked entry from EVERY event array (PreToolUse + PostToolUse alike); drop an event
+         key whose array we empty, then the hooks key if it empties — a fully pristine detach. *)
+      let hooks_fields =
+        List.filter_map
+          (fun (event, v) ->
+            match v with
+            | `List current ->
+              let kept = List.filter (fun e -> not (contains (to_string e) marker)) current in
+              if List.length kept <> List.length current then changed := true;
+              if kept = [] then None else Some (event, `List kept)
+            | _ -> Some (event, v))
+          hooks_fields
+      in
+      if not !changed then Ok (text, false)
+      else
+        let fields = if hooks_fields = [] then List.remove_assoc "hooks" fields else assoc_replace "hooks" (`Assoc hooks_fields) fields in
+        Ok (pretty_to_string (`Assoc fields) ^ "\n", true)
     | _ -> Ok (text, false))
   | _ -> Ok (text, false)
   | exception Yojson.Json_error msg -> Error ("existing config is not valid JSON: " ^ msg)
 
 (* the idempotent installer Claude + Codex share. Writes a fresh file when none exists; otherwise
    merges (replacing a stale fennec entry, preserving everything else). *)
-let install_json_file ~harness_id ~path ~matcher ~root ~agent_dir =
-  let command = guarded_command ~harness_id ~root ~agent_dir in
-  let marker = marker ~root in
-  let expected = hook_json ~matcher ~command in
-  match read_file path with
-  | Some text when contains text marker ->
-    if String.trim text = String.trim expected then
-      { harness = harness_id; path; changed = false; message = "hook config already installed" }
-    else (
-      match merge_hook_json text ~matcher ~command ~marker with
-      | Ok merged ->
-        write_file path merged;
-        { harness = harness_id; path; changed = true; message = "hook config refreshed; preserved existing settings" }
-      | Error message -> { harness = harness_id; path; changed = false; message })
-  | Some text when String.trim text <> "" -> (
-    match merge_hook_json text ~matcher ~command ~marker with
-    | Ok merged ->
-      write_file path merged;
-      { harness = harness_id; path; changed = true; message = "hook config installed; preserved existing settings" }
-    | Error message -> { harness = harness_id; path; changed = false; message })
-  | _ ->
-    write_file path expected;
-    { harness = harness_id; path; changed = true; message = "hook config installed" }
+(* Idempotently install ONE (event, command) entry into a nested-JSON hooks file, preserving every
+   other key and hook. Adapters call it once per event (PreToolUse mark, then PostToolUse hook) on the
+   same file; each merge replaces only its own marked entry and keeps the other's. *)
+let install_json_file ~harness_id ~path ~event ~matcher ~command =
+  let old = Option.value (read_file path) ~default:"" in
+  let merged =
+    if String.trim old <> "" then merge_hook_json old ~event ~matcher ~command ~marker
+    else Ok (hook_json ~event ~matcher ~command)
+  in
+  match merged with
+  | Error message -> { harness = harness_id; path; changed = false; message }
+  | Ok next ->
+    let changed = String.trim old <> String.trim next in
+    if changed then write_file path next;
+    { harness = harness_id; path; changed;
+      message = (if changed then "hook config installed; preserved existing settings" else "hook config already installed") }
 
-let uninstall_json_file ~harness_id ~path ~root =
-  let marker = marker ~root in
+let uninstall_json_file ~harness_id ~path =
   match read_file path with
   | None -> { harness = harness_id; path; changed = false; message = "nothing to remove (no config)" }
   | Some text -> (
@@ -214,24 +203,28 @@ let render_camel ~event ~text =
 
 (* ── tests: the harness-agnostic kit ─────────────────────────────────────────────────────────────*)
 
-let%test "guarded command carries the stable fennec marker + the baked harness id" =
-  (* the python body is shell-quoted, so assert the parts that survive: the trailing marker comment and
-     the baked `harness="<id>"` literal (double quotes survive single-quoting; a distinctive id proves
-     it is threaded through to the `--harness` exec) *)
-  let c = guarded_command ~harness_id:"vibe" ~root:"/tmp/project" ~agent_dir:"/tmp/agent" in
-  contains c "fennec-fastlane:" && contains c "harness=\"vibe\""
+let%test "agent command carries the marker + the baked harness id, and execs fennec agent hook" =
+  let c = agent_command ~harness_id:"vibe" in
+  contains c "fennec-fastlane" && contains c "--harness vibe" && contains c "agent hook"
 
 let%test "hook json includes the post-tool matcher and command" =
-  let json = hook_json ~matcher:"Edit|Write" ~command:"fennec agent hook" in
+  let json = hook_json ~event:"PostToolUse" ~matcher:"Edit|Write" ~command:"fennec agent hook" in
   contains json "\"PostToolUse\"" && contains json "fennec agent hook"
 
 let%test "merge preserves existing top-level settings" =
-  match merge_hook_json "{\n  \"model\": \"haiku\"\n}\n" ~matcher:"Edit" ~command:"fennec agent hook" ~marker:"fennec-fastlane:abc" with
+  match merge_hook_json "{\n  \"model\": \"haiku\"\n}\n" ~event:"PostToolUse" ~matcher:"Edit" ~command:"fennec agent hook" ~marker:"fennec-fastlane:abc" with
   | Ok json -> contains json "\"model\": \"haiku\"" && contains json "\"hooks\""
   | Error _ -> false
 
+let%test "merge of a PreToolUse entry preserves an existing PostToolUse one" =
+  (* installing the mark (pre) must not clobber the hook (post) — adapters install both into one file *)
+  let with_post = "{\n  \"hooks\": {\"PostToolUse\": [{\"matcher\":\"Edit\",\"hooks\":[{\"type\":\"command\",\"command\":\"post # fennec-fastlane\"}]}]}\n}\n" in
+  match merge_hook_json with_post ~event:"PreToolUse" ~matcher:"Edit" ~command:"mark # fennec-fastlane" ~marker:"fennec-fastlane" with
+  | Ok json -> contains json "\"PreToolUse\"" && contains json "\"PostToolUse\"" && contains json "post # fennec-fastlane" && contains json "mark # fennec-fastlane"
+  | Error _ -> false
+
 let%test "merge refuses non-object settings" =
-  match merge_hook_json "[]" ~matcher:"Edit" ~command:"fennec agent hook" ~marker:"fennec-fastlane:abc" with
+  match merge_hook_json "[]" ~event:"PostToolUse" ~matcher:"Edit" ~command:"fennec agent hook" ~marker:"fennec-fastlane:abc" with
   | Ok _ -> false
   | Error msg -> contains msg "not a JSON object"
 
@@ -247,7 +240,7 @@ let%test "merge replaces the marked fennec hook and keeps unrelated hooks" =
     \  }\n\
      }"
   in
-  match merge_hook_json old ~matcher:"Edit" ~command:"fennec agent hook # fennec-fastlane:abc" ~marker:"fennec-fastlane:abc" with
+  match merge_hook_json old ~event:"PostToolUse" ~matcher:"Edit" ~command:"fennec agent hook # fennec-fastlane:abc" ~marker:"fennec-fastlane:abc" with
   | Error _ -> false
   | Ok json ->
     contains json "echo keep" && contains json "echo stop" && contains json "fennec agent hook" && not (contains json "echo old")

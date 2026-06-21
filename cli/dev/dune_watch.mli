@@ -42,8 +42,11 @@ val strip_ansi : string -> string
     reuse by the diagnostics parser. *)
 val find_sub : string -> string -> int option
 
-(** A build cycle that has fully settled, or the watcher process exiting. *)
+(** A build cycle starting, fully settled, or the watcher process exiting. *)
 type event =
+  | Build_started
+      (** the watcher began a rebuild (dune's "NEW BUILD"), emitted once per cycle BEFORE the settle —
+          lets a consumer (the agent hook) tell a real build in progress from an inert edit. *)
   | Settled_build of {
       outcome : outcome;
       triggers : string list;  (** the "(… changed)" descriptions seen since the last settle *)
