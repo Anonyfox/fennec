@@ -541,7 +541,8 @@ let agent_cmd =
     in
     let go dir quiet =
       let input = try In_channel.input_all stdin with _ -> "" in
-      let id = Fennec_fastlane.Journal.mark ~dir:(state_dir dir) ~input in
+      (* SAME resolution as the hook, so the pre-edit mark and the post-edit hook share one journal *)
+      let id = Fennec_fastlane.Journal.mark ~dir:(Fennec_fastlane.Journal.resolve_dir ?override:dir ~input ()) ~input in
       if not quiet then Printf.printf "%d\n" id;
       0
     in
@@ -557,7 +558,10 @@ let agent_cmd =
     let go dir timeout harness_id =
       let input = try In_channel.input_all stdin with _ -> "" in
       let harness = Option.value (Fennec_fastlane.Registry.find harness_id) ~default:Fennec_fastlane.Claude.adapter in
-      (match Fennec_fastlane.Hook.run ~harness ~dir:(state_dir dir) ~timeout ~input with "" -> () | out -> print_endline out);
+      (* resolve the journal from the PAYLOAD (edited file's project), so this one global hook talks to
+         the right project among many — not whatever cwd the harness happened to spawn us in *)
+      let agent_dir = Fennec_fastlane.Journal.resolve_dir ?override:dir ~input () in
+      (match Fennec_fastlane.Hook.run ~harness ~dir:agent_dir ~timeout ~input with "" -> () | out -> print_endline out);
       0
     in
     Cmd.v

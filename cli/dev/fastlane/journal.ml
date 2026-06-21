@@ -177,6 +177,46 @@ let unescape_json_string s =
   go 0;
   Buffer.contents b
 
+(* ── project resolution: which journal does THIS edit's hook talk to? ─────────────────────────────
+   The post-edit hook is ONE global, project-agnostic entry firing on every edit in every repo, so it
+   must resolve the RIGHT project's journal — airtight across many projects, in parallel and over time.
+   The journals are isolated by [default_dir]'s md5(root), so correct resolution IS isolation. *)
+
+(* the fennec project root for [start]: the nearest ancestor (inclusive) holding a [dune-project], else
+   [start] itself. Mirrors the dev server's own root notion, so a hook resolving from an edit's path
+   lands on exactly the journal that server writes. *)
+let project_root_of ~start =
+  let rec go dir =
+    if Sys.file_exists (Filename.concat dir "dune-project") then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then start else go parent
+  in
+  go start
+
+(* Resolve the journal dir for a hook/mark invocation. Priority: an explicit [override] (--dir); else
+   the EDITED FILE's project (its absolute [file_path] from the payload — robust to wherever the harness
+   spawned the hook, and correct even when one session edits across projects); else the session [cwd]
+   from the payload; else the process cwd. [mark] and [hook] both call this, so a pre/post pair always
+   lands on the same journal. *)
+let resolve_dir ?override ~input () =
+  match override with
+  | Some d when d <> "" -> d
+  | _ ->
+    let from_file =
+      match find_string_field input "file_path" with
+      | Some f ->
+        let f = unescape_json_string f in
+        if Filename.is_relative f then None else Some (Filename.dirname f)
+      | None -> None
+    in
+    let from_cwd = match find_string_field input "cwd" with Some c -> Some (unescape_json_string c) | None -> None in
+    let start = match from_file with Some d -> d | None -> ( match from_cwd with Some c -> c | None -> Sys.getcwd ()) in
+    (* canonicalise (resolve symlinks) so we agree with the dev server, whose root came from getcwd():
+       e.g. an edit under /tmp/p (→ /private/tmp/p) must hash to the same journal key, not a sibling. *)
+    let start = try Unix.realpath start with _ -> start in
+    default_dir ~root:(project_root_of ~start)
+
 let summarize_event line =
   match find_string_field line "summary" with
   | Some s -> unescape_json_string s
@@ -621,6 +661,49 @@ let%test_unit "feedback_text skips the building marker and returns the settle pa
       let text = feedback_text ~dir ~timeout:0.2 ~input:"{}" in
       chk "building marker not injected" (not (contains_ text "building"));
       chk "the settle past it is" (contains_ text "index.mlx changed"))
+
+(* ── project resolution (the airtight-multi-project core) ── *)
+let with_temp_project f =
+  let proj = Filename.concat (Filename.get_temp_dir_name ()) (Printf.sprintf "fennec-proj-%d-%f" (Unix.getpid ()) (Unix.gettimeofday ())) in
+  Fun.protect
+    ~finally:(fun () -> ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote proj))))
+    (fun () ->
+      mkdir_p (Filename.concat proj "sub");
+      write_file (Filename.concat proj "dune-project") "(lang dune 3.0)\n";
+      f proj)
+
+let%test_unit "resolve_dir: explicit override wins" =
+  Fennec_hunt_unit.check "override used verbatim"
+    (resolve_dir ~override:"/x/agent" ~input:{|{"tool_input":{"file_path":"/a/b.ml"}}|} () = "/x/agent")
+
+let%test_unit "resolve_dir: an absolute file_path lands on THAT file's project, not the cwd" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_project (fun proj ->
+      (* cwd points at a DIFFERENT place — the file's project must win (cross-project correctness) *)
+      let input = Printf.sprintf {|{"cwd":"/somewhere/else","tool_input":{"file_path":%S}}|} (Filename.concat proj "sub/f.ml") in
+      chk "resolved to the edited file's project journal" (resolve_dir ~input () = default_dir ~root:(Unix.realpath proj)))
+
+let%test_unit "resolve_dir: no file_path falls back to the payload cwd's project" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_project (fun proj ->
+      let input = Printf.sprintf {|{"cwd":%S}|} (Filename.concat proj "sub") in
+      chk "resolved via cwd to the project root" (resolve_dir ~input () = default_dir ~root:(Unix.realpath proj)))
+
+let%test_unit "resolve_dir: a relative file_path is ignored in favour of the cwd" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_project (fun proj ->
+      let input = Printf.sprintf {|{"cwd":%S,"tool_input":{"file_path":"sub/rel.ml"}}|} proj in
+      chk "relative path skipped, cwd used" (resolve_dir ~input () = default_dir ~root:(Unix.realpath proj)))
+
+let%test_unit "resolve_dir: two different projects resolve to two different journals (no cross-talk)" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_project (fun a ->
+      with_temp_project (fun b ->
+          let ia = Printf.sprintf {|{"tool_input":{"file_path":%S}}|} (Filename.concat a "sub/x.ml") in
+          let ib = Printf.sprintf {|{"tool_input":{"file_path":%S}}|} (Filename.concat b "sub/y.ml") in
+          chk "A resolves to A" (resolve_dir ~input:ia () = default_dir ~root:(Unix.realpath a));
+          chk "B resolves to B" (resolve_dir ~input:ib () = default_dir ~root:(Unix.realpath b));
+          chk "A and B are distinct journals" (resolve_dir ~input:ia () <> resolve_dir ~input:ib ())))
 
 let%test_unit "status reports latest id and liveness" =
   let chk = Fennec_hunt_unit.check in

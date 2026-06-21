@@ -13,6 +13,14 @@ val default_dir : root:string -> string
 (** Default state directory for [root], using [FENNEC_AGENT_DIR] when set, then
     [XDG_STATE_HOME], then [$HOME/.local/state]. *)
 
+val resolve_dir : ?override:string -> input:string -> unit -> string
+(** Resolve the journal dir for a post-edit hook / pre-edit mark from the harness PAYLOAD, so the ONE
+    global project-agnostic hook talks to the RIGHT project among many — in parallel and over time.
+    Priority: [override] (--dir) > the edited file's project (an absolute [file_path] -> its
+    [dune-project] root) > the payload [cwd]'s project > the process cwd. Both the mark and the hook
+    resolve identically, so a pre/post pair always shares one journal. Journals are isolated by
+    {!default_dir}'s md5(root), so correct resolution is full isolation — no cross-project talk. *)
+
 val start : ?dir:string -> ?port:int -> root:string -> unit -> t
 (** Create the state directory, truncate the event journal for this dev session,
     and write status metadata. *)
