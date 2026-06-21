@@ -51,7 +51,21 @@ let server_dune ~comp_lib =
      (executable\n\
     \ (name server)\n\
     \ (modes byte exe)\n\
-    \ (libraries fennec fennec.fur fennec.fur.html fennec.web %s))\n"
+    \ (libraries fennec fennec.fur fennec.fur.html fennec.web %s))\n\
+     \n\
+     ; `fennec dev` builds under a custom `fastdev` profile (= dev minus `-g`) for fast incremental\n\
+     ; relinks. This (env) makes that profile behave: force js_of_ocaml SEPARATE compilation (dune only\n\
+     ; auto-enables it for the built-in `dev` profile, so a custom one would fall back to slow\n\
+     ; whole-program jsoo on every client edit) and drop source maps (no `-g`, so they'd map to nothing\n\
+     ; and jsoo would warn). `fennec dev --debug` uses the standard `dev` profile instead.\n\
+     (env\n\
+    \ (fastdev\n\
+    \  (ocamlc_flags\n\
+    \   (:standard \\ -g))\n\
+    \  (js_of_ocaml\n\
+    \   (compilation_mode separate)\n\
+    \   (flags\n\
+    \    (:standard \\ --source-map-inline --source-map --sourcemap)))))\n"
     comp_lib
 
 let hello_mlx =

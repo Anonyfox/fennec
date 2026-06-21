@@ -61,9 +61,14 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      test`'s `_build/default` (and vice-versa). The server exe (+ its sibling assets dir) is re-pointed
      to the same root. See {!Build_dir}. *)
   let root = Sys.getcwd () in
+  (* boot phase timing (FENNEC_DEV_DEBUG=1) — answers "where do the seconds before READY go" *)
+  let boot_t = now () in
+  let boot_debug = match Sys.getenv_opt "FENNEC_DEV_DEBUG" with Some ("1" | "on" | "true" | "yes") -> true | _ -> false in
+  let mark name = if boot_debug then ef "[fennec dev:boot] %-14s +%6.0f ms\n%!" name ((now () -. boot_t) *. 1000.) in
   Build_dir.export ~root;
   let exe = Build_dir.retarget ~root exe in
   Stublibs.ensure ();
+  mark "stublibs";
 
   (* ═══════════ boot: children (esbuild + warm test worker), dune --watch, backend, agent journal ═══════════ *)
 
@@ -80,6 +85,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   done;
   if Sys.file_exists worker_socket then Unix.putenv Dev_proto.env_esbuild_worker worker_socket
   else Ui.notice ui Ui.Info "esbuild worker did not start — falling back to cold builds";
+  mark "esbuild-worker";
 
   (* Unit feedback in the dev loop. Discover colocated inline-test runners plus conventional
      *_test dune test executables under the watched app root, build them as watch targets, then
@@ -127,7 +133,9 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      falls back to cold via the worker's load-failed sentinel. (Same default as Dune_watch's profile.) *)
   let dev_profile = Build_dir.profile () in
   (try ignore (Sys.command (Printf.sprintf "dune build --profile %s cli/dev/worker/fennec_test_worker.bc >/dev/null 2>&1" dev_profile)) with _ -> ());
+  mark "worker-build";
   start_test_worker ();
+  mark "worker-spawn";
   (* with a worker active, the watch must also build the bytecode test targets (.bc → the test .cmo +
      app .cma's) so a settle has them ready for the worker to load *)
   let warm_targets () = if !test_worker <> None then Dev_tests.byte_targets dev_tests else [] in
@@ -136,12 +144,15 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      lock, `dune describe` errors ("build directory is locked"), so the warm worker could never derive
      a test's app chain and every test would fall back to cold. Best-effort; safe if it fails. *)
   Dev_tests.prime_describe dev_tests;
+  mark "describe";
   let dw = ref (Dune_watch.start (targets @ initial_test_targets @ warm_targets ())) in
+  mark "watch-start";
   let control_path = tmp_socket "fennec-lr" in
   (* the dev port base: --port if given, else 4000 (the server's own default). Set FENNEC_PORT
      explicitly so the supervisor and server agree, and so the banner can show the gateway URL. *)
   let dev_base = Option.value port ~default:4000 in
   let mongo = Mongo_rs.ensure_dev ~root:(Sys.getcwd ()) ~base_port:dev_base () in
+  mark "mongo-backend";
   let agent =
     match agent_dir with
     | None -> None
@@ -193,6 +204,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
      handler can reclaim/name the holder; chatter is dropped; anything else is the user's app log. *)
   let on_line : Server_proc.parsed -> unit = function
     | Server_proc.Urls urls ->
+      mark "READY (server bound)";
       (match !server with Up up -> up.busy_port <- None (* it bound — any earlier "port busy" is stale *) | Down -> ());
       Ui.ready ui ~ms:!last_build_ms ~urls ~gateway:gateway_url ~backend:(Mongo_rs.summary ());
       if not !agent_ready_sent then begin
@@ -227,6 +239,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
       if Artifact.bytecode_ready exe then
         match Server_proc.start ~exe ~env:dev_env with
         | Some proc ->
+          mark "server-spawned";
           server := Up { proc; busy_port = None; last_exe = mtime exe };
           Assets.seed assets;
           (* re-record so the pidfile lists the NEW server pid, not the dead old one we just killed
@@ -273,6 +286,7 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   (* ═══════════ build outcomes: a green settle (restart / reload / css / tests) or a failure ═══════════ *)
 
   let on_build_ok triggers dur =
+    mark "build-settled";
     Crash_limiter.reset limiter;
     dune_exits := 0;
     last_build_ms := dur;

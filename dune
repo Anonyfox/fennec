@@ -20,8 +20,15 @@
  ; custom profile silently falls back to WHOLE-PROGRAM jsoo, which re-translates the entire client image
  ; (runtime + every lib + app) on every edit (~0.64s here vs ~0.28s incremental — and the client bundle
  ; is the long pole of `@dev`). So we must force `separate` back on, or the -g win is more than erased.
+ ; No `-g`, so the bytecode carries no debug info — which means jsoo's source maps would map to
+ ; nothing. dune still requests them in a dev-like profile, so jsoo warns ("--source-map enabled but
+ ; compiled with no debugging information") and wastes time emitting useless maps on every client
+ ; rebuild. Drop the source-map flags here so `fennec dev`'s frontend builds are clean + a touch faster.
+ ; (Source-mapped debugging is still available via `fennec dev --debug`, which uses the `dev` profile.)
  (fastdev
   (ocamlc_flags
    (:standard \ -g))
   (js_of_ocaml
-   (compilation_mode separate))))
+   (compilation_mode separate)
+   (flags
+    (:standard \ --source-map-inline --source-map --sourcemap)))))
