@@ -24,7 +24,15 @@ let () =
   check "'dunelike' is NOT ours (no loose substring)" (not (P.comm_is_ours "dunelike"));
   check "'x.bcfg' is NOT ours (.bc must be a suffix)" (not (P.comm_is_ours "x.bcfg"));
   check "'sleep' is NOT ours" (not (P.comm_is_ours "sleep"));
-  check "'preserve' is NOT ours" (not (P.comm_is_ours "preserve"))
+  check "'preserve' is NOT ours" (not (P.comm_is_ours "preserve"));
+  (* the graceful-SIGTERM gate: the supervisor + its esbuild worker (both `fennec`), NOT dune/server
+     (which the supervisor restarts, so we must let IT take them down, not signal them directly) *)
+  print_endline "Pidfile.comm_is_fennec:";
+  check "fennec is a fennec-cli proc" (P.comm_is_fennec "fennec");
+  check "an abs fennec.exe path is a fennec-cli proc" (P.comm_is_fennec "/abs/_build/default/cli/fennec.exe");
+  check "dune is NOT a fennec-cli proc (let the supervisor take it down)" (not (P.comm_is_fennec "dune"));
+  check "ocamlrun (the test worker) is NOT a fennec-cli proc" (not (P.comm_is_fennec "ocamlrun"));
+  check "a server.bc is NOT a fennec-cli proc" (not (P.comm_is_fennec "/abs/server.bc"))
 
 (* reap_stale must be identity-safe: a recorded pid that has been recycled to an UNRELATED
    process (here a `sleep`, which is not one of our dune/server/worker binaries) must NOT be

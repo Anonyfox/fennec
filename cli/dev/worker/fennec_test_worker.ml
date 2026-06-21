@@ -29,6 +29,17 @@ let () = Dynlink.allow_unsafe_modules true (* the framework .cma's were built wi
    exit 75 simply also falls back to cold (which re-runs it correctly) — safe either way. *)
 let load_failed_exit = 75
 
+(* Never outlive the dev supervisor (our direct parent): if `fennec dev` dies — even by SIGKILL, which
+   it can't clean up after, and with no next run to reap us — we'd otherwise linger forever holding the
+   socket. We capture the parent pid at startup and, between requests, exit the moment getppid() stops
+   matching it (a reparent to init/launchd/a subreaper). Mirrors the server's parent-watch
+   (fennec/app/fennec.ml); immune to pid recycling (getppid is our real current parent). Polled while
+   IDLE in BOTH the accept loop AND the per-connection request loop — the persistent client connection
+   may not EOF on the supervisor's death (a sibling can inherit the fd), so a select-timeout poll, not
+   the EOF, is what guarantees we go. *)
+let parent = Unix.getppid ()
+let parent_gone () = Unix.getppid () <> parent
+
 (* ── tiny IO helpers (blocking, Stdlib + Unix only) ──────────────────────────────────────────── *)
 
 let write_all fd s =
@@ -170,19 +181,25 @@ let handle_conn fd =
     write_all fd r.output
   in
   let rec loop () =
-    match read_line_fd fd with
-    | None -> () (* client hung up *)
-    | Some "PING" -> write_all fd "PONG\n"; loop ()
-    | Some "SHUTDOWN" -> write_all fd "BYE\n"; exit 0
-    | Some "RUN" ->
-      let chain = read_chain fd in
-      let r = run_chain chain in
-      (* the worker's own structured log line (stderr → the dev log) *)
-      Printf.eprintf "[fennec-test-worker] run: exit=%d total=%.1fms dynlink=%.1fms run=%.1fms objs=%d\n%!"
-        r.child_exit (r.total_us /. 1000.) (r.dynlink_us /. 1000.) (r.run_us /. 1000.) (List.length chain);
-      respond_result r;
-      loop ()
-    | Some other -> write_all fd (Printf.sprintf "ERR unknown request %S\n" other); loop ()
+    (* poll for the supervisor's death between requests (the connection may never EOF), so we never
+       outlive `fennec dev` even while parked on a persistent connection *)
+    match Unix.select [ fd ] [] [] 0.25 with
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> loop ()
+    | [], _, _ -> if parent_gone () then exit 0 else loop ()
+    | _ -> (
+      match read_line_fd fd with
+      | None -> () (* client hung up *)
+      | Some "PING" -> write_all fd "PONG\n"; loop ()
+      | Some "SHUTDOWN" -> write_all fd "BYE\n"; exit 0
+      | Some "RUN" ->
+        let chain = read_chain fd in
+        let r = run_chain chain in
+        (* the worker's own structured log line (stderr → the dev log) *)
+        Printf.eprintf "[fennec-test-worker] run: exit=%d total=%.1fms dynlink=%.1fms run=%.1fms objs=%d\n%!"
+          r.child_exit (r.total_us /. 1000.) (r.dynlink_us /. 1000.) (r.run_us /. 1000.) (List.length chain);
+        respond_result r;
+        loop ()
+      | Some other -> write_all fd (Printf.sprintf "ERR unknown request %S\n" other); loop ())
   in
   loop ()
 
@@ -202,12 +219,18 @@ let () =
   Unix.listen srv 8;
   (* announce readiness so the supervisor's handshake can proceed deterministically *)
   Printf.eprintf "[fennec-test-worker] listening on %s\n%!" socket_path;
+  (* the accept is bounded by a short select so the parent-death check (see [parent_gone]) runs even
+     while no client is connected — we never outlive the supervisor that spawned us *)
   let rec accept_loop () =
-    match Unix.accept srv with
-    | fd, _ ->
-      (try handle_conn fd with _ -> ());
-      (try Unix.close fd with _ -> ());
-      accept_loop ()
+    match Unix.select [ srv ] [] [] 0.25 with
     | exception Unix.Unix_error (Unix.EINTR, _, _) -> accept_loop ()
+    | [], _, _ -> if parent_gone () then exit 0 else accept_loop () (* idle tick: parent alive? *)
+    | _ -> (
+      match Unix.accept srv with
+      | fd, _ ->
+        (try handle_conn fd with _ -> ());
+        (try Unix.close fd with _ -> ());
+        accept_loop ()
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> accept_loop ())
   in
   accept_loop ()

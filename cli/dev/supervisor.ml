@@ -260,7 +260,11 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     emit_verdict Verdict.Stopped;
     (match mongo with Some t -> Mongo_rs.stop t | None -> ());
     stop_test_worker ();
-    kill (Dune_watch.pid !dw);
+    (* WAIT for dune --watch to actually exit, don't just signal it: dune holds the build-dir lock and
+       only releases it (and leaves a CONSISTENT build dir) once it finishes its current action and
+       shuts down. Exiting while it is still winding down would hand the next `fennec dev` a held lock
+       and a half-written build dir. [Dune_watch.stop] is SIGTERM → wait → SIGKILL. *)
+    Dune_watch.stop !dw;
     kill worker_pid;
     (try Sys.remove control_path with _ -> ());
     (try Sys.remove worker_socket with _ -> ());

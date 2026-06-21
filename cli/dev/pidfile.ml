@@ -58,6 +58,23 @@ let comm_is_ours (comm : string) : bool =
    now holds the pid. Verifying the command name first ({!comm_is_ours}) makes that impossible. *)
 let is_fennec_proc pid = match proc_comm pid with None -> false | Some name -> comm_is_ours name
 
+(* A fennec-COMMAND process: the dev supervisor, or an internal worker that shares the command name
+   (today only `fennec __esbuild-worker`). These are the ones we SIGTERM for a GRACEFUL takedown — the
+   supervisor's own signal handler then stops its server (frees the port), its dune --watch (releases
+   the build lock + leaves a CONSISTENT build dir, NOT a half-written one), its test worker and mongo,
+   and removes this pidfile. The esbuild worker isn't auto-restarted, so signalling it directly is
+   safe; we must NOT signal dune/server directly, as a still-live supervisor would just respawn them. *)
+let comm_is_fennec (comm : string) : bool = starts_with (Filename.basename comm) "fennec"
+let is_fennec_cli pid = match proc_comm pid with None -> false | Some name -> comm_is_fennec name
+
+(* dune holds the build-dir lock; it frees the moment the process exits, so we identify dune procs to
+   wait them out before the next `dune --watch` starts (else it queues behind a dying one). *)
+let comm_is_dune (comm : string) : bool = Filename.basename comm = "dune"
+let is_dune pid = match proc_comm pid with None -> false | Some name -> comm_is_dune name
+
+(* cheap liveness probe (no [ps]) for the bounded wait loops; ESRCH ⇒ gone *)
+let proc_alive pid = match Unix.kill pid 0 with () -> true | exception _ -> false
+
 let reap_stale ~cwd =
   match find_root cwd with
   | None -> ()
@@ -66,8 +83,35 @@ let reap_stale ~cwd =
     match read_all path with
     | None -> ()
     | Some body ->
-      let pids = parse body in
-      let killed = List.fold_left (fun acc pid -> if is_fennec_proc pid then (try Unix.kill pid Sys.sigkill; true with _ -> acc) else acc) false pids in
+      let recorded = parse body in
+      (* 1. GRACEFUL: ask the previous supervisor to shut itself (and its tree) down cleanly. *)
+      let supervisors = List.filter is_fennec_cli recorded in
+      List.iter (fun p -> try Unix.kill p Sys.sigterm with _ -> ()) supervisors;
+      (* 2. wait for that clean exit — the handler removes this pidfile once it is DONE (server stopped,
+         dune --watch fully shut down so the lock is free + the build dir consistent). Poll the FILE,
+         not process liveness: a reaped child can linger as a zombie until ITS parent reaps it, which we
+         are not, so a [kill 0] poll would over-wait. Bounded; a previous run that died without removing
+         the file (a crash / kill -9) just falls through to the backstop below. *)
+      if supervisors <> [] then begin
+        let i = ref 0 in
+        while !i < 20 && Sys.file_exists path do
+          Unix.sleepf 0.1;
+          incr i
+        done
+      end;
+      (* 3. BACKSTOP: SIGKILL anything of OURS still alive — a hung supervisor, or orphans a previous
+         `kill -9` left with no supervisor to reap them. The identity gate keeps a recycled pid (now an
+         unrelated process) safe. *)
+      List.iter (fun pid -> if is_fennec_proc pid then (try Unix.kill pid Sys.sigkill with _ -> ())) recorded;
       (try Sys.remove path with _ -> ());
-      (* give a killed dune daemon a moment to release its build lock *)
-      if killed then Unix.sleepf 0.3)
+      (* 4. wait out the dune procs so their build lock is actually free before the caller starts a new
+         watch (replaces the old fixed 0.3s, which was both too long for a clean handoff and too short
+         for a busy one). *)
+      let dunes = List.filter is_dune recorded in
+      if dunes <> [] then begin
+        let i = ref 0 in
+        while !i < 40 && List.exists proc_alive dunes do
+          Unix.sleepf 0.05;
+          incr i
+        done
+      end)
