@@ -102,6 +102,7 @@ let render_feedback ~event:_ ~text =
 let adapter : Harness.t =
   { id = "vibe";
     detect = (fun () -> Harness.getenv "VIBE_SESSION_ID" <> None || Harness.getenv "MISTRAL_VIBE" <> None);
+    installed = (fun () -> Sys.file_exists (Filename.concat (Harness.home ()) ".vibe"));
     install;
     uninstall;
     render_feedback

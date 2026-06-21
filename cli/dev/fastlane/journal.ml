@@ -194,23 +194,50 @@ let project_root_of ~start =
   in
   go start
 
+(* first string element of a JSON array field, e.g. ["workspaceRoots":["/a","/b"]] -> "/a". Cline's
+   hook payload carries no "cwd"; its project root is the first workspaceRoots entry. *)
+let find_first_array_string text name =
+  match find_sub text ("\"" ^ name ^ "\"") with
+  | None -> None
+  | Some i ->
+    let n = String.length text in
+    let rec open_bracket j =
+      if j >= n then None
+      else match text.[j] with '[' -> Some (j + 1) | ':' | ' ' | '\t' | '\n' | '\r' -> open_bracket (j + 1) | _ -> None
+    in
+    (match open_bracket (i + String.length name + 2) with
+    | None -> None
+    | Some k ->
+      let rec to_quote j = if j >= n then None else match text.[j] with '"' -> Some (j + 1) | ']' -> None | _ -> to_quote (j + 1) in
+      (match to_quote k with
+      | None -> None
+      | Some s ->
+        let rec scan j esc =
+          if j >= n then None
+          else match (text.[j], esc) with '"', false -> Some (String.sub text s (j - s)) | '\\', false -> scan (j + 1) true | _ -> scan (j + 1) false
+        in
+        scan s false))
+
 (* Resolve the journal dir for a hook/mark invocation. Priority: an explicit [override] (--dir); else
-   the EDITED FILE's project (its absolute [file_path] from the payload — robust to wherever the harness
-   spawned the hook, and correct even when one session edits across projects); else the session [cwd]
-   from the payload; else the process cwd. [mark] and [hook] both call this, so a pre/post pair always
-   lands on the same journal. *)
+   the EDITED FILE's project (its absolute [file_path] / [filePath] from the payload — robust to wherever
+   the harness spawned the hook, and correct even across projects); else the session root from the
+   payload ([cwd], or Cline's [workspaceRoots][0]); else the process cwd. [mark] and [hook] both call
+   this, so a pre/post pair always lands on the same journal. *)
 let resolve_dir ?override ~input () =
   match override with
   | Some d when d <> "" -> d
   | _ ->
-    let from_file =
-      match find_string_field input "file_path" with
-      | Some f ->
-        let f = unescape_json_string f in
-        if Filename.is_relative f then None else Some (Filename.dirname f)
+    let abs_dir_of name =
+      match find_string_field input name with
+      | Some f -> let f = unescape_json_string f in if Filename.is_relative f then None else Some (Filename.dirname f)
       | None -> None
     in
-    let from_cwd = match find_string_field input "cwd" with Some c -> Some (unescape_json_string c) | None -> None in
+    let from_file = match abs_dir_of "file_path" with Some d -> Some d | None -> abs_dir_of "filePath" in
+    let from_cwd =
+      match find_string_field input "cwd" with
+      | Some c -> Some (unescape_json_string c)
+      | None -> ( match find_first_array_string input "workspaceRoots" with Some c -> Some (unescape_json_string c) | None -> None)
+    in
     let start = match from_file with Some d -> d | None -> ( match from_cwd with Some c -> c | None -> Sys.getcwd ()) in
     (* canonicalise (resolve symlinks) so we agree with the dev server, whose root came from getcwd():
        e.g. an edit under /tmp/p (→ /private/tmp/p) must hash to the same journal key, not a sibling. *)
@@ -529,11 +556,26 @@ let wait_settle ~after ~dir ~grace ~timeout () =
    explicit override in the payload, else the id we marked before the tool, else our read cursor; a
    delivered verdict advances the cursor so each is reported once. A harness adapter wraps this text in
    its own injection JSON ({!Harness.render_feedback}) — the ONLY per-harness step. *)
+(* Is this tool a file edit? Some harnesses (Cline) fire the post-tool hook on EVERY tool — reads,
+   greps, shell — so without this we'd grace-wait on each. The JSON harnesses already scope us via a
+   matcher, so their payload's tool name (if any) is an edit, and a payload with no tool name proceeds.
+   Heuristic over the tool name: most edit tools contain edit/write/patch/replace/apply/create. *)
+let is_edit_tool input =
+  match (match find_string_field input "tool_name" with Some t -> Some t | None -> find_string_field input "toolName") with
+  | None -> true
+  | Some t ->
+    let n = String.lowercase_ascii (unescape_json_string t) in
+    let has s = find_sub n s <> None in
+    has "edit" || has "write" || has "patch" || has "replac" || has "apply" || has "new_file" || has "create" || has "modify"
+
 let feedback_text ~dir ~timeout ~input =
   (* The always-on hook fires on EVERY edit in EVERY project; it must be SILENT unless a dev server is
-     actually live for this one. [`Unknown] (no journal here — a non-fennec edit) and [`Dead] (the
-     server was stopped/killed — the functional "detach": the stale hook just no-ops) both return ""
-     so the harness injects nothing. Only [`Alive] waits for + reports a verdict. *)
+     actually live for this one. A non-file-edit tool (Cline fires us on reads/greps too) → "". Then
+     [`Unknown] (no journal here — a non-fennec edit) and [`Dead] (the server was stopped/killed — the
+     functional "detach") both return "" so the harness injects nothing. Only [`Alive] + a file edit
+     waits for + reports a verdict. *)
+  if not (is_edit_tool input) then ""
+  else
   match liveness ~dir with
   | `Unknown | `Dead _ -> ""
   | `Alive ->

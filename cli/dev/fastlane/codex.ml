@@ -65,12 +65,13 @@ let install_trust ~event ~command =
 let adapter : Harness.t =
   { id = "codex";
     detect = (fun () -> Harness.getenv "CODEX_THREAD_ID" <> None || Harness.getenv "CODEX_CI" <> None);
+    installed = (fun () -> Sys.file_exists (Filename.concat (Harness.home ()) ".codex"));
     install =
       (fun () ->
         let path = hooks_path () in
         let mark_cmd = Harness.mark_command () and hook_cmd = Harness.agent_command ~harness_id:"codex" in
-        let pre = Harness.install_json_file ~harness_id:"codex" ~path ~event:"PreToolUse" ~matcher ~command:mark_cmd in
-        let post = Harness.install_json_file ~harness_id:"codex" ~path ~event:"PostToolUse" ~matcher ~command:hook_cmd in
+        let pre = Harness.install_json_file ~harness_id:"codex" ~path ~event:"PreToolUse" ~matcher ~command:mark_cmd () in
+        let post = Harness.install_json_file ~harness_id:"codex" ~path ~event:"PostToolUse" ~matcher ~command:hook_cmd () in
         install_trust ~event:"pre_tool_use" ~command:mark_cmd;
         install_trust ~event:"post_tool_use" ~command:hook_cmd;
         { post with changed = pre.changed || post.changed });

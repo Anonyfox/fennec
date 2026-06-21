@@ -11,8 +11,9 @@ type result = { harness : string; path : string; changed : bool; message : strin
    user's other settings. [render_feedback] wraps the harness-agnostic feedback text ({!Journal.
    feedback_text}) in this harness's injection JSON — the single per-harness output difference. *)
 type t = {
-  id : string;                                              (* stable key: "claude" | "codex" | "vibe" *)
+  id : string;                                              (* stable key: "claude" | "codex" | "vibe" | … *)
   detect : unit -> bool;                                    (* env sniff so `--attach` self-registers *)
+  installed : unit -> bool;                                 (* harness present on this machine? gates auto-install so `dev --agent` never litters configs for harnesses you don't use *)
   install : unit -> result;                                 (* one universal, project-agnostic entry *)
   uninstall : unit -> result;
   render_feedback : event:string -> text:string -> string;
@@ -87,7 +88,10 @@ let mark_command () =
    (Codex's `hooks.json` mirrors Claude's `settings.json` shape; only the path, matcher and a trust
    step differ — those live in the adapters.) *)
 
-let hook_entry_json ~matcher ~command =
+(* [timeout] units differ by harness: Claude/Codex read seconds (default 15); Gemini reads
+   MILLISECONDS, so its adapter passes 15000. The extra [statusMessage] is Claude's; other JSON
+   harnesses ignore unknown fields. *)
+let hook_entry_json ?(timeout = 15) ~matcher ~command () =
   `Assoc
     [ ("matcher", `String matcher);
       ( "hooks",
@@ -95,12 +99,12 @@ let hook_entry_json ~matcher ~command =
           [ `Assoc
               [ ("type", `String "command");
                 ("command", `String command);
-                ("timeout", `Int 15);
+                ("timeout", `Int timeout);
                 ("statusMessage", `String "Fennec feedback...") ] ] ) ]
 
-let hook_json ~event ~matcher ~command =
+let hook_json ?timeout ~event ~matcher ~command () =
   Yojson.Basic.pretty_to_string
-    (`Assoc [ ("hooks", `Assoc [ (event, `List [ hook_entry_json ~matcher ~command ]) ]) ])
+    (`Assoc [ ("hooks", `Assoc [ (event, `List [ hook_entry_json ?timeout ~matcher ~command () ]) ]) ])
   ^ "\n"
 
 let assoc_replace key value fields =
@@ -113,7 +117,7 @@ let assoc_replace key value fields =
 
 (* parse an existing JSON config, drop our previously-marked PostToolUse entry, append the fresh one,
    and re-serialise — leaving every other key and hook untouched. *)
-let merge_hook_json text ~event ~matcher ~command ~marker =
+let merge_hook_json ?timeout text ~event ~matcher ~command ~marker =
   let open Yojson.Basic in
   match from_string text with
   | `Assoc fields ->
@@ -130,7 +134,7 @@ let merge_hook_json text ~event ~matcher ~command ~marker =
       | Some _ -> raise (Failure ("existing " ^ event ^ " hooks field is not a JSON array"))
     in
     let keep entry = not (contains (to_string entry) marker) in
-    let post = `List (List.filter keep current @ [ hook_entry_json ~matcher ~command ]) in
+    let post = `List (List.filter keep current @ [ hook_entry_json ?timeout ~matcher ~command () ]) in
     let hooks = `Assoc (assoc_replace event post hooks_fields) in
     Ok (pretty_to_string (`Assoc (assoc_replace "hooks" hooks fields)) ^ "\n")
   | _ -> Error "existing config is not a JSON object; left unchanged"
@@ -172,11 +176,11 @@ let strip_hook_json text ~marker =
 (* Idempotently install ONE (event, command) entry into a nested-JSON hooks file, preserving every
    other key and hook. Adapters call it once per event (PreToolUse mark, then PostToolUse hook) on the
    same file; each merge replaces only its own marked entry and keeps the other's. *)
-let install_json_file ~harness_id ~path ~event ~matcher ~command =
+let install_json_file ?timeout ~harness_id ~path ~event ~matcher ~command () =
   let old = Option.value (read_file path) ~default:"" in
   let merged =
-    if String.trim old <> "" then merge_hook_json old ~event ~matcher ~command ~marker
-    else Ok (hook_json ~event ~matcher ~command)
+    if String.trim old <> "" then merge_hook_json ?timeout old ~event ~matcher ~command ~marker
+    else Ok (hook_json ?timeout ~event ~matcher ~command ())
   in
   match merged with
   | Error message -> { harness = harness_id; path; changed = false; message }
@@ -197,9 +201,72 @@ let uninstall_json_file ~harness_id ~path =
       write_file path next;
       { harness = harness_id; path; changed = true; message = "fennec hook removed; preserved existing settings" })
 
-(* the two camelCase harnesses (Claude, Codex) share one injection shape *)
+(* ── script-file kit (Cline) ──────────────────────────────────────────────────────────────────────
+   Cline installs hooks as EXECUTABLE SCRIPT FILES named by the event (PreToolUse, PostToolUse) in a
+   hooks dir — not entries in a JSON/TOML config. We write a tiny shell wrapper that execs [command];
+   the marker comment identifies ours for idempotent re-install + precise removal, and lets us REFUSE
+   to clobber a user's own same-named hook. *)
+let install_script_file ~harness_id ~path ~command =
+  let body = "#!/bin/sh\n# " ^ marker ^ "\nexec " ^ command ^ "\n" in
+  match read_file path with
+  | Some existing when not (contains existing marker) ->
+    { harness = harness_id; path; changed = false; message = "left your existing hook untouched (not ours)" }
+  | Some existing when existing = body -> { harness = harness_id; path; changed = false; message = "hook script already installed" }
+  | _ ->
+    write_file path body;
+    (try Unix.chmod path 0o755 with _ -> ());
+    { harness = harness_id; path; changed = true; message = "hook script installed" }
+
+let uninstall_script_file ~harness_id ~path =
+  match read_file path with
+  | Some existing when contains existing marker ->
+    (try Sys.remove path with _ -> ());
+    { harness = harness_id; path; changed = true; message = "fennec hook script removed" }
+  | Some _ -> { harness = harness_id; path; changed = false; message = "left your existing hook untouched (not ours)" }
+  | None -> { harness = harness_id; path; changed = false; message = "no fennec hook present" }
+
+(* ── Cursor JSON kit ──────────────────────────────────────────────────────────────────────────────
+   ~/.cursor/hooks.json is {"version":1,"hooks":{<event>:[{command, matcher}]}} — a FLATTER entry than
+   Claude's nested {matcher, hooks:[{type, command}]}, plus a top-level version. Removal reuses the
+   generic {!strip_hook_json} (it just drops marked entries from each event's array, leaving version). *)
+let cursor_merge text ~event ~matcher ~command ~marker =
+  let open Yojson.Basic in
+  let base = match from_string text with `Assoc f -> f | _ -> [] | exception _ -> [] in
+  let hooks_fields = match List.assoc_opt "hooks" base with Some (`Assoc xs) -> xs | _ -> [] in
+  let current = match List.assoc_opt event hooks_fields with Some (`List xs) -> xs | _ -> [] in
+  let kept = List.filter (fun e -> not (contains (to_string e) marker)) current in
+  let entry = `Assoc [ ("command", `String command); ("matcher", `String matcher) ] in
+  let hooks_fields = assoc_replace event (`List (kept @ [ entry ])) hooks_fields in
+  let base = assoc_replace "version" (`Int 1) (assoc_replace "hooks" (`Assoc hooks_fields) base) in
+  pretty_to_string (`Assoc base) ^ "\n"
+
+let install_cursor_json ~harness_id ~path ~event ~matcher ~command =
+  let old = Option.value (read_file path) ~default:"" in
+  let next = cursor_merge old ~event ~matcher ~command ~marker in
+  let changed = String.trim old <> String.trim next in
+  if changed then write_file path next;
+  { harness = harness_id; path; changed;
+    message = (if changed then "hook config installed; preserved existing settings" else "hook config already installed") }
+
+(* Empty feedback (no live dev server / inert edit) renders to nothing for the harnesses that treat an
+   empty stdout as a no-op (Claude, Codex, Gemini, Vibe, Cursor). Cline needs a JSON object, so it gets
+   "{}" instead (see {!render_cline}). render_feedback is the single per-harness output step. *)
+
+(* Claude + Codex + Gemini share the camelCase shape. [event] is the harness's own event name (e.g.
+   "PostToolUse" for Claude, "AfterTool" for Gemini), echoed back from the payload. *)
 let render_camel ~event ~text =
-  "{\"hookSpecificOutput\":{\"hookEventName\":" ^ json_escape event ^ ",\"additionalContext\":" ^ json_escape text ^ "}}"
+  if String.trim text = "" then ""
+  else "{\"hookSpecificOutput\":{\"hookEventName\":" ^ json_escape event ^ ",\"additionalContext\":" ^ json_escape text ^ "}}"
+
+(* Cline: a [contextModification] string, injected as a <hook_context> block. Cline keys hooks by the
+   script's FILE name, so [event] is unused. It needs a JSON object on stdout — "{}" is the no-op. *)
+let render_cline ~event:_ ~text =
+  if String.trim text = "" then "{}" else "{\"contextModification\":" ^ json_escape text ^ "}"
+
+(* Cursor: a flat snake_case [additional_context]. (Cursor drops this on the floor as of 2026-06 — a
+   confirmed bug — but it's the documented shape, so the adapter lights up the day they fix it.) *)
+let render_cursor ~event:_ ~text =
+  if String.trim text = "" then "" else "{\"additional_context\":" ^ json_escape text ^ "}"
 
 (* ── tests: the harness-agnostic kit ─────────────────────────────────────────────────────────────*)
 
@@ -208,8 +275,35 @@ let%test "agent command carries the marker + the baked harness id, and execs fen
   contains c "fennec-fastlane" && contains c "--harness vibe" && contains c "agent hook"
 
 let%test "hook json includes the post-tool matcher and command" =
-  let json = hook_json ~event:"PostToolUse" ~matcher:"Edit|Write" ~command:"fennec agent hook" in
+  let json = hook_json ~event:"PostToolUse" ~matcher:"Edit|Write" ~command:"fennec agent hook" () in
   contains json "\"PostToolUse\"" && contains json "fennec agent hook"
+
+let%test "gemini-style ms timeout threads into the entry" =
+  let json = hook_json ~timeout:15000 ~event:"AfterTool" ~matcher:"write_file" ~command:"x" () in
+  contains json "\"AfterTool\"" && contains json "15000"
+
+let%test "render_camel/cline/cursor are empty-safe and carry the verdict" =
+  render_camel ~event:"AfterTool" ~text:"" = "" && render_cursor ~event:"x" ~text:"" = ""
+  && render_cline ~event:"x" ~text:"" = "{}"
+  && contains (render_camel ~event:"AfterTool" ~text:"build ok") "\"additionalContext\":\"build ok\""
+  && contains (render_cline ~event:"x" ~text:"build ok") "\"contextModification\":\"build ok\""
+  && contains (render_cursor ~event:"x" ~text:"build ok") "\"additional_context\":\"build ok\""
+
+let%test "cursor merge writes version:1 + a flat command/matcher entry, append-safe" =
+  let j = cursor_merge "" ~event:"postToolUse" ~matcher:"Write" ~command:"c # fennec-fastlane" ~marker:"fennec-fastlane" in
+  contains j "\"version\": 1" && contains j "\"postToolUse\"" && contains j "\"matcher\": \"Write\"" && contains j "\"command\""
+
+let%test "script-file install writes an exec wrapper + marker; refuses a non-ours file" =
+  let dir = Filename.concat (Filename.get_temp_dir_name ()) ("fennec-script-" ^ string_of_int (Unix.getpid ())) in
+  mkdir_p dir;
+  let p = Filename.concat dir "PostToolUse" in
+  Fun.protect ~finally:(fun () -> ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote dir))))
+    (fun () ->
+      let r = install_script_file ~harness_id:"cline" ~path:p ~command:"x # fennec-fastlane" in
+      let ours = match read_file p with Some b -> contains b marker && contains b "exec x" | None -> false in
+      write_file (Filename.concat dir "Other") "#!/bin/sh\necho hi\n";
+      let refused = (install_script_file ~harness_id:"cline" ~path:(Filename.concat dir "Other") ~command:"y # fennec-fastlane").changed = false in
+      r.changed && ours && refused)
 
 let%test "merge preserves existing top-level settings" =
   match merge_hook_json "{\n  \"model\": \"haiku\"\n}\n" ~event:"PostToolUse" ~matcher:"Edit" ~command:"fennec agent hook" ~marker:"fennec-fastlane:abc" with

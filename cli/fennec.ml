@@ -423,7 +423,9 @@ let dev_cmd =
          `fennec agent detach` removes it. (--attach stays as an explicit synonym.) *)
       let install_hooks () =
         if agent then (
-          let results = Fennec_fastlane.Attach.install ~harnesses:Fennec_fastlane.Registry.all () in
+          (* default install set = harnesses actually present on this machine (Registry.installed), so
+             we never write hook configs for tools you don't use *)
+          let results = Fennec_fastlane.Attach.install () in
           Printf.printf "%s\n%!" (Fennec_fastlane.Attach.report results))
       in
       match exe with
@@ -515,7 +517,7 @@ let agent_cmd =
   in
   let attach =
     let harness_ids_arg =
-      let doc = "Attach a specific harness ($(b,claude) | $(b,codex) | $(b,vibe)); repeatable. Default: auto-detect from the environment, else all known harnesses." in
+      let doc = "Attach a specific harness ($(b,claude) | $(b,codex) | $(b,vibe) | $(b,gemini) | $(b,cline) | $(b,cursor)); repeatable. Default: the harnesses present on this machine." in
       Arg.(value & opt_all string [] & info [ "harness" ] ~docv:"ID" ~doc)
     in
     let go harness_ids =
@@ -543,7 +545,9 @@ let agent_cmd =
       let input = try In_channel.input_all stdin with _ -> "" in
       (* SAME resolution as the hook, so the pre-edit mark and the post-edit hook share one journal *)
       let id = Fennec_fastlane.Journal.mark ~dir:(Fennec_fastlane.Journal.resolve_dir ?override:dir ~input ()) ~input in
-      if not quiet then Printf.printf "%d\n" id;
+      (* --quiet is the pre-tool hook path: emit a valid no-op JSON object ({}) that every harness's
+         pre-hook accepts, rather than nothing. Non-quiet (manual) prints the snapshotted id. *)
+      if quiet then print_string "{}" else Printf.printf "%d\n" id;
       0
     in
     Cmd.v
@@ -551,7 +555,7 @@ let agent_cmd =
       Term.(const go $ dir_arg $ quiet_arg)
   in
   let harness_arg =
-    let doc = "Which coding harness called this hook ($(b,claude) | $(b,codex) | $(b,vibe)). Selects the injected-feedback JSON shape; baked into each installed hook. Default: claude." in
+    let doc = "Which coding harness called this hook ($(b,claude) | $(b,codex) | $(b,vibe) | $(b,gemini) | $(b,cline) | $(b,cursor)). Selects the injected-feedback JSON shape; baked into each installed hook. Default: claude." in
     Arg.(value & opt string "claude" & info [ "harness" ] ~docv:"ID" ~doc)
   in
   let hook =

@@ -15,8 +15,9 @@ type result = { harness : string; path : string; changed : bool; message : strin
     [render_feedback] wraps {!Journal.feedback_text} in this harness's injection JSON — the single
     per-harness output difference. *)
 type t = {
-  id : string;                                          (** stable key: ["claude"] | ["codex"] | ["vibe"] *)
+  id : string;                                          (** stable key: ["claude"] | ["codex"] | ["vibe"] | … *)
   detect : unit -> bool;                                (** env sniff so [dev --attach] self-registers *)
+  installed : unit -> bool;                             (** harness present on this machine? gates auto-install (no config litter for unused harnesses) *)
   install : unit -> result;                             (** install ONE universal, project-agnostic entry *)
   uninstall : unit -> result;
   render_feedback : event:string -> text:string -> string;
@@ -51,13 +52,33 @@ val agent_command : harness_id:string -> string
     agnostic. *)
 val mark_command : unit -> string
 
-(** Idempotently install ONE (event, command) entry into a nested-JSON hooks file (Claude + Codex share
-    this), preserving every other key and hook. Adapters call it once per event — [PreToolUse] mark,
-    [PostToolUse] hook — on the same file. *)
-val install_json_file : harness_id:string -> path:string -> event:string -> matcher:string -> command:string -> result
+(** Idempotently install ONE (event, command) entry into a nested-JSON hooks file (Claude, Codex,
+    Gemini share this), preserving every other key and hook. Adapters call it once per event — the
+    pre-tool mark, then the post-tool hook — on the same file. [timeout] is the harness's hook timeout
+    (Claude/Codex: seconds, default 15; Gemini: milliseconds, e.g. 15000). *)
+val install_json_file : ?timeout:int -> harness_id:string -> path:string -> event:string -> matcher:string -> command:string -> unit -> result
 
-(** Remove our marked entry from EVERY event array of a JSON hooks file, leaving the rest untouched. *)
+(** Remove our marked entry from EVERY event array of a JSON hooks file, leaving the rest untouched.
+    Also the removal path for Cursor's flat hooks.json (it just drops marked entries per event). *)
 val uninstall_json_file : harness_id:string -> path:string -> result
 
-(** The camelCase injection shape Claude Code and Codex share: [hookSpecificOutput.additionalContext]. *)
+(** Install our hook as an EXECUTABLE SCRIPT FILE that execs [command] (Cline's convention: one file
+    per event in a hooks dir). Idempotent; refuses to clobber a file that isn't ours (no marker). *)
+val install_script_file : harness_id:string -> path:string -> command:string -> result
+
+(** Remove our marked hook script file (the inverse of {!install_script_file}); leaves a non-ours file. *)
+val uninstall_script_file : harness_id:string -> path:string -> result
+
+(** Install ONE entry into Cursor's flatter [{version:1, hooks:{<event>:[{command, matcher}]}}] file,
+    append-safe. Remove with {!uninstall_json_file}. *)
+val install_cursor_json : harness_id:string -> path:string -> event:string -> matcher:string -> command:string -> result
+
+(** The camelCase injection shape Claude Code, Codex, and Gemini share:
+    [hookSpecificOutput.additionalContext]. Empty text → [""] (no injection). *)
 val render_camel : event:string -> text:string -> string
+
+(** Cline's injection shape: [{"contextModification": text}]; empty text → ["{}"] (Cline's no-op). *)
+val render_cline : event:string -> text:string -> string
+
+(** Cursor's injection shape: flat [{"additional_context": text}] (snake_case); empty text → [""]. *)
+val render_cursor : event:string -> text:string -> string

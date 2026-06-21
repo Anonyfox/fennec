@@ -13,11 +13,10 @@ let event_of_input input =
     | None -> "PostToolUse")
 
 let run ~(harness : Harness.t) ~dir ~timeout ~input =
-  (* Empty feedback (no live dev server, or an inert edit) → emit NOTHING, so the harness injects no
-     block at all rather than an empty wrapper. The always-on hook is invisible unless there's a verdict. *)
-  match Journal.feedback_text ~dir ~timeout ~input with
-  | "" -> ""
-  | text -> harness.render_feedback ~event:(event_of_input input) ~text
+  (* Each harness's [render_feedback] decides what EMPTY feedback (no live dev server / inert edit)
+     looks like — "" for the ones that treat empty stdout as a no-op (Claude/Codex/Gemini/Vibe/Cursor),
+     or "{}" for Cline which needs a JSON object. The always-on hook is invisible unless there's a verdict. *)
+  harness.render_feedback ~event:(event_of_input input) ~text:(Journal.feedback_text ~dir ~timeout ~input)
 
 let%test_unit "hook wraps the settled verdict in the harness injection shape" =
   let chk = Fennec_hunt_unit.check in
