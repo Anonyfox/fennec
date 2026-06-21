@@ -99,6 +99,29 @@ neither should have to parse the other's:
 | File | Role |
 |------|------|
 | [`affected.ml`](affected.ml) | Infer the affected surface (backend / web / component / route) from the changed files. |
+| [`build_dir.ml`](build_dir.ml) | The one build-layout authority — which `_build/<profile>` dir the current command uses, and every path derived from it. |
+
+## Build layout — one authority, cargo-style (`build_dir.ml`)
+
+[`Build_dir`](build_dir.ml) is the single source of truth for *which build directory* a command works
+in, so the same logic isn't scattered across the dev loop, the warm worker, and `fennec test`:
+
+- **`dev` (default)** → the standard `_build/default`. `dune build`, `dune runtest`, **and `fennec
+  test`** all use this. `Build_dir.profile ()` returns `"dev"` unless told otherwise.
+- **`fastdev`** → an isolated `_build/fastdev` (an *absolute* `DUNE_BUILD_DIR` — dune rejects a relative
+  build dir nested under `_build`). **Only `fennec dev`** opts in (it exports `FENNEC_DEV_PROFILE` via
+  `Build_dir.dev_loop_profile`), so its byte build + warm worker never share — and never invalidate —
+  the native `dev` build. Like cargo's `target/{debug,release}`.
+
+This is what lets **`fennec test` run while `fennec dev` is running**: disjoint build dirs ⇒ disjoint
+dune locks. `fennec test`'s `dune shutdown` targets the default RPC and can't see the dev loop's
+(separate) one. The supervisor exports `DUNE_BUILD_DIR` once; everything else just calls
+`Build_dir.context_dir` / `Build_dir.describe_prefix`.
+
+> Downstream note: in this monorepo the example rebuilds all of fennec from source (it's a *local*
+> dep), which is why a cold `fennec dev` is slow once per profile. A real downstream app depends on the
+> *opam-installed* fennec packages (prebuilt) — dune never recompiles those per profile, so its cold
+> build is just its own code + jsoo.
 
 ## The agent fastlane (how an agent uses this)
 
