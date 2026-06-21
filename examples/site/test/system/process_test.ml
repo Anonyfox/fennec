@@ -37,8 +37,13 @@ let%system "SIGKILL frees the port, restart binds, second reaps first, clean exi
 
 let%system "a leftover of our own server is auto-reclaimed" = fun sb ->
   let server_bc = match S.server_bc () with Some b -> b | None -> failwith "FENNEC_SERVER_BC not set by the harness" in
-  (* a stray copy of OUR server holds :4000 *)
-  let leftover = S.spawn sb ~cwd:(S.app_dir ()) ~env:[ ("FENNEC_ENV", "development") ] [ server_bc ] in
+  (* a stray copy of OUR server holds :4000. Give it a backend (MONGO_URL): a bare server.bc — run
+     without the `fennec dev` supervisor that normally sets it — fails hard on a missing MONGO_URL, so
+     it would die on boot and never hold the port. [:memory:] boots instantly and leaves nothing behind
+     when the reclaim SIGKILLs it. *)
+  let leftover =
+    S.spawn sb ~cwd:(S.app_dir ()) ~env:[ ("FENNEC_ENV", "development"); ("MONGO_URL", ":memory:") ] [ server_bc ]
+  in
   S.wait_ready leftover ~port ();
   (* fennec dev starts; reaching "ready" means it bound the port — only possible by reclaiming the
      leftover that was holding it, which it does by SIGKILLing our own stray server *)
