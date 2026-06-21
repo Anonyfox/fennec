@@ -31,7 +31,17 @@ let collection (def : 'a Def.t) : 'a T.t =
 
 (* server writes (used inside method handlers): validating, ambient *)
 let insert def v = T.insert (collection def) v
-let seed def vs = List.iter (fun v -> ignore (insert def v)) vs
+
+(* Seed-if-empty: insert the bootstrap documents only when the collection currently has none.
+   Idempotent across restarts, which is what makes the two database lifecycles both behave correctly
+   from the SAME [on_start] call:
+   - a DURABLE dev DB (burrow) is seeded ONCE — a later `fennec dev` reboot sees the persisted docs
+     (count > 0) and skips, so your edits survive instead of being buried under duplicate seed rows;
+   - a FRESH `:memory:` / temp e2e DB is always empty at boot, so every test run re-seeds it for a
+     clean, deterministic slate.
+   [T.count] reads the backing store synchronously server-side (the server IS the source of truth, not
+   an async mirror), so it reflects persisted documents. *)
+let seed def vs = if T.count (collection def) () = 0 then List.iter (fun v -> ignore (insert def v)) vs
 let update def ?multi ~where m = T.update (collection def) ?multi ~where m
 let upsert def ?multi ~where m = T.upsert (collection def) ?multi ~where m
 let remove def ~where = T.remove (collection def) ~where

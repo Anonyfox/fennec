@@ -52,7 +52,11 @@ val collection : 'a Def.t -> 'a T.t
 (** Validating insert; returns the new [_id]. *)
 val insert : 'a Def.t -> 'a -> string
 
-(** Insert many (seed/bootstrap) — [List.iter insert]. *)
+(** Seed-if-empty: insert the bootstrap documents, but ONLY when the collection is currently empty.
+    Idempotent, so it is safe to call unconditionally from [on_start] on every boot. A durable dev DB
+    (burrow) is seeded once and survives `fennec dev` restarts without accumulating duplicates; a fresh
+    [:memory:] / temp e2e DB is always empty, so it re-seeds every run for a clean slate. To force a
+    re-seed of a durable dev DB, reset it first with `fennec clean --db`. *)
 val seed : 'a Def.t -> 'a list -> unit
 
 val update : 'a Def.t -> ?multi:bool -> where:Filter.t list -> Update.t -> int
