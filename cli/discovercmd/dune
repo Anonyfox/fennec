@@ -11,6 +11,7 @@
   doc_extract
   route_facts
   snapshot
+  snapshot_codec
   snapshot_gen
   retrieve
   select
@@ -18,7 +19,7 @@
   render_text
   render_json
   golden)
- (libraries ppxlib digestif yojson fennec-hunt.unit)
+ (libraries ppxlib digestif yojson zlib bigstringaf fennec-hunt.unit)
  (inline_tests
   (backend fennec-hunt.runner))
  (preprocess

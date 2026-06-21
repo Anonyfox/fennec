@@ -605,8 +605,12 @@ let build ~root =
 let ocaml_string_literal s = Printf.sprintf "%S" s
 
 let emit_ocaml snapshot =
+  (* Deflate the marshaled blob before embedding it — the API index is ~37 MB raw but a fraction of
+     that compressed, so this keeps the CLI binary ~26 MB smaller. The loader inflates once at startup
+     (~60 ms, measured) — see {!Snapshot_codec}. *)
   let payload = Marshal.to_string snapshot [] in
+  let compressed = Snapshot_codec.compress payload in
   Printf.printf
-    "let snapshot () = (Marshal.from_string %s 0 : \
+    "let snapshot () = (Marshal.from_string (Fennec_discover_core.Snapshot_codec.decompress %s) 0 : \
      Fennec_discover_core.Discover_model.snapshot)\n"
-    (ocaml_string_literal payload)
+    (ocaml_string_literal compressed)
