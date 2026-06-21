@@ -81,7 +81,7 @@ dialect binary on PATH. `opam install fennec-cli` installs all of it; `fennec do
    - **CLI → app, on a frontend edit**: one line (`css`/`reload`) to the `FENNEC_LIVERELOAD` socket; the app relays it to browsers.
    - **app → CLI, on stderr**: a dev-URL report (`[fennec:urls] web=… admin=…`, named `name=url` pairs parsed for the banner) and a port-conflict line paired with a distinct exit code, so the CLI self-heals a held port instead of crash-looping.
 4. **app ↔ browser**: the framework's livereload websocket (`/_fennec/pulse/livereload`) + an injected client script. Framework's concern entirely.
-5. **Shared state across all of them**: the `_build` output dir + the port block (from `FENNEC_PORT`, default 4000 dev / 80 prod). That's it.
+5. **Shared state across all of them**: the `_build` output tree + the port block (from `FENNEC_PORT`, default 4000 dev / 80 prod). That's it. (The `_build` tree is split by profile — `dev`/`release` use `_build/default`, the `fennec dev` loop uses `_build/fastdev` — so the dev loop and a parallel `dune build`/`fennec test` never share a lock. One module owns those paths: `Fennec_dev.Build_dir`; see § The build ladder.)
 
 **Domains & ports.** An endpoint is identified by a **name** + its **host pattern(s)** (`Endpoint.make ~name ?hosts`); ports live nowhere in userland. Domains are declared ONLY there — exact (`acme.com`), wildcard (`*.acme.com`), or the single catch-all `*` (the default, sorted last). PROD serves the whole set on one port, routed by Host (most-specific wins). DEV serves the *same* routing on a **gateway** at `FENNEC_PORT` base (so `-H Host:` is prod-identical) plus a **contiguous forced convenience port** per endpoint (`base+1, base+2, …` in declaration order, no gaps) for header-free browsing. `--port`/`FENNEC_PORT` shifts the whole block, so a different worktree runs an isolated instance.
 
@@ -250,6 +250,47 @@ A third use of the build axis, for raw iteration speed. The server executable is
 file, native or bytecode alike). It's the same decoupling as the embed stub: a
 build-time choice the runtime never sees.
 
+### The build ladder: release · dev · fastdev (one authority: `Build_dir`)
+
+Three build profiles, each with a clear job and an isolated-enough build dir. **Exactly one module
+constructs `_build/…` build paths — `Fennec_dev.Build_dir`**; nothing else hardcodes a build dir (the
+other `_build/` references in the CLI are process-identity matching in `Port`, the dev DB dir, and the
+`.gitignore` template — not build-path construction).
+
+| Profile | Who runs it | Codegen | Tests | Assets | Build dir |
+| --- | --- | --- | --- | --- | --- |
+| **release** | prod / CI / `opam install` (`dune build --profile release`) | native `server.exe`, optimized | stripped (`FENNEC_DROP_TESTS`) | embedded | `_build/default` |
+| **dev** (default) | `dune build`, `dune runtest`, **`fennec test`** | native | present | from disk (dev stub) | `_build/default` |
+| **fastdev** | **`fennec dev`** only (it exports `FENNEC_DEV_PROFILE`; `--debug` falls back to `dev`) | bytecode `server.bc`, no `-g`, jsoo separate + no source-map | present | from disk | **`_build/fastdev`** (isolated) |
+
+- **No separate "test" profile.** Tests run under `dev` (native, `fennec test`) and `fastdev` (the dev
+  loop's warm worker, bytecode); `release` strips them. The profile axis is "are tests/assets *in*?",
+  not "is this a test run?".
+- **Why `fastdev` gets its own dir** (`_build/fastdev`, set via an *absolute* `DUNE_BUILD_DIR` — dune
+  rejects a relative build dir nested under `_build`): the dev loop's bytecode build and the native
+  `dev` build would otherwise invalidate each other inside one `_build/default`, forcing a full rebuild
+  on every switch between `fennec dev` and `dune build`/`fennec test`. This is cargo's
+  `target/{debug,release}` idea, for dune — and it is also what lets **`fennec test` run while `fennec
+  dev` is running**: disjoint build dirs ⇒ disjoint dune locks (the dev loop's `dune --watch` daemon and
+  a one-shot `dune`/`fennec test` never contend).
+- `release` and `dev` share `_build/default` on purpose: they don't interleave in practice (you build
+  release for a deploy, not mid-edit), so the rare dev↔release rebuild is fine. The *frequent* switch
+  (dev loop ↔ build/test) is the one that's isolated.
+
+### `dune test` vs `fennec test` (and CI/CD)
+
+- **`dune test` / `dune runtest`** runs everything that needs **no orchestration**: inline tests
+  (`let%test`/`let%test_unit`/`let%prop`), doctests, and any `(test)` stanza. This is the dune-native
+  gate; it works in a plain app with the standard `(inline_tests)` setup, no CLI required.
+- **`fennec test <cut>`** runs the **orchestrated** suites on top: `http` / `browser` / `system` boot
+  isolated app instances and allocate ports, so they are `(executable)`s the CLI drives — deliberately
+  NOT `(test)` stanzas, so a bare `dune test` never needs a booted server or Chrome. Cuts: `unit`
+  (= the dune gate) · `http` · `browser` · `system` · `docs`; `all` = unit + every suite.
+- **CI/CD** is one command after `opam install`: `fennec test all` (full), or `dune build @all && dune
+  runtest` for just the unit gate. No services to stand up — `:memory:`/burrow back the data layer, and
+  no `fennec dev` need be running (each suite boots its own instance). Safe to run alongside a live
+  `fennec dev` (different build dir, different lock).
+
 ### Dev-cycle speed (measured, `DUNE_CACHE` off, real edits)
 
 The target is **"instant" ≈ 100 ms** of *felt* latency. `dune build` pays a fixed
@@ -329,5 +370,10 @@ shared `/react.js` runtime. A per-app client bundle is just the jsoo output, ser
 verbatim. Reset build state with `dune clean` (a full clean); manually deleting a
 `_build/` subtree desyncs dune's incremental DB.
 
-Not yet (future iterations): the DDP/reactive data layer (no mongo yet),
-diagnostics overlay (`dune rpc`).
+The DDP/reactive data layer now exists (Fennec.Pulse — publish/subscribe over DDP,
+live queries, SSR-with-live-data) over a runtime-selectable backend: real MongoDB
+(libmongoc FFI), the in-process embedded **burrow** engine (`burrow://`), or
+`:memory:` minimongo. No mongod is bundled in the CLI — `fennec-mongo.mongod` is a
+pure-Unix lifecycle launcher for an external one; the embedded path is burrow.
+
+Not yet (future iterations): the browser diagnostics overlay (`dune rpc`).

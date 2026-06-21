@@ -1,9 +1,17 @@
-(** Per-profile build directories — cargo's [target/{debug,release}] for dune.
+(** Per-profile build directories — cargo's [target/{debug,release}] for dune. The ONE place that
+    constructs [_build/…] build paths (the build-layout authority).
+
+    The build ladder (see docs/internal/CLI-INTEROP.md § The build ladder for the full table):
+    - [release] — prod/CI/install: native, optimized, tests stripped → [_build/default].
+    - [dev] (default) — [dune build] / [dune runtest] / [fennec test]: native, tests present → [_build/default].
+    - [fastdev] — [fennec dev] ONLY: bytecode, no -g, jsoo separate + no source-map → [_build/fastdev] (isolated).
+    There is NO separate "test" profile: tests run under [dev]/[fastdev] and are stripped under [release].
 
     The dev loop ([fastdev], byte) and [dune build]/[fennec test] ([dev], native) used to share one
-    [_build/default], so each invalidated the other and every switch forced a full rebuild. These
-    helpers give each profile its own build root via dune's [DUNE_BUILD_DIR], so both stay warm. All
-    paths are computed from [root] (the absolute workspace root) + [FENNEC_DEV_PROFILE]. *)
+    [_build/default], so each invalidated the other and every switch forced a full rebuild. Giving
+    [fastdev] its own build root (via dune's [DUNE_BUILD_DIR]) keeps both warm AND lets [fennec test]
+    run while [fennec dev] is live (disjoint dirs ⇒ disjoint locks). All paths are computed from [root]
+    (the absolute workspace root) + [FENNEC_DEV_PROFILE]. *)
 
 (** The active build profile ([FENNEC_DEV_PROFILE], default ["dev"] — the standard [_build/default]).
     Only [fennec dev] sets it to ["fastdev"]; every other entry point sees the default. *)
