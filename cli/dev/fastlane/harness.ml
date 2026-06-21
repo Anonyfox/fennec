@@ -160,8 +160,11 @@ let strip_hook_json text ~marker =
         let kept = List.filter (fun e -> not (contains (to_string e) marker)) current in
         if List.length kept = List.length current then Ok (text, false)
         else
-          let hooks = `Assoc (assoc_replace "PostToolUse" (`List kept) hooks_fields) in
-          Ok (pretty_to_string (`Assoc (assoc_replace "hooks" hooks fields)) ^ "\n", true)
+          (* drop the PostToolUse key (and then the hooks key) entirely if our removal empties it, so a
+             detach leaves no residual empty block — a fully pristine config. *)
+          let hooks_fields = if kept = [] then List.remove_assoc "PostToolUse" hooks_fields else assoc_replace "PostToolUse" (`List kept) hooks_fields in
+          let fields = if hooks_fields = [] then List.remove_assoc "hooks" fields else assoc_replace "hooks" (`Assoc hooks_fields) fields in
+          Ok (pretty_to_string (`Assoc fields) ^ "\n", true)
       | _ -> Ok (text, false))
     | _ -> Ok (text, false))
   | _ -> Ok (text, false)
@@ -267,6 +270,12 @@ let%test "strip removes our hook and reports the change, leaving others" =
 let%test "strip on a config without our hook is a no-op" =
   match strip_hook_json "{\n  \"model\": \"x\"\n}\n" ~marker:"fennec-fastlane:abc" with
   | Ok (_, false) -> true
+  | _ -> false
+
+let%test "strip the ONLY hook leaves no empty hooks/PostToolUse residue" =
+  let only = "{\n  \"model\": \"x\",\n  \"hooks\": {\"PostToolUse\": [{\"matcher\":\"Edit\",\"hooks\":[{\"type\":\"command\",\"command\":\"c # fennec-fastlane:abc\"}]}]}\n}\n" in
+  match strip_hook_json only ~marker:"fennec-fastlane:abc" with
+  | Ok (json, true) -> contains json "\"model\"" && not (contains json "PostToolUse") && not (contains json "\"hooks\"")
   | _ -> false
 
 let%test "render_camel wraps text as hookSpecificOutput.additionalContext" =

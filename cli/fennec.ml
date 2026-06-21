@@ -508,6 +508,22 @@ let agent_cmd =
     in
     Cmd.v (Cmd.info "status" ~doc:"Print the current agent attachment state") Term.(const go $ dir_arg)
   in
+  let attach =
+    let harness_ids_arg =
+      let doc = "Attach a specific harness ($(b,claude) | $(b,codex) | $(b,vibe)); repeatable. Default: auto-detect from the environment, else all known harnesses." in
+      Arg.(value & opt_all string [] & info [ "harness" ] ~docv:"ID" ~doc)
+    in
+    let go harness_ids =
+      let root = project_root (Sys.getcwd ()) in
+      let agent_dir = Fennec_fastlane.Journal.default_dir ~root in
+      let harnesses = match harness_ids with [] -> None | ids -> Some (List.filter_map Fennec_fastlane.Registry.find ids) in
+      print_endline (Fennec_fastlane.Attach.report (Fennec_fastlane.Attach.install ?harnesses ~root ~agent_dir ()));
+      0
+    in
+    Cmd.v
+      (Cmd.info "attach" ~doc:"Install the fennec fastlane hook into a coding harness (without starting dev — the inverse of `agent detach`)")
+      Term.(const go $ harness_ids_arg)
+  in
   let wait =
     let go dir timeout after =
       match Fennec_fastlane.Journal.wait_next ?after ~dir:(state_dir dir) ~timeout () with
@@ -566,7 +582,7 @@ let agent_cmd =
       Term.(const go $ dir_arg $ after_arg)
   in
   let doc = "Agent-facing hook helpers for fennec dev --agent" in
-  Cmd.group (Cmd.info "agent" ~doc) [ status; mark; wait; hook; detach; selftest; errors ]
+  Cmd.group (Cmd.info "agent" ~doc) [ status; attach; detach; mark; wait; hook; selftest; errors ]
 
 let new_cmd =
   let name_arg =
