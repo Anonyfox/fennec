@@ -98,7 +98,9 @@ let summary () =
   | Runtime.Memory -> Some ":memory: (in-memory)"
   | Runtime.Burrow { expose = Some e; _ } ->
     let host = if e.Runtime.host = "0.0.0.0" then "localhost" else e.Runtime.host in
-    Some (Printf.sprintf "embedded · mongosh mongodb://%s:%d" host e.Runtime.port)
-  | Runtime.Burrow { expose = None; _ } -> Some "embedded (storage only)"
+    (* name burrow explicitly — the mongodb:// URI is just its mongosh-compatible access port, NOT a
+       real mongod (one only appears with an explicit MONGO_URL; see ensure_dev) *)
+    Some (Printf.sprintf "burrow (embedded, no mongod) · mongosh mongodb://%s:%d" host e.Runtime.port)
+  | Runtime.Burrow { expose = None; _ } -> Some "burrow (embedded, storage only)"
   | Runtime.Mongo { uri; _ } -> Some uri
   | Runtime.Missing -> None

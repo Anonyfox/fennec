@@ -108,9 +108,12 @@ let starts_with ~prefix s =
 (* a local lib whose source sits under one of the watched roots is a Dynlink candidate; any other lib
    (project-local framework, or opam) is "framework" and must already be in the worker. The build dir
    prefix is stripped so we compare against the workspace-relative watched roots. *)
-let build_prefix = "_build/default/"
+(* the default build-context prefix (the [dev] profile / a synthetic describe in the unit tests). The
+   real dev loop passes the per-profile prefix from {!Build_dir.describe_prefix} (absolute under an
+   isolated [fastdev] build dir), so [derive] takes [?build_prefix]. *)
+let default_build_prefix = "_build/default/"
 
-let under_watched ~watch_roots (l : lib) =
+let under_watched ~build_prefix ~watch_roots (l : lib) =
   if not l.local then false
   else
     let rel =
@@ -141,7 +144,7 @@ let error_to_string = function
 
 (* workspace-relative .cma for a local lib: strip the _build/default/ prefix off source_dir, append
    <name>.cma. (The worker resolves paths against the build root, so relative is enough + portable.) *)
-let cma_of (l : lib) =
+let cma_of ~build_prefix (l : lib) =
   let dir =
     if starts_with ~prefix:build_prefix l.source_dir then
       String.sub l.source_dir (String.length build_prefix)
@@ -168,7 +171,7 @@ let cmo_of_target target =
    - [preloaded]   : framework lib names the worker linked (-linkall); membership decides warm vs cold
    - [test_libs]   : the test stanza's direct [(libraries …)] names
    - [target]      : the test exe's workspace-relative target (…/<name>.exe) *)
-let derive ~describe ~watch_roots ~preloaded ~test_libs ~target =
+let derive ?(build_prefix = default_build_prefix) ~describe ~watch_roots ~preloaded ~test_libs ~target () =
   let libs = libs_of_describe describe in
   if libs = [] then Error No_describe
   else begin
@@ -205,7 +208,7 @@ let derive ~describe ~watch_roots ~preloaded ~test_libs ~target =
             l.requires;
           Hashtbl.remove visiting l.uid;
           Hashtbl.replace done_ l.uid ();
-          if under_watched ~watch_roots l then ordered := l :: !ordered
+          if under_watched ~build_prefix ~watch_roots l then ordered := l :: !ordered
           else if l.local && not (Hashtbl.mem preloaded_set l.name) && !err = None then
             (* a PROJECT-LOCAL framework lib the worker did not link — pre-emptively refuse. (opam libs
                are not checked here: they ride into the worker transitively with the project framework
@@ -218,7 +221,7 @@ let derive ~describe ~watch_roots ~preloaded ~test_libs ~target =
       (match !err with
        | Some e -> Error e
        | None ->
-         let cmas = List.rev_map cma_of !ordered in
+         let cmas = List.rev_map (cma_of ~build_prefix) !ordered in
          Ok { cmas; cmo = cmo_of_target target })
   end
 
@@ -267,7 +270,7 @@ let%test "chain: local app libs in dep order, framework skipped, test cmo last" 
   match
     derive ~describe:fixture ~watch_roots ~preloaded
       ~test_libs:[ "fennec.fur"; "site_components"; "site_store"; "site_styles"; "site_handlers" ]
-      ~target:test_target
+      ~target:test_target ()
   with
   | Error _ -> false
   | Ok t ->
@@ -286,7 +289,7 @@ let%test "chain: local app libs in dep order, framework skipped, test cmo last" 
     && t.cmo = "examples/site/frontend_test/.test_components.eobjs/byte/dune__exe__Test_components.cmo"
 
 let%test "chain: .cma path is <rel source_dir>/<name>.cma" =
-  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target with
+  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target () with
   | Ok t -> t.cmas = [ "examples/site/frontend/store/site_store.cma" ]
   | Error _ -> false
 
@@ -294,13 +297,13 @@ let%test "fallback: a framework dep the worker did NOT preload is refused" =
   (* drop "fennec" from the preload set — handlers transitively needs it ⇒ Needs_unpreloaded *)
   match
     derive ~describe:fixture ~watch_roots ~preloaded:[ "fennec.fur" ]
-      ~test_libs:[ "site_handlers" ] ~target:test_target
+      ~test_libs:[ "site_handlers" ] ~target:test_target ()
   with
   | Error (Needs_unpreloaded "fennec") -> true
   | _ -> false
 
 let%test "fallback: an undeclared test lib is reported" =
-  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "nope_lib" ] ~target:test_target with
+  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "nope_lib" ] ~target:test_target () with
   | Error (Unknown_lib "nope_lib") -> true
   | _ -> false
 
@@ -308,18 +311,18 @@ let%test "opam deps are NOT pre-emptively flagged (only project framework libs a
   (* fmt (opam, local=false) is in fennec.fur's closure but absent from [preloaded]; it must NOT
      trigger Needs_unpreloaded — opam coverage is left to the worker's runtime Dynlink catch. *)
   match derive ~describe:fixture ~watch_roots ~preloaded:[ "fennec.fur"; "fennec" ]
-          ~test_libs:[ "site_store" ] ~target:test_target
+          ~test_libs:[ "site_store" ] ~target:test_target ()
   with
   | Ok _ -> true
   | Error _ -> false
 
 let%test "fallback: empty describe yields No_describe" =
-  match derive ~describe:"()" ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target with
+  match derive ~describe:"()" ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target () with
   | Error No_describe -> true
   | _ -> false
 
 let%test "objects appends the cmo after the cmas" =
-  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target with
+  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target () with
   | Ok t -> objects t = [ "examples/site/frontend/store/site_store.cma"; t.cmo ]
   | Error _ -> false
 
@@ -327,6 +330,6 @@ let%test "cmo_of_target mangles dune__exe__ + capitalizes" =
   cmo_of_target "a/b/foo_test.exe" = "a/b/.foo_test.eobjs/byte/dune__exe__Foo_test.cmo"
 
 let%test "a leaf-only test (no app libs) yields an empty cma list + just the cmo" =
-  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "fennec.fur" ] ~target:test_target with
+  match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "fennec.fur" ] ~target:test_target () with
   | Ok t -> t.cmas = [] && objects t = [ t.cmo ]
   | Error _ -> false

@@ -49,9 +49,11 @@ let normalize_rel path =
   let path = String.trim path in
   if starts_with path "./" then String.sub path 2 (String.length path - 2) else path
 
-let build_dir root rel = Filename.concat (Filename.concat root "_build/default") rel
+(* the build CONTEXT dir for a workspace-relative path — [<root>/_build/default] on the [dev] profile
+   (unchanged), or the isolated [<root>/_build/<profile>/default] otherwise. See {!Build_dir}. *)
+let build_dir root rel = Filename.concat (Build_dir.context_dir ~root) rel
 
-(* recursively find .<lib>.inline-tests dirs under _build/default *)
+(* recursively find .<lib>.inline-tests dirs under the build context dir *)
 let rec find_dirs acc dir depth =
   if depth > 6 then acc (* don't recurse too deep *)
   else
@@ -162,7 +164,7 @@ let is_hunt_internal lib =
   lib = "fennec_hunt" || lib = "fennec_hunt_unit"
 
 let discover root watch_roots =
-  let build_default = Filename.concat root "_build/default" in
+  let build_default = Build_dir.context_dir ~root in
   let prefix = build_default ^ "/" in
   let lp = String.length prefix in
   let build_roots =
@@ -416,8 +418,8 @@ let chain_for t (r : runner) : (Test_chain.t, string) Stdlib.result =
         | [] -> Error "could not read the test's (libraries …)"
         | test_libs -> (
           match
-            Test_chain.derive ~describe ~watch_roots:t.watch_roots ~preloaded:Test_worker.preloaded ~test_libs
-              ~target:(byte_mirror_target r.target)
+            Test_chain.derive ~build_prefix:(Build_dir.describe_prefix ~root:t.root) ~describe ~watch_roots:t.watch_roots
+              ~preloaded:Test_worker.preloaded ~test_libs ~target:(byte_mirror_target r.target) ()
           with
           | Ok chain -> Ok chain
           | Error e -> Error (Test_chain.error_to_string e)))
@@ -442,7 +444,7 @@ let run_via_worker t (r : runner) : result option =
       match chain_for t r with
       | Error _ -> None
       | Ok chain ->
-        let abs rel = if Filename.is_relative rel then Filename.concat (Filename.concat t.root "_build/default") rel else rel in
+        let abs rel = if Filename.is_relative rel then Filename.concat (Build_dir.context_dir ~root:t.root) rel else rel in
         let objs = List.map abs (Test_chain.objects chain) in
         (match Test_worker.run w ~chain:objs with
          | None -> None

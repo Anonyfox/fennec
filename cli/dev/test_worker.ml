@@ -96,12 +96,13 @@ let pid t = t.pid
 (* ── locating the worker binary ──────────────────────────────────────────────────────────────────
    dev-only + NOT installed (it is a 26 MB bytecode image), so resolve it without assuming an install:
      1. $FENNEC_TEST_WORKER (explicit override / tests),
-     2. <root>/_build/default/cli/dev/worker/fennec_test_worker.bc (the fennec repo dogfood),
+     2. <build-context>/cli/dev/worker/fennec_test_worker.bc — the fennec repo dogfood, in the active
+        per-profile build dir (so it matches, CRC-wise, the app .cma's the watch builds there),
      3. next to the running fennec exe (if a build ever colocates it).
    None of these existing ⇒ no warm path; the caller stays on the cold path. *)
 let candidate_paths ~root =
   let by_env = match Sys.getenv_opt "FENNEC_TEST_WORKER" with Some p when p <> "" -> [ p ] | _ -> [] in
-  let in_build = Filename.concat root "_build/default/cli/dev/worker/fennec_test_worker.bc" in
+  let in_build = Filename.concat (Build_dir.context_dir ~root) "cli/dev/worker/fennec_test_worker.bc" in
   let near_exe = Filename.concat (Filename.dirname Sys.executable_name) "fennec_test_worker.bc" in
   by_env @ [ in_build; near_exe ]
 
@@ -187,10 +188,16 @@ let spawn ?worker_exe ~root () =
     let socket_path = tmp_socket () in
     (try Unix.unlink socket_path with _ -> ());
     (match
-       (* worker logs to its own stderr → folded into the dev log; stdin from /dev/null *)
-       let devnull = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
-       let pid = Unix.create_process exe [| exe; socket_path |] devnull Unix.stderr Unix.stderr in
-       (try Unix.close devnull with _ -> ());
+       (* The worker's own stdout/stderr is internal diagnostics ("listening on …", per-run timing) that
+          duplicates the [Ui.tested] line — pure noise on the dev terminal, where it leaked raw before.
+          Send it to /dev/null (readiness is detected by the socket + PING/PONG below, NOT these lines);
+          set FENNEC_DEV_DEBUG=1 to see it when debugging the worker. stdin is always /dev/null. *)
+       let devnull_in = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+       let debug = match Sys.getenv_opt "FENNEC_DEV_DEBUG" with Some ("1" | "on" | "true" | "yes") -> true | _ -> false in
+       let log = if debug then Unix.stderr else Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0 in
+       let pid = Unix.create_process exe [| exe; socket_path |] devnull_in log log in
+       (try Unix.close devnull_in with _ -> ());
+       (if not debug then try Unix.close log with _ -> ());
        pid
      with
      | exception _ -> None
@@ -293,9 +300,10 @@ let%test "decode_result_header rejects a malformed header" =
 let%test "decode_result_header tolerates a trailing newline" =
   decode_result_header "RESULT 0 1 2 3 4\n" <> None
 
-let%test "candidate_paths includes the in-build worker under the root" =
+let%test "candidate_paths includes the in-build worker under the active build context dir" =
   let ps = candidate_paths ~root:"/proj" in
-  List.exists (starts_with ~prefix:"/proj/_build/default/cli/dev/worker/") ps
+  let expect = Filename.concat (Build_dir.context_dir ~root:"/proj") "cli/dev/worker/" in
+  List.exists (starts_with ~prefix:expect) ps
 
 let%test "candidate_paths honours $FENNEC_TEST_WORKER first" =
   let key = "FENNEC_TEST_WORKER" in

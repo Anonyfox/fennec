@@ -402,8 +402,10 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
      port) or any listen error must never take down the app's web server — log and carry on *)
   try
     Server.run ~sw ~net ~addr config;
-    Printf.printf "fennec: mongo-wire endpoint on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
-  with e -> Printf.eprintf "fennec: mongo-wire endpoint NOT started on %s — %s\n%!" where (Printexc.to_string e)
+    (* "embedded" makes clear this is burrow speaking the mongo wire protocol for mongosh access — NOT a
+       real external mongod (which only runs with an explicit MONGO_URL) *)
+    Printf.printf "fennec: embedded mongo-wire endpoint on %s (auth=%b, read_only=%b, tls=%b)\n%!" where require_auth read_only (tls <> None)
+  with e -> Printf.eprintf "fennec: embedded mongo-wire endpoint NOT started on %s — %s\n%!" where (Printexc.to_string e)
 
 (* The auto path the framework calls ({!boot}, from [Fennec.serve]). The MONGO_URL alone decides everything:
    if it is a burrow:// URL WITH an authority, open the mongosh wire endpoint there — bind host:port,

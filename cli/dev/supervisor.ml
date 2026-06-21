@@ -56,6 +56,13 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
+  (* Per-profile build dir (cargo-style): export DUNE_BUILD_DIR BEFORE any dune runs, so the dev loop's
+     `fastdev` artifacts land in their own `_build/fastdev` and never invalidate `dune build`/`fennec
+     test`'s `_build/default` (and vice-versa). The server exe (+ its sibling assets dir) is re-pointed
+     to the same root. See {!Build_dir}. *)
+  let root = Sys.getcwd () in
+  Build_dir.export ~root;
+  let exe = Build_dir.retarget ~root exe in
   Stublibs.ensure ();
 
   (* ═══════════ boot: children (esbuild + warm test worker), dune --watch, backend, agent journal ═══════════ *)

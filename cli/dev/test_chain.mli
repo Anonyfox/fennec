@@ -31,13 +31,18 @@ val error_to_string : error -> string
     - [preloaded]   : framework lib names linked into the worker; membership decides warm vs cold
     - [test_libs]   : the test stanza's direct [(libraries …)] names (describe omits [(test)] stanzas,
                       so these come from the caller parsing the test's [dune])
-    - [target]      : the test exe's workspace-relative target ([…/<name>.exe]) *)
+    - [target]      : the test exe's workspace-relative target ([…/<name>.exe])
+    - [build_prefix] : the build-context prefix to strip off describe's [source_dir]s (default
+                       ["_build/default/"]; the dev loop passes {!Build_dir.describe_prefix}, which is
+                       absolute under an isolated per-profile build dir) *)
 val derive :
+  ?build_prefix:string ->
   describe:string ->
   watch_roots:string list ->
   preloaded:string list ->
   test_libs:string list ->
   target:string ->
+  unit ->
   (t, error) result
 
 (** The full ordered object list the worker loads: [cmas] then [cmo]. *)

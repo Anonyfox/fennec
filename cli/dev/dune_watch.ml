@@ -99,9 +99,11 @@ let start (targets : string list) : t =
   let rd, wr = Unix.pipe ~cloexec:false () in
   (* the dev loop builds under a custom `fastdev` profile = dev minus `-g`: the bytecode link skips
      writing the whole-image debug section (the dominant ~180ms on every server relink), so an edit
-     rebuilds in a fraction of the time. `fennec dev --debug` sets the profile to `dev` to restore
-     `-g` backtraces. A custom profile still builds into _build/default (flags-only), so paths and the
-     `<> release` rules are unaffected. *)
+     rebuilds in a fraction of the time. The catch used to be that `fastdev` and `dev` shared one
+     `_build/default`, so each invalidated the other — switching between `fennec dev` and `dune build`/
+     `fennec test` forced a full rebuild. That is now solved by a per-profile BUILD DIR (see
+     {!build_dir} / the [--build-dir] below): like cargo's debug/ vs release/, each profile keeps its
+     own cache, so both stay warm. Override the profile with FENNEC_DEV_PROFILE. *)
   let profile = match Sys.getenv_opt "FENNEC_DEV_PROFILE" with Some p when p <> "" -> p | _ -> "fastdev" in
   let args = Array.of_list ("dune" :: "build" :: "--watch" :: "--profile" :: profile :: targets) in
   (* dune's status + diagnostics go to STDERR — capture those; its stdout is only progress/asset-
