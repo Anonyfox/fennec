@@ -263,6 +263,20 @@ let build_term =
     $ external_arg $ sourcemap_arg $ banner_arg $ banner_file_arg $ out_name_arg $ public_arg
     $ embed_arg $ include_arg)
 
+(* ONE discover slot, spliced into every task-facing subcommand's --help below. Whichever command you
+   reach for first, the help tells you the discover tool exists and how to drive it — the tool is found
+   from inside the CLI, never from an external readme. Mechanically one definition; change it once. *)
+let discovery_man : Manpage.block list =
+  [ `S "DISCOVERY";
+    `P
+      "Unsure which Fennec API a task needs? $(b,fennec discover \"<task>\") answers from the shipped, \
+       source-generated snapshot — the public path, a source-backed example, and the next drill — \
+       before you guess or grep. It is orientation for the pre-edit moment, not symbol lookup. Run \
+       $(b,fennec discover) with no task to learn the tool itself.";
+    `Pre "  fennec discover \"protect a route with basic auth\"";
+    `Pre "  fennec discover --browse Paw          # explore a module surface";
+    `Pre "  fennec discover --why api:Paw.Session.make" ]
+
 let build_cmd =
   let doc = "Build JavaScript and CSS for production" in
   let man =
@@ -486,6 +500,7 @@ let dev_cmd =
       `Pre "  fennec dev --dry-run       # show what would run";
       `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
+    @ discovery_man
   in
   Cmd.v (Cmd.info "dev" ~doc ~man)
     Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ attach_arg $ agent_dir_arg $ debug_arg)
@@ -624,6 +639,7 @@ let new_cmd =
       `S Manpage.s_examples;
       `Pre "  fennec new hello-fennec     # scaffold ./hello-fennec";
       `Pre "  cd hello-fennec && dune build && fennec dev" ]
+    @ discovery_man
   in
   Cmd.v (Cmd.info "new" ~doc ~man) Term.(const go $ name_arg)
 
@@ -647,6 +663,7 @@ let doctor_cmd =
          non-zero when something required is missing, so it doubles as a CI / setup gate.";
       `S Manpage.s_examples;
       `Pre "  fennec doctor                  # check the toolchain in the current project" ]
+    @ discovery_man
   in
   Cmd.v (Cmd.info "doctor" ~doc ~man) Term.(const go $ const ())
 
@@ -822,6 +839,7 @@ let test_cmd =
       `Pre "  fennec test docs --strict      # …make missing docs a CI gate";
       `Pre "  fennec test docs --promote     # move .ml-only docs into the .mli";
       `Pre "  fennec test new system reclaim # scaffold test/system/reclaim_test.ml" ]
+    @ discovery_man
   in
   Cmd.v (Cmd.info "test" ~doc ~man)
     Term.(const go $ pos_arg $ grep_arg $ max_failures_arg $ no_fail_fast_arg $ reporter_arg $ jobs_arg $ headed_arg $ screenshots_arg $ port_arg $ strict_arg $ private_arg $ promote_arg $ discover_arg $ mongo_arg)

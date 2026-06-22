@@ -194,7 +194,12 @@ let run ?(in_dir = Sys.getcwd ()) (name : string) : int =
       Printf.printf "Created %s/ — a minimal frontend Fennec app:\n" name;
       List.iter (fun (rel, _) -> Printf.printf "  %s/%s\n" name rel) fs;
       Printf.printf
-        "\nNext:\n  cd %s\n  dune build      # compile (preprocesses the .mlx)\n  fennec dev      # run with livereload\n\nStuck on the editor or build? Run `fennec doctor`.\n"
+        "\nNext:\n\
+        \  cd %s\n\
+        \  dune build              # compile (preprocesses the .mlx)\n\
+        \  fennec dev              # run with livereload\n\
+        \  fennec discover \"TASK\"   # find the Fennec API for whatever you build next\n\n\
+         Stuck on the editor or build? Run `fennec doctor`.\n"
         name;
       flush stdout;
       0
