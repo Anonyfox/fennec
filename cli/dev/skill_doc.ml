@@ -10,6 +10,7 @@ let render () =
       "fennec                         # print this guide";
       "fennec discover \"TASK\"         # find the Fennec way before editing";
       "fennec dev                     # discover and run the app with live reload";
+      "fennec console                 # REPL with the whole app + framework loaded (no HTTP)";
       "fennec test                    # fast unit gate";
       "fennec test all                # unit -> http -> browser -> system -> docs";
       "fennec test docs               # doc coverage, warn-only by default";
@@ -51,6 +52,17 @@ let render () =
       "```";
       "";
       "When `MONGO_URL` is unset, `fennec dev` auto-starts/adopts a local MongoDB if `mongod` is available. If not, the app still boots and database-backed features fail clearly when used.";
+      "";
+      "## Console";
+      "";
+      "`fennec console` boots the whole app — framework, your libraries, the data backend (the persistent burrow in dev) — into an OCaml REPL, like `iex -S mix` or `rails console`. Evaluate against the live runtime with the app's own modules in scope:";
+      "";
+      "```sh";
+      "fennec console                 # standalone REPL (no HTTP server)";
+      "fennec dev --console           # the dev loop AND a REPL pinned to the bottom of the feed";
+      "```";
+      "";
+      "It runs the project's `console` target (a bytecode toplevel calling `Fennec.console_run`, never `Fennec.serve`, so server discovery ignores it). The backend is shared on disk, so what you query is the same data the dev server serves. Ctrl-C cancels a running eval; Ctrl-D leaves. Use it to probe collections, call a handler, or check an Accounts/Sift expression without writing a throwaway test.";
       "";
       "## Agent Fastlane";
       "";

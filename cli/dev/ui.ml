@@ -18,6 +18,8 @@ type t = {
   mutable raw : string; (* unparseable diagnostic text, shown verbatim if [problems] is empty *)
   mutable serving : bool; (* is a last-good server still up while broken? *)
   mutable region : int; (* lines the live region currently occupies (interactive only) *)
+  mutable prompt : (string * int) option; (* the REPL input line + cursor col, for `dev --console` *)
+  mutable prompt_drawn : bool; (* is a prompt line currently the bottom anchor on screen? *)
   mutable builds : int;
   mutable total_ms : float;
 }
@@ -26,7 +28,8 @@ let stdout_writer s = print_string s; flush stdout
 
 let create ?(out = stdout_writer) ?caps () =
   let caps = match caps with Some c -> c | None -> Tty.detect () in
-  { out; caps; dir = "."; ready_shown = false; problems = []; raw = ""; serving = false; region = 0; builds = 0; total_ms = 0. }
+  { out; caps; dir = "."; ready_shown = false; problems = []; raw = ""; serving = false; region = 0;
+    prompt = None; prompt_drawn = false; builds = 0; total_ms = 0. }
 
 (* ---- colour + glyph helpers ---- *)
 let c t code s = Tty.sgr t.caps code s
@@ -57,9 +60,16 @@ let fmt_trigger (caps : Tty.t) trig =
 let fmt_ms = function Some ms -> Printf.sprintf "%.0fms" ms | None -> "—"
 
 (* ---- live-region plumbing (interactive only) ---- *)
+(* erase the live "tail" — the problem region plus, under [dev --console], the REPL prompt below it.
+   With a prompt drawn the cursor sits mid prompt-line, so return to column 0 first; then rise past the
+   region (the prompt is the line we're on) and clear downward. *)
 let erase_region t =
-  if t.caps.interactive && t.region > 0 then (t.out (Tty.cursor_up t.region); t.out Tty.erase_below);
-  t.region <- 0
+  if t.caps.interactive && (t.region > 0 || t.prompt_drawn) then (
+    if t.prompt_drawn then t.out Tty.cr;
+    t.out (Tty.cursor_up t.region);
+    t.out Tty.erase_below);
+  t.region <- 0;
+  t.prompt_drawn <- false
 
 (* A code frame read from the source itself — for errors where dune gives no excerpt (mlx/ocaml
    SYNTAX errors). dune's line:col is a real byte offset, but it marks the parser's point of
@@ -135,11 +145,33 @@ let render_region t : string =
 
 let draw_region t =
   let s = render_region t in
-  if s <> "" then (t.out s; if t.caps.interactive then t.region <- count_lines s)
+  if s <> "" then (t.out s; if t.caps.interactive then t.region <- count_lines s);
+  (* the REPL prompt (dev --console) is the bottom-most line, below the problem region; the cursor is
+     left within it so the user sees where they are typing *)
+  match t.prompt with
+  | Some (line, cursor) when t.caps.interactive ->
+    t.out line;
+    t.out Tty.cr;
+    if cursor > 0 then t.out (Printf.sprintf "\027[%dC" cursor);
+    t.prompt_drawn <- true
+  | _ -> ()
 
-(* print a permanent log line, keeping any live region pinned below it *)
+(* print a permanent log line, keeping the live region + prompt pinned below it *)
 let log t line =
   if t.caps.interactive then (erase_region t; t.out (line ^ "\n"); draw_region t) else t.out (line ^ "\n")
+
+(* ── dev --console: the REPL prompt as the bottom anchor (interactive only) ──────────────────────── *)
+
+(* (re)draw the input line; everything else (HTTP, build, problems) streams ABOVE it via [log]. *)
+let set_prompt t line ~cursor =
+  if t.caps.interactive then (erase_region t; t.prompt <- Some (line, cursor); draw_region t)
+
+(* freeze the current input line into the scrollback (on submit), then drop it; the caller redraws the
+   fresh empty prompt next *)
+let commit_prompt t =
+  match t.prompt with
+  | Some (line, _) when t.caps.interactive -> erase_region t; t.prompt <- None; t.out (line ^ "\n"); draw_region t
+  | _ -> ()
 
 (* ---- event lines ---- *)
 let event t glyph color trigger ms verb =

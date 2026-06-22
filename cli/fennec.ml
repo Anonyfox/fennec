@@ -390,10 +390,36 @@ let dev_cmd =
     in
     Arg.(value & flag & info [ "debug" ] ~doc)
   in
-  let go target exe assets dry clean port mongo agent attach agent_dir debug =
+  let console_arg =
+    let doc =
+      "Also open an interactive REPL pinned to the bottom of the dev feed (like $(b,iex -S mix \
+       phx.server)): the dev loop streams above, you evaluate against the live app below. Builds and \
+       runs the project's $(b,console) target (a sibling process sharing the backend on disk)."
+    in
+    Arg.(value & flag & info [ "console" ] ~doc)
+  in
+  let go target exe assets dry clean port mongo agent attach agent_dir debug console =
     (* fast by default (fastdev profile, no -g — see Build_dir); --debug restores -g backtraces. This is
        the one place the dev loop opts out of the standard `dev` build dir into its isolated one. *)
     Unix.putenv "FENNEC_DEV_PROFILE" (Fennec_dev.Build_dir.dev_loop_profile ~debug);
+    (* --console: build the project's sibling `console.bc` (derived from the server exe path) and hand
+       its path to the supervisor, which spawns it and weaves a REPL prompt into the dev UI. *)
+    let console_bc_for ~root ~exe =
+      if not console then None
+      else
+        let rel =
+          let p = root ^ "/" in
+          if String.length exe > String.length p && String.sub exe 0 (String.length p) = p then String.sub exe (String.length p) (String.length exe - String.length p) else exe
+        in
+        match String.split_on_char '/' rel with
+        | "_build" :: _profile :: rest when rest <> [] ->
+          let src = String.concat "/" (List.filteri (fun i _ -> i < List.length rest - 1) rest) in
+          let target = Filename.concat src "console.bc" in
+          let console_bc = Filename.concat (Filename.dirname exe) "console.bc" in
+          if Sys.command (Printf.sprintf "cd %s && dune build %s" (Filename.quote root) (Filename.quote target)) = 0 then Some console_bc
+          else (Printf.eprintf "fennec dev --console: could not build %s — the app needs a `console` target (see `fennec console`)\n%!" target; None)
+        | _ -> None
+    in
     (* what dune watches: an explicit --target if given, else the discovered server bytecode PLUS
        the served web-root dir (so the client bundle rebuilds too, not just the SSR server) *)
     let dev_targets (d : Discover.t) =
@@ -456,7 +482,8 @@ let dev_cmd =
            discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
            needed, but it's CORRECT: @@default includes the web root, so frontend livereload still
            works. Pass --target to scope it. (Supervisor.run blocks until killed; 0 is for the type.) *)
-        Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
+        let console_bc = console_bc_for ~root ~exe:exe_path in
+        Fennec_dev.Supervisor.run ?port ?agent_dir ?console_bc ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
         0
       | None -> (
         match Discover.find () with
@@ -470,7 +497,8 @@ let dev_cmd =
             match agent_dir with Some d -> Some d | None -> if agent then Some (Fennec_fastlane.Journal.default_dir ~root:d.Discover.root) else None
           in
           install_hooks ();
-          Fennec_dev.Supervisor.run ?port ?agent_dir ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
+          let console_bc = console_bc_for ~root:d.Discover.root ~exe:d.Discover.exe in
+          Fennec_dev.Supervisor.run ?port ?agent_dir ?console_bc ~targets:(dev_targets d) ~exe:d.Discover.exe ~assets;
           0)
     end
   in
@@ -497,13 +525,14 @@ let dev_cmd =
       `Pre "  fennec dev                 # discover the server and run it";
       `Pre "  fennec dev --agent         # same, plus an agent event journal";
       `Pre "  fennec dev --agent --attach # app loop with current coding harness attached";
+      `Pre "  fennec dev --console       # same, plus a REPL pinned to the bottom of the feed";
       `Pre "  fennec dev --dry-run       # show what would run";
       `Pre "  fennec dev --port 9000     # run an isolated instance on a different port block";
       `Pre "  fennec dev --target @examples/site/dev _build/default/examples/site/server.bc" ]
     @ discovery_man
   in
   Cmd.v (Cmd.info "dev" ~doc ~man)
-    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ attach_arg $ agent_dir_arg $ debug_arg)
+    Term.(const go $ target_arg $ exe_arg $ assets_arg $ dry_arg $ clean_arg $ port_arg $ mongo_arg $ agent_arg $ attach_arg $ agent_dir_arg $ debug_arg $ console_arg)
 
 let agent_cmd =
   let dir_arg =

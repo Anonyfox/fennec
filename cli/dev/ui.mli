@@ -66,5 +66,18 @@ val app : t -> string -> unit
     plus its message, shown in every mode so a piped agent sees runtime failures. Always append-only. *)
 val http : t -> Paw.Access.t -> unit
 
+(** {1 Console prompt (dev --console)}
+
+    Under [dev --console] an interactive REPL prompt is pinned as the bottom-most line; every other
+    line ({!app}, {!http}, build events, the problem region) streams ABOVE it, so the dev feed and the
+    REPL coexist in one terminal. No-ops in the plain (piped) view. *)
+
+(** (Re)draw the input line [line] with the cursor at byte column [cursor]. *)
+val set_prompt : t -> string -> cursor:int -> unit
+
+(** Freeze the current input line into the scrollback (on Enter), then clear it; the caller draws the
+    next empty prompt with {!set_prompt}. *)
+val commit_prompt : t -> unit
+
 (** Clean-shutdown sign-off with a terse session summary. *)
 val stopped : t -> unit

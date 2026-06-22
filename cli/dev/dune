@@ -13,6 +13,8 @@
  (libraries
   unix
   fennec_tty
+  fennec_console
+  fennec.console.protocol
   fennec_fastlane
   fennec-paw
   fennec-hunt.unit

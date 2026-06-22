@@ -52,7 +52,7 @@ let ping control_path frame =
         ignore (Unix.write_substring fd msg 0 (String.length msg)))
   with _ -> ()
 
-let run ?port ?agent_dir ~targets ~exe ~assets =
+let run ?port ?agent_dir ?console_bc ~targets ~exe ~assets =
   if not (Sys.file_exists "dune-project") then (ef "fennec dev: run from a dune project root (no dune-project here)\n"; exit 1);
   let ui = Ui.create () in
   Ui.start ui ~dir:(match targets with t :: _ -> Filename.dirname t | [] -> ".");
@@ -265,12 +265,29 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
         | None -> Ui.notice ui Ui.Error (Printf.sprintf "could not start the server (%s missing?)" exe); record_pids ())
   in
 
+  (* ═══════════ dev --console: a REPL sidecar process woven into the dev UI ═══════════
+     The console is its OWN process (the `console` byte target, which links the engine); the supervisor
+     drives its eval socket and renders the prompt as the dev UI's bottom anchor. Defined here (before
+     [shutdown]) so teardown can restore the terminal and reap the child. *)
+  let console : (Fennec_console.Console_client.t * Fennec_console.Repl.t * int * Unix.terminal_io option) option ref = ref None in
+  let teardown_console () =
+    match !console with
+    | None -> ()
+    | Some (client, _, pid, saved) ->
+      (match saved with Some s -> (try Unix.tcsetattr Unix.stdin Unix.TCSANOW s with _ -> ()) | None -> ());
+      (try Ui.commit_prompt ui with _ -> ()); (* drop the prompt line from the live UI *)
+      (try Fennec_console.Console_client.close client with _ -> ());
+      (try Unix.kill pid Sys.sigterm with _ -> ());
+      console := None
+  in
+
   let shutting_down = ref false in
   let shutdown _ =
     (* idempotent: a second signal (Ctrl-C mashed, or SIGTERM right after SIGINT) must not re-enter
        the teardown — just leave now. Keeps the handler from racing its own kill/reap. *)
     if !shutting_down then exit 0;
     shutting_down := true;
+    teardown_console (); (* restore the terminal (raw → cooked) before anything prints *)
     (match !server with Up up -> Server_proc.stop up.proc | Down -> ()); (* frees the port before we go *)
     Ui.stopped ui;
     emit_verdict Verdict.Stopped;
@@ -499,6 +516,79 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
     | Down -> ()
     | Up up -> ( match Server_proc.reap up.proc with Some status -> on_server_crash up status | None -> ())
   in
+  (* spawn the console sidecar (if requested), connect its eval socket, put the terminal in raw mode,
+     and weave its prompt into [ui]. The console is its own process sharing the dev backend on disk. *)
+  let start_console cbc =
+    let sock = Fennec_console.Paths.socket ~root in
+    (try Sys.remove sock with _ -> ());
+    let logpath = Filename.concat (Filename.get_temp_dir_name ()) (Printf.sprintf "fennec-console-%d.log" (Unix.getpid ())) in
+    let logfd = try Unix.openfile logpath [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 with _ -> Unix.stderr in
+    let devnull = try Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 with _ -> Unix.stdin in
+    let env =
+      Array.append (Unix.environment ())
+        [| Dev_proto.env_console_sock ^ "=" ^ sock;
+           Dev_proto.env_dev_parent ^ "=" ^ string_of_int (Unix.getpid ());
+           Dev_proto.env_mode ^ "=development" |]
+    in
+    match (try Some (Unix.create_process_env cbc [| cbc |] env devnull logfd logfd) with _ -> None) with
+    | None -> Ui.notice ui Ui.Warn "dev --console: could not start the console process"
+    | Some pid ->
+      (if logfd <> Unix.stderr then (try Unix.close logfd with _ -> ()));
+      (if devnull <> Unix.stdin then (try Unix.close devnull with _ -> ()));
+      let rec wait n = if Sys.file_exists sock then true else if n <= 0 then false else (Unix.sleepf 0.05; wait (n - 1)) in
+      if not (wait 160) then (
+        Ui.notice ui Ui.Warn (Printf.sprintf "dev --console: the console did not come up (see %s)" logpath);
+        (try Unix.kill pid Sys.sigterm with _ -> ()))
+      else (
+        match (try Some (Fennec_console.Console_client.connect sock) with _ -> None) with
+        | None -> Ui.notice ui Ui.Warn "dev --console: could not connect to the console"; (try Unix.kill pid Sys.sigterm with _ -> ())
+        | Some client ->
+          let saved =
+            try
+              let s = Unix.tcgetattr Unix.stdin in
+              Unix.tcsetattr Unix.stdin Unix.TCSANOW
+                { s with c_icanon = false; c_echo = false; c_isig = false; c_icrnl = false; c_ixon = false; c_vmin = 1; c_vtime = 0 };
+              Some s
+            with _ -> None
+          in
+          let sink : Fennec_console.Repl.sink =
+            { banner = (fun (b : Console_protocol.banner) -> Ui.notice ui Ui.Info (Printf.sprintf "console ready · data %s · open %s" b.backend (String.concat " " b.opened)));
+              output = (fun ~id:_ ~text ~is_error:_ -> List.iter (fun l -> if String.trim l <> "" then Ui.app ui ("  " ^ l)) (String.split_on_char '\n' text));
+              prompt = (fun line ~cursor -> Ui.set_prompt ui line ~cursor);
+              commit = (fun () -> Ui.commit_prompt ui);
+              notice = (fun m -> Ui.notice ui Ui.Info m) }
+          in
+          let session = Fennec_console.Repl.create ~client ~sink () in
+          Fennec_console.Console_client.send client (Console_protocol.Hello { cols = 80 });
+          Fennec_console.Repl.render_prompt session;
+          console := Some (client, session, pid, saved))
+  in
+  (match console_bc with Some cbc -> start_console cbc | None -> ());
+
+  (* when the console is active, wait on stdin + its socket so keystrokes are responsive, then poll
+     dune non-blockingly; with no console, the original 0.2s dune-driven wait. *)
+  let pump_console () =
+    match !console with
+    | None -> false
+    | Some (client, session, _, _) ->
+      let cfd = Fennec_console.Console_client.fd client in
+      (match (try Unix.select [ Unix.stdin; cfd ] [] [] 0.15 with _ -> ([], [], [])) with
+       | rs, _, _ ->
+         (if List.mem Unix.stdin rs then
+            let buf = Bytes.create 4096 in
+            match Unix.read Unix.stdin buf 0 4096 with
+            | 0 -> ()
+            | exception _ -> ()
+            | n ->
+              List.iter
+                (fun k -> match Fennec_console.Repl.feed_key session k with `Quit -> teardown_console () | `Ok -> ())
+                (Fennec_console.Key.parse (Bytes.sub_string buf 0 n)));
+         if !console <> None && List.mem cfd rs then (
+           match Fennec_console.Console_client.receive client with
+           | `Closed -> teardown_console ()
+           | `Replies rs -> Fennec_console.Repl.feed_replies session rs));
+      true
+  in
   let step () =
     (* drain the server's output BEFORE checking for its exit, so an EADDRINUSE message ("port N
        in use") is parsed into [busy_port] before [on_server_crash] runs and wants it. *)
@@ -507,7 +597,8 @@ let run ?port ?agent_dir ~targets ~exe ~assets =
        server that crashed on boot during an edit burst (steady stream of settles) wouldn't be
        noticed until the burst quieted. *)
     check_server ();
-    match Dune_watch.poll !dw ~timeout:0.2 with Some ev -> handle (newest ev) | None -> ()
+    if pump_console () then (match Dune_watch.poll !dw ~timeout:0.0 with Some ev -> handle (newest ev) | None -> ())
+    else match Dune_watch.poll !dw ~timeout:0.2 with Some ev -> handle (newest ev) | None -> ()
   in
   let rec loop () =
     (try step () with e -> ef "fennec dev: internal error (continuing): %s\n%!" (Printexc.to_string e); Unix.sleepf 0.1);

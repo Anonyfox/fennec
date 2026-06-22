@@ -17,5 +17,14 @@
 (** Watch [targets] with [dune build --watch], supervise the server executable [exe], and serve
     livereload from the [assets] subdirectory of the exe's build dir. Blocks until killed
     (SIGINT/SIGTERM clean up the children). *)
-val run : ?port:int -> ?agent_dir:string -> targets:string list -> exe:string -> assets:string -> unit
+val run :
+  ?port:int ->
+  ?agent_dir:string ->
+  ?console_bc:string ->
+  targets:string list ->
+  exe:string ->
+  assets:string ->
+  unit
+(** [?console_bc] is the path of the project's built [console] bytecode; when given ([dev --console]),
+    the supervisor spawns it, drives its eval socket, and pins a REPL prompt as the UI's bottom line. *)
 (* C-stub loading for spawned bytecode servers (CAML_LD_LIBRARY_PATH) lives in {!Stublibs}. *)
