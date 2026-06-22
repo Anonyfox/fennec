@@ -210,3 +210,35 @@ val serve :
      (sw:Eio.Switch.t -> sleep:(float -> unit) -> net:[ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t -> unit) ->
   Paw.Endpoint.t list ->
   unit
+
+(** {1 Console (dev-only seam)}
+
+    The interactive console ({!Fennec_console_engine}) links the OCaml toplevel, so it must never reach
+    the production binary. It registers itself through {!set_console_hook} — set by the dev byte build's
+    engine at load time, never present in a native release build — so {!serve}, in dev, can start the
+    in-process REPL eval socket without {!Fennec}'s core ever referencing the compiler. This is the same
+    dev-capability seam as {!Mail.set_dev_capture}; applications never call it. *)
+
+(** A console starter the engine registers: given the live runtime ([sw]/[net]/[sleep]) and the app's
+    declared [endpoints], it forks the eval-socket listener into [sw]. The engine self-gates on
+    [FENNEC_CONSOLE_SOCK], so it opens nothing unless the fennec tooling provided a socket path. *)
+type console_start =
+  sw:Eio.Switch.t ->
+  net:[ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t ->
+  sleep:(float -> unit) ->
+  endpoints:Paw.Endpoint.t list ->
+  unit
+
+(** Register the console engine's starter (dev byte build only). {!serve} invokes it in dev. *)
+val set_console_hook : console_start -> unit
+
+(** Run a pure interactive console — boot the data-layer runtime (same backend, accounts, and ambient
+    switch as {!serve}; the persistent burrow in dev, shared on disk with a running server), start the
+    eval engine, and block. NO HTTP listener.
+
+    This is the entire [main] of a dedicated console build: a byte executable that links
+    {!Fennec_console_engine} and runs [let () = Fennec.console_run ()]. Because it never calls {!serve},
+    the CLI's server discovery ignores it — adding a console build never disturbs the app's one real
+    server. [fennec console] builds and runs such a target. Exits with a message if the engine isn't
+    linked (a non-console build). *)
+val console_run : ?accounts:Accounts.config -> unit -> unit

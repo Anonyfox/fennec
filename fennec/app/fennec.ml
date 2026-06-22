@@ -144,73 +144,53 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
    which finds the single [serve] site. *)
 let started = Atomic.make false
 
-let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error ?on_start
-    (endpoints : Endpoint.t list) : unit =
-  if not (Atomic.compare_and_set started false true) then
-    failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
-  (* apply the declarative Accounts config (if any) to the process-native instance BEFORE [Accounts.boot]
-     forces it below — so the configured cookie/path/lifetime/policy/password settings and the derived
-     routes/method gate take effect at boot. Omitting [?accounts] leaves Accounts at today's defaults
-     (hard-wired, every feature off, all methods on) — byte-identical to before. *)
+(* ── the dev-only console seam ────────────────────────────────────────────────────────────────────
+   The console eval engine ({!Fennec_console_engine}) links [compiler-libs.toplevel], so it must stay
+   out of the prod binary. It registers itself HERE — a hook the dev byte build's engine sets at load
+   time and the prod native build simply never has — so [serve] starts the REPL without [fennec]'s core
+   ever referencing the compiler. Same shape as {!Mail.set_dev_capture}. The engine reads its unix-socket
+   path from the environment ([FENNEC_CONSOLE_SOCK]); with none set it stays idle, so a server not
+   launched by the fennec tooling never opens a console. *)
+type console_start =
+  sw:Eio.Switch.t ->
+  net:[ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t ->
+  sleep:(float -> unit) ->
+  endpoints:Endpoint.t list ->
+  unit
+
+let console_hook : console_start option ref = ref None
+let set_console_hook f = console_hook := Some f
+
+(* [FENNEC_CONSOLE=1] turns [serve] into a pure console: boot the runtime, run the eval engine, block —
+   no HTTP listener. The user's [server.ml] is unchanged; [fennec console] sets the flag. *)
+let console_mode () =
+  match Sys.getenv_opt Dev_proto.env_console with Some ("1" | "on" | "true" | "yes") -> true | _ -> false
+
+(* Boot the full data-layer runtime and hand [env]/[sw] to [f]: own Eio, install the ambient switch
+   (mongo/burrow), bind the mail + accounts-HTTPS transports, build the accounts store, warm the SSR
+   data registry, and arm the dev-supervisor self-exit watch. Shared VERBATIM by the HTTP server ([serve])
+   and the console (no HTTP) so the REPL boots byte-for-byte like the running app — same backend, same
+   accounts, same ambient switch. The boot order is load-bearing: the ambient switch is installed before
+   accounts so collections open by name; see the per-step notes that lived in [serve]. *)
+let with_runtime ?accounts (f : env:_ -> sw:Eio.Switch.t -> unit) : unit =
+  (* apply the declarative Accounts config (if any) BEFORE [Accounts.boot] forces the store below *)
   Accounts.start ?config:accounts ();
   Eio_main.run @@ fun env ->
-  let lr = Livereload.create () in
-  (* Livereload is a dev convenience; it reloads the page on a frontend edit. For an e2e or
-     any controlled run it is pure nondeterminism (spontaneous navigations), so it can be
-     turned off while still serving the dev (on-disk) web root: set FENNEC_DEV_LIVERELOAD=0. *)
-  let livereload_on =
-    is_dev && (match Sys.getenv_opt Dev_proto.env_dev_livereload with Some ("0" | "off" | "false" | "no") -> false | _ -> true)
-  in
-  let endpoints =
-    List.map (fun e -> Endpoint.prepend (Accounts.native_paw ()) e) endpoints
-  in
-  (* auto-mount the co-located data refetch routes (Fur.Data.local / model_local) on every endpoint:
-     one paw that, per request, answers any registered data path from the process registry — no
-     server.ml route wiring. Prepended so a data path is matched before an SSR app's catch-all. The
-     registry is warmed at boot below; an empty registry ⇒ the paw always declines (no-op). *)
-  let endpoints =
-    List.map (fun e -> Endpoint.prepend data_route_paw e) endpoints
-  in
-  let endpoints =
-    if livereload_on then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints
-    else endpoints
-  in
   Eio.Switch.run @@ fun sw ->
-  if livereload_on then dev_control ~sw ~net:(Eio.Stdenv.net env) lr;
-  (* Boot the data layer inside the long-lived switch, BEFORE any endpoint is served: install the ambient
-     Eio switch (so app + accounts collections open by name — no [sw] threading) and, when MONGO_URL is a
-     burrow:// URL with an authority, front the embedded engine over the MongoDB wire protocol so `mongosh`
-     connects (zero-config in dev). MONGO_URL alone decides the backend; there is no app-level "start". *)
-  Fennec_mongo_dynamic.boot ~sw ~net:(Eio.Stdenv.net env) ();
-  (* outbound email transport from MAIL_URL (smtp:// / smtps:// / unset ⇒ dev log), booted with the
-     switch's net so SMTP submission runs on the server's Eio loop *)
-  Fennec_mail.boot ~sw ~net:(Eio.Stdenv.net env) ();
-  (* the ambient outbound-HTTPS transport the Accounts provider presets use for token-exchange / profile
-     / JWKS / discovery calls: bind fennec's prod-safe HTTPS client (Paw.Https_client — peer verified
-     against the OS trust store) to the server's net, exactly as the mail transport is bound. Without a
-     configured SSO preset this is never exercised; with one, [Accounts.OAuth.github ~client_id
-     ~client_secret ()] is a true one-liner because the preset's exchange reads this transport at
-     callback time (a request handler has no Eio net of its own). *)
-  Accounts.set_http_transport (Accounts.Http_transport.default ~net:(Eio.Stdenv.net env) ());
-  (* eager accounts: build the (memoized) store now — inside the switch, after the ambient switch is
-     installed — so the engine opens + indexes are ensured at boot, not on the first authenticated
-     request. Opt-in is preserved: no MONGO_URL ⇒ the no-op store, and a request with no session cookie
-     resolves to [user_id = None] without touching the database. *)
+  let net = Eio.Stdenv.net env in
+  (* install the ambient Eio switch (app + accounts collections open by name — no [sw] threading) and,
+     for a burrow:// URL with an authority, front the embedded engine over the MongoDB wire protocol *)
+  Fennec_mongo_dynamic.boot ~sw ~net ();
+  (* outbound email transport from MAIL_URL (unset ⇒ dev log), on the server's Eio loop *)
+  Fennec_mail.boot ~sw ~net ();
+  (* the ambient outbound-HTTPS transport the Accounts SSO presets use for token-exchange / JWKS calls *)
+  Accounts.set_http_transport (Accounts.Http_transport.default ~net ());
+  (* eager accounts: build the (memoized) store now so indexes are ensured at boot, not first request *)
   Accounts.boot ();
-  (* warm the co-located data registry: render each recorded SSR app once (throwaway) so every
-     component's [Fur.Data.local] fetcher registers NOW — before the first request. This makes the
-     auto-mounted refetch routes ([data_route_paw]) deterministic from boot (no 404 on a direct API hit
-     before any page render). Runs after the data layer is up (a component's setup may subscribe). With
-     no Fur SSR app (or no co-located resource) this is a cheap no-op. *)
+  (* warm the co-located data registry so the auto-mounted refetch routes are deterministic from boot *)
   Fur_ssr.warm_data ();
-  (* never outlive the dev supervisor: if [fennec dev] dies (even by SIGKILL, which it can't
-     clean up after) we'd otherwise keep the port and make the next `fennec dev` fail to bind.
-     The supervisor (our direct parent) passes its pid as FENNEC_DEV_PARENT; we exit the moment
-     getppid() stops matching it. When the supervisor dies we are reparented, so getppid changes
-     to WHATEVER reaper takes us (init, a subreaper, a shell) — this is robust regardless of the
-     reparent target, AND immune to pid recycling (getppid is our real current parent; a recycled
-     pid elsewhere is not it). Independent of livereload, so an e2e run self-exits too. Cheap: a
-     0.25s poll on a background fiber. *)
+  (* never outlive the dev supervisor: it passes its pid as FENNEC_DEV_PARENT and we self-exit the moment
+     getppid() stops matching it — robust to any reparent target, immune to pid recycling. A 0.25s poll. *)
   (match Option.bind (Sys.getenv_opt Dev_proto.env_dev_parent) int_of_string_opt with
   | Some parent ->
     Eio.Fiber.fork ~sw (fun () ->
@@ -222,6 +202,71 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error
         in
         watch ())
   | None -> ());
+  f ~env ~sw
+
+(* start the dev-only eval engine if it registered itself (the byte build) and we are in dev — so
+   `fennec console` can attach to this live process. A prod build (no engine linked) is a silent no-op,
+   and even in dev the engine self-gates on [FENNEC_CONSOLE_SOCK], so this never opens a socket
+   unless the fennec tooling asked for one. *)
+let start_console_engine ~env ~sw ~endpoints =
+  if is_dev then
+    match !console_hook with
+    | Some start ->
+      start ~sw ~net:(Eio.Stdenv.net env) ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) ~endpoints
+    | None -> ()
+
+(* A pure console — boot the runtime, run the eval engine, and block; NO HTTP, NO endpoints. This is the
+   entry point of a dedicated console build (a byte target that links {!Fennec_console_engine} and whose
+   whole [main] is [let () = Fennec.console_run ()]). Because it does NOT call {!serve}, the CLI's server
+   discovery ignores it, so adding a console build never disturbs the app's single real server. It boots
+   the SAME data layer as [serve] (same backend — the persistent burrow in dev — same accounts), so the
+   REPL behaves like the app; with the burrow shared on disk it sees the running server's data too. *)
+let console_run ?accounts () =
+  with_runtime ?accounts @@ fun ~env ~sw ->
+  match !console_hook with
+  | Some start ->
+    start ~sw ~net:(Eio.Stdenv.net env) ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) ~endpoints:[];
+    Eio.Fiber.await_cancel ()
+  | None ->
+    Printf.eprintf "fennec: this console build is missing the engine — link fennec.console.engine\n%!";
+    exit 1
+
+let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error ?on_start
+    (endpoints : Endpoint.t list) : unit =
+  if not (Atomic.compare_and_set started false true) then
+    failwith "Fennec.serve: a server is already running in this process — start the server in exactly one place";
+  if console_mode () then
+    (* a pure console (no HTTP): boot the runtime, run the eval engine, and block on the live switch. *)
+    with_runtime ?accounts @@ fun ~env ~sw ->
+    (match !console_hook with
+     | Some _ -> start_console_engine ~env ~sw ~endpoints; Eio.Fiber.await_cancel ()
+     | None ->
+       Printf.eprintf "fennec: %s set but the console engine is not linked (a dev-only build feature)\n%!"
+         Dev_proto.env_console;
+       exit 1)
+  else
+  with_runtime ?accounts @@ fun ~env ~sw ->
+  let net = Eio.Stdenv.net env in
+  (* the engine sees the user's declared endpoints (so `Console.routes ()` can list them); start it
+     before the route-wiring transforms below so it captures the app as authored, not the paw-wrapped form *)
+  start_console_engine ~env ~sw ~endpoints;
+  let lr = Livereload.create () in
+  (* Livereload is a dev convenience; turn it off (FENNEC_DEV_LIVERELOAD=0) for a deterministic e2e. *)
+  let livereload_on =
+    is_dev && (match Sys.getenv_opt Dev_proto.env_dev_livereload with Some ("0" | "off" | "false" | "no") -> false | _ -> true)
+  in
+  let endpoints =
+    List.map (fun e -> Endpoint.prepend (Accounts.native_paw ()) e) endpoints
+  in
+  (* auto-mount the co-located data refetch routes (Fur.Data.local / model_local) on every endpoint *)
+  let endpoints =
+    List.map (fun e -> Endpoint.prepend data_route_paw e) endpoints
+  in
+  let endpoints =
+    if livereload_on then List.map (fun e -> Endpoint.prepend (Livereload.paw lr) e) endpoints
+    else endpoints
+  in
+  if livereload_on then dev_control ~sw ~net lr;
   (* app startup hook — runs once in the server's Eio context (the long-lived switch + a clock-backed
      sleep), after the switch is live and BEFORE any connection is served. This is where an app
      creates resources that need the runtime — e.g. a real-mongo backend's collections and their

@@ -12,6 +12,7 @@
  ; adapters); the supervisor plugs in via Journal.{start,emit,emit_error}.
  (libraries
   unix
+  fennec_tty
   fennec_fastlane
   fennec-paw
   fennec-hunt.unit

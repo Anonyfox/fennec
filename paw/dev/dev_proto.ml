@@ -18,6 +18,8 @@ let env_dev_parent = "FENNEC_DEV_PARENT" (* the supervisor's pid; the server sel
 let env_dev_ui = "FENNEC_DEV_UI" (* "1" → the server reports its URLs for the CLI's banner *)
 let env_dev_livereload = "FENNEC_DEV_LIVERELOAD" (* "0" → serve the dev root but suppress livereload (e2e) *)
 let env_esbuild_worker = "FENNEC_ESBUILD_WORKER" (* path of the warm esbuild worker socket *)
+let env_console = "FENNEC_CONSOLE" (* "1" → serve boots the runtime + the eval engine, NO HTTP (a pure console) *)
+let env_console_sock = "FENNEC_CONSOLE_SOCK" (* path of the console eval unix socket the engine listens on (dev only) *)
 let env_port = "FENNEC_PORT" (* the base port: dev allocates the block from here; prod listens on it *)
 let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) override; auto by default *)
 

@@ -13,6 +13,8 @@
   fennec_buildkit
   cmdliner
   unix
+  fennec-paw
+  fennec_console
   fennec_dev
   fennec_fastlane
   fennec_testcmd

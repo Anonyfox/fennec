@@ -1,0 +1,24 @@
+; The in-server console EVAL ENGINE — a dev-only, bytecode-only library that hosts the OCaml toplevel
+; INSIDE the running app server, so a REPL evaluates against the server's OWN linked modules and LIVE
+; state (the open burrow, booted Accounts, in-flight fibers) — the `iex -S mix phx.server` model.
+;
+; It links [compiler-libs.toplevel], so it must NEVER reach the prod binary; it is byte-only (the
+; toplevel is bytecode) and registers itself through the dev hook ([Fennec.set_console_hook]) rather
+; than being referenced by fennec's core. The dev server build links it with -linkall (so the toplevel
+; can resolve every linked module); the prod native build links neither it nor the compiler.
+(library
+ (name console_engine)
+ (public_name fennec.console.engine)
+ (modes byte)
+ (libraries
+  fennec
+  fennec.console.protocol
+  compiler-libs.toplevel
+  eio
+  eio.unix
+  unix
+  fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

@@ -19,7 +19,7 @@
   test_pool
   test_reaper
   test_mongo_rs)
- (libraries fennec_dev fennec-paw fennec_testcmd unix))
+ (libraries fennec_dev fennec_tty fennec-paw fennec_testcmd unix))
 
 ; The PRIMARY proof for the warm test worker: a direct socket drive (no dev server). It spawns the
 ; worker and runs the example's test_components chain + the wwfix reload fixtures, asserting 42 checks

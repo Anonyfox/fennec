@@ -1,0 +1,8 @@
+; Terminal capability detection + low-level escape helpers, in their OWN tiny library so BOTH the
+; `fennec dev` UI and the console driver can share them without either pulling in the other (the
+; driver and the dev supervisor must not form a dependency cycle). Pure string-building over a
+; once-detected capability record; (wrapped false) keeps the module name a bare `Tty`.
+(library
+ (name fennec_tty)
+ (wrapped false)
+ (libraries unix))

@@ -725,6 +725,86 @@ let discover_cmd =
   in
   Cmd.v (Cmd.info "discover" ~doc ~man) Term.(const go $ json_arg $ more_arg $ why_arg $ browse_arg $ query_arg)
 
+(* `fennec console` — an interactive REPL with the whole app + framework loaded, no HTTP server. It
+   builds and runs the project's `console` target (a bytecode toplevel whose main is
+   [Fennec.console_run]), which boots the same runtime as the server (the persistent burrow in dev) and
+   serves an eval socket; this process is the terminal driver that connects to it. If a console is
+   already running for this project, we attach to that one instead of spawning a second. *)
+let console_cmd =
+  let socket_answers sock =
+    match try Some (Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0) with _ -> None with
+    | None -> false
+    | Some fd ->
+      let ok = try Unix.connect fd (Unix.ADDR_UNIX sock); true with _ -> false in
+      (try Unix.close fd with _ -> ());
+      ok
+  in
+  let go () =
+    match Fennec_dev.Discover.find () with
+    | Error e -> Printf.eprintf "fennec console: %s\n%!" e; 1
+    | Ok d ->
+      let sock = Fennec_console.Paths.socket ~root:d.Fennec_dev.Discover.root in
+      if socket_answers sock then (Fennec_console.Repl.run ~sock_path:sock; 0) (* attach to the running one *)
+      else begin
+        let console_target = Filename.concat d.Fennec_dev.Discover.src_dir "console.bc" in
+        let console_bc = Filename.concat (Filename.dirname d.Fennec_dev.Discover.exe) "console.bc" in
+        Printf.printf "fennec console: building…\n%!";
+        (* build from the workspace root so the root-relative target resolves regardless of the cwd *)
+        if Sys.command (Printf.sprintf "cd %s && dune build %s" (Filename.quote d.Fennec_dev.Discover.root) (Filename.quote console_target)) <> 0 then begin
+          Printf.eprintf
+            "fennec console: could not build %s — the app needs a `console` target:\n\
+            \  (executable (name console) (modes byte) (modules console) (link_flags (-linkall))\n\
+            \   (libraries fennec fennec.console.engine <your app libs>))\n\
+             with console.ml = `let () = Fennec.console_run ()`\n%!"
+            console_target;
+          1
+        end
+        else begin
+          Fennec_dev.Stublibs.ensure (); (* CAML_LD_LIBRARY_PATH so the bytecode console finds its C stubs *)
+          Unix.putenv Paw.Dev_proto.env_console_sock sock;
+          Unix.putenv Paw.Dev_proto.env_dev_parent (string_of_int (Unix.getpid ())); (* it self-exits if we die *)
+          Unix.putenv Paw.Dev_proto.env_mode "development";
+          (try Sys.remove sock with _ -> ());
+          let log = Filename.concat (Filename.get_temp_dir_name ()) "fennec-console.log" in
+          let logfd = Unix.openfile log [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
+          let devnull = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+          let pid = Unix.create_process console_bc [| console_bc |] devnull logfd logfd in
+          Unix.close logfd; Unix.close devnull;
+          let rec wait n = if Sys.file_exists sock then true else if n <= 0 then false else (Unix.sleepf 0.1; wait (n - 1)) in
+          if not (wait 100) then begin
+            Printf.eprintf "fennec console: the console did not start — see %s\n%!" log;
+            (try Unix.kill pid Sys.sigterm with _ -> ());
+            1
+          end
+          else (
+            Fun.protect
+              ~finally:(fun () ->
+                (try Unix.kill pid Sys.sigterm with _ -> ());
+                (try Sys.remove sock with _ -> ()))
+              (fun () -> Fennec_console.Repl.run ~sock_path:sock);
+            0)
+        end
+      end
+  in
+  let doc = "Open a REPL with the app + framework loaded (no HTTP server)" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Boot the whole app — the framework, your libraries, the data backend (the persistent burrow in \
+         dev) — into an OCaml toplevel and drop into a REPL, like $(b,iex -S mix) or $(b,rails console). \
+         It runs the project's $(b,console) target (which calls $(b,Fennec.console_run), not \
+         $(b,Fennec.serve), so it never disturbs the real server) and connects this terminal to it.";
+      `P
+        "Evaluate against the live runtime: query collections, call handlers, exercise Accounts, try a \
+         Sift query. The backend is shared on disk, so what you see and change is the same data the dev \
+         server serves. If a console is already running for this project, $(b,fennec console) attaches \
+         to it. Ctrl-C cancels a running evaluation; Ctrl-D leaves.";
+      `S Manpage.s_examples;
+      `Pre "  fennec console";
+      `Pre "  Pulse.find Task.collection (Sift.Filter.empty)" ]
+  in
+  Cmd.v (Cmd.info "console" ~doc ~man) Term.(const go $ const ())
+
 (* Internal: the persistent esbuild worker `fennec dev` spawns. Not for direct use. *)
 let worker_cmd =
   let socket_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"SOCKET") in
@@ -923,6 +1003,6 @@ let main_cmd =
        markdown when piped). `fennec skill` keeps the canonical raw markdown for agents. *)
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render_human ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
+  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; console_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

@@ -44,6 +44,11 @@ let server_ml =
   \  |> Paw.get \"/\" home\n\n\
    let () = Fennec.serve [ web ]\n"
 
+(* console.ml — the entire `fennec console` entry: boot the app's runtime (no HTTP) into a REPL with
+   the whole app + framework in scope. `Fennec.console_run` is not `Fennec.serve`, so server discovery
+   ignores this target. *)
+let console_ml = "let () = Fennec.console_run ()\n"
+
 let server_dune ~comp_lib =
   Printf.sprintf
     "; The server executable. `fennec dev` builds server.bc (bytecode) for a fast loop; a release\n\
@@ -51,7 +56,18 @@ let server_dune ~comp_lib =
      (executable\n\
     \ (name server)\n\
     \ (modes byte exe)\n\
+    \ (modules server)\n\
     \ (libraries fennec fennec.fur fennec.fur.html fennec.web %s))\n\
+     \n\
+     ; `fennec console` — a REPL with the whole app + framework loaded, no HTTP. A bytecode toplevel:\n\
+     ; the dev-only fennec.console.engine links the compiler, and -linkall lets the toplevel reach every\n\
+     ; module. It calls Fennec.console_run (not Fennec.serve), so `fennec dev` discovery ignores it.\n\
+     (executable\n\
+    \ (name console)\n\
+    \ (modes byte)\n\
+    \ (modules console)\n\
+    \ (link_flags (-linkall))\n\
+    \ (libraries fennec fennec.console.engine fennec.fur fennec.fur.html fennec.web %s))\n\
      \n\
      ; `fennec dev` builds under a custom `fastdev` profile (= dev minus `-g`) for fast incremental\n\
      ; relinks. This (env) makes that profile behave: force js_of_ocaml SEPARATE compilation (dune only\n\
@@ -66,7 +82,7 @@ let server_dune ~comp_lib =
     \   (compilation_mode separate)\n\
     \   (flags\n\
     \    (:standard \\ --source-map-inline --source-map --sourcemap)))))\n"
-    comp_lib
+    comp_lib comp_lib
 
 let hello_mlx =
   (* a real .mlx: bare-text JSX children + {expr} interpolation (the fennec surface) + a colocated\n\
@@ -148,6 +164,7 @@ let files ~(name : string) : (string * string) list =
   [ ("dune-project", dune_project_text);
     ("dune", server_dune ~comp_lib);
     ("server.ml", server_ml);
+    ("console.ml", console_ml);
     ("frontend/dune", frontend_dune ~comp_lib);
     ("frontend/hello.mlx", hello_mlx);
     (".gitignore", gitignore);
@@ -252,4 +269,4 @@ let%test "files: the server dune links that same components lib" =
 let%test "files: the file set is exactly the expected paths" =
   let paths = List.map fst (files ~name:"demo") |> List.sort compare in
   paths = List.sort compare
-    [ "dune-project"; "dune"; "server.ml"; "frontend/dune"; "frontend/hello.mlx"; ".gitignore"; "README.md" ]
+    [ "dune-project"; "dune"; "server.ml"; "console.ml"; "frontend/dune"; "frontend/hello.mlx"; ".gitignore"; "README.md" ]

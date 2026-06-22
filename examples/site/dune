@@ -94,6 +94,32 @@
   fennec.pwa
   fennec.pulse.app))
 
+; the CONSOLE target (`fennec console`) — a bytecode toplevel that boots the SAME runtime as the server
+; (no HTTP) and drops into a REPL with the whole app + framework in scope. It links the dev-only
+; `fennec.console.engine` (which links the compiler) and uses -linkall so the toplevel can resolve EVERY
+; linked module against its live runtime symbols. It calls `Fennec.console_run`, never `Fennec.serve`, so
+; the CLI's server discovery ignores it — adding it leaves `server.bc`/`server.exe` untouched. Bytecode
+; only (the toplevel is bytecode); it never reaches a release build.
+(executable
+ (name console)
+ (modes byte)
+ (modules console)
+ (link_flags (-linkall))
+ (libraries
+  fennec
+  fennec.console.engine
+  fennec.fur
+  fennec.fur.server
+  fennec.pulse.sift
+  web_app
+  site_handlers
+  admin_app
+  site_components
+  site_styles
+  site_store
+  fennec.pwa
+  fennec.pulse.app))
+
 ; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test
 ; machinery or its yojson dep. A pure-OCaml guard reads the native server.exe and fails if
 ; any forbidden module-name appears. Runs under `dune runtest`, so a regression trips CI. ----

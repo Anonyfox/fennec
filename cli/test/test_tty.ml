@@ -1,7 +1,7 @@
 (* Tty: the pure escape-builders + visible-width measurement (capability detection is IO and
    covered indirectly by the live integration). *)
 
-module T = Fennec_dev.Tty
+module T = Tty
 
 let fails = ref 0
 let check name c = if c then Printf.printf "  ok   %s\n" name else (incr fails; Printf.printf "  FAIL %s\n" name)

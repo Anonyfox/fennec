@@ -1,0 +1,12 @@
+; The console terminal DRIVER — the frontend half of the console: a raw-mode line editor, history,
+; tab completion, Ctrl-C, and the print-above-prompt rendering. It speaks Console_protocol over a Unix
+; socket to the in-server engine, so it carries NO app code and NO compiler — just terminal I/O. The
+; standalone `fennec console` owns the terminal; `dev --console` reuses the session through a dev-UI
+; sink (dependency-inverted, so this lib never imports the supervisor).
+(library
+ (name fennec_console)
+ (libraries fennec.console.protocol fennec_tty unix fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

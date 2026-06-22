@@ -1,0 +1,13 @@
+; The console wire protocol — the one seam between a console FRONTEND (the terminal driver, or a
+; future web/editor surface) and the in-server eval ENGINE. Deliberately tiny and dependency-light
+; (stdlib + the test runner only) so any frontend can speak it without pulling the framework or the
+; compiler. The message TYPES are the contract; both ends Marshal them, so no hand-written serializer
+; can ever drift from the types (the robustness the OCaml type system buys us for free).
+(library
+ (name console_protocol)
+ (public_name fennec.console.protocol)
+ (libraries fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

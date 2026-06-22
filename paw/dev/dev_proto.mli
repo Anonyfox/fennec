@@ -35,6 +35,14 @@ val env_dev_livereload : string
 (** [FENNEC_ESBUILD_WORKER] — path of the warm esbuild worker socket. *)
 val env_esbuild_worker : string
 
+(** [FENNEC_CONSOLE] — ["1"] turns the server into a pure console: boot the runtime + the eval engine,
+    no HTTP listener. The user's [server.ml] is unchanged; [fennec console] sets this. *)
+val env_console : string
+
+(** [FENNEC_CONSOLE_SOCK] — path of the console eval unix socket the in-server engine listens on (dev
+    only). With none, the engine stays idle (no console). Set by [fennec dev] / [fennec console]. *)
+val env_console_sock : string
+
 (** [FENNEC_PORT] — the base port: dev allocates its block from here, prod listens on it. *)
 val env_port : string
 
