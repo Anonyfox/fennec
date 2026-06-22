@@ -117,6 +117,66 @@ let render () =
       "- Before final handoff, run the relevant `fennec test ...` cut or explain why it was not run.";
       "" ]
 
+(* ── human rendering ───────────────────────────────────────────────────────────────────────────
+   The SAME guide markdown, pretty-printed for a person at a terminal: brand-orange headers, cyan
+   commands, dimmed inline comments, no raw `#`/```/backtick noise. [render] stays the canonical
+   markdown an agent consumes ([fennec skill]); [render_human] is what bare [fennec] prints — and it
+   degrades to the raw markdown the moment colour is off (piped, NO_COLOR, not a TTY), so a redirect
+   never gets escape soup. One source of truth; two faithful renderings. *)
+
+(* recolour `inline code` spans in prose: drop the backticks, tint the inner text *)
+let tint_inline tint s =
+  let b = Buffer.create (String.length s) and n = String.length s and i = ref 0 in
+  while !i < n do
+    if s.[!i] = '`' then (
+      match String.index_from_opt s (!i + 1) '`' with
+      | Some j -> Buffer.add_string b (tint (String.sub s (!i + 1) (j - !i - 1))); i := j + 1
+      | None -> Buffer.add_char b '`'; incr i)
+    else (Buffer.add_char b s.[!i]; incr i)
+  done;
+  Buffer.contents b
+
+let pretty (t : Tty.t) (md : string) : string =
+  let bold s = Tty.sgr t "1" s and dim s = Tty.sgr t "2" s in
+  let brand s = Tty.sgr t "38;5;173" s (* warm terracotta, the Fennec brand *) and cyan s = Tty.sgr t "36" s in
+  let has p s = String.length s >= String.length p && String.sub s 0 (String.length p) = p in
+  let drop n s = String.sub s n (String.length s - n) in
+  (* a code line "cmd        # note" → command tinted, the aligned trailing comment dimmed; indent 2 *)
+  let code_line line =
+    let n = String.length line in
+    let rec hash i = if i >= n then None else if line.[i] = '#' && i > 0 && line.[i - 1] = ' ' then Some i else hash (i + 1) in
+    match hash 0 with
+    | Some k -> "  " ^ cyan (String.sub line 0 k) ^ dim (drop k line)
+    | None -> "  " ^ cyan line
+  in
+  let in_code = ref false in
+  String.split_on_char '\n' md
+  |> List.filter_map (fun line ->
+         if has "```" (String.trim line) then (in_code := not !in_code; None) (* drop fence markers *)
+         else if !in_code then Some (code_line line)
+         else if has "## " line then Some (brand "▌ " ^ bold (brand (drop 3 line)))
+         else if has "# " line then Some (bold (brand (drop 2 line)))
+         else if has "- " line then Some ("  " ^ brand "•" ^ " " ^ tint_inline cyan (drop 2 line))
+         else Some (tint_inline cyan line))
+  |> String.concat "\n"
+
+(* bare [fennec]: pretty when a person is watching a colour terminal, raw markdown otherwise *)
+let render_human () =
+  let t = Tty.detect () in
+  if t.color then pretty t (render ()) else render ()
+
+let%test "human render is the raw guide when colour is off (pipes/agents/tests)" =
+  render_human () = render ()
+
+let%test "pretty render tints headers + strips markdown noise, keeps the content" =
+  let t = { Tty.color = true; hyperlinks = false; interactive = true; width = 80 } in
+  let p = pretty t (render ()) in
+  Fennec_hunt_unit.str_contains p "\027[" (* emitted ANSI *)
+  && Fennec_hunt_unit.str_contains p "Fennec"
+  && Fennec_hunt_unit.str_contains p "fennec discover"
+  && not (Fennec_hunt_unit.str_contains p "```")  (* fence markers gone *)
+  && not (Fennec_hunt_unit.str_contains p "## ")   (* header hashes gone *)
+
 let%test "guide names the agent hook" =
   Fennec_hunt_unit.str_contains (render ()) "fennec agent hook --timeout 12"
 

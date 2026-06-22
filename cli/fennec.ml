@@ -919,7 +919,9 @@ let main_cmd =
   in
   let info = Cmd.info "fennec" ~version ~doc ~man in
   let default =
-    Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render ()); 0) $ const ())
+    (* bare `fennec` is the human landing page → the guide, pretty-printed on a colour TTY (raw
+       markdown when piped). `fennec skill` keeps the canonical raw markdown for agents. *)
+    Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render_human ()); 0) $ const ())
   in
   Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
 
