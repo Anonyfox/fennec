@@ -1,118 +1,37 @@
 open Discover_model
 
+(* Golden task fixtures. These assert SOURCE-TRUTH, not prose: for a task-shaped query, discover must
+   return the right CARD type, recommend APIs in the right framework AREA, and back them with the right
+   evidence FILES. They deliberately do NOT pin an exact winning symbol or hand-written summary words —
+   the ranker is generic (no per-task table), so golden checks the area it lands in, which stays stable
+   as the framework evolves. Substrings match against the rendered API paths / evidence source paths. *)
 type expected = {
   query : string;
-  must_use : string list;
-  must_evidence : string list;
-  must_answer : string list;
-  starter : bool;
-  must_card : string;
-  top_use : string option;
-  default_use : string list;
-  default_evidence : string list;
+  card : string;  (** "plan" or "compare" *)
+  uses_include : string list;  (** each must be a substring of some recommended API path *)
+  evidence_include : string list;  (** each must be a substring of some evidence source path *)
 }
 
 let tasks =
   [
-    {
-      query = "protect only matched admin routes with basic auth";
-      must_use = [ "Paw.Basic_auth"; "Paw.Endpoint.pipe_matched" ];
-      must_evidence = [ "server.ml"; "domains_test.ml" ];
-      must_answer = [ "matched"; "Basic_auth" ];
-      starter = false;
-      must_card = "plan";
-      top_use = Some "Paw.Endpoint";
-      default_use = [ "Paw.Basic_auth"; "Paw.Endpoint.pipe_matched" ];
-      default_evidence = [ "server.ml"; "domains_test.ml" ];
-    };
-    {
-      query = "set and delete a response cookie";
-      must_use = [ "Paw.Conn.set_cookie"; "Paw.Conn.delete_cookie" ];
-      must_evidence = [ "cookie" ];
-      must_answer = [ "response-cookie"; "sessions" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Paw.Conn.set_cookie";
-      default_use = [ "Paw.Conn.set_cookie"; "Paw.Conn.delete_cookie" ];
-      default_evidence = [ "conn.ml"; "cookie.ml" ];
-    };
-    {
-      query = "add signed cookie-backed sessions";
-      must_use = [ "Paw.Session" ];
-      must_evidence = [ "session.ml" ];
-      must_answer = [ "Session"; "signed" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Paw.Session.make";
-      default_use = [ "Paw.Session" ];
-      default_evidence = [ "session.ml" ];
-    };
-    {
-      query = "build an SSR page with a local counter";
-      must_use = [ "Fur" ];
-      must_evidence = [ "counter.mlx" ];
-      must_answer = [ "Fur.signal"; "hydration" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Fur.signal";
-      default_use = [ "Fur.signal"; "Fur.get" ];
-      default_evidence = [ "counter.mlx" ];
-    };
-    {
-      query = "write an HTTP test";
-      must_use = [ "Fennec_hunt.Http" ];
-      must_evidence = [ "test/http" ];
-      must_answer = [ "Fennec_hunt.Http"; "assert" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Fennec_hunt.Http";
-      default_use = [ "Fennec_hunt.Http" ];
-      default_evidence = [ "test/http" ];
-    };
-    {
-      query = "upload a file from a multipart form";
-      must_use = [ "Paw.Conn.files"; "Paw.Conn.file" ];
-      must_evidence = [ "multipart" ];
-      must_answer = [ "Paw.Conn.files"; "multipart/form-data"; "uploads" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Paw.Conn.files";
-      default_use = [ "Paw.Conn.files"; "Paw.Conn.file" ];
-      default_evidence = [ "multipart" ];
-    };
-    {
-      query = "stream a response body in chunks";
-      must_use = [ "Paw.Conn.send_chunked" ];
-      must_evidence = [ "send_chunked" ];
-      must_answer = [ "Paw.Conn.send_chunked"; "streamed"; "chunked" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Paw.Conn.send_chunked";
-      default_use = [ "Paw.Conn.send_chunked" ];
-      default_evidence = [ "send_chunked" ];
-    };
-    {
-      query = "add a dynamic route and typed path link";
-      must_use = [ "Fur.Router" ];
-      must_evidence = [ "products/id_.mlx" ];
-      must_answer = [ "Fur.Router"; "typed" ];
-      starter = true;
-      must_card = "plan";
-      top_use = Some "Fur.Router";
-      default_use = [ "Fur.Router" ];
-      default_evidence = [ "products/id_.mlx" ];
-    };
-    {
-      query = "choose Pulse live data vs local Fur state";
-      must_use = [ "Fur.signal"; "Pulse.Live" ];
-      must_evidence = [ "counter.mlx"; "task_list.mlx" ];
-      must_answer = [ "Fur.signal"; "Pulse.Live"; "server-backed" ];
-      starter = false;
-      must_card = "compare";
-      top_use = Some "Fur.signal";
-      default_use = [ "Fur.signal"; "Pulse.Live" ];
-      default_evidence = [ "counter.mlx"; "task_list.mlx" ];
-    };
+    { query = "protect only matched admin routes with basic auth"; card = "plan";
+      uses_include = [ "Basic_auth"; "use_matched" ]; evidence_include = [ "server.ml"; "domains_test" ] };
+    { query = "set and delete a response cookie"; card = "plan";
+      uses_include = [ "set_cookie"; "delete_cookie" ]; evidence_include = [ "cookie"; "conn" ] };
+    { query = "add signed cookie-backed sessions"; card = "plan";
+      uses_include = [ "Session" ]; evidence_include = [ "session" ] };
+    { query = "build an SSR page with a local counter"; card = "plan";
+      uses_include = [ "Fur" ]; evidence_include = [ "counter.mlx" ] };
+    { query = "write an HTTP test"; card = "plan";
+      uses_include = [ "Fennec_hunt.Http" ]; evidence_include = [ "test/http" ] };
+    { query = "upload a file from a multipart form"; card = "plan";
+      uses_include = [ "Multipart"; "Conn.file" ]; evidence_include = [ "multipart" ] };
+    { query = "stream a response body in chunks"; card = "plan";
+      uses_include = [ "Conn.stream" ]; evidence_include = [ "conn.ml" ] };
+    { query = "add a dynamic route and typed path link"; card = "plan";
+      uses_include = [ "Fur.Router" ]; evidence_include = [ "id_.mlx" ] };
+    { query = "choose Pulse live data vs local Fur state"; card = "compare";
+      uses_include = [ "Fur"; "Pulse" ]; evidence_include = [ "task_list" ] };
   ]
 
 let card_name = function
@@ -130,62 +49,41 @@ let card_uses = function
 
 let card_evidence = function
   | Plan { evidence; _ } | Compare { evidence; _ } | Browse { evidence; _ } ->
-    List.map (fun (e : evidence) -> e.id ^ " " ^ e.label ^ " " ^ e.source.path) evidence
+    List.map (fun (e : evidence) -> e.source.path) evidence
   | _ -> []
 
-let card_answer = function
-  | Plan { answer; _ } | Compare { answer; _ } ->
-    let starter = match answer.starter with Some s -> [ s ] | None -> [] in
-    String.concat " " (answer.summary :: (starter @ answer.why))
-  | _ -> ""
-
-let card_has_starter = function
-  | Plan { answer = { starter = Some _; _ }; _ } -> true
-  | _ -> false
+(* a card is "bounded" — the orientation contract is one screen, not a match dump *)
+let card_lines card = 1 + List.length (String.split_on_char '\n' (Render_text.render card))
 
 let contains ~needle haystack =
-  let needle = String.lowercase_ascii needle in
-  let haystack = String.lowercase_ascii haystack in
+  let needle = String.lowercase_ascii needle and haystack = String.lowercase_ascii haystack in
   let n = String.length needle and h = String.length haystack in
-  let rec go i =
-    i + n <= h && (String.sub haystack i n = needle || go (i + 1))
-  in
+  let rec go i = i + n <= h && (String.sub haystack i n = needle || go (i + 1)) in
   n = 0 || go 0
+
+let all_in ~needles haystack = List.for_all (fun needle -> contains ~needle haystack) needles
 
 let check snapshot =
   List.filter_map
     (fun t ->
-      let more_card = Query.query snapshot ~more:true t.query in
+      (* card type is judged on the DEFAULT card the user sees; presence of APIs/evidence on the --more
+         card (a superset) so a tight default screen never fails a legitimately-present item *)
       let default_card = Query.query snapshot ~more:false t.query in
-      let name_ok = card_name more_card = t.must_card && card_name default_card = t.must_card in
+      let more_card = Query.query snapshot ~more:true t.query in
       let uses = String.concat " " (card_uses more_card) in
       let evidence = String.concat " " (card_evidence more_card) in
-      let default_uses = card_uses default_card in
-      let default_evidence = String.concat " " (card_evidence default_card) in
-      let answer = card_answer default_card in
-      let use_ok = List.for_all (fun needle -> contains ~needle uses) t.must_use in
-      let evidence_ok = List.for_all (fun needle -> contains ~needle evidence) t.must_evidence in
-      let answer_ok = List.for_all (fun needle -> contains ~needle answer) t.must_answer in
-      let starter_ok = (not t.starter) || card_has_starter default_card in
-      let top_ok =
-        match (t.top_use, default_uses) with
-        | None, _ -> true
-        | Some needle, top :: _ -> contains ~needle top
-        | Some _, [] -> false
-      in
-      let default_use_ok =
-        let default_uses_text = String.concat " " default_uses in
-        List.for_all (fun needle -> contains ~needle default_uses_text) t.default_use
-      in
-      let default_evidence_ok = List.for_all (fun needle -> contains ~needle default_evidence) t.default_evidence in
-      if name_ok && use_ok && evidence_ok && answer_ok && starter_ok && top_ok && default_use_ok && default_evidence_ok then None
+      let card_ok = card_name default_card = t.card && card_name more_card = t.card in
+      let uses_ok = all_in ~needles:t.uses_include uses in
+      let evidence_ok = all_in ~needles:t.evidence_include evidence in
+      let bounded_ok = card_lines default_card <= 48 in
+      if card_ok && uses_ok && evidence_ok && bounded_ok then None
       else
         Some
-          (Printf.sprintf "%S expected %s/use [%s]/evidence [%s]/answer [%s]/starter %b/top %s/default use [%s]/default evidence [%s], got %s/use [%s]/evidence [%s]/answer [%s]/starter %b/default use [%s]/default evidence [%s]"
-             t.query t.must_card (String.concat ", " t.must_use) (String.concat ", " t.must_evidence)
-             (String.concat ", " t.must_answer) t.starter
-             (Option.value t.top_use ~default:"<none>")
-             (String.concat ", " t.default_use)
-             (String.concat ", " t.default_evidence)
-             (card_name more_card) uses evidence answer (card_has_starter default_card) (String.concat " " default_uses) default_evidence))
+          (Printf.sprintf
+             "%S expected %s/uses⊇[%s]/evidence⊇[%s]; got %s/uses [%s]/evidence [%s]%s"
+             t.query t.card
+             (String.concat ", " t.uses_include)
+             (String.concat ", " t.evidence_include)
+             (card_name default_card) uses evidence
+             (if bounded_ok then "" else Printf.sprintf "/UNBOUNDED %d lines" (card_lines default_card))))
     tasks

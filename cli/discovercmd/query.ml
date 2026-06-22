@@ -111,98 +111,24 @@ let confidence_reason = function
 
 let mentions terms xs = List.exists (fun x -> List.mem x terms) xs
 
-let path_in uses path =
-  List.exists (fun (i : public_item) -> i.path = path || starts_with i.path (path ^ ".")) uses
+(* ── generic answer / steps / evidence synthesis ───────────────────────────────────────────────
+   There is NO task taxonomy. A card's prose is synthesized from the selected public APIs, their own
+   `.mli` docs, and the linked evidence — so a new framework feature needs no new branch here: index
+   its `.mli` + an example and discover describes it. *)
 
-let lead_path = function
-  | item :: _ -> item.path
-  | [] -> ""
+(* first sentence of an odoc doc string, lightly de-marked, for one-line prose. *)
+let doc_lead = function
+  | None -> ""
+  | Some doc ->
+    let one = doc |> String.split_on_char '\n' |> List.map String.trim |> String.concat " " |> String.trim in
+    let buf = Buffer.create (String.length one) in
+    String.iter (function '[' | ']' | '{' | '}' -> () | c -> Buffer.add_char buf c) one;
+    let s = String.trim (Buffer.contents buf) in
+    (match String.index_opt s '.' with
+     | Some i when i >= 12 -> String.sub s 0 (i + 1)
+     | _ -> if String.length s <= 150 then s else String.sub s 0 150 ^ "…")
 
-let lead_is uses path =
-  let p = lead_path uses in
-  p = path || starts_with p (path ^ ".")
-
-let has_use uses path = path_in uses path
-
-let terms_match terms xs = List.exists (fun x -> List.mem x terms) xs
-
-type plan_kind =
-  | Matched_auth
-  | Response_cookie
-  | Session
-  | Upload
-  | Chunked_stream
-  | Http_test
-  | Local_state
-  | Router
-  | Generic
-
-let infer_plan_kind terms uses evidence =
-  let wants_test = terms_match terms [ "test"; "tests"; "assert"; "assertion"; "expect" ] in
-  let has_route_evidence = List.exists (fun e -> e.kind = Route) evidence in
-  let conn_lead = lead_is uses "Paw.Conn" in
-  if has_use uses "Paw.Basic_auth" && has_use uses "Paw.Endpoint" then Matched_auth
-  else if conn_lead && terms_match terms [ "cookie"; "cookies" ] then Response_cookie
-  else if lead_is uses "Paw.Session" || has_use uses "Paw.Session" then Session
-  else if
-    (lead_is uses "Paw.Conn.files" || lead_is uses "Paw.Conn.file")
-    || (has_use uses "Paw.Conn.files" && terms_match terms [ "upload"; "uploads"; "multipart"; "form" ])
-  then Upload
-  else if
-    (lead_is uses "Paw.Conn.send_chunked" || lead_is uses "Paw.Conn.stream")
-    || (has_use uses "Paw.Conn.send_chunked" && terms_match terms [ "stream"; "streams"; "chunk"; "chunks"; "chunked"; "sse" ])
-  then Chunked_stream
-  else if (lead_is uses "Fennec_hunt.Http" || has_use uses "Fennec_hunt.Http") && wants_test then Http_test
-  else if lead_is uses "Fur" && terms_match terms [ "counter"; "local"; "state" ] then Local_state
-  else if lead_is uses "Fur.Router" || has_route_evidence then Router
-  else Generic
-
-let first_use uses =
-  match uses with
-  | item :: _ -> item.path
-  | [] -> "the highest-ranked public API"
-
-let default_summary task uses =
-  Printf.sprintf "Start with %s for %s." (first_use uses) task
-
-let starter_for = function
-  | Response_cookie ->
-    Some
-      "let conn = Paw.Conn.set_cookie conn \"seen\" \"1\" in\n\
-       let conn = Paw.Conn.delete_cookie conn \"old\" in\n\
-       conn"
-  | Session ->
-    Some
-      "let session = Paw.Session.make ~secret:\"...\" ()\n\
-       \n\
-       (* Add the session paw early, then read/write session values downstream. *)"
-  | Upload ->
-    Some
-      "match Paw.Conn.file conn \"upload\" with\n\
-       | Some part -> Paw.Conn.text conn part.data\n\
-       | None -> Paw.Conn.text ~status:400 conn \"missing upload\""
-  | Chunked_stream ->
-    Some
-      "Paw.Conn.send_chunked conn ~content_type:\"text/event-stream\" (fun emit ->\n\
-       \  emit \"data: ready\\n\\n\")"
-  | Http_test ->
-    Some
-      "open Fennec_hunt.Http\n\
-       \n\
-       let%http \"health\" = fun () ->\n\
-       \  check \"GET /health\" (fun () ->\n\
-       \    get \"/health\" ~expect:[status 200])"
-  | Router ->
-    Some
-      "(* app/products/id_.mlx becomes a dynamic route such as /products/:id. *)\n\
-       let href = Fur.Router.path router \"/products/%s\" product_id"
-  | Local_state ->
-    Some
-      "let count = Fur.signal 0\n\
-       \n\
-       (* Render with Fur.get count; update from browser event handlers. *)\n\
-       Fur.update count succ"
-  | Matched_auth | Generic -> None
+let first_use uses = match uses with (i : public_item) :: _ -> i.path | [] -> "the highest-ranked public API"
 
 let next_for_query task (uses : public_item list) =
   ignore task;
@@ -212,255 +138,95 @@ let next_for_query task (uses : public_item list) =
     ("fennec discover --why " ^ i.id)
     :: (rest |> take 2 |> List.map (fun (i : public_item) -> "fennec discover --why " ^ i.id))
 
-let plan_summary kind task uses =
-  match kind with
-  | Matched_auth ->
-    "Protect real routes with matched-route middleware: define the endpoint, then attach Basic_auth in the matched phase."
-  | Response_cookie ->
-    "Use Paw.Conn response-cookie helpers for one-off browser cookies; use sessions for signed request-to-request state."
-  | Session ->
-    "Use Paw.Session for signed cookie-backed session state such as login data, flash values, or preferences."
-  | Upload ->
-    "Use Paw.Conn.files or Paw.Conn.file to read uploaded multipart/form-data parts in the request handler."
-  | Chunked_stream ->
-    "Use Paw.Conn.send_chunked to answer with a streamed chunked response body; use HTTP/browser tests only to prove it reassembles."
-  | Local_state ->
-    "Use Fur.signal for local component state; SSR renders the initial value and browser handlers update it after hydration."
-  | Http_test ->
-    "Use Fennec_hunt.Http for endpoint-level HTTP tests: register a suite, make requests, and assert the response."
-  | Router ->
-    "Use Fur.Router and generated route/path facts for dynamic routes and compiler-checked in-app links."
-  | Generic -> default_summary task uses
+(* a module's primary constructor — the value you actually start with ([Session.make], [Csrf.make],
+   …). Generic: probe the conventional constructor leaves against the index, no per-module table. *)
+let constructor_of snapshot (m : public_item) =
+  [ "make"; "create"; "v"; "init"; "default"; "empty" ]
+  |> List.find_map (fun c -> Retrieve.find_api snapshot ("api:" ^ m.path ^ "." ^ c))
 
-let plan_why kind evidence =
-  let proof =
-    if List.exists (fun (e : evidence) -> e.kind = Test) evidence then [ "A matching test backs the recommendation." ]
-    else if evidence <> [] then [ "A framework example backs the recommendation." ]
-    else []
-  in
-  let reason =
-    match kind with
-    | Matched_auth ->
-      [
-        "Matched middleware protects existing routes without turning unrelated misses into auth failures.";
-        "The endpoint API owns host/app routing, while Basic_auth is the reusable paw.";
-      ]
-    | Response_cookie ->
-      [
-        "Conn cookie helpers write Set-Cookie response headers without answering the request.";
-        "Request cookie readers and response cookie writers are separate on purpose.";
-      ]
-    | Session ->
-      [
-        "The session paw signs the browser cookie and exposes session values downstream.";
-        "It is the right abstraction for request-to-request state, unlike one-off response cookies.";
-      ]
-    | Upload ->
-      [
-        "Conn.files exposes parsed multipart file parts from the incoming request body.";
-        "The Hunt multipart helpers are for tests that submit uploads, not for reading uploads in handlers.";
-      ]
-    | Chunked_stream ->
-      [
-        "send_chunked is the answerer that streams chunks without buffering the full body.";
-        "Conn.stream and Hunt response-body helpers are observation surfaces around the streamed response.";
-      ]
-    | Local_state ->
-      [
-        "Fur.signal is local UI state owned by a component or page.";
-        "Fur.get reads during render; Fur.update changes the value from event handlers.";
-      ]
-    | Http_test ->
-      [
-        "HTTP tests exercise the app through real requests and focused response assertions.";
-        "The public surface is Fennec_hunt.Http, not its internal For_test helpers.";
-      ]
-    | Router ->
-      [
-        "Route files produce route patterns and typed path/link helpers.";
-        "The router keeps app navigation compiler-checked instead of stringly scattered.";
-      ]
-    | Generic -> [ "The selected APIs and evidence have the strongest public match for this task." ]
-  in
-  take 3 (reason @ proof)
+(* the starter snippet is a REAL signature from the index — the anchor's own when it's a callable, or
+   its module's constructor when the anchor is a module. Source-truthful; no hand-written code templates
+   to keep in sync with the framework. *)
+let starter_for snapshot uses =
+  let sig_of (i : public_item) = match i.signature with Some s when String.trim s <> "" -> Some s | _ -> None in
+  match uses with
+  | (i : public_item) :: _ -> (
+    match i.kind with
+    | Value | Type | Exception -> sig_of i
+    | Module | Module_type -> Option.bind (constructor_of snapshot i) sig_of)
+  | [] -> None
 
-let answer_for_plan task terms uses evidence =
-  let kind = infer_plan_kind terms uses evidence in
-  {
-    summary = plan_summary kind task uses;
-    why = plan_why kind evidence;
-    starter = starter_for kind;
-    copy_next = next_for_query task uses;
-  }
+let evidence_proof_note evidence =
+  if List.exists (fun (e : evidence) -> e.kind = Test) evidence then [ "A framework test backs this." ]
+  else if List.exists (fun (e : evidence) -> e.kind = Example || e.kind = Doctest || e.kind = Route) evidence then [ "A framework example backs this." ]
+  else []
 
-let compare_axis terms left right =
-  let has x = List.mem x terms in
-  if
-    (has "local" || has "state")
-    && (starts_with left.path "Fur" || starts_with right.path "Fur")
-    && (starts_with left.path "Pulse.Live" || starts_with right.path "Pulse.Live")
-  then
-    ( "state scope",
-      "Use Fur.signal for local browser/component state such as counters, toggles, tabs, and input drafts.",
-      "Use Pulse.Live for server-backed data that should update across clients, such as task lists or notifications." )
-  else
-    ( "fit",
-      "Use this when its public API and evidence match the task more directly.",
-      "Use this when its public API and evidence better match the adjacent concern." )
-
-let answer_for_compare terms left right =
-  let axis, left_when, right_when = compare_axis terms left right in
+let answer_for_plan snapshot task uses evidence =
+  let anchor_lead = match uses with (i : public_item) :: _ -> doc_lead i.doc | [] -> "" in
   let summary =
-    if axis = "state scope" then
-      "Choose Fur.signal for local UI state; choose Pulse.Live for server-backed realtime data shared across clients."
-    else
-      Printf.sprintf "Compare %s and %s by which public surface fits the task evidence." left.path right.path
+    match uses with
+    | (i : public_item) :: _ -> (
+      match anchor_lead with "" -> Printf.sprintf "Reach for %s for %s." i.path task | lead -> Printf.sprintf "Reach for %s — %s" i.path lead)
+    | [] -> Printf.sprintf "No strong public API matched %s." task
   in
+  let why =
+    (* skip the anchor's own doc (already the summary) so Why adds the NEXT API's purpose + proof *)
+    let docs =
+      uses
+      |> List.filter_map (fun (i : public_item) -> match doc_lead i.doc with "" -> None | s -> if s = anchor_lead then None else Some s)
+      |> take 2
+    in
+    take 3 (docs @ evidence_proof_note evidence)
+  in
+  { summary; why; starter = starter_for snapshot uses; copy_next = next_for_query task uses }
+
+let plan_steps uses evidence =
+  let api_step (i : public_item) =
+    match doc_lead i.doc with "" -> Printf.sprintf "Reach for %s." i.path | lead -> Printf.sprintf "Reach for %s — %s" i.path lead
+  in
+  let api_steps = uses |> take 2 |> List.map api_step in
+  let proof_step =
+    match List.find_opt (fun (e : evidence) -> e.kind = Test || e.kind = Example || e.kind = Route) evidence with
+    | Some e -> [ Printf.sprintf "Follow the worked shape in %s." (Source_ref.to_string e.source) ]
+    | None -> [ "Run `--why` on the API above before editing if its signature is unfamiliar." ]
+  in
+  match api_steps with [] -> [ "Browse the closest public module and follow its example evidence." ] | _ -> api_steps @ proof_step
+
+(* the decision axis for a compare is each side's OWN purpose (its doc) — no hand-coded axis table. *)
+let compare_axis left right =
+  ( "fit",
+    (match doc_lead left.doc with "" -> Printf.sprintf "Use %s when it fits the task directly." left.path | s -> s),
+    (match doc_lead right.doc with "" -> Printf.sprintf "Use %s for the adjacent concern." right.path | s -> s) )
+
+let answer_for_compare task left right =
+  ignore task;
+  let _, left_when, right_when = compare_axis left right in
   {
-    summary;
-    why = [ left_when; right_when ];
+    summary = Printf.sprintf "Choose %s or %s by which fits — each one's purpose and proof are below." left.path right.path;
+    why = List.filter (fun s -> s <> "") [ left_when; right_when ];
     starter = None;
     copy_next = [ "fennec discover --why " ^ left.id; "fennec discover --why " ^ right.id ];
   }
 
-let plan_steps terms uses evidence =
-  match infer_plan_kind terms uses evidence with
-  | Matched_auth ->
-    [
-      "Define the endpoint/app route surface with Paw.Endpoint.";
-      "Attach Basic_auth in the matched phase so unrelated misses still behave like misses.";
-      "Use the system/http evidence as the regression shape.";
-    ]
-  | Response_cookie ->
-    [
-      "Read request cookies with Conn.cookie/cookies only when you need browser-sent values.";
-      "Write response cookies with Conn.set_cookie and expire them with Conn.delete_cookie.";
-      "Use Session instead when the value is signed request-to-request application state.";
-    ]
-  | Session ->
-    [
-      "Create the session paw with a strong secret and add it early in the pipeline.";
-      "Read and mutate session values downstream through the session API.";
-      "Use plain Conn.set_cookie only for one-off response cookies.";
-    ]
-  | Upload ->
-    [
-      "Handle the multipart request in a paw or endpoint handler.";
-      "Read all uploaded parts with Conn.files, or a named upload with Conn.file.";
-      "Use Fennec_hunt.Http multipart helpers only in the regression test.";
-    ]
-  | Chunked_stream ->
-    [
-      "Answer the request with Conn.send_chunked.";
-      "Emit each chunk from the producer callback; use text/event-stream for SSE.";
-      "Cover it with HTTP or browser evidence that reads the complete response body.";
-    ]
-  | Local_state ->
-    [
-      "Create a Fur.signal for state owned by this component/page.";
-      "Read it during render with Fur.get.";
-      "Update it from browser handlers with Fur.set or Fur.update.";
-    ]
-  | Http_test ->
-    [
-      "Open Fennec_hunt.Http in an HTTP test file.";
-      "Register a let%http suite and group checks with check.";
-      "Make requests with get/post and assert responses with status, JSON, body, cookie, or timing helpers.";
-    ]
-  | Router ->
-    [
-      "Start from the generated route shape shown in the evidence.";
-      "Use the public routing/link API from the recommendation list.";
-      "Keep route modules as normal Dune modules so edits stay local and typed.";
-    ]
-  | Generic ->
-    [
-      "Start from the highest-ranked public API below.";
-      "Use `--why` on that API before editing if the signature is unfamiliar.";
-      "Follow the closest example/test evidence, then add the narrowest focused test.";
-    ]
-
-let focused_uses terms evidence uses =
-  let kind = infer_plan_kind terms uses evidence in
-  let keep_path path prefixes =
-    List.exists (fun prefix -> path = prefix || starts_with path (prefix ^ ".")) prefixes
-  in
-  let prefixes =
-    match kind with
-    | Matched_auth -> [ "Paw.Endpoint"; "Paw.Basic_auth" ]
-    | Response_cookie -> [ "Paw.Conn.cookie"; "Paw.Conn.cookies"; "Paw.Conn.set_cookie"; "Paw.Conn.delete_cookie" ]
-    | Session -> [ "Paw.Session" ]
-    | Upload -> [ "Paw.Conn.files"; "Paw.Conn.file" ]
-    | Chunked_stream -> [ "Paw.Conn.send_chunked"; "Paw.Conn.stream" ]
-    | Http_test -> [ "Fennec_hunt.Http" ]
-    | Local_state -> [ "Fur.signal"; "Fur.get"; "Fur.set"; "Fur.update"; "Fur.Head" ]
-    | Router -> [ "Fur.Router" ]
-    | Generic -> []
-  in
-  let focused =
-    match prefixes with
-    | [] -> uses
-    | prefixes -> List.filter (fun (i : public_item) -> keep_path i.path prefixes) uses
-  in
-  match focused with [] -> uses | _ -> focused
-
 let avoid_notes evidence =
-  evidence
-  |> List.filter_map (fun e -> match e.kind with Hazard -> Some e.text | _ -> None)
-  |> take 2
+  evidence |> List.filter_map (fun (e : evidence) -> match e.kind with Hazard -> Some e.text | _ -> None) |> take 2
 
+(* evidence ranking for the card: linkage to a selected API + query token overlap + retrieval score +
+   a kind prior. No per-file or per-task constants. *)
 let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
   let e = r.Retrieve.ev in
-  let path = e.source.path in
   let linked = List.exists (fun api -> Hashtbl.mem selected_ids api) e.apis in
-  let has x = List.mem x terms in
-  let source =
-    if has "session" && contains_sub ~needle:"paw/middleware/session" path then 110.0
-    else if has "cookie" && contains_sub ~needle:"examples/site/test/browser" path then -.80.0
-    else if has "cookie" && contains_sub ~needle:"paw/conn/conn.ml" path then 75.0
-    else if has "cookie" && contains_sub ~needle:"paw/http/cookie.ml" path then 70.0
-    else if contains_sub ~needle:"examples/site/frontend/components/task_list" path && (has "pulse" || has "live") then 120.0
-    else if contains_sub ~needle:"examples/site/test/browser/web_test" path && (has "local" || has "state" || has "counter") then 10.0
-    else if contains_sub ~needle:"examples/site/frontend/components/counter" path && (has "local" || has "counter") then 85.0
-    else if contains_sub ~needle:"examples/site/server.ml" path then 35.0
-    else if contains_sub ~needle:"examples/site/test/system/domains_test" path then 35.0
-    else if contains_sub ~needle:"examples/site/test/http" path then 30.0
-    else if contains_sub ~needle:"examples/site/" path then 18.0
-    else if starts_with path "fennec/" then -.12.0
-    else 0.0
-  in
-  let kind_relevance =
-    match e.kind with
-    | Route when has "route" || has "path" || has "link" || has "dynamic" -> 120.0
-    | Route -> 12.0
-    | Test when has "test" -> 20.0
-    | Doctest when has "example" -> 12.0
-    | Example | Test | Doctest | Hazard -> 0.0
-  in
-  source
-  +. kind_relevance
-  +. (if linked then 24.0 else 0.0)
+  let overlap = token_hits terms (String.concat " " [ e.label; e.text; e.source.path ]) in
+  (if linked then 24.0 else 0.0)
+  +. (float_of_int overlap *. 8.0)
   +. (r.score *. 3.0)
   +. (match e.kind with Test -> 8.0 | Example -> 6.0 | Route -> 5.0 | Doctest -> 4.0 | Hazard -> -.20.0)
 
-let evidence_presentable kind terms selected_ids (e : evidence) =
+(* keep an evidence item on the default card if it proves a selected API or genuinely overlaps the
+   query — generic, no per-task gate. *)
+let evidence_presentable terms selected_ids (e : evidence) =
   let linked = List.exists (fun api -> Hashtbl.mem selected_ids api) e.apis in
-  let visible_text = String.concat " " [ e.label; e.text; e.source.path; evidence_kind_to_string e.kind ] in
-  let has x = contains_sub ~needle:x visible_text in
-  let kind_match =
-    match kind with
-    | Upload -> has "multipart" || has "upload" || has "form-data"
-    | Chunked_stream -> has "send_chunked" || has "chunk" || has "/api/stream"
-    | Http_test ->
-      has "let%http" || has "fennec_hunt.http" || has "http suite" || has "expect:[" || has "check "
-    | Matched_auth -> has "basic_auth" || has "basic auth" || has "pipe_matched"
-    | Local_state -> has "counter" || has "local state" || has "signal"
-    | Session -> has "session"
-    | Response_cookie -> has "cookie" || has "set-cookie"
-    | Router -> has "route" || has "router" || has "typed path"
-    | Generic -> true
-  in
-  kind_match && (linked || token_hits terms visible_text >= 2)
+  linked || token_hits terms (String.concat " " [ e.label; e.text; e.source.path ]) >= 2
 
 let find_api = Retrieve.find_api
 
@@ -476,8 +242,8 @@ let compare_card snapshot task terms uses evidence =
   match Select.compare_pair ~task ~terms ~uses ~public_items:snapshot.public_items with
   | None -> None
   | Some (left, right) ->
-    let axis, left_when, right_when = compare_axis terms left right in
-    let answer = answer_for_compare terms left right in
+    let axis, left_when, right_when = compare_axis left right in
+    let answer = answer_for_compare task left right in
     (* a compare must show evidence from BOTH sides; the generic plan evidence skews to whichever
        side the query's rarest terms hit (e.g. all Pulse, no Fur). For each compared API pull its
        linked evidence and pick the CANONICAL usage example — the one that names the API's leaf and is
@@ -620,7 +386,7 @@ let query snapshot ~more task =
   let uses : public_item list =
     Select.plan_uses ~terms:ordered_terms ~more ~api_results ~evidence_seed_items ~public_items:snapshot.public_items
   in
-  let evidence_uses = if more then uses else focused_uses terms [] uses in
+  let evidence_uses = uses in
   let selected_results =
     let selected = Hashtbl.create (List.length evidence_uses * 2) in
     List.iter (fun (i : public_item) -> Hashtbl.replace selected i.id ()) evidence_uses;
@@ -628,23 +394,16 @@ let query snapshot ~more task =
     |> List.filter (fun r -> Hashtbl.mem selected r.Retrieve.item.id)
   in
   let evidence : evidence list =
-    let evidence_kind = infer_plan_kind terms evidence_uses [] in
     let max_per_source = if more then 2 else 1 in
     let selected_ids = Hashtbl.create (List.length evidence_uses * 2) in
     List.iter (fun (i : public_item) -> Hashtbl.replace selected_ids i.id ()) evidence_uses;
     Retrieve.evidence snapshot terms selected_results
     |> List.map (fun r -> (r.Retrieve.ev, evidence_card_score terms selected_ids r))
-    |> List.filter (fun (e, _) -> more || evidence_presentable evidence_kind terms selected_ids e)
+    |> List.filter (fun (e, _) -> more || evidence_presentable terms selected_ids e)
     |> List.sort (fun (_, a) (_, b) -> compare b a)
     |> List.map fst
     |> limit_evidence_per_source max_per_source
-    |> take
-         (if more then 8
-          else if mentions terms [ "vs"; "versus"; "choose"; "when" ] then 2
-          else
-            match evidence_kind with
-            | Upload | Chunked_stream | Matched_auth -> 2
-            | _ -> 3)
+    |> take (if more then 8 else if mentions terms [ "vs"; "versus"; "choose"; "when" ] then 2 else 3)
   in
   let top = match api_results with x :: _ -> Some x | [] -> None in
   let second = match api_results with _ :: x :: _ -> Some x | _ -> None in
@@ -664,12 +423,11 @@ let query snapshot ~more task =
     match compare_card snapshot task ordered_terms uses evidence with
     | Some c -> c
     | None ->
-      let uses = if more then uses else focused_uses terms evidence uses in
       Plan
         {
           task;
-          answer = answer_for_plan task terms uses evidence;
-          steps = plan_steps terms uses evidence;
+          answer = answer_for_plan snapshot task uses evidence;
+          steps = plan_steps uses evidence;
           uses;
           evidence;
           avoid = avoid_notes evidence;
@@ -678,12 +436,11 @@ let query snapshot ~more task =
           next = next_for_query task uses;
         })
   else
-    let uses = if more then uses else focused_uses terms evidence uses in
     Plan
       {
         task;
-        answer = answer_for_plan task terms uses evidence;
-        steps = plan_steps terms uses evidence;
+        answer = answer_for_plan snapshot task uses evidence;
+        steps = plan_steps uses evidence;
         uses;
         evidence;
         avoid = avoid_notes evidence;

@@ -62,10 +62,28 @@ let helper_leaf leaf =
   List.mem (String.lowercase_ascii leaf)
     [ "cookie"; "cookies"; "get"; "set"; "run"; "expect"; "status"; "header"; "headers"; "render"; "handle"; "changed"; "aggregate" ]
 
-let action_leaf_score terms path =
-  let leaf_words = Normalize.words (leaf path) in
-  let hits = List.fold_left (fun acc term -> if List.mem term leaf_words then acc + 1 else acc) 0 terms in
-  float_of_int hits *. 28.0
+(* the segment that NAMES the containing module — the concept the API belongs to. *)
+let module_name path =
+  match List.rev (String.split_on_char '.' path) with _ :: m :: _ -> m | _ -> ""
+
+(* Generic concept match, the replacement for any hand-maintained "this task → this exact API" table:
+   reward query terms that hit the API's LEAF (the action — [send_chunked], [set_cookie]) and its
+   containing MODULE (the concept — [Session], [Basic_auth], [Csrf]). This is what makes "add signed
+   sessions" surface [Paw.Session(.make)] and "basic auth" surface [Paw.Basic_auth] from the path
+   alone — derived from the indexed `.mli` structure, nothing per-task baked in. *)
+let name_match_score terms path =
+  let count ws = List.fold_left (fun acc term -> if List.mem term ws then acc + 1 else acc) 0 terms in
+  let leaf_hits = count (Normalize.words (leaf path)) in
+  let mod_hits = count (Normalize.words (module_name path)) in
+  (float_of_int leaf_hits *. 26.0) +. (float_of_int mod_hits *. 22.0)
+
+(* PURPOSE match: query terms found in the API's `.mli` doc. This is what disambiguates a coincidental
+   name collision from the real intent — "local counter" hits [Fur.Data.local] by leaf but [Fur.signal]
+   by DOC ("create a local reactive signal"), and the doc is the truth. Capped so a long doc can't run
+   away with it. *)
+let doc_match_score terms (i : public_item) =
+  let hits = token_hits terms (Option.value i.doc ~default:"") in
+  float_of_int (min hits 4) *. 11.0
 
 let first_leaf_term_position terms path =
   let leaf_words = Normalize.words (leaf path) in
@@ -108,30 +126,10 @@ let internal_doc_penalty (i : public_item) =
     then -.180.0
     else 0.0
 
-let exact_task_anchor terms (i : public_item) =
-  let p = i.path in
-  let has x = List.mem x terms in
-  if has "http" && has "test" && p = "Fennec_hunt.Http" then 100.0
-  else if (has "route" || has "admin") && has "auth" && p = "Paw.Endpoint" then 220.0
-  else if has "matched" && p = "Paw.Endpoint.pipe_matched" then 72.0
-  else if has "auth" && starts_with p "Paw.Basic_auth" then 60.0
-  else if has "session" && p = "Paw.Session.make" then 260.0
-  else if has "session" && p = "Paw.Session" then 64.0
-  (* [signal] is the API you START with for local state; [get] only reads it — so signal leads. *)
-  else if has "counter" && p = "Fur.signal" then 150.0
-  else if (has "local" || has "state") && p = "Fur.signal" then 150.0
-  else if has "counter" && p = "Fur.get" then 140.0
-  else if (has "local" || has "state") && p = "Fur.get" then 90.0
-  else if has "live" && has "data" && p = "Pulse.Live" then 86.0
-  else if has "live" && p = "Pulse.Live.find" then 60.0
-  else if has "cookie" && has "set" && p = "Paw.Conn.set_cookie" then 90.0
-  else if has "cookie" && has "delete" && p = "Paw.Conn.delete_cookie" then 88.0
-  else if (has "upload" || has "multipart") && p = "Paw.Conn.files" then 170.0
-  else if (has "upload" || has "multipart") && p = "Paw.Conn.file" then 150.0
-  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Paw.Conn.send_chunked" then 180.0
-  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Paw.Conn.stream" then 70.0
-  else if has "dynamic" && has "route" && p = "Fur.Router" then 80.0
-  else 0.0
+(* test-intent terms: when the task is about TESTING, the test library is exactly what you want;
+   otherwise it is for proving a feature, not building one, so it should not crowd the recommendation. *)
+let test_intent terms =
+  List.exists (fun t -> List.mem t terms) [ "test"; "tests"; "testing"; "assert"; "assertion"; "expect"; "spec"; "suite" ]
 
 let score_item terms seed_ids api_rank (i : public_item) =
   let rank_bonus =
@@ -139,15 +137,21 @@ let score_item terms seed_ids api_rank (i : public_item) =
     | None -> 0.0
     | Some rank -> max 0.0 (24.0 -. (float_of_int rank *. 0.6))
   in
-  let seed_bonus = if List.mem i.id seed_ids then 35.0 else 0.0 in
+  (* an API that a query-matching EXAMPLE actually uses is strong evidence it's the right one — this is
+     the bridge when the user's words ("counter") differ from the API name ("signal"). *)
+  let seed_bonus = if List.mem i.id seed_ids then 50.0 else 0.0 in
   let helper_penalty =
     if helper_leaf (leaf i.path) && phrase_hits terms i.path <= 1 && token_hits terms (Option.value i.doc ~default:"") < 2 then -.28.0
     else 0.0
   in
-  exact_task_anchor terms i
+  (* the test package (fennec-hunt) answers test tasks, not build tasks — one library-role rule. Strong
+     enough to sink a test assertion that lexically matches a build query ("response body" → response_body). *)
+  let test_tool_penalty = if i.package = "fennec-hunt" && not (test_intent terms) then -.75.0 else 0.0 in
+  name_match_score terms i.path
+  +. doc_match_score terms i
+  +. test_tool_penalty
   +. seed_bonus
   +. rank_bonus
-  +. action_leaf_score terms i.path
   +. task_order_bonus terms i.path
   +. (float_of_int (token_hits terms (item_text i)) *. 7.0)
   +. (float_of_int (phrase_hits terms i.path) *. 9.0)
@@ -158,16 +162,10 @@ let score_item terms seed_ids api_rank (i : public_item) =
   +. helper_penalty
   +. internal_doc_penalty i
 
-let family_cap terms fam =
-  if fam = "Paw.Conn" && List.mem "cookie" terms then 3
-  else if
-    fam = "Paw.Conn"
-    && List.exists (fun term -> List.mem term terms) [ "upload"; "multipart"; "stream"; "chunk"; "chunks"; "chunked" ]
-  then 2
-  else if fam = "Paw.Endpoint" && (List.mem "matched" terms || List.mem "route" terms) then 3
-  else if fam = "Paw.Basic_auth" then 2
-  else if fam = "Fur" && (List.mem "counter" terms || List.mem "state" terms) then 3
-  else 1
+(* How many items of one API family may share the visible list. A flat small cap keeps the card
+   diverse (the set_cookie/delete_cookie pair, the endpoint/pipe_matched pair) without a per-family
+   table — two members of a family is enough to orient, the rest is drilldown. *)
+let family_cap _terms _fam = 2
 
 let select_diverse terms limit scored =
   let counts = Hashtbl.create 16 in
@@ -189,12 +187,12 @@ let plan_uses ~terms ~more ~api_results ~evidence_seed_items ~public_items =
   let api_rank = Hashtbl.create 64 in
   List.iteri (fun rank r -> Hashtbl.replace api_rank r.Retrieve.item.id rank) api_results;
   let seed_ids = List.map (fun (i : public_item) -> i.id) evidence_seed_items in
-  let exact_candidates =
-    public_items
-    |> List.filter (fun i -> exact_task_anchor terms i > 0.0)
-  in
+  (* candidates are the retrieved APIs (lexical match over the whole index) plus the APIs that
+     source-backed evidence points at — re-ranked for PRESENTATION by [score_item]. No hand-seeded
+     "this query always includes X" list: if an API belongs on the card, retrieval or its evidence
+     surfaced it. *)
   let candidates =
-    exact_candidates @ evidence_seed_items @ (api_results |> take 80 |> List.map (fun r -> r.Retrieve.item))
+    evidence_seed_items @ (api_results |> take 80 |> List.map (fun r -> r.Retrieve.item))
     |> uniq_items_by_id
     |> List.filter (fun i -> is_facade_path i.path)
   in

@@ -26,6 +26,10 @@ type runtime = {
   item_by_id : (string, public_item) Hashtbl.t;
   advisory : (public_item * public_item * string) list;
   owner_items : (string, public_item array) Hashtbl.t;
+  (* source-file basename (sans ext) → families of the public items DEFINED in that file. Lets an
+     evidence file (paw/middleware/session.ml) be attributed to the module it implements (Paw.Session)
+     with no hand-maintained file→API table — it's read straight off where each `.mli` lives. *)
+  source_owners : (string, string list) Hashtbl.t;
 }
 
 let contains_sub ~needle haystack =
@@ -127,6 +131,14 @@ let root_of_path path =
   | root :: _ -> root
   | [] -> path
 
+(* the API family — the top two path segments ([Paw.Session] from [Paw.Session.make]) — used as a
+   prefix to gather an owning module's items. *)
+let family_of path =
+  match String.split_on_char '.' path with
+  | a :: b :: _ -> a ^ "." ^ b
+  | a :: _ -> a
+  | [] -> path
+
 let resolve_ref public_items ~(source : public_item) target =
   let source_root = root_of_path source.path in
   let qualified = contains_sub ~needle:"." target in
@@ -172,6 +184,15 @@ let runtime snapshot =
         Hashtbl.replace item_by_id item.id item;
         Hashtbl.replace item_by_id item.path item)
       public_items;
+    let source_owners = Hashtbl.create (Array.length public_items) in
+    Array.iter
+      (fun (item : public_item) ->
+        let base = Filename.remove_extension (Filename.basename item.source.path) in
+        let fam = family_of item.path in
+        if base <> "" && fam <> "" then
+          let cur = Option.value (Hashtbl.find_opt source_owners base) ~default:[] in
+          if not (List.mem fam cur) then Hashtbl.replace source_owners base (fam :: cur))
+      public_items;
     let rt =
       {
         snapshot;
@@ -183,6 +204,7 @@ let runtime snapshot =
         item_by_id;
         advisory = advisory_edges snapshot.public_items;
         owner_items = Hashtbl.create 32;
+        source_owners;
       }
     in
     runtime_cache := Some rt;
@@ -243,29 +265,18 @@ let leaf path =
 
 let leaf_match terms path = List.mem (String.lowercase_ascii (leaf path)) terms
 
-let source_owner_prefixes (ev : evidence) =
-  let path = ev.source.path in
+(* Which API families an evidence file is about. Generated route facts always own the router; every
+   other file is attributed to the module it IMPLEMENTS — read off the source-file index, not a
+   hand-listed file→API table. (A file that merely USES an API still links through the evidence's own
+   `apis`, computed at index time.) *)
+let source_owner_prefixes rt (ev : evidence) =
   let route_owner = match ev.kind with Route -> [ "Fur.Router" ] | _ -> [] in
-  let path_owners =
-    if starts_with path "examples/site/test/http/" || starts_with path "hunt/http" then [ "Fennec_hunt.Http" ]
-    else if starts_with path "examples/site/test/browser/" || starts_with path "hunt/live" then [ "Fennec_hunt.Live" ]
-    else if starts_with path "examples/site/test/system/" || starts_with path "hunt/system" then [ "Fennec_hunt.System" ]
-    else if starts_with path "paw/middleware/basic_auth" then [ "Paw.Basic_auth" ]
-    else if starts_with path "paw/middleware/session" then [ "Paw.Session" ]
-    else if starts_with path "paw/routing/endpoint" then [ "Paw.Endpoint" ]
-    else if starts_with path "paw/conn/conn" then [ "Paw.Conn" ]
-    else if starts_with path "paw/http/cookie" then [ "Paw.Cookie" ]
-    else if starts_with path "fennec/fur/tools/route_gen" then [ "Fur.Router" ]
-    else if starts_with path "examples/site/frontend/apps/" then [ "Fur.Router"; "Fur" ]
-    else if starts_with path "fennec/fur/core/fur" || starts_with path "fennec/fur/server/" || starts_with path "examples/site/frontend/components/counter" then [ "Fur" ]
-    else if starts_with path "examples/site/frontend/components/task_list" then [ "Pulse.Live"; "Fur" ]
-    else if starts_with path "fennec/pulse/live" || starts_with path "examples/site/e2e/realtime" then [ "Pulse.Live" ]
-    else []
-  in
-  uniq_by Fun.id (route_owner @ path_owners)
+  let base = Filename.remove_extension (Filename.basename ev.source.path) in
+  let defined = Option.value (Hashtbl.find_opt rt.source_owners base) ~default:[] in
+  uniq_by Fun.id (route_owner @ defined)
 
 let inferred_source_apis rt terms (ev : evidence) =
-  let prefixes = source_owner_prefixes ev in
+  let prefixes = source_owner_prefixes rt ev in
   if prefixes = [] then []
   else
     prefixes
@@ -447,7 +458,7 @@ let apis snapshot terms =
   let evs = evidence_channel snapshot terms |> take 80 in
   let advisory = rt.advisory in
   let evidence_owners =
-    evs |> take 20 |> List.concat_map (fun (r : evidence_result) -> source_owner_prefixes r.ev) |> uniq_by Fun.id
+    evs |> take 20 |> List.concat_map (fun (r : evidence_result) -> source_owner_prefixes rt r.ev) |> uniq_by Fun.id
   in
   let by_api = Hashtbl.create 128 in
   let advisory_penalty = Hashtbl.create 32 in
