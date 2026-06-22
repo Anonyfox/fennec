@@ -44,6 +44,16 @@ let dune_build_dir ~root =
 let context_dir ~root =
   match dune_build_dir ~root with Some d -> Filename.concat d "default" | None -> Filename.concat (Filename.concat root "_build") "default"
 
+(* `fennec release` builds the native production artifact under `--profile release`. Per the build
+   ladder (see the .mli) release SHARES `_build/default` with `dev` / `fennec test` — it is a ship-time
+   one-shot, not an interactive loop, so unlike `fastdev` it gets no isolated build root. These two are
+   deliberately env-INDEPENDENT (they do NOT read FENNEC_DEV_PROFILE): a `fennec release` must locate
+   its artifact in `_build/default` even when invoked from inside a dev session whose environment still
+   carries a fastdev DUNE_BUILD_DIR. *)
+let release_profile = "release"
+
+let release_context_dir ~root = Filename.concat (Filename.concat root "_build") "default"
+
 (* the prefix to strip off a [dune describe] [source_dir] to recover the workspace-relative path.
    describe echoes paths in the SAME form as DUNE_BUILD_DIR: absolute when we set it (fastdev), or the
    relative `_build/default/` when we don't (dev). So this must match {!dune_build_dir}. *)

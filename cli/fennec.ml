@@ -310,6 +310,55 @@ let build_cmd =
   in
   Cmd.v (Cmd.info "build" ~doc ~man) build_term
 
+(* `fennec release` — the deployable production build. Where `build` (above) bundles JS/CSS assets,
+   `release` produces the whole shippable: it discovers the server, builds it native under the release
+   profile (which bakes the web root into the binary), VERIFIES the two things a plain `dune build
+   --profile release` lets fail silently — that the binary is prod-lean and that its web root actually
+   embedded — then strips + stages it and prints the runtime deploy contract. One verified call into
+   {!Fennec_release.Release.run}. *)
+let release_cmd =
+  let docker_arg =
+    Arg.(value & flag & info [ "docker" ] ~doc:"Also write a runtime $(b,./Dockerfile) that copies + runs the staged binary.")
+  in
+  let no_strip_arg =
+    Arg.(value & flag & info [ "no-strip" ] ~doc:"Do not $(b,strip) the staged binary (keep its debug sections).")
+  in
+  let check_arg =
+    Arg.(
+      value & flag
+      & info [ "check" ]
+          ~doc:"Build and verify only (prod-lean + an embedded web root); stage nothing and write nothing — a CI / pre-deploy gate.")
+  in
+  let go outdir docker no_strip check =
+    Fennec_release.Release.run { outdir; docker; strip = not no_strip; check_only = check }
+  in
+  let doc = "Build, verify, and stage a production deployable" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Produce the deployable production artifact in one verified step: discover the server (the one \
+         $(b,Fennec.serve)), build it native under the $(b,release) profile — inline tests stripped, and \
+         a web app's assets baked into the binary — then assert it is $(i,prod-lean) (links none of the \
+         CDP/Chrome/yojson test machinery) and that its web root actually embedded, $(b,strip) it, and \
+         stage it into $(b,./dist).";
+      `P
+        "The build itself is plain dune: $(b,dune build --profile release) yields the same binary. \
+         $(b,fennec release) adds the parts that are easy to get wrong — the right incantation, the two \
+         silent-failure checks above, and the runtime deploy contract: the environment the binary needs \
+         to run correctly, above all $(b,FENNEC_ENV=production) (without it the server falls back to dev \
+         behaviour and serves its assets from disk instead of the embedded copy).";
+      `S Manpage.s_examples;
+      `Pre "  fennec release                 # build, verify, strip, stage ./dist/<server>";
+      `Pre "  fennec release --docker        # also emit a runtime Dockerfile";
+      `Pre "  fennec release --check         # verify only (CI gate); stage nothing";
+      `S "WHAT SHIPS";
+      `P
+        "A single self-contained native binary. For a web app the JS/CSS/static web root is embedded, so \
+         there is nothing else to deploy; an API/SSR-only server simply has no web root. Run it with \
+         $(b,FENNEC_ENV=production) and a $(b,MONGO_URL) (or none, for an in-memory backend)." ]
+  in
+  Cmd.v (Cmd.info "release" ~doc ~man) Term.(const go $ outdir_arg $ docker_arg $ no_strip_arg $ check_arg)
+
 let dev_cmd =
   let target_arg =
     let doc = "Override the dune target(s) to build and watch (default: derived from the server)." in
@@ -1032,6 +1081,6 @@ let main_cmd =
        markdown when piped). `fennec skill` keeps the canonical raw markdown for agents. *)
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render_human ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; console_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
+  Cmd.group info ~default [ build_cmd; release_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; console_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

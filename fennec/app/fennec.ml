@@ -96,8 +96,28 @@ let data_route_paw : Paw.t =
 (* A web root for an app: dev reads the assembled webroot/ dir next to the exe
    (the per-app dune assembly), prod serves the embedded map. [name] disambiguates
    per-app dev webroots ("webroot_web", "webroot_admin"). *)
+
+(* Guard the #1 production footgun (once, loudly): a `fennec release` binary embeds its web root, but
+   serving the embedded copy requires FENNEC_ENV=production. Launched WITHOUT it, [is_dev] is true and
+   we fall back to reading a webroot/ dir on disk beside the binary — which a single-binary deploy did
+   not ship. The result is a silent 404 for every asset. So when the dev-mode disk dir is absent, say
+   exactly that and exactly how to fix it. (In a real `fennec dev` session the dir exists, so this never
+   fires there.) *)
+let warned_missing_webroot = ref false
+
 let web_source ~name ~assets : Paw.Static.source =
-  if is_dev then Paw.Static.Dir (Filename.concat (Filename.dirname Sys.executable_name) name)
+  if is_dev then begin
+    let dir = Filename.concat (Filename.dirname Sys.executable_name) name in
+    if (not (Sys.file_exists dir)) && not !warned_missing_webroot then begin
+      warned_missing_webroot := true;
+      Printf.eprintf
+        "fennec: serving static %S from %s, but that directory does not exist.\n\
+        \  If this is a `fennec release` binary, set FENNEC_ENV=production — a release embeds its assets,\n\
+        \  and dev mode looks for them on disk instead. (Otherwise assemble the web root beside the binary.)\n%!"
+        name dir
+    end;
+    Paw.Static.Dir dir
+  end
   else Paw.Static.Embedded (name, assets)
 
 (* the static-serving paw for an app's web root. In DEV every asset is served [no-cache]

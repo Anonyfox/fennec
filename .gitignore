@@ -5,6 +5,9 @@ _opam/
 *.merlin
 .DS_Store
 
+# `fennec release` stages the deployable binary here (also `fennec build`'s default outdir)
+dist/
+
 # npm: examples install node deps locally; lockfiles are committed for
 # reproducible CI installs, node_modules is not.
 node_modules/

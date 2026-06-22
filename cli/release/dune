@@ -1,0 +1,12 @@
+; `fennec release` — produce + verify a deployable production build, as a library of small focused
+; modules (resolve the deployable, build it native under --profile release, assert prod-lean + an
+; embedded web root, stage + strip the binary, print the deploy contract). The CLI `release` subcommand
+; is a one-line call into Release.run. Depends on fennec_dev only for Discover (the one Fennec.serve
+; exe) and Build_dir (the build-layout authority) — no Eio, no compiler, no app code.
+(library
+ (name fennec_release)
+ (libraries unix fennec_dev fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

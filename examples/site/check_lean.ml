@@ -18,7 +18,12 @@
    (Chrome CDP, TLS, websockets). Yojson is their transitive JSON dep.
    Fennec_hunt_unit is ALLOWED: it's the lightweight inline-test runtime (1KB, dep: unix only),
    so libraries can carry let%test registrations. The registered thunks are inert in production
-   (nobody calls Unit.run). *)
+   (nobody calls Unit.run).
+
+   This same list lives in cli/release/lean.ml ({!Fennec_release.Lean.forbidden}), which `fennec
+   release` runs on the artifact it stages. The two are kept in sync deliberately rather than shared:
+   this guard stays a ZERO-dependency `dune runtest` check (a tiny exe with no library deps), so it
+   must not take a dependency on the CLI. Edit both when the heavy-machinery set changes. *)
 let forbidden = [ "Fennec_hunt__Cdp"; "Fennec_hunt__Chrome"; "Fennec_hunt__Http_client"; "Yojson" ]
 
 (* allocation-free substring search (the haystack is a multi-MB binary) *)

@@ -29,6 +29,16 @@ val dune_build_dir : root:string -> string option
     [<root>/_build/default] or [<root>/_build/fastdev/default]. *)
 val context_dir : root:string -> string
 
+(** The profile [fennec release] builds under: ["release"] (native, optimized, inline tests stripped). *)
+val release_profile : string
+
+(** The absolute build context for a [fennec release] build: [<root>/_build/default]. Per the build
+    ladder, release shares [_build/default] with [dev]/[fennec test] — it is a ship-time one-shot, not
+    an interactive loop, so unlike [fastdev] it gets no isolated root. Deliberately env-INDEPENDENT
+    (does {e not} read [FENNEC_DEV_PROFILE]) so the artifact is located correctly even when invoked
+    from inside a dev session whose environment still carries a fastdev [DUNE_BUILD_DIR]. *)
+val release_context_dir : root:string -> string
+
 (** The prefix to strip off a [dune describe] [source_dir] to recover a workspace-relative path. Tracks
     {!dune_build_dir}: relative ["_build/default/"] on the default dir, absolute otherwise. *)
 val describe_prefix : root:string -> string

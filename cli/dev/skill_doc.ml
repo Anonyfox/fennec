@@ -15,6 +15,7 @@ let render () =
       "fennec test all                # unit -> http -> browser -> system -> docs";
       "fennec test docs               # doc coverage, warn-only by default";
       "fennec build INPUT...          # native JS/CSS/SCSS bundling";
+      "fennec release                 # build + verify + stage a production deployable";
       "fennec doctor                  # check the .mlx toolchain when a frontend app won't build";
       "```";
       "";
@@ -63,6 +64,18 @@ let render () =
       "```";
       "";
       "It runs the project's `console` target (a bytecode toplevel calling `Fennec.console_run`, never `Fennec.serve`, so server discovery ignores it). The backend is shared on disk, so what you query is the same data the dev server serves. Ctrl-C cancels a running eval; Ctrl-D leaves. Use it to probe collections, call a handler, or check an Accounts/Sift expression without writing a throwaway test.";
+      "";
+      "## Deploy";
+      "";
+      "`fennec release` produces the deployable: it discovers the server, builds it native under the `release` profile (inline tests stripped; a web app's JS/CSS/static web root baked into the binary), verifies the binary is prod-lean and that its web root actually embedded, strips it, and stages a single self-contained binary into `./dist` — then prints the runtime deploy contract.";
+      "";
+      "```sh";
+      "fennec release                 # build, verify, strip, stage ./dist/<server>";
+      "fennec release --check         # verify only (CI gate); stage nothing";
+      "fennec release --docker        # also emit a runtime Dockerfile";
+      "```";
+      "";
+      "Plain `dune build --profile release` produces the same artifact; `fennec release` adds the incantation, the two silent-failure checks, and the run-time contract. Run the staged binary with `FENNEC_ENV=production` — without it the server falls back to dev behaviour and serves assets from disk instead of the embedded copy (the one footgun the command exists to prevent). Provide a `MONGO_URL` for a persistent backend, or none for in-memory.";
       "";
       "## Agent Fastlane";
       "";

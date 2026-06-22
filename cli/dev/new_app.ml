@@ -114,7 +114,7 @@ let frontend_dune ~comp_lib =
     \  (:standard -w -a -open Fur)))\n"
     comp_lib
 
-let gitignore = "_build/\n.fennec/\n*.install\n.merlin\n"
+let gitignore = "_build/\n.fennec/\ndist/\n*.install\n.merlin\n"
 
 let readme ~name ~comp_lib:_ =
   Printf.sprintf
@@ -125,6 +125,12 @@ let readme ~name ~comp_lib:_ =
      dune build      # compile (the .mlx is preprocessed by `fennec mlx-pp`)\n\
      fennec dev      # run with livereload — it prints the local URL to open\n\
      ```\n\n\
+     ## Deploy\n\n\
+     ```sh\n\
+     fennec release  # build native, verify, strip, stage ./dist/server\n\
+     ```\n\n\
+     Run the staged binary with `FENNEC_ENV=production` (without it the server stays in dev mode).\n\
+     It is a single self-contained binary; `fennec release --docker` also writes a runtime Dockerfile.\n\n\
      ## Layout\n\n\
      - `server.ml` — the server: one endpoint, renders the component on `GET /`.\n\
      - `frontend/hello.mlx` — your first `.mlx` component (edit this).\n\
