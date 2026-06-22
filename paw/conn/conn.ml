@@ -354,6 +354,12 @@ let halt (c : t) : t =
   if c.state = Unset then c.state <- Halted;
   c
 
+(* a compact toplevel rendering — method, path, and the response status once one is set — so a [Conn.t]
+   shows as e.g. [<conn GET /users → 200>] in the REPL instead of [<abstr>]. `fennec console` installs it. *)
+let pp fmt (c : t) =
+  let status = match resp c with Some r -> Printf.sprintf " \xe2\x86\x92 %d" r.H.status | None -> "" in
+  Format.fprintf fmt "<conn %s %s%s>" (H.string_of_meth (meth c)) (path c) status
+
 (* ──── helpers ──── *)
 
 let contains_ hay sub =
@@ -671,3 +677,6 @@ let%test "send_chunked producer emits in order" =
    | Some (Chunked (_ct, produce)) -> produce (fun s -> got := s :: !got)
    | _ -> ());
   List.rev !got = [ "a"; "b" ]
+
+let%test "pp renders method and path compactly (the REPL printer)" =
+  Format.asprintf "%a" pp (make (req_ ~meth:H.POST "/users")) = "<conn POST /users>"

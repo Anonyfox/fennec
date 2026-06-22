@@ -127,5 +127,6 @@ val compare : t -> t -> int
     canonical extended-JSON — it is for debugging only (e.g. [{a: 1, b: "x"}]). *)
 val to_string : t -> string
 
-(** [pp] formats via {!to_string}. *)
-val pp : Format.formatter -> t -> unit
+(** [pp] formats via {!to_string} — also a toplevel printer, so BSON documents render readably in a
+    REPL / [dune utop] / [fennec console] instead of as [<abstr>]. *)
+val pp : Format.formatter -> t -> unit [@@ocaml.toplevel_printer]

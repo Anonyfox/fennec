@@ -248,3 +248,7 @@ val upgrade : t -> (Ws_channel.t -> unit) -> t
 
 (** Explicitly halt with no response (rare; the server turns this into a 404). *)
 val halt : t -> t
+
+(** A compact toplevel printer — method · path · response status, e.g. [<conn GET /users → 200>] — so a
+    connection reads at a glance in a REPL or [dune utop] instead of showing as [<abstr>]. *)
+val pp : Format.formatter -> t -> unit [@@ocaml.toplevel_printer]

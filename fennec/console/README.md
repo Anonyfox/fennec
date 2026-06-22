@@ -55,6 +55,12 @@ reloaded copy. That's what makes `Pulse.find` hit the live burrow exactly like t
   engine, which `Discover`'s "exactly one `Fennec.serve`" invariant currently precludes.
 - Under `dev --console`, the console is built and spawned once at startup; app-code edits do not hot-
   reload into it (restart the console for fresh code).
-- Polish not yet wired: `[@@ocaml.toplevel_printer]` custom printers (values render structurally today)
-  and ppx-on-typed-phrases (so `[%q …]`/fur work at the prompt). Calling compiled functions and plain
-  OCaml works fully.
+- **Custom printers are wired.** A few framework types (`Paw.Conn`, `Bson`) carry a `pp` annotated
+  `[@@ocaml.toplevel_printer]` (so `dune utop` users get them too); the engine installs them at boot so
+  a connection or a BSON document reads at a glance instead of as `<abstr>`. Add a type by adding its
+  `pp` path to `console_engine.ml`'s `printers` list (a missing path is ignored).
+- **ppx-at-the-prompt (typing `[%q …]` / fur JSX) is deliberately not wired.** The app's ppx is composed
+  *per target by dune* into a driver — there is no single app-wide ppx executable, and `dune ocaml top`
+  emits no ppx setup — so adding it here cleanly would mean reimplementing dune's ppx composition. The
+  clean route is `dune utop`, whose Lwt loop conflicts with this Eio engine. Calling compiled functions,
+  plain OCaml, and tab completion all work fully.

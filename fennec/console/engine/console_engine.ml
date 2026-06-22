@@ -136,8 +136,16 @@ let complete (prefix : string) : string list =
    driver in the banner so the human sees what is in scope. *)
 let opened_modules = [ "Fennec"; "Paw" ]
 
+(* Custom toplevel printers for framework types whose default rendering is just [<abstr>]. Each type's
+   [pp] lives next to it (annotated [@@ocaml.toplevel_printer], so it also serves `dune utop`); here we
+   install them into THIS toplevel, because a [-linkall]'d linked library is not auto-scanned for the
+   attribute the way an `ocamlfind`-loaded one is. A path that doesn't resolve — its library simply isn't
+   linked into this app — is ignored (the eval error is swallowed). Add a type by adding its [pp] path. *)
+let printers = [ "Paw.Conn.pp"; "Bson.pp" ]
+
 let run_preamble () =
-  List.iter (fun m -> ignore (eval ("open " ^ m))) opened_modules
+  List.iter (fun m -> ignore (eval ("open " ^ m))) opened_modules;
+  List.iter (fun p -> ignore (eval ("#install_printer " ^ p))) printers
 
 (* ── the protocol server: one connection = one REPL session ──────────────────────────────────────── *)
 
