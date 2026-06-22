@@ -423,9 +423,9 @@ let dev_cmd =
          `fennec agent detach` removes it. (--attach stays as an explicit synonym.) *)
       let install_hooks () =
         if agent then (
-          (* default install set = harnesses actually present on this machine (Registry.installed), so
-             we never write hook configs for tools you don't use *)
-          let results = Fennec_fastlane.Attach.install () in
+          (* the dev server is a separate process (no harness env to detect), so install into ALL
+             harnesses PRESENT on this machine — never the absent ones, so we don't litter configs *)
+          let results = Fennec_fastlane.Attach.install ~harnesses:(Fennec_fastlane.Registry.installed ()) () in
           Printf.printf "%s\n%!" (Fennec_fastlane.Attach.report results))
       in
       match exe with

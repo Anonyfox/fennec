@@ -747,6 +747,24 @@ let%test_unit "resolve_dir: two different projects resolve to two different jour
           chk "B resolves to B" (resolve_dir ~input:ib () = default_dir ~root:(Unix.realpath b));
           chk "A and B are distinct journals" (resolve_dir ~input:ia () <> resolve_dir ~input:ib ())))
 
+let%test_unit "resolve_dir: Cline-style filePath and workspaceRoots[0] resolve to the project (no cwd)" =
+  let chk = Fennec_hunt_unit.check in
+  with_temp_project (fun proj ->
+      let want = default_dir ~root:(Unix.realpath proj) in
+      let by_filepath = Printf.sprintf {|{"tool_input":{"filePath":%S}}|} (Filename.concat proj "sub/f.ml") in
+      chk "camelCase filePath resolves" (resolve_dir ~input:by_filepath () = want);
+      let by_ws = Printf.sprintf {|{"workspaceRoots":[%S,"/other/x"]}|} (Filename.concat proj "sub") in
+      chk "workspaceRoots[0] resolves" (resolve_dir ~input:by_ws () = want))
+
+let%test_unit "is_edit_tool: edits pass, reads/shell are filtered, no tool name proceeds" =
+  let chk = Fennec_hunt_unit.check in
+  let tool name = is_edit_tool (Printf.sprintf {|{"tool_name":%S}|} name) in
+  let tool2 name = is_edit_tool (Printf.sprintf {|{"toolName":%S}|} name) in
+  List.iter (fun n -> chk (n ^ " is an edit") (tool n)) [ "write_file"; "Write"; "apply_patch"; "Edit"; "MultiEdit"; "replace" ];
+  chk "Cline write_to_file (toolName) is an edit" (tool2 "write_to_file");
+  List.iter (fun n -> chk (n ^ " is NOT an edit") (not (tool n))) [ "read_files"; "run_commands"; "Grep"; "Shell" ];
+  chk "no tool name in payload → proceed (matcher already scoped us)" (is_edit_tool "{}")
+
 let%test_unit "status reports latest id and liveness" =
   let chk = Fennec_hunt_unit.check in
   with_temp_agent (fun dir ->

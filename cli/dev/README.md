@@ -125,11 +125,24 @@ dune locks. `fennec test`'s `dune shutdown` targets the default RPC and can't se
 
 ## The agent fastlane (how an agent uses this)
 
-`fennec dev --agent` writes the journal; a coding agent installs a post-tool hook (`agent_attach.ml`)
-that, after each edit, calls `fennec agent hook`. That blocks for the **next** dev verdict and returns
-it as model context — so the agent never tails logs or guesses. Runtime HTTP errors that piled up since
-the last tool are appended to the same feedback, and the full list is `fennec agent errors`. The
-contract is the `events.jsonl` id sequence; keep it pure (see the two-stream note above).
+The fastlane is its own self-contained library, [`fastlane/`](fastlane/) (`fennec_fastlane`) — a
+harness-free journal core plus one declarative adapter per coding harness. `fennec dev --agent` writes
+the journal AND auto-installs a hook into each harness **present on this machine** (so it never litters
+configs for tools you don't use). After each edit the harness runs `fennec agent hook`, which:
+
+- **resolves the right project's journal** from the edit's payload (the edited file's `dune-project`
+  root, realpath-canonicalised) — so one global hook serves many projects in parallel with no cross-talk;
+- returns **this edit's** settled verdict, pinned by a pre-edit `fennec agent mark` so a leftover/
+  background build can't mask it;
+- stays **silent** when no dev server is live for that project (the functional "detach" — a stopped or
+  killed server leaves no stale 12s waits), and on non-edit tools.
+
+Runtime HTTP errors that piled up since the last tool are appended to the same feedback; the full list
+is `fennec agent errors`. The contract is the `events.jsonl` id sequence; keep it pure.
+
+**Six harnesses, one value each.** Claude Code, Codex, Mistral Vibe, Gemini CLI, Cline, Cursor — each
+is one `Harness.t` in [`fastlane/registry.ml`](fastlane/registry.ml) (its config location, edit
+matcher, and injection-JSON shape). Adding a harness is a new value, never a change to the core.
 
 ## Invariants worth knowing before you change things
 
