@@ -1,33 +1,30 @@
 (** Fennec — the userland facade.
 
-    Everything a server application needs in one module: request/response types ({!Http},
-    {!Cookie}), the connection carrier ({!Conn}), the paw primitive + batteries ({!Paw}),
-    named endpoints ({!Endpoint}), concurrency helpers ({!parallel}, {!both}), asset serving
-    ({!static}, {!web_source}), and the single entry point ({!serve}).
+    Fennec owns the operational layer of a server app: the Eio entry point ({!serve}), the
+    dev/prod web-root flip ({!static}, {!web_source}), concurrency helpers ({!parallel},
+    {!both}), HTTPS config ({!Tls}/{!Acme}), and the framework batteries ({!Accounts}, {!Fur},
+    {!Mail}, {!Sift}).
+
+    The HTTP toolkit it builds on — the connection carrier, HTTP types, named endpoints, the
+    paw primitive and middleware — is {!Paw}, used {e directly}: Fennec's dune [(re_export)]s
+    [fennec-paw], so an app depends on [fennec] alone and writes [open Paw] to reach
+    [Conn]/[Endpoint]/[Http]/[Cookie]/[Logger]/[Session]/… with no pass-through proxy.
 
     The framework's internals (dev-mode wiring, the CLI↔server protocol, livereload relay)
     are NOT exported here — they are implementation details of {!serve}.
 
-    {[ (* an app: endpoints (Host-routed), a paw pipeline, the SSR app, one entry point *)
+    {[ (* an app opens both: [Fennec] for serve/static/Fur, [Paw] for the HTTP toolkit *)
+       open Fennec
+       open Paw
+
        let web =
          Endpoint.make ~name:"web" ~hosts:[ "*" ] ()
-         |> Endpoint.pipe [ Paw.Logger.make (); Paw.Security_headers.make () ]
+         |> Endpoint.pipe [ Logger.make (); Security_headers.make () ]
          |> Endpoint.get "/api/health" (fun c -> Conn.json c {|{"ok":true}|})
          |> Endpoint.app (Fur_ssr.handler ~styles:Site_styles.css ~mounts:[ Web_app.Routes.mount ])
 
-       let () = Fennec.serve [ web ]                 (* plain HTTP *)
+       let () = serve [ web ]                        (* plain HTTP *)
        (* ~tls / ~acme for HTTPS; ~on_start:(fun ~sw ~sleep:_ -> …) for boot (e.g. Pulse setup) *) ]} *)
-
-(** {1 Core types} *)
-
-(** The request-scoped connection carrier (see {!Paw.Conn}). *)
-module Conn = Paw.Conn
-
-(** HTTP types: request, response, status codes, methods (see {!Paw.Http}). *)
-module Http = Paw.Http
-
-(** Cookie parsing and serialization (see {!Paw.Cookie}). *)
-module Cookie = Paw.Cookie
 
 (** Accounts: the framework-native identity/session substrate. Password/email/OAuth/OIDC/SAML/
     passkey/MFA/org/SCIM batteries, passwordless route helpers, passkey JSON ceremonies, OIDC
@@ -42,15 +39,6 @@ module Accounts = Fennec_accounts.Accounts
     the ambient transport. {!Mail.set_dev_capture} tees every send into a live collection — the seam the
     dev mailbox (a userland realtime SPA over that collection) is built on. *)
 module Mail = Fennec_mail
-
-(** {1 Endpoints — host routing, apps, and route-local middleware} *)
-
-(** Named apps routed by the request's Host header (see {!Paw.Endpoint}).
-
-    Use endpoints to define one app per host/catch-all, mount SSR apps, add route handlers, and
-    attach matched-route middleware such as auth or rate limiting without turning unrelated 404s
-    into 401/403 responses. *)
-module Endpoint = Paw.Endpoint
 
 (** {1 Fur — the presentation layer}
 
@@ -69,20 +57,12 @@ module Fur : sig
 
   (* Standalone HANDLERS (frontend/handlers/*.mlx — view + load + own bundle) are authored as files and
      wired by the fur ppx + route_gen; the generated server [serve] uses {!Fennec_fur_handler.Handler}
-     + {!Conn} directly, so there is no handler facade module here. *)
+     + {!Paw.Conn} directly, so there is no handler facade module here. *)
   module Handler : module type of Fennec_web.Handler
   module Form : module type of Fennec_web.Form
   module Action : module type of Fennec_web.Action
   module Respond : module type of Fennec_web.Respond
 end
-
-(** {1 Paw — the HTTP toolkit}
-
-    The whole {{!Paw}fennec-paw} library, re-exported: the pipeline primitive and its algebra, the
-    flat endpoint builder ([Paw.endpoint () |> Paw.use … |> Paw.get …]), the conn-pipe response verbs
-    ([c |> Paw.set_status … |> Paw.json …]), and the middleware battery ([Paw.Logger], [Paw.Session],
-    [Paw.Csrf], …). See the [fennec-paw] docs for the full surface. *)
-module Paw = Paw
 
 (** {1 Helpers} *)
 
@@ -92,7 +72,7 @@ val is_dev : bool
 (** [dev_only f e] applies the endpoint transform [f] only when {!is_dev}; in production [e] is returned
     untouched, so any routes [f] would add simply do not exist (no bundle served, no handler reachable).
     The clean dev-only mount for tooling, e.g. [... |> dev_only (Endpoint.get "/dev/mailbox" Mailbox.serve)]. *)
-val dev_only : (Endpoint.t -> Endpoint.t) -> Endpoint.t -> Endpoint.t
+val dev_only : (Paw.Endpoint.t -> Paw.Endpoint.t) -> Paw.Endpoint.t -> Paw.Endpoint.t
 
 (** A web root source: dev reads the assembled webroot dir next to the exe; prod serves the
     embedded asset map. *)
@@ -113,10 +93,10 @@ val both : (unit -> 'a) -> (unit -> 'b) -> 'a * 'b
 
 (** Request-scoped errors that flow through the unified error funnel. *)
 type request_error = Paw.Server.request_error =
-  | Handler_exception of exn * Http.request  (** a handler or middleware raised *)
-  | Handler_timeout of Http.request  (** the per-request deadline expired *)
-  | No_route of Http.request  (** no endpoint matched the Host header (and no ["*"] default) *)
-  | Method_not_allowed of Http.request * Http.meth list
+  | Handler_exception of exn * Paw.Http.request  (** a handler or middleware raised *)
+  | Handler_timeout of Paw.Http.request  (** the per-request deadline expired *)
+  | No_route of Paw.Http.request  (** no endpoint matched the Host header (and no ["*"] default) *)
+  | Method_not_allowed of Paw.Http.request * Paw.Http.meth list
       (** the path exists but not for this method; carries the methods it does serve. The server
           renders [405] with an [Allow] header (and auto-answers [OPTIONS]) — override only the body. *)
 
@@ -225,8 +205,8 @@ val serve :
   ?tls:Tls.t ->
   ?acme:Acme.config ->
   ?accounts:Accounts.config ->
-  ?on_error:(request_error -> Http.response) ->
+  ?on_error:(request_error -> Paw.Http.response) ->
   ?on_start:
      (sw:Eio.Switch.t -> sleep:(float -> unit) -> net:[ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t -> unit) ->
-  Endpoint.t list ->
+  Paw.Endpoint.t list ->
   unit

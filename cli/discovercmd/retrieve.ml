@@ -134,7 +134,7 @@ let resolve_ref public_items ~(source : public_item) target =
   |> List.filter (fun (i : public_item) -> suffix_match ~suffix:target i.path)
   |> List.sort (fun (a : public_item) (b : public_item) ->
          let score i =
-           (if starts_with i.path "Fennec." || starts_with i.path "Fur." || starts_with i.path "Pulse." || starts_with i.path "Fennec_hunt." then 4.0
+           (if starts_with i.path "Fennec." || starts_with i.path "Paw." || starts_with i.path "Fur." || starts_with i.path "Pulse." || starts_with i.path "Fennec_hunt." then 4.0
             else if starts_with i.path "Fennec_" then -2.0
             else 0.0)
            +. (if (not qualified) && root_of_path i.path = source_root then 12.0 else 0.0)
@@ -250,11 +250,11 @@ let source_owner_prefixes (ev : evidence) =
     if starts_with path "examples/site/test/http/" || starts_with path "hunt/http" then [ "Fennec_hunt.Http" ]
     else if starts_with path "examples/site/test/browser/" || starts_with path "hunt/live" then [ "Fennec_hunt.Live" ]
     else if starts_with path "examples/site/test/system/" || starts_with path "hunt/system" then [ "Fennec_hunt.System" ]
-    else if starts_with path "paw/middleware/basic_auth" then [ "Fennec.Paw.Basic_auth" ]
-    else if starts_with path "paw/middleware/session" then [ "Fennec.Paw.Session" ]
-    else if starts_with path "paw/routing/endpoint" then [ "Fennec.Endpoint" ]
-    else if starts_with path "fennec/paw/conn" then [ "Fennec.Conn" ]
-    else if starts_with path "fennec/core/cookie" then [ "Fennec.Cookie" ]
+    else if starts_with path "paw/middleware/basic_auth" then [ "Paw.Basic_auth" ]
+    else if starts_with path "paw/middleware/session" then [ "Paw.Session" ]
+    else if starts_with path "paw/routing/endpoint" then [ "Paw.Endpoint" ]
+    else if starts_with path "paw/conn/conn" then [ "Paw.Conn" ]
+    else if starts_with path "paw/http/cookie" then [ "Paw.Cookie" ]
     else if starts_with path "fennec/fur/tools/route_gen" then [ "Fur.Router" ]
     else if starts_with path "examples/site/frontend/apps/" then [ "Fur.Router"; "Fur" ]
     else if starts_with path "fennec/fur/core/fur" || starts_with path "fennec/fur/server/" || starts_with path "examples/site/frontend/components/counter" then [ "Fur" ]
@@ -321,6 +321,7 @@ let evidence_kind_match terms kind =
 let public_prior path =
   let facade =
     if starts_with path "Fennec." then 2.4
+    else if starts_with path "Paw." then 2.4
     else if starts_with path "Fur." then 2.2
     else if starts_with path "Pulse." then 2.0
     else if starts_with path "Fennec_hunt." then 1.8
@@ -333,7 +334,7 @@ let public_prior path =
   facade +. shallow
 
 let is_facade path =
-  starts_with path "Fennec." || starts_with path "Fur." || starts_with path "Pulse." || starts_with path "Fennec_hunt."
+  starts_with path "Fennec." || starts_with path "Paw." || starts_with path "Fur." || starts_with path "Pulse." || starts_with path "Fennec_hunt."
 
 let posting_refs table term =
   match Hashtbl.find_opt table term with

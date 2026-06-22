@@ -194,13 +194,9 @@ track the useful Meteor vocabulary (`userId`, `setUserId`, `createUser`, `login`
   email verification, and MFA completion decode the server's canonical BSON payloads into typed
   OCaml variants.
 
-The facade exports both:
-
-- `Fennec.Accounts`
-- `Fennec.Paw.Accounts`
-
-They are the same module; `Paw.Accounts` exists so users discover auth next to the other route
-middleware batteries.
+The facade exports it as `Fennec.Accounts` (a re-export of `Fennec_accounts.Accounts`). Auth is part of
+the framework, not the HTTP foundation: it lives under `Fennec`, while the plain route middleware
+batteries live under `Paw` (`Paw.Logger`, `Paw.Session`, …).
 
 ## App Roles
 
@@ -245,7 +241,7 @@ already-applied grant/revoke is a no-op and does not create audit noise.
 Route guards stay server-authoritative:
 
 ```ocaml
-Fennec.Endpoint.use_matched
+Paw.Endpoint.use_matched
   (Fennec.Accounts.require_permission accounts ~policy Perms.admin_access ())
   admin_endpoint
 ```
@@ -349,8 +345,8 @@ Typical server setup:
 
 ```ocaml
 let app =
-  Fennec.Endpoint.make ~name:"web" ()
-  |> Fennec.Endpoint.pipe_matched [ Fennec.Accounts.require_user () ]
+  Paw.Endpoint.make ~name:"web" ()
+  |> Paw.Endpoint.pipe_matched [ Fennec.Accounts.require_user () ]
 
 let () =
   Fennec.serve [ app ]
@@ -386,7 +382,7 @@ MFA and org/tenant guards stay in the paw pipeline too:
 ```ocaml
 let admin_routes =
   let requirement = Result.get_ok (Fennec.Accounts.Mfa.requirement Fennec.Accounts.Mfa.Multi_factor) in
-  Fennec.Paw.seq
+  Paw.seq
     [
       Fennec.Accounts.require_user ();
       Fennec.Accounts.require_assurance requirement ();
@@ -415,14 +411,14 @@ For a form/HTTP login endpoint, use the completion form when the app supports MF
 ```ocaml
 match Fennec.Accounts.login_with_password_completion accounts (By_email email) ~password with
 | Ok (Complete_login (_user, token)) ->
-    conn |> Fennec.Accounts.set_login_cookie accounts token |> Fennec.Conn.redirect "/"
+    conn |> Fennec.Accounts.set_login_cookie accounts token |> Paw.Conn.redirect "/"
 | Ok (Step_up_required step) ->
     (* render or redirect to the app's TOTP/passkey/backup-code step-up UI *)
     Render.mfa_form
       ~user_id:step.user.id
       ~token:(Fennec.Accounts.Challenge.token_to_string step.step_up.token)
 | Error e ->
-    Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 ```
 
 The shorter `login_with_password`, `login_with_strategy`, and direct identity wrappers are still
@@ -436,24 +432,24 @@ Accounts owns the challenge, identity, password hash, and revocation semantics:
 match Fennec.Accounts.issue_password_reset accounts email with
 | Ok None ->
     (* Same outward response as success: do not reveal whether the email exists. *)
-    Fennec.Conn.redirect "/check-your-email" conn
+    Paw.Conn.redirect "/check-your-email" conn
 | Ok (Some reset) ->
     Mailer.send_password_reset email (Fennec.Accounts.Challenge.token_to_string reset.token);
-    Fennec.Conn.redirect "/check-your-email" conn
+    Paw.Conn.redirect "/check-your-email" conn
 | Error e ->
-    Fennec.Conn.text ~status:400 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:400 conn (Fennec.Accounts.string_of_error e)
 ```
 
 ```ocaml
 match Fennec.Accounts.reset_password_completion accounts token ~password with
 | Ok (Complete_login (_user, session)) ->
-    conn |> Fennec.Accounts.set_login_cookie accounts session |> Fennec.Conn.redirect "/"
+    conn |> Fennec.Accounts.set_login_cookie accounts session |> Paw.Conn.redirect "/"
 | Ok (Step_up_required step) ->
     Render.mfa_form
       ~user_id:step.user.id
       ~token:(Fennec.Accounts.Challenge.token_to_string step.step_up.token)
 | Error e ->
-    Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 ```
 
 For the conventional form endpoints, helper paws remove the repetitive plumbing while keeping the
@@ -461,7 +457,7 @@ same boundary:
 
 ```ocaml
 let account_routes =
-  Fennec.Paw.seq
+  Paw.seq
     [
       Fennec.Accounts.password_reset_request_paw
         accounts
@@ -513,13 +509,13 @@ match
     facts
 with
 | Ok (Complete_identity_login r) ->
-    conn |> Fennec.Accounts.set_login_cookie accounts r.token |> Fennec.Conn.redirect "/"
+    conn |> Fennec.Accounts.set_login_cookie accounts r.token |> Paw.Conn.redirect "/"
 | Ok (Identity_step_up_required step) ->
     Render.mfa_form
       ~user_id:step.user.id
       ~token:(Fennec.Accounts.Challenge.token_to_string step.step_up.token)
 | Error e ->
-    Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 ```
 
 The resolver order is deliberately small and explicit:
@@ -544,9 +540,9 @@ match
     principal
 with
 | Ok r ->
-    conn |> Fennec.Accounts.set_login_cookie accounts r.token |> Fennec.Conn.redirect "/"
+    conn |> Fennec.Accounts.set_login_cookie accounts r.token |> Paw.Conn.redirect "/"
 | Error e ->
-    Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 ```
 
 The same shape exists for consumed email links/OTPs, SAML principals, and verified passkey
@@ -611,8 +607,8 @@ the WebAuthn ceremony:
 
 ```ocaml
 match Fennec.Accounts.register_passkey_credential accounts credential with
-| Ok _link -> Fennec.Conn.redirect "/security" conn
-| Error e -> Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+| Ok _link -> Paw.Conn.redirect "/security" conn
+| Error e -> Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 ```
 
 Passkey assertion can persist the updated counter and then issue the normal Accounts token:
@@ -620,12 +616,12 @@ Passkey assertion can persist the updated counter and then issue the normal Acco
 ```ocaml
 match Fennec.Accounts.login_with_passkey_assertion_completion accounts assertion with
 | Ok (Complete_identity_login r) ->
-    conn |> Fennec.Accounts.set_login_cookie accounts r.token |> Fennec.Conn.redirect "/"
+    conn |> Fennec.Accounts.set_login_cookie accounts r.token |> Paw.Conn.redirect "/"
 | Ok (Identity_step_up_required step) ->
     Render.mfa_form
       ~user_id:step.user.id
       ~token:(Fennec.Accounts.Challenge.token_to_string step.step_up.token)
-| Error e -> Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+| Error e -> Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 ```
 
 ## MFA And Organizations
@@ -638,7 +634,7 @@ match Fennec.Accounts.enroll_totp accounts user_id with
     (* render setup.provisioning_uri as a QR code *)
     Render.totp_setup setup.provisioning_uri
 | Error e ->
-    Fennec.Conn.text ~status:400 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:400 conn (Fennec.Accounts.string_of_error e)
 ```
 
 After the user enters a code, `confirm_totp_enrollment` activates the factor. Later step-up calls use
@@ -654,13 +650,13 @@ After the second factor verifies, exchange that token and assurance for the fina
 ```ocaml
 match Fennec.Accounts.verify_totp_factor accounts enrollment_id ~code with
 | Error e ->
-    Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e)
 | Ok verification -> (
     match Fennec.Accounts.complete_login_step_up accounts mfa_token verification with
     | Ok (_user, session) ->
-        conn |> Fennec.Accounts.set_login_cookie accounts session |> Fennec.Conn.redirect "/"
+        conn |> Fennec.Accounts.set_login_cookie accounts session |> Paw.Conn.redirect "/"
     | Error e ->
-        Fennec.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e))
+        Paw.Conn.text ~status:403 conn (Fennec.Accounts.string_of_error e))
 ```
 
 `complete_login_step_up` consumes the single-use challenge, checks the supplied assurance against the
@@ -678,7 +674,7 @@ match Fennec.Accounts.issue_org_invite accounts ~org_id:"acme" ~email ~role:"mem
 | Ok invite ->
     Mailer.send_org_invite email invite.token
 | Error e ->
-    Fennec.Conn.text ~status:400 conn (Fennec.Accounts.string_of_error e)
+    Paw.Conn.text ~status:400 conn (Fennec.Accounts.string_of_error e)
 ```
 
 `accept_org_invite` checks the hashed token, pending/expiry state, and that the target user carries

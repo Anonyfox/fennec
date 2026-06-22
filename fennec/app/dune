@@ -1,13 +1,15 @@
 ; The userland facade — `Fennec`. The one server-side library an app's server.ml
 ; depends on: owns Eio, the dev/prod web-root flip, dev livereload, and serve.
-; Re-exports Endpoint/Conn/Http + the Paw battery namespace so userland opens one module.
+; Paw is the HTTP foundation we build on, so we (re_export) it: a downstream app
+; depends on `fennec` alone and names `Paw.*` directly (open Paw) — no proxy module,
+; no second dune dep. Conn/Endpoint/Http/Cookie/middleware all come straight from Paw.
 
 (library
  (name fennec)
  (public_name fennec)
  (modes byte native)
  (libraries
-  fennec-paw
+  (re_export fennec-paw)
   fennec.accounts
   fennec.fur
   fennec.fur.server

@@ -26,7 +26,7 @@ let render () =
       "```sh";
       "fennec discover \"protect admin route with basic auth\"";
       "fennec discover \"build an SSR page with a local counter\"";
-      "fennec discover --browse Fennec.Paw";
+      "fennec discover --browse Paw";
       "fennec discover --why ID";
       "```";
       "";

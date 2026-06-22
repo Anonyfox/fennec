@@ -16,35 +16,35 @@ let tasks =
   [
     {
       query = "protect only matched admin routes with basic auth";
-      must_use = [ "Fennec.Paw.Basic_auth"; "Fennec.Endpoint.pipe_matched" ];
+      must_use = [ "Paw.Basic_auth"; "Paw.Endpoint.pipe_matched" ];
       must_evidence = [ "server.ml"; "domains_test.ml" ];
       must_answer = [ "matched"; "Basic_auth" ];
       starter = false;
       must_card = "plan";
-      top_use = Some "Fennec.Endpoint";
-      default_use = [ "Fennec.Paw.Basic_auth"; "Fennec.Endpoint.pipe_matched" ];
+      top_use = Some "Paw.Endpoint";
+      default_use = [ "Paw.Basic_auth"; "Paw.Endpoint.pipe_matched" ];
       default_evidence = [ "server.ml"; "domains_test.ml" ];
     };
     {
       query = "set and delete a response cookie";
-      must_use = [ "Fennec.Conn.set_cookie"; "Fennec.Conn.delete_cookie" ];
+      must_use = [ "Paw.Conn.set_cookie"; "Paw.Conn.delete_cookie" ];
       must_evidence = [ "cookie" ];
       must_answer = [ "response-cookie"; "sessions" ];
       starter = true;
       must_card = "plan";
-      top_use = Some "Fennec.Conn.set_cookie";
-      default_use = [ "Fennec.Conn.set_cookie"; "Fennec.Conn.delete_cookie" ];
+      top_use = Some "Paw.Conn.set_cookie";
+      default_use = [ "Paw.Conn.set_cookie"; "Paw.Conn.delete_cookie" ];
       default_evidence = [ "conn.ml"; "cookie.ml" ];
     };
     {
       query = "add signed cookie-backed sessions";
-      must_use = [ "Fennec.Paw.Session" ];
+      must_use = [ "Paw.Session" ];
       must_evidence = [ "session.ml" ];
       must_answer = [ "Session"; "signed" ];
       starter = true;
       must_card = "plan";
-      top_use = Some "Fennec.Paw.Session.make";
-      default_use = [ "Fennec.Paw.Session" ];
+      top_use = Some "Paw.Session.make";
+      default_use = [ "Paw.Session" ];
       default_evidence = [ "session.ml" ];
     };
     {
@@ -71,24 +71,24 @@ let tasks =
     };
     {
       query = "upload a file from a multipart form";
-      must_use = [ "Fennec.Conn.files"; "Fennec.Conn.file" ];
+      must_use = [ "Paw.Conn.files"; "Paw.Conn.file" ];
       must_evidence = [ "multipart" ];
-      must_answer = [ "Fennec.Conn.files"; "multipart/form-data"; "uploads" ];
+      must_answer = [ "Paw.Conn.files"; "multipart/form-data"; "uploads" ];
       starter = true;
       must_card = "plan";
-      top_use = Some "Fennec.Conn.files";
-      default_use = [ "Fennec.Conn.files"; "Fennec.Conn.file" ];
+      top_use = Some "Paw.Conn.files";
+      default_use = [ "Paw.Conn.files"; "Paw.Conn.file" ];
       default_evidence = [ "multipart" ];
     };
     {
       query = "stream a response body in chunks";
-      must_use = [ "Fennec.Conn.send_chunked" ];
+      must_use = [ "Paw.Conn.send_chunked" ];
       must_evidence = [ "send_chunked" ];
-      must_answer = [ "Fennec.Conn.send_chunked"; "streamed"; "chunked" ];
+      must_answer = [ "Paw.Conn.send_chunked"; "streamed"; "chunked" ];
       starter = true;
       must_card = "plan";
-      top_use = Some "Fennec.Conn.send_chunked";
-      default_use = [ "Fennec.Conn.send_chunked" ];
+      top_use = Some "Paw.Conn.send_chunked";
+      default_use = [ "Paw.Conn.send_chunked" ];
       default_evidence = [ "send_chunked" ];
     };
     {

@@ -4,19 +4,16 @@
    a dev control socket the CLI pings), and starting the server. Userland writes
    endpoints as paw pipelines and hands them to [serve].
 
-   Re-exports the pieces an app needs (Endpoint, Conn, Http, …) so a userland file
-   opens one module. The prebuilt batteries live under {!Paw} as submodules
-   ([Paw.Logger], [Paw.Session], [Paw.Csrf], …), each a [make] returning a paw. *)
+   Paw is the HTTP foundation Fennec builds on, and Fennec's dune (re_export)s it: an app
+   names [Paw.Conn]/[Paw.Endpoint]/[Paw.Http]/[Paw.Logger]/… DIRECTLY (open Paw), with no
+   pass-through proxy. Here we just [open Paw] for our own plumbing below (Conn/Endpoint/Http/
+   Static/Livereload/Dev_proto/Server/Acme are all Paw submodules). *)
 
-module Conn = Paw.Conn
-module Endpoint = Paw.Endpoint
+open Paw
+
 module Tls = Paw.Tls_termination (* in-process HTTPS termination: load a cert+key, pass to serve ~tls *)
 module Cert_store = Paw.Cert_store (* pluggable ACME cert storage: file (default) / memory / custom *)
 module Acme = Paw.Acme (* automatic HTTPS (Let's Encrypt): serve ~acme:(Acme.auto ~email ()) *)
-module Livereload = Paw.Livereload
-module Http = Paw.Http
-module Cookie = Paw.Cookie
-module Dev_proto = Paw.Dev_proto (* the CLI<->server dev wire (env names, stderr line formats) *)
 module Accounts = Fennec_accounts.Accounts
 module Mail = Fennec_mail (* outbound email: one MAIL_URL knob (unset ⇒ logged to stdout in dev) *)
 
@@ -38,11 +35,6 @@ module Fur = struct
   module Action = Fennec_web.Action (* typed path/query scalars + JSON-body decode *)
   module Respond = Fennec_web.Respond (* JSON output building blocks (hand-built APIs) *)
 end
-
-(* The whole fennec-paw library, under one name: the pipeline primitive + algebra, the flat endpoint
-   builder ([Paw.endpoint () |> Paw.use … |> Paw.get …]), the conn-pipe response verbs, and every
-   prebuilt battery ([Paw.Logger], [Paw.Session], …) — each [make] returns a plain [Paw.t]. *)
-module Paw = Paw
 
 type request_error = Paw.Server.request_error =
   | Handler_exception of exn * Http.request

@@ -48,9 +48,9 @@ let oauth = Fennec.Accounts.OAuth.make ~challenge in
 
 match Fennec.Accounts.OAuth.authorize oauth ~redirect:"/dashboard" github with
 | Ok authorization ->
-    Fennec.Conn.redirect conn authorization.url
+    Paw.Conn.redirect conn authorization.url
 | Error err ->
-    Fennec.Conn.text ~status:400 conn (Fennec.Accounts.OAuth.string_of_error err)
+    Paw.Conn.text ~status:400 conn (Fennec.Accounts.OAuth.string_of_error err)
 ```
 
 State metadata includes:

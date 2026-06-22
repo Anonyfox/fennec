@@ -53,7 +53,7 @@ let starts_with s prefix =
   String.length s >= String.length prefix && String.sub s 0 (String.length prefix) = prefix
 
 let is_facade path =
-  starts_with path "Fennec." || starts_with path "Fur." || starts_with path "Pulse." || starts_with path "Fennec_hunt."
+  starts_with path "Fennec." || starts_with path "Paw." || starts_with path "Fur." || starts_with path "Pulse." || starts_with path "Fennec_hunt."
 
 let depth path = List.length (String.split_on_char '.' path)
 
@@ -140,17 +140,17 @@ type plan_kind =
 let infer_plan_kind terms uses evidence =
   let wants_test = terms_match terms [ "test"; "tests"; "assert"; "assertion"; "expect" ] in
   let has_route_evidence = List.exists (fun e -> e.kind = Route) evidence in
-  let conn_lead = lead_is uses "Fennec.Conn" in
-  if has_use uses "Fennec.Paw.Basic_auth" && has_use uses "Fennec.Endpoint" then Matched_auth
+  let conn_lead = lead_is uses "Paw.Conn" in
+  if has_use uses "Paw.Basic_auth" && has_use uses "Paw.Endpoint" then Matched_auth
   else if conn_lead && terms_match terms [ "cookie"; "cookies" ] then Response_cookie
-  else if lead_is uses "Fennec.Paw.Session" || has_use uses "Fennec.Paw.Session" then Session
+  else if lead_is uses "Paw.Session" || has_use uses "Paw.Session" then Session
   else if
-    (lead_is uses "Fennec.Conn.files" || lead_is uses "Fennec.Conn.file")
-    || (has_use uses "Fennec.Conn.files" && terms_match terms [ "upload"; "uploads"; "multipart"; "form" ])
+    (lead_is uses "Paw.Conn.files" || lead_is uses "Paw.Conn.file")
+    || (has_use uses "Paw.Conn.files" && terms_match terms [ "upload"; "uploads"; "multipart"; "form" ])
   then Upload
   else if
-    (lead_is uses "Fennec.Conn.send_chunked" || lead_is uses "Fennec.Conn.stream")
-    || (has_use uses "Fennec.Conn.send_chunked" && terms_match terms [ "stream"; "streams"; "chunk"; "chunks"; "chunked"; "sse" ])
+    (lead_is uses "Paw.Conn.send_chunked" || lead_is uses "Paw.Conn.stream")
+    || (has_use uses "Paw.Conn.send_chunked" && terms_match terms [ "stream"; "streams"; "chunk"; "chunks"; "chunked"; "sse" ])
   then Chunked_stream
   else if (lead_is uses "Fennec_hunt.Http" || has_use uses "Fennec_hunt.Http") && wants_test then Http_test
   else if lead_is uses "Fur" && terms_match terms [ "counter"; "local"; "state" ] then Local_state
@@ -168,22 +168,22 @@ let default_summary task uses =
 let starter_for = function
   | Response_cookie ->
     Some
-      "let conn = Fennec.Conn.set_cookie conn \"seen\" \"1\" in\n\
-       let conn = Fennec.Conn.delete_cookie conn \"old\" in\n\
+      "let conn = Paw.Conn.set_cookie conn \"seen\" \"1\" in\n\
+       let conn = Paw.Conn.delete_cookie conn \"old\" in\n\
        conn"
   | Session ->
     Some
-      "let session = Fennec.Paw.Session.make ~secret:\"...\" ()\n\
+      "let session = Paw.Session.make ~secret:\"...\" ()\n\
        \n\
        (* Add the session paw early, then read/write session values downstream. *)"
   | Upload ->
     Some
-      "match Fennec.Conn.file conn \"upload\" with\n\
-       | Some part -> Fennec.Conn.text conn part.data\n\
-       | None -> Fennec.Conn.text ~status:400 conn \"missing upload\""
+      "match Paw.Conn.file conn \"upload\" with\n\
+       | Some part -> Paw.Conn.text conn part.data\n\
+       | None -> Paw.Conn.text ~status:400 conn \"missing upload\""
   | Chunked_stream ->
     Some
-      "Fennec.Conn.send_chunked conn ~content_type:\"text/event-stream\" (fun emit ->\n\
+      "Paw.Conn.send_chunked conn ~content_type:\"text/event-stream\" (fun emit ->\n\
        \  emit \"data: ready\\n\\n\")"
   | Http_test ->
     Some
@@ -217,13 +217,13 @@ let plan_summary kind task uses =
   | Matched_auth ->
     "Protect real routes with matched-route middleware: define the endpoint, then attach Basic_auth in the matched phase."
   | Response_cookie ->
-    "Use Fennec.Conn response-cookie helpers for one-off browser cookies; use sessions for signed request-to-request state."
+    "Use Paw.Conn response-cookie helpers for one-off browser cookies; use sessions for signed request-to-request state."
   | Session ->
-    "Use Fennec.Paw.Session for signed cookie-backed session state such as login data, flash values, or preferences."
+    "Use Paw.Session for signed cookie-backed session state such as login data, flash values, or preferences."
   | Upload ->
-    "Use Fennec.Conn.files or Fennec.Conn.file to read uploaded multipart/form-data parts in the request handler."
+    "Use Paw.Conn.files or Paw.Conn.file to read uploaded multipart/form-data parts in the request handler."
   | Chunked_stream ->
-    "Use Fennec.Conn.send_chunked to answer with a streamed chunked response body; use HTTP/browser tests only to prove it reassembles."
+    "Use Paw.Conn.send_chunked to answer with a streamed chunked response body; use HTTP/browser tests only to prove it reassembles."
   | Local_state ->
     "Use Fur.signal for local component state; SSR renders the initial value and browser handlers update it after hydration."
   | Http_test ->
@@ -327,7 +327,7 @@ let plan_steps terms uses evidence =
   match infer_plan_kind terms uses evidence with
   | Matched_auth ->
     [
-      "Define the endpoint/app route surface with Fennec.Endpoint.";
+      "Define the endpoint/app route surface with Paw.Endpoint.";
       "Attach Basic_auth in the matched phase so unrelated misses still behave like misses.";
       "Use the system/http evidence as the regression shape.";
     ]
@@ -387,11 +387,11 @@ let focused_uses terms evidence uses =
   in
   let prefixes =
     match kind with
-    | Matched_auth -> [ "Fennec.Endpoint"; "Fennec.Paw.Basic_auth" ]
-    | Response_cookie -> [ "Fennec.Conn.cookie"; "Fennec.Conn.cookies"; "Fennec.Conn.set_cookie"; "Fennec.Conn.delete_cookie" ]
-    | Session -> [ "Fennec.Paw.Session" ]
-    | Upload -> [ "Fennec.Conn.files"; "Fennec.Conn.file" ]
-    | Chunked_stream -> [ "Fennec.Conn.send_chunked"; "Fennec.Conn.stream" ]
+    | Matched_auth -> [ "Paw.Endpoint"; "Paw.Basic_auth" ]
+    | Response_cookie -> [ "Paw.Conn.cookie"; "Paw.Conn.cookies"; "Paw.Conn.set_cookie"; "Paw.Conn.delete_cookie" ]
+    | Session -> [ "Paw.Session" ]
+    | Upload -> [ "Paw.Conn.files"; "Paw.Conn.file" ]
+    | Chunked_stream -> [ "Paw.Conn.send_chunked"; "Paw.Conn.stream" ]
     | Http_test -> [ "Fennec_hunt.Http" ]
     | Local_state -> [ "Fur.signal"; "Fur.get"; "Fur.set"; "Fur.update"; "Fur.Head" ]
     | Router -> [ "Fur.Router" ]
@@ -417,8 +417,8 @@ let evidence_card_score terms selected_ids (r : Retrieve.evidence_result) =
   let source =
     if has "session" && contains_sub ~needle:"paw/middleware/session" path then 110.0
     else if has "cookie" && contains_sub ~needle:"examples/site/test/browser" path then -.80.0
-    else if has "cookie" && contains_sub ~needle:"fennec/paw/conn.ml" path then 75.0
-    else if has "cookie" && contains_sub ~needle:"fennec/core/cookie.ml" path then 70.0
+    else if has "cookie" && contains_sub ~needle:"paw/conn/conn.ml" path then 75.0
+    else if has "cookie" && contains_sub ~needle:"paw/http/cookie.ml" path then 70.0
     else if contains_sub ~needle:"examples/site/frontend/components/task_list" path && (has "pulse" || has "live") then 120.0
     else if contains_sub ~needle:"examples/site/test/browser/web_test" path && (has "local" || has "state" || has "counter") then 10.0
     else if contains_sub ~needle:"examples/site/frontend/components/counter" path && (has "local" || has "counter") then 85.0
@@ -464,12 +464,39 @@ let evidence_presentable kind terms selected_ids (e : evidence) =
 
 let find_api = Retrieve.find_api
 
+(* dedupe an evidence list by id, keeping first occurrence (order-preserving). *)
+let uniq_evidence_by_id xs =
+  let seen = Hashtbl.create 16 in
+  List.filter
+    (fun (e : evidence) ->
+      if Hashtbl.mem seen e.id then false else (Hashtbl.add seen e.id (); true))
+    xs
+
 let compare_card snapshot task terms uses evidence =
   match Select.compare_pair ~task ~terms ~uses ~public_items:snapshot.public_items with
   | None -> None
   | Some (left, right) ->
     let axis, left_when, right_when = compare_axis terms left right in
     let answer = answer_for_compare terms left right in
+    (* a compare must show evidence from BOTH sides; the generic plan evidence skews to whichever
+       side the query's rarest terms hit (e.g. all Pulse, no Fur). For each compared API pull its
+       linked evidence and pick the CANONICAL usage example — the one that names the API's leaf and is
+       an example component — then put one of each FIRST, so the card always proves both alternatives. *)
+    let best_linked (item : public_item) =
+      let leaf = String.lowercase_ascii (leaf item.path) in
+      let canonical (e : evidence) =
+        (if contains_sub ~needle:leaf (String.lowercase_ascii (e.label ^ " " ^ e.text)) then 10 else 0)
+        + (match e.kind with
+           | Example -> if starts_with e.source.path "examples/site/frontend/components" then 8 else 4
+           | Test -> 3
+           | _ -> 0)
+      in
+      Retrieve.evidence snapshot terms [ ({ item; score = 10.0; coverage = 1.0 } : Retrieve.api_result) ]
+      |> List.map (fun (r : Retrieve.evidence_result) -> r.ev)
+      |> List.stable_sort (fun a b -> compare (canonical b) (canonical a))
+      |> take 1
+    in
+    let evidence = uniq_evidence_by_id (best_linked left @ best_linked right @ evidence) in
     Some
       (Compare
          {
@@ -679,13 +706,13 @@ let tiny_snapshot =
     packages = [ { name = "fennec"; version = "0"; digest = "x" } ];
     public_items =
       [
-        { id = "api:Fennec.Paw.Basic_auth.make"; package = "fennec"; library = "fennec"; path = "Fennec.Paw.Basic_auth.make"; kind = Value; signature = Some "val make"; doc = Some "basic authentication middleware"; source = Source_ref.make ~path:"f.mli" ~line:1 () };
-        { id = "api:Fennec.Endpoint.pipe_matched"; package = "fennec"; library = "fennec"; path = "Fennec.Endpoint.pipe_matched"; kind = Value; signature = Some "val pipe_matched"; doc = Some "run middleware after route match"; source = Source_ref.make ~path:"e.mli" ~line:2 () };
+        { id = "api:Paw.Basic_auth.make"; package = "fennec-paw"; library = "fennec-paw"; path = "Paw.Basic_auth.make"; kind = Value; signature = Some "val make"; doc = Some "basic authentication middleware"; source = Source_ref.make ~path:"f.mli" ~line:1 () };
+        { id = "api:Paw.Endpoint.pipe_matched"; package = "fennec-paw"; library = "fennec-paw"; path = "Paw.Endpoint.pipe_matched"; kind = Value; signature = Some "val pipe_matched"; doc = Some "run middleware after route match"; source = Source_ref.make ~path:"e.mli" ~line:2 () };
       ];
     api_index = [];
     evidence =
       [
-        { id = "test:auth"; kind = Test; package = "fennec"; label = "protect admin route with matched auth"; text = "protect admin route using pipe_matched Basic_auth.make returns 401 while unmatched stays 404"; apis = [ "api:Fennec.Paw.Basic_auth.make"; "api:Fennec.Endpoint.pipe_matched" ]; source = Source_ref.make ~path:"t.ml" ~line:3 () };
+        { id = "test:auth"; kind = Test; package = "fennec"; label = "protect admin route with matched auth"; text = "protect admin route using pipe_matched Basic_auth.make returns 401 while unmatched stays 404"; apis = [ "api:Paw.Basic_auth.make"; "api:Paw.Endpoint.pipe_matched" ]; source = Source_ref.make ~path:"t.ml" ~line:3 () };
       ];
     evidence_index = [];
     api_evidence_index = [];

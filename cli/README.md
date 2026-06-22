@@ -24,7 +24,7 @@ Answers task-shaped questions before code is written:
 fennec discover "protect admin route with basic auth"
 fennec discover "build an SSR page with a local counter"
 fennec discover "upload a file from a multipart form"
-fennec discover --browse Fennec.Paw
+fennec discover --browse Paw
 ```
 
 The answer comes from the framework snapshot generated from public interfaces, docs, examples, and

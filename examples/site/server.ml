@@ -11,9 +11,8 @@
    web app gets server-rendered data + fast-render seeds. The SAME frontend lib is
    compiled to JS via js_of_ocaml for the client (./client). *)
 
-module Endpoint = Fennec.Endpoint
-module Paw = Fennec.Paw
-module Conn = Fennec.Conn
+(* Paw is the HTTP foundation, re-exported by fennec — used directly, no Fennec.* proxy. *)
+module Conn = Paw.Conn (* the conn verbs: before_send, body_param, redirect, send_chunked *)
 module Accounts = Fennec.Accounts
 
 (* The app's data. [/api/greeting] is GONE from here — it is now CO-LOCATED in the component
@@ -45,10 +44,10 @@ let download_path =
   p
 
 (* a custom paw — trivial to write and unit-test: stamp every response *)
-let powered_by : Fennec.Paw.t =
+let powered_by : Paw.t =
  fun c ->
   Conn.before_send c (fun r ->
-      { r with Fennec.Http.headers = ("X-Powered-By", "fennec") :: r.Fennec.Http.headers })
+      { r with Paw.Http.headers = ("X-Powered-By", "fennec") :: r.Paw.Http.headers })
 
 (* the realtime backend: a published "tasks" collection + an addTask method, served as DDP over a
    websocket at /ddp. The browser (Task_list) subscribes and renders it live; addTask inserts and the

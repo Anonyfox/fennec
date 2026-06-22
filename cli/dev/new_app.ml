@@ -33,8 +33,8 @@ let lib_name_of (raw : string) : string =
    JSX), and applying it once more renders the vnode. *)
 let server_ml =
   "(* The whole server: one endpoint, one route, rendering a .mlx component to HTML.\n\
-  \   `fennec dev` discovers THIS file (it calls Fennec.serve) and runs it with livereload. *)\n\n\
-   module Paw = Fennec.Paw\n\n\
+  \   `fennec dev` discovers THIS file (it calls Fennec.serve) and runs it with livereload.\n\
+  \   `Paw` is the HTTP toolkit — re-exported by fennec, so it's available directly. *)\n\n\
    (* GET / → render the Hello component. A Fur component's `make` returns a render thunk, so we\n\
   \   apply () a second time to produce the vnode Handler.html renders. *)\n\
    let home conn = Fennec.Fur.Handler.html conn ((Hello.make ~name:\"world\" ()) ())\n\n\

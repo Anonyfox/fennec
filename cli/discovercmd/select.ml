@@ -37,13 +37,9 @@ let depth path = List.length (String.split_on_char '.' path)
 
 let family path =
   match String.split_on_char '.' path with
-  | "Fennec" :: "Paw" :: name :: _ -> "Fennec.Paw." ^ name
-  | "Fennec" :: name :: _ -> "Fennec." ^ name
   | "Fur" :: _ -> "Fur"
   | "Pulse" :: "Live" :: _ -> "Pulse.Live"
-  | "Pulse" :: name :: _ -> "Pulse." ^ name
-  | "Fennec_hunt" :: name :: _ -> "Fennec_hunt." ^ name
-  | a :: b :: _ -> a ^ "." ^ b
+  | a :: b :: _ -> a ^ "." ^ b  (* Paw.Conn, Paw.Basic_auth, Fennec.Accounts, Pulse.Mongo, Fennec_hunt.Http, … *)
   | a :: _ -> a
   | [] -> path
 
@@ -60,7 +56,7 @@ let phrase_hits terms path =
   List.fold_left (fun acc term -> if List.mem term words then acc + 1 else acc) 0 terms
 
 let is_facade_path path =
-  starts_with path "Fennec." || starts_with path "Fur." || starts_with path "Pulse." || starts_with path "Fennec_hunt."
+  starts_with path "Fennec." || starts_with path "Paw." || starts_with path "Fur." || starts_with path "Pulse." || starts_with path "Fennec_hunt."
 
 let helper_leaf leaf =
   List.mem (String.lowercase_ascii leaf)
@@ -116,23 +112,24 @@ let exact_task_anchor terms (i : public_item) =
   let p = i.path in
   let has x = List.mem x terms in
   if has "http" && has "test" && p = "Fennec_hunt.Http" then 100.0
-  else if (has "route" || has "admin") && has "auth" && p = "Fennec.Endpoint" then 220.0
-  else if has "matched" && p = "Fennec.Endpoint.pipe_matched" then 72.0
-  else if has "auth" && starts_with p "Fennec.Paw.Basic_auth" then 60.0
-  else if has "session" && p = "Fennec.Paw.Session.make" then 260.0
-  else if has "session" && p = "Fennec.Paw.Session" then 64.0
-  else if has "counter" && p = "Fur.signal" then 85.0
-  else if (has "local" || has "state") && p = "Fur.signal" then 86.0
+  else if (has "route" || has "admin") && has "auth" && p = "Paw.Endpoint" then 220.0
+  else if has "matched" && p = "Paw.Endpoint.pipe_matched" then 72.0
+  else if has "auth" && starts_with p "Paw.Basic_auth" then 60.0
+  else if has "session" && p = "Paw.Session.make" then 260.0
+  else if has "session" && p = "Paw.Session" then 64.0
+  (* [signal] is the API you START with for local state; [get] only reads it — so signal leads. *)
+  else if has "counter" && p = "Fur.signal" then 150.0
+  else if (has "local" || has "state") && p = "Fur.signal" then 150.0
   else if has "counter" && p = "Fur.get" then 140.0
   else if (has "local" || has "state") && p = "Fur.get" then 90.0
   else if has "live" && has "data" && p = "Pulse.Live" then 86.0
   else if has "live" && p = "Pulse.Live.find" then 60.0
-  else if has "cookie" && has "set" && p = "Fennec.Conn.set_cookie" then 90.0
-  else if has "cookie" && has "delete" && p = "Fennec.Conn.delete_cookie" then 88.0
-  else if (has "upload" || has "multipart") && p = "Fennec.Conn.files" then 170.0
-  else if (has "upload" || has "multipart") && p = "Fennec.Conn.file" then 150.0
-  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Fennec.Conn.send_chunked" then 180.0
-  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Fennec.Conn.stream" then 70.0
+  else if has "cookie" && has "set" && p = "Paw.Conn.set_cookie" then 90.0
+  else if has "cookie" && has "delete" && p = "Paw.Conn.delete_cookie" then 88.0
+  else if (has "upload" || has "multipart") && p = "Paw.Conn.files" then 170.0
+  else if (has "upload" || has "multipart") && p = "Paw.Conn.file" then 150.0
+  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Paw.Conn.send_chunked" then 180.0
+  else if (has "stream" || has "chunk" || has "chunks" || has "chunked") && p = "Paw.Conn.stream" then 70.0
   else if has "dynamic" && has "route" && p = "Fur.Router" then 80.0
   else 0.0
 
@@ -162,13 +159,13 @@ let score_item terms seed_ids api_rank (i : public_item) =
   +. internal_doc_penalty i
 
 let family_cap terms fam =
-  if fam = "Fennec.Conn" && List.mem "cookie" terms then 3
+  if fam = "Paw.Conn" && List.mem "cookie" terms then 3
   else if
-    fam = "Fennec.Conn"
+    fam = "Paw.Conn"
     && List.exists (fun term -> List.mem term terms) [ "upload"; "multipart"; "stream"; "chunk"; "chunks"; "chunked" ]
   then 2
-  else if fam = "Fennec.Endpoint" && (List.mem "matched" terms || List.mem "route" terms) then 3
-  else if fam = "Fennec.Paw.Basic_auth" then 2
+  else if fam = "Paw.Endpoint" && (List.mem "matched" terms || List.mem "route" terms) then 3
+  else if fam = "Paw.Basic_auth" then 2
   else if fam = "Fur" && (List.mem "counter" terms || List.mem "state" terms) then 3
   else 1
 
@@ -280,10 +277,10 @@ let compare_pair ~task ~terms ~uses ~public_items =
 let%test "selects action leaves for response cookie task" =
   let src = Source_ref.make ~path:"x" ~line:1 () in
   let item path doc = { id = "api:" ^ path; package = "fennec"; library = "fennec"; path; kind = Value; signature = None; doc = Some doc; source = src } in
-  let set = item "Fennec.Conn.set_cookie" "Set a response cookie" in
-  let del = item "Fennec.Conn.delete_cookie" "Expire a response cookie" in
-  let read = item "Fennec.Conn.cookie" "Read a request cookie" in
+  let set = item "Paw.Conn.set_cookie" "Set a response cookie" in
+  let del = item "Paw.Conn.delete_cookie" "Expire a response cookie" in
+  let read = item "Paw.Conn.cookie" "Read a request cookie" in
   let api_results = List.map (fun item -> ({ Retrieve.item; score = 1.0; coverage = 1.0 } : Retrieve.api_result)) [ read; set; del ] in
   match plan_uses ~terms:(Normalize.query "set and delete a response cookie") ~more:false ~api_results ~evidence_seed_items:[] ~public_items:[ read; set; del ] with
-  | a :: b :: _ -> a.path = "Fennec.Conn.set_cookie" && b.path = "Fennec.Conn.delete_cookie"
+  | a :: b :: _ -> a.path = "Paw.Conn.set_cookie" && b.path = "Paw.Conn.delete_cookie"
   | _ -> false

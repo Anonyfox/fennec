@@ -35,6 +35,7 @@
  (deps
   gen_snapshot.exe
   %{project_root}/dune-project
+  (source_tree %{project_root}/paw)
   (source_tree %{project_root}/fennec)
   (source_tree %{project_root}/hunt)
   (source_tree %{project_root}/mongo)

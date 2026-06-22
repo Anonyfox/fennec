@@ -90,14 +90,14 @@ not only one winning symbol.
 Task: protected admin route
 
 Recommended path:
-  1. Define the admin endpoint with Fennec.Endpoint.
+  1. Define the admin endpoint with Paw.Endpoint.
   2. Put auth in the matched phase, not the always phase.
-  3. Use Fennec.Paw.Basic_auth.make.
+  3. Use Paw.Basic_auth.make.
   4. Copy the matched-route test shape.
 
 Use:
-  api:Fennec.Endpoint.pipe_matched
-  api:Fennec.Paw.Basic_auth.make
+  api:Paw.Endpoint.pipe_matched
+  api:Paw.Basic_auth.make
 
 Best examples:
   example:site:server:admin_basic_auth#91cc02  examples/site/server.ml:100
@@ -108,7 +108,7 @@ Avoid unless:
 
 Confidence: high - public docs, facade APIs, example, and system test agree.
 Next:
-  fennec discover --why api:Fennec.Endpoint.pipe_matched
+  fennec discover --why api:Paw.Endpoint.pipe_matched
   fennec discover --more "pipe_matched basic auth"
 ```
 
@@ -150,7 +150,7 @@ Task: ...
 Confidence: insufficient - no public Fennec API matched strongly.
 Try:
   fennec discover "..."
-  fennec discover --browse Fennec.Paw
+  fennec discover --browse Paw
 Inspect:
   ...
 ```
@@ -363,8 +363,8 @@ Construction:
 For example, "protected admin route" should be synthesized from framework
 evidence:
 
-- `Fennec.Endpoint.pipe_matched` docs: matched-phase middleware
-- `Fennec.Paw.Basic_auth.make` facade API
+- `Paw.Endpoint.pipe_matched` docs: matched-phase middleware
+- `Paw.Basic_auth.make` facade API
 - `examples/site/server.ml`: admin endpoint uses `pipe_matched`
 - `examples/site/test/system/domains_test.ml`: unmatched stays default/404-ish,
   matched admin route becomes 401 without auth
@@ -406,7 +406,7 @@ from the file-tree convention without writing anything.
 API ids use canonical public paths when available:
 
 ```text
-api:Fennec.Paw.Session.make
+api:Paw.Session.make
 ```
 
 Example/test ids include kind, package/library/app, semantic label or module,

@@ -116,6 +116,36 @@ let root_for_interface ~dune_text ~public_name ~file =
     in
     if file_root = wrapper then wrapper else wrapper ^ "." ^ file_root
 
+(* The module names a wrapper [.mli] re-exports as public submodules — every [module Foo = …] or
+   [module Foo : …] declaration. Used to index a wrapped lib's subfolder [.mli]'s (the paw shape) under
+   the public name WITHOUT pulling internal-only modules the wrapper deliberately doesn't expose. *)
+let reexported_modules text =
+  let len = String.length text in
+  let is_id c = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '_' || c = '\'' in
+  let kw = "module " in
+  let m = String.length kw in
+  let acc = ref [] in
+  let i = ref 0 in
+  while !i + m <= len do
+    if String.sub text !i m = kw && (!i = 0 || (match text.[!i - 1] with ' ' | '\t' | '\n' -> true | _ -> false)) then begin
+      let j = ref (!i + m) in
+      while !j < len && (text.[!j] = ' ' || text.[!j] = '\t') do incr j done;
+      let s = !j in
+      while !j < len && is_id text.[!j] do incr j done;
+      let name = String.sub text s (!j - s) in
+      let k = ref !j in
+      while !k < len && (text.[!k] = ' ' || text.[!k] = '\t') do incr k done;
+      (if String.length name > 0 && name.[0] >= 'A' && name.[0] <= 'Z'
+          && !k < len && (text.[!k] = '=' || text.[!k] = ':')
+       then acc := name :: !acc);
+      i := !j
+    end
+    else incr i
+  done;
+  List.sort_uniq compare !acc
+
+let module_of_file file = String.capitalize_ascii (Filename.remove_extension (Filename.basename file))
+
 let interface_inputs ~root =
   let dunes = collect [] root "dune" in
   List.concat_map
@@ -129,11 +159,40 @@ let interface_inputs ~root =
         let dir = Filename.dirname dune in
         let package = package_of_path (rel ~root dir) in
         let library = library_of_public_name public_name in
-        let mlis = collect_direct dir ".mli" in
-        List.map
-          (fun file ->
-            { package; library; root = root_for_interface ~dune_text ~public_name ~file; file })
-          mlis))
+        let direct = collect_direct dir ".mli" in
+        let direct_inputs =
+          List.map
+            (fun file ->
+              { package; library; root = root_for_interface ~dune_text ~public_name ~file; file })
+            direct
+        in
+        (* A wrapped lib with [(include_subdirs …)] keeps its submodule [.mli]'s in subfolders under ONE
+           dune (e.g. [paw/conn/conn.mli]); [collect_direct] only sees the top-level wrapper [paw.mli]. So
+           also index the subfolder modules the wrapper actually re-exports ([module Conn = Conn] → root
+           [Paw.Conn]), giving the real public surface ([Paw.Conn.set_cookie], [Paw.Endpoint.pipe_matched],
+           …) first-class — while internal-only submodules (Host_trie, Route_table, …) stay unindexed. *)
+        let subdir_inputs =
+          if not (str_contains dune_text "(include_subdirs") then []
+          else
+            let wrapper = module_name (match library_name_of_dune dune_text with Some n -> n | None -> public_name) in
+            match List.find_opt (fun f -> module_of_file f = wrapper) direct with
+            | None -> []
+            | Some wf -> (
+              match read_file wf with
+              | None -> []
+              | Some wtext -> (
+                match reexported_modules wtext with
+                | [] -> []
+                | reexports ->
+                  collect [] dir ".mli"
+                  |> List.filter (fun f -> f <> wf && not (str_contains f "/test/"))
+                  |> List.filter_map (fun file ->
+                         let mod_name = module_of_file file in
+                         if List.mem mod_name reexports then
+                           Some { package; library; root = wrapper ^ "." ^ mod_name; file }
+                         else None)))
+        in
+        direct_inputs @ subdir_inputs))
     dunes
 
 let line_of_offset s off =
@@ -468,38 +527,6 @@ let api_evidence_index evidence =
     postings []
   |> List.sort (fun a b -> compare a.term b.term)
 
-let replace_prefix ~prefix ~with_ text =
-  let n = String.length prefix in
-  if String.length text > n && String.sub text 0 n = prefix && text.[n] = '.' then
-    Some (with_ ^ String.sub text n (String.length text - n))
-  else None
-
-let facade_aliases =
-  [
-    ("Paw.Endpoint", "Fennec.Endpoint");
-    ("Paw.Conn", "Fennec.Conn");
-    ("Paw.Http", "Fennec.Http");
-    ("Paw.Cookie", "Fennec.Cookie");
-  ]
-
-let facade_items (items : public_item list) =
-  List.concat_map
-    (fun (prefix, with_) ->
-      items
-      |> List.filter_map (fun (item : public_item) ->
-             match replace_prefix ~prefix ~with_ item.path with
-             | None -> None
-             | Some path ->
-               Some
-                 {
-                   item with
-                   id = "api:" ^ path;
-                   package = "fennec";
-                   library = "fennec";
-                   path;
-                 }))
-    facade_aliases
-
 let item_preference (i : public_item) =
   let kind =
     match i.kind with
@@ -573,15 +600,15 @@ let build ~root =
   let public_items =
     public_items @ parent_module_items public_items |> dedupe_public_items
   in
-  let public_items =
-    public_items @ facade_items public_items |> dedupe_public_items
-  in
   let example_files =
     List.concat
       [
         collect [] (Filename.concat root "examples/site") ".ml";
         collect [] (Filename.concat root "examples/site") ".mlx";
         collect [] (Filename.concat root "fennec") ".ml";
+        (* paw is its own top-level package now (not under fennec/): scan its impl + inline [let%test]
+           blocks too, so [Paw.Conn]/[Paw.Session]/[Paw.Multipart]/… have source-backed evidence. *)
+        collect [] (Filename.concat root "paw") ".ml";
       ]
   in
   let mention_index = build_mention_index public_items in

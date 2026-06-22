@@ -17,13 +17,13 @@
 
     {[
       let app =
-        Fennec.Endpoint.make ~name:"web" ()
-        |> Fennec.Endpoint.pipe_matched [ Fennec.Accounts.require_user () ]
+        Paw.Endpoint.make ~name:"web" ()
+        |> Paw.Endpoint.pipe_matched [ Fennec.Accounts.require_user () ]
 
       let handler conn =
         match Fennec.Accounts.user_id conn with
-        | Some uid -> Fennec.Conn.text conn ("hello " ^ uid)
-        | None -> Fennec.Conn.redirect conn "/login"
+        | Some uid -> Paw.Conn.text conn ("hello " ^ uid)
+        | None -> Paw.Conn.redirect conn "/login"
     ]}
 
     {1 Submodules}

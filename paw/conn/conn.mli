@@ -122,7 +122,7 @@ val query : t -> string -> string option
 
 (** Request cookies (parsed lazily). These read cookies sent by the browser on this request.
     To write a response cookie, use {!set_cookie}; to expire one, use {!delete_cookie};
-    to persist request-to-request state, prefer {!Fennec.Paw.Session.make}. *)
+    to persist request-to-request state, prefer {!Session.make}. *)
 val cookies : t -> (string * string) list
 
 (** A single request cookie value by name. This does not inspect pending response
@@ -176,7 +176,7 @@ val set_header : t -> string -> string -> t
 (** Set a response cookie (adds [Set-Cookie], does not answer). Use for small browser
     preferences, one-off flags, and remember-me style response cookies. Defaults:
     [path="/"], [http_only=true], [same_site=Lax]; [SameSite=None] implies [Secure].
-    For request-to-request application state, prefer {!Fennec.Paw.Session.make}. *)
+    For request-to-request application state, prefer {!Session.make}. *)
 val set_cookie :
   t ->
   ?path:string ->

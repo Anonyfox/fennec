@@ -483,7 +483,18 @@ let desugar_handler str =
     | Pstr_value (rf, [ vb ]) when pat_name vb.pvb_pat = Some "load" ->
       if !conn_client then []
       else
-        let e = [%expr let open Fennec in let open Fennec_fur_handler.Handler in [%e vb.pvb_expr]] in
+        (* open Fennec (Accounts/Pulse/Sift…) + the Paw HTTP carrier as MODULES (so [Conn]/[Http]/[Cookie]
+           resolve bare) + Handler LAST (so [render]/[html]/[json]/[redirect] are its outcome verbs). We
+           bind Conn/Http/Cookie as modules rather than [open Paw] on purpose: opening Paw would bring its
+           [type t] (= the paw fn type) into scope and shadow the payload [type t] a [load]/[view] annotates
+           ([let p : t = …]). The opens stay LOCAL to [load] (never reach the client build). *)
+        let e = [%expr
+          let open Fennec in
+          let module Conn = Paw.Conn in
+          let module Http = Paw.Http in
+          let module Cookie = Paw.Cookie in
+          let open Fennec_fur_handler.Handler in
+          [%e vb.pvb_expr]] in
         [ { item with pstr_desc = Pstr_value (rf, [ { vb with pvb_expr = e } ]) } ]
     | _ -> [ item ]) str
   in
@@ -496,15 +507,15 @@ let desugar_handler str =
           Fennec.Fur.Data.with_context @@ fun () ->   (* per-request seed + Head isolation for this render *)
           match load conn with
           | Fennec_fur_handler.Handler.Render p ->
-              Fennec.Conn.html conn
+              Paw.Conn.html conn
                 (Fennec_fur_handler.Handler.render_doc ~key:[%e key] ~codec ~bundle:[%e bundle] p view)
           | Fennec_fur_handler.Handler.Html p ->
-              Fennec.Conn.html conn (Fennec_fur_handler.Handler.render_static (view p))
-          | Fennec_fur_handler.Handler.Json s -> Fennec.Conn.json conn s
-          | Fennec_fur_handler.Handler.Text s -> Fennec.Conn.text conn s
-          | Fennec_fur_handler.Handler.Redirect u -> Fennec.Conn.redirect conn u
-          | Fennec_fur_handler.Handler.Not_found -> Fennec.Conn.text ~status:404 conn "Not found"
-          | Fennec_fur_handler.Handler.Error s -> Fennec.Conn.text ~status:s conn ("Error " ^ string_of_int s) ] ]
+              Paw.Conn.html conn (Fennec_fur_handler.Handler.render_static (view p))
+          | Fennec_fur_handler.Handler.Json s -> Paw.Conn.json conn s
+          | Fennec_fur_handler.Handler.Text s -> Paw.Conn.text conn s
+          | Fennec_fur_handler.Handler.Redirect u -> Paw.Conn.redirect conn u
+          | Fennec_fur_handler.Handler.Not_found -> Paw.Conn.text ~status:404 conn "Not found"
+          | Fennec_fur_handler.Handler.Error s -> Paw.Conn.text ~status:s conn ("Error " ^ string_of_int s) ] ]
   in
   body @ extra
 
@@ -526,8 +537,16 @@ let desugar_form_handler str =
           match item.pstr_desc with
           | Pstr_value (rf, [ vb ]) when pat_name vb.pvb_pat = Some "submit" ->
             (* open the facade LOCALLY in `submit` so it reads `again …`/`redirect …`/`page …` bare and
-               can use Pulse/Conn for real work — never leaking into the client (load-less, stripped) *)
-            let e = [%expr let open Fennec in let open Fennec.Fur.Form in [%e vb.pvb_expr]] in
+               can use Pulse/Conn for real work — never leaking into the client (load-less, stripped).
+               Conn/Http/Cookie come in as MODULES (not [open Paw]) so Paw's [type t] never shadows the
+               form payload [type t] that `submit (t : t)` annotates; Form is opened last for its verbs. *)
+            let e = [%expr
+              let open Fennec in
+              let module Conn = Paw.Conn in
+              let module Http = Paw.Http in
+              let module Cookie = Paw.Cookie in
+              let open Fennec.Fur.Form in
+              [%e vb.pvb_expr]] in
             [ { item with pstr_desc = Pstr_value (rf, [ { vb with pvb_expr = e } ]) } ]
           | _ -> [ item ])
         str
@@ -552,7 +571,7 @@ let desugar_form_handler str =
         [%stri
           let serve conn =
             Fennec.Fur.Data.with_context @@ fun () ->   (* per-request seed + Head isolation (view + render) *)
-            match Fennec.Conn.meth conn with Fennec.Http.POST -> post conn | _ -> get conn] ]
+            match Paw.Conn.meth conn with Paw.Http.POST -> post conn | _ -> get conn] ]
     in
     (* alias Form so the view's `Form.ctx`/`Form.flash`/`Form.error`/… resolve: the handler lib opens
        CORE Fur (which has no Form — the client mirror needs core Fur, as Fennec.Fur.Form is native-only).

@@ -12,8 +12,8 @@ so a handler just reads the request user:
 ```ocaml
 let handler conn =
   match Fennec.Accounts.user_id conn with
-  | Some uid -> Fennec.Conn.text conn ("hello " ^ uid)
-  | None     -> Fennec.Conn.redirect conn "/login"
+  | Some uid -> Paw.Conn.text conn ("hello " ^ uid)
+  | None     -> Paw.Conn.redirect conn "/login"
 ```
 
 The substrate is always present but inert until you turn features on: with no `MONGO_URL` and no
@@ -310,8 +310,8 @@ Then guard routes with the no-argument forms (they read the configured singleton
 
 ```ocaml
 let admin =
-  Fennec.Endpoint.make ~name:"admin" ()
-  |> Fennec.Endpoint.pipe_matched
+  Paw.Endpoint.make ~name:"admin" ()
+  |> Paw.Endpoint.pipe_matched
        [ Accounts.require_user ();
          Accounts.require_permission (Accounts.Roles.Permission.v_exn "billing.write") () ]
 ```

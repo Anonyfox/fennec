@@ -679,7 +679,7 @@ let discover_cmd =
     Arg.(value & opt (some string) None & info [ "why" ] ~docv:"ID" ~doc)
   in
   let browse_arg =
-    let doc = "Browse one shallow public module surface, e.g. Fennec.Paw." in
+    let doc = "Browse one shallow public module surface, e.g. Paw or Fennec.Accounts." in
     Arg.(value & opt (some string) None & info [ "browse" ] ~docv:"MODULE" ~doc)
   in
   let query_arg =
@@ -702,8 +702,8 @@ let discover_cmd =
       `S Manpage.s_examples;
       `Pre "  fennec discover \"build login with signed cookies\"";
       `Pre "  fennec discover \"SSR page with client-side counter\"";
-      `Pre "  fennec discover --browse Fennec.Paw";
-      `Pre "  fennec discover --why api:Fennec.Paw.Basic_auth.make";
+      `Pre "  fennec discover --browse Paw";
+      `Pre "  fennec discover --why api:Paw.Basic_auth.make";
       `Pre "  fennec discover --json \"write an HTTP test\"" ]
   in
   Cmd.v (Cmd.info "discover" ~doc ~man) Term.(const go $ json_arg $ more_arg $ why_arg $ browse_arg $ query_arg)

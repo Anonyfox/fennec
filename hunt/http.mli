@@ -78,7 +78,7 @@ val check : string -> (unit -> unit) -> unit
 
 (** One part of a [multipart/form-data] body — a text field or a file upload. Construct with
     {!field} / {!file}; pass a list as [~multipart]. Fennec handlers read these through
-    {!Fennec.Conn.files} and {!Fennec.Conn.file}. *)
+    [Paw.Conn.files] and [Paw.Conn.file]. *)
 type part
 
 (** A plain text field: [field name value]. *)
