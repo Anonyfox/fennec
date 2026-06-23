@@ -405,9 +405,9 @@ let test_format () =
 (* ----------------------------------------------------- rerun-command derivation ---- *)
 let test_rerun () =
   print_endline "— rerun command derivation —";
-  Unix.putenv "FENNEC_HUNT_RERUN" "sh examples/site/e2e/run.sh";
+  Unix.putenv "FENNEC_HUNT_RERUN" "sh examples/site/test/browser/run.sh";
   let r = D.rerun_for "checkout works" in
-  check "uses FENNEC_HUNT_RERUN as the prefix" (contains r "sh examples/site/e2e/run.sh");
+  check "uses FENNEC_HUNT_RERUN as the prefix" (contains r "sh examples/site/test/browser/run.sh");
   check "passes the test name via --grep" (contains r "--grep");
   check "quotes a name with spaces" (contains r "'checkout works'");
   let r = D.rerun_for "it's broken" in

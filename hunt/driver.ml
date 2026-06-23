@@ -126,7 +126,7 @@ module Make (B : Backend.S) = struct
       test_timeout = 30.0; screenshot_dir = None }
 
   (* how to re-run just this test, copy-pasteable. Prefix from FENNEC_HUNT_RERUN (wrappers set
-     it, e.g. "sh examples/site/e2e/run.sh") else the executable name; the test name is
+     it, e.g. "sh examples/site/test/browser/run.sh") else the executable name; the test name is
      single-quote-escaped so spaces/specials survive a shell. *)
   let shell_quote s = "'" ^ String.concat "'\\''" (String.split_on_char '\'' s) ^ "'"
   let rerun_for name =

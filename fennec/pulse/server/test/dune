@@ -1,9 +1,10 @@
 ; Full-stack DDP-server test driven by a FAKE Ws_channel (just the callback record): proves
 ; frame -> decode -> session -> glue -> reactive -> encode -> frame end to end, with no Eio / no
-; real socket. The live server round-trip is a separate system test.
+; real socket. Its live twin (test_realtime, below) runs the same stack over a REAL WebSocket.
 
 (test
  (name test_pulse_server)
+ (modules test_pulse_server)
  (libraries
   fennec.pulse.server
   fennec.pulse
@@ -16,3 +17,23 @@
   fennec-hunt.unit)
  (preprocess
   (pps fennec-hunt.ppx)))
+
+; The live counterpart to the fake-channel proof above: the same DDP server stack driven over a REAL
+; WebSocket (a minimal RFC 6455 server on paw's Ws codec) in one Eio process, with fennec-hunt's Cdp
+; ws client doing a full connect/subscribe/method round-trip and asserting the server->client live
+; push. Deterministic (own server + client fiber via Fiber.first), exits 0/1 — so `dune runtest` and
+; CI run it. No ppx: it's a plain main whose exit code is the verdict.
+
+(test
+ (name test_realtime)
+ (modules test_realtime)
+ (libraries
+  eio
+  eio_main
+  fennec-paw
+  fennec.pulse.server
+  fennec.pulse
+  fennec.ddp
+  fennec-mongo.bson
+  fennec-mongo.minimongo
+  fennec-hunt))

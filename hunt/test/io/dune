@@ -1,0 +1,28 @@
+; Manual real-socket proofs of fennec-hunt's Http client — run by hand (`dune exec ./tls_check.exe`,
+; `dune exec ./probe_check.exe`), NOT part of `dune runtest`: each binds a fixed port and spawns a
+; sibling server process, so they stay out of the parallel test run. These are the ONLY tests that
+; drive Http over a real socket; the in-repo unit tests (../test_http.ml) use a fake backend.
+
+; TLS proof: a pure-OCaml self-signed HTTPS server (tls_server) + a hunt against it over https://
+; (tls_check). tls-eio + x509, no openssl, no python. Proves Fennec_hunt.Http speaks TLS.
+(executable
+ (name tls_check)
+ (modules tls_check)
+ (libraries fennec-hunt))
+
+(executable
+ (name tls_server)
+ (modules tls_server)
+ (libraries eio eio_main tls tls-eio x509 ptime mirage-crypto-rng.unix))
+
+; I/O proofs: per-request timeout, redirect following, chunked decode, multipart upload, and polling
+; — against a tiny pure-Eio probe server (probe_server) that probe_check spawns via `~spawn`.
+(executable
+ (name probe_server)
+ (modules probe_server)
+ (libraries eio eio_main))
+
+(executable
+ (name probe_check)
+ (modules probe_check)
+ (libraries fennec-hunt))

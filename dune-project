@@ -191,8 +191,8 @@
    (>= 3.16))
   fennec
   fennec-cli
-  ; the site example's real-browser e2e suite (examples/site/e2e) uses the standalone
-  ; e2e driver; it brings yojson/base64 transitively. No npm, no Lwt, no chromedriver.
+  ; the site example's test suites (examples/site/test/{http,system,browser}) use the standalone
+  ; hunt driver; it brings yojson/base64 transitively. No npm, no Lwt, no chromedriver.
   fennec-hunt))
 
 ; The data layer: a standalone MongoDB story — a pure BSON value + query/update

@@ -1,6 +1,6 @@
 (* Proof that the Http layer speaks TLS — hunts against a self-signed HTTPS server over
    https://. Pure OCaml end to end (the server is tls_server.exe, a sibling binary). Run
-   manually (like the other e2e binaries), not part of `dune test`. *)
+   manually (`dune exec ./tls_check.exe`), not part of `dune runtest`. *)
 open Fennec_hunt.Http
 
 (* the self-signed HTTPS server built next to this binary *)
