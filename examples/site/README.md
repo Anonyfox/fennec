@@ -18,7 +18,9 @@ examples/site/
       products/index.mlx /products    (folders nest)
       products/id_.mlx   /products/:id  (dynamic param — see "Routing")
       rest__.mlx         catch-all / not_found (web app)
-      main.scss          the ONE external stylesheet: global/base + design tokens (CSS vars)
+      main.css           CSS ORDERING MANIFEST: @layer + @import (web) — or main.scss + @use (admin)
+      styles/            CSS escape hatch — drop .css/.scss (a theme, a vendor sheet), @import it
+      scripts/           JS escape hatch — drop .js/.ts (a vendor lib); esbuild → loaded before jsoo
     components/        shared single-file components — markup + colocated [%%style] + inline
                        `let%test` (render via Fur.to_html) ALL in one .mlx, impossible to miss.
       marketing/hero.mlx   GROUP INTO SUBFOLDERS FREELY — no dune anywhere under here. The whole
@@ -48,6 +50,12 @@ examples/site/
   a page recompiles just that module. `route_gen --glue` reads the file tree and emits
   the wiring — `routes.ml` (router + mount) and `paths.ml` (typed path builders) — without
   ever inlining your source.
+- **Escape hatches for non-inline assets.** When you need a vendor sheet/lib or a swappable theme
+  rather than inline `[%%style]`: `apps/<name>/main.css` is an ordering manifest — `@layer theme, app;`
+  then `@import url("styles/theme.css") layer(theme)` — so you control the cascade and **white-label by
+  swapping one `@import`**; Lightning CSS bundles it at build time (or use `main.scss` + `@use`).
+  Symmetric for JS: a `apps/<name>/scripts/main.{ts,js}` entry is esbuild-bundled (TS too) and loaded in
+  `<head>` before the jsoo app bundle, so its `window` globals are FFI-reachable at hydration.
 - **Group into subfolders freely — zero config.** Every authored category (`components`,
   `handlers`, `store`, `templates`) uses `(include_subdirs unqualified)`: drop a file into any
   subfolder, **no dune anywhere under it**, and it folds into the one library with a FLAT module
