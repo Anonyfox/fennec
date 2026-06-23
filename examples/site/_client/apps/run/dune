@@ -11,6 +11,7 @@
  (deps
   (glob_files_rec *.bc.js)
   (glob_files_rec *.css)
+  (glob_files_rec *.vendor.js)
   %{project_root}/fennec/fur/tools/stage.exe)
  (targets
   (dir served))

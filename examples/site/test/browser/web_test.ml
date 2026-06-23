@@ -135,3 +135,14 @@ let%browser "realtime DDP: subscribe renders seeded tasks; addTask pushes live" 
   |> click ".tasks .add-task"
   |> expect_text ".tasks .task-items" "Task 1"
   |> ignore
+
+(* the JS escape hatch: the dropped scripts/main.ts (TS) was bundled by esbuild into /_apps/web/vendor.js
+   and loaded in <head> BEFORE the jsoo app bundle — so its side effect ran (data-vendor) and the window
+   global it defines is reachable (as OCaml would reach it via js_of_ocaml FFI: ...##.fennecVendor). *)
+let%browser "JS escape hatch: scripts/ vendor bundle runs before hydration; its globals are FFI-ready" = fun page ->
+  page
+  |> goto "/" |> hydrated
+  |> wait_for ~descr:"vendor side effect ran" "document.documentElement.dataset.vendor === 'ready'"
+  |> wait_for ~descr:"vendor global callable"
+       "window.fennecVendor && window.fennecVendor.greet('Ada') === 'vendor says hi to Ada'"
+  |> ignore

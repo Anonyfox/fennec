@@ -40,5 +40,8 @@ let () =
   in
   Sys.readdir "."
   |> Array.iter (fun f ->
-         if Filename.check_suffix f ".bc.js" then write (out (Filename.chop_suffix f ".bc.js") "main.js") (read f)
+         (* <name>.vendor.js (the esbuild'd scripts/ drop-zone) -> served/<name>/vendor.js. Checked
+            FIRST: it ends in ".js" too, but is NOT the jsoo ".bc.js" app bundle. *)
+         if Filename.check_suffix f ".vendor.js" then write (out (Filename.chop_suffix f ".vendor.js") "vendor.js") (read f)
+         else if Filename.check_suffix f ".bc.js" then write (out (Filename.chop_suffix f ".bc.js") "main.js") (read f)
          else if Filename.check_suffix f ".css" then write (out (Filename.chop_suffix f ".css") "main.css") (read f))

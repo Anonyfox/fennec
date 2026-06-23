@@ -185,7 +185,23 @@ let emit_app_bundles apps_dir out_dir rel_frontend =
             Buffer.add_string b
               (Printf.sprintf
                  "(rule\n (target %s.css)\n (deps (glob_files_rec %%{project_root}/%s/*.scss) (glob_files_rec %%{project_root}/%s/*.css))\n (action (run %%{bin:fennec} build --out-name %s.css -o . %%{project_root}/%s/apps/%s/%s)))\n"
-                 n rel_frontend rel_frontend n rel_frontend n e)));
+                 n rel_frontend rel_frontend n rel_frontend n e));
+         (* The JS escape hatch: a scripts/main.{ts,js} entry (ES-imports your vendor libs in order) →
+            esbuild → <app>.vendor.js (IIFE, so globals are FFI-reachable), staged to /_apps/<app>/vendor.js.
+            Load it with ONE Head.script line in your layout — it lands in <head>, the jsoo app bundle in
+            <body>, so vendor globals exist when hydration runs. (Optional: only built if scripts/ exists.) *)
+         let js_entry =
+           if Sys.file_exists (Filename.concat app "scripts/main.ts") then Some "scripts/main.ts"
+           else if Sys.file_exists (Filename.concat app "scripts/main.js") then Some "scripts/main.js"
+           else None
+         in
+         (match js_entry with
+          | None -> ()
+          | Some e ->
+            Buffer.add_string b
+              (Printf.sprintf
+                 "(rule\n (target %s.vendor.js)\n (deps (glob_files_rec %%{project_root}/%s/apps/%s/scripts/*))\n (action (run %%{bin:fennec} build --format iife --out-name %s.vendor.js -o . %%{project_root}/%s/apps/%s/%s)))\n"
+                 n rel_frontend n n rel_frontend n e)));
   write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
 (* ---- HANDLERS (frontend/handlers/**.mlx) — one .mlx = one handler = one bundle ----

@@ -12,6 +12,10 @@ let make ctx =
       {Doc.head ctx}
       <link rel="stylesheet" href="/_apps/web/main.css" />
       <style>{Doc.styles ctx}</style>
+      (* the JS escape hatch: the bundled scripts/ vendor, in <head> + deferred so it runs BEFORE the
+         jsoo app bundle in <body> — its window globals are then FFI-reachable at hydration. One line;
+         remove it if the app drops no scripts. *)
+      <script src="/_apps/web/vendor.js" defer=true></script>
     </head>
     <body className="web">
       <div id="app">{Doc.outlet ctx}</div>
