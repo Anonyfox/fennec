@@ -1,33 +1,20 @@
-; Standalone HANDLERS — one .mlx = one handler = one bundle, all under frontend/ as first-class
-; citizens (no parallel folders). The fur ppx (-handler) fuses each file's payload/load/view into a
-; server `serve` (this lib, e.g. Site_handlers.Greet.serve) and a client `boot` (the mirror below).
-; You mount each serve MANUALLY in server.ml at any path you like (params, reuse across paths) —
-; central-router DX. Adding a handler = drop a .mlx here; route_gen regenerates its bundle.
+; Standalone HANDLERS — one .mlx = one handler, all under frontend/ as first-class citizens. The fur ppx
+; (-handler) fuses each file's payload/load/view into a server `serve` (this lib, e.g.
+; Site_handlers.Greet.serve) and a client `boot` (the generated mirror). You mount each serve MANUALLY in
+; server.ml at any path you like — central-router DX. Group handlers into subfolders freely:
+; (include_subdirs unqualified) folds the whole tree into this lib, FLAT namespace (Site_handlers.Greet
+; wherever greet.mlx sits), no dune in any subfolder. The -conn-client client mirror + the per-handler
+; jsoo bundles are generated into ../../_client/handlers (route_gen); you only ever touch THIS tree.
+(include_subdirs unqualified)
+
 (library
  (name site_handlers)
- (modules :standard)
  (libraries fennec fennec.fur fennec.fur.html fennec.fur.handler fennec.pulse.sift site_components fennec-hunt.unit)
  ; inline let%test next to each handler (e.g. me.mlx's Mode-B view), scoped to the example like the
- ; components — see ../../test/dune. Stripped from the -conn-client jsoo mirror below.
+ ; components — see ../../test/dune. Stripped from the -conn-client jsoo mirror.
  (inline_tests
   (backend site_test_runner))
  (preprocess
   (pps fennec.fur.ppx -handler))
  (flags
   (:standard -w -a -open Fur)))
-
-; the CLIENT half — the SAME .mlx, compiled with -conn-client so `load` is stripped (the jsoo bundle
-; never sees Conn). copy_files keeps it inside this one folder (no parallel pages_client next to
-; frontend); the generated bundles (client/handlers) link this lib.
-(subdir
- client
- (copy_files#
-  (files ../*.mlx))
- (library
-  (name site_handlers_client)
-  (modules :standard)
-  (libraries fennec.fur fennec.fur.html fennec.fur.handler fennec.fur.client fennec.pulse.sift site_components)
-  (preprocess
-   (pps fennec.fur.ppx -handler -conn-client -fennec-drop-tests))
-  (flags
-   (:standard -w -a -open Fur))))

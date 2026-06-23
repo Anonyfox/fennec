@@ -1,3 +1,9 @@
+; Server-only document shells (default, admin_shell). Group into subfolders freely — (include_subdirs
+; unqualified) folds the whole tree into one lib, flat namespace, no dune in any subfolder. The
+; -data-client client mirror is generated into ../../_client/templates (route_gen --mirror); you only
+; ever touch THIS tree.
+(include_subdirs unqualified)
+
 (library
  (name site_templates)
  (wrapped false)
@@ -6,18 +12,3 @@
   (pps fennec.fur.ppx))
  (flags
   (:standard -w -a -open Fur)))
-
-; CLIENT mirror (see ../components/dune): templates carry no [Data.local], but the app's client lib
-; (web_app/client) links a -data-client closure end to end, so a stripped twin keeps that closure pure.
-(subdir
- client
- (copy_files#
-  (files ../*.mlx))
- (library
-  (name site_templates_client)
-  (wrapped false)
-  (libraries fennec.fur fennec.fur.html)
-  (preprocess
-   (pps fennec.fur.ppx -data-client))
-  (flags
-   (:standard -w -a -open Fur))))

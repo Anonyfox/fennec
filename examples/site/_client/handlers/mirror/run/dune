@@ -1,0 +1,14 @@
+; GENERATED client mirror of site_handlers — the SAME .mlx tree (flattened in from ../gen/dune.inc's
+; copy_files#) compiled with -conn-client so each handler's `load` (the server half, which touches Conn)
+; is STRIPPED from the jsoo bundle, and -fennec-drop-tests so inline let%test never reach it. The
+; per-handler bundles (../../run) link THIS lib (site_handlers_client); the server links site_handlers.
+; Do not edit — nesting/adding a handler regenerates this automatically.
+(library
+ (name site_handlers_client)
+ (libraries fennec.fur fennec.fur.html fennec.fur.handler fennec.fur.client fennec.pulse.sift site_components)
+ (preprocess
+  (pps fennec.fur.ppx -handler -conn-client -fennec-drop-tests))
+ (flags
+  (:standard -w -a -open Fur)))
+
+(dynamic_include ../gen/dune.inc)

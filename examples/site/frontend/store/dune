@@ -1,5 +1,8 @@
-; Global state store — shared signals (Store.todos, …). Plain .ml, no ppx. Wrapped
-; false so the module is just `Store`. Components depend on this lib.
+; Global state store — shared signals (Store.todos, …). Wrapped false so a file is just its module
+; (Store, …). Group into subfolders freely: (include_subdirs unqualified) folds the whole tree into this
+; one lib, flat namespace, no dune in any subfolder. No client mirror — store is isomorphic (the SAME lib
+; links into the server AND every jsoo bundle), so nesting it costs nothing extra.
+(include_subdirs unqualified)
 
 (library
  (name site_store)

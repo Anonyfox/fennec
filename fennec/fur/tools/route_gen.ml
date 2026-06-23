@@ -175,11 +175,17 @@ let emit_app_bundles apps_dir out_dir rel_frontend =
                 n rel_frontend n rel_frontend n));
   write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
-(* ---- HANDLERS (frontend/handlers/*.mlx) — one flat .mlx = one handler = one bundle ---- *)
-let handler_basenames dir =
+(* ---- HANDLERS (frontend/handlers/**.mlx) — one .mlx = one handler = one bundle ----
+   Recurses subfolders: a handler's module is its FLAT basename wherever it sits (the server lib +
+   the client mirror both use (include_subdirs unqualified)), so you can group handlers by feature. *)
+let rec handler_files dir =
   if Sys.file_exists dir && Sys.is_directory dir then
     Sys.readdir dir |> Array.to_list |> List.sort String.compare
-    |> List.filter_map (fun f -> if Filename.check_suffix f ".mlx" then Some (Filename.chop_suffix f ".mlx") else None)
+    |> List.concat_map (fun f ->
+           let full = Filename.concat dir f in
+           if (try Sys.is_directory full with _ -> false) then handler_files full
+           else if Filename.check_suffix f ".mlx" then [ (Filename.chop_suffix f ".mlx", full) ]
+           else [])
   else []
 
 (* the CLIENT bundles: a dune.inc evaluated via (dynamic_include) — per handler, a rule that writes the
@@ -198,15 +204,15 @@ let has_top_let name src =
   in
   go 0
 
-let is_spa_handler dir n = has_top_let "load" (read (Filename.concat dir (n ^ ".mlx")))
+let is_spa_handler full = has_top_let "load" (read full)
 
 let emit_handler_bundles dir out_dir client_lib =
   let client_mod = String.capitalize_ascii client_lib in
   let b = Buffer.create 1024 in
-  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per SPA frontend/handlers/*.mlx (boot rule + executable). Form handlers (server-only, `let submit`) are skipped — no client bundle.\n";
-  handler_basenames dir
-  |> List.filter (is_spa_handler dir)
-  |> List.iter (fun n ->
+  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per SPA frontend/handlers/**.mlx (boot rule + executable). Form handlers (server-only, `let submit`) are skipped — no client bundle.\n";
+  handler_files dir
+  |> List.filter (fun (_, full) -> is_spa_handler full)
+  |> List.iter (fun (n, _) ->
          let m = String.capitalize_ascii (mangle n) in
          Buffer.add_string b
            (Printf.sprintf

@@ -1,9 +1,9 @@
-; GENERATOR: route_gen reads the EXTERNAL frontend/handlers/*.mlx and emits dune.inc — per handler, a
-; boot rule + a private jsoo (executable) linking the stripped client mirror. Globbing the external
-; dir (never ../run) is what avoids the dynamic_include dependency cycle.
+; GENERATOR: route_gen reads the EXTERNAL frontend/handlers/**.mlx (recursively) and emits dune.inc —
+; per handler, a boot rule + a private jsoo (executable) linking the stripped client mirror. Globbing the
+; external dir (never ../run) is what avoids the dynamic_include dependency cycle.
 (rule
  (deps
-  (glob_files %{project_root}/examples/site/frontend/handlers/*.mlx)
+  (glob_files_rec %{project_root}/examples/site/frontend/handlers/*.mlx)
   %{project_root}/fennec/fur/tools/route_gen.exe)
  (target dune.inc)
  (action

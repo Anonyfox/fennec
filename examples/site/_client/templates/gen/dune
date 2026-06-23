@@ -1,0 +1,15 @@
+; GENERATOR: route_gen --mirror reads the EXTERNAL frontend/templates/ tree and emits dune.inc — one
+; copy_files# per authored subdir, flattening the nested tree into the client mirror in ../run. Globbing
+; the external source (never ../run) avoids the dynamic_include cycle. Nest a template = it just appears.
+(rule
+ (deps
+  (source_tree %{project_root}/examples/site/frontend/templates)
+  %{project_root}/fennec/fur/tools/route_gen.exe)
+ (target dune.inc)
+ (action
+  (run
+   %{project_root}/fennec/fur/tools/route_gen.exe
+   --mirror
+   %{project_root}/examples/site/frontend/templates
+   .
+   examples/site/frontend/templates)))
