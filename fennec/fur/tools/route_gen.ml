@@ -168,11 +168,24 @@ let emit_app_bundles apps_dir out_dir rel_frontend =
            (Printf.sprintf
               "(rule\n (target %s.ml)\n (action (with-stdout-to %s.ml (echo \"let () = Fur_csr.start [ %s.Routes.mount ]\"))))\n(executable\n (name %s)\n (modules %s)\n (modes js)\n (libraries %s fennec.fur.client fennec.pulse.live.client.browser)\n (preprocess (pps js_of_ocaml-ppx))\n (flags (:standard -w -a)))\n"
               n n lib_mod n n lib);
-         if Sys.file_exists (Filename.concat (Filename.concat apps_dir n) "main.scss") then
-           Buffer.add_string b
-             (Printf.sprintf
-                "(rule\n (target %s.css)\n (deps (glob_files_rec %%{project_root}/%s/*.scss))\n (action (run %%{bin:fennec} build --out-name %s.css -o . %%{project_root}/%s/apps/%s/main.scss)))\n"
-                n rel_frontend n rel_frontend n));
+         (* The app's CSS entry is an ORDERING MANIFEST: main.css (pure CSS — @layer + @import a dropped
+            theme, bundled by Lightning CSS) OR main.scss (the @use alternative — grass). Whichever the
+            app ships. The dep glob covers BOTH .scss and .css recursively, so a dropped theme/override
+            under apps/<app>/styles/ rebuilds the sheet. Component [%%style] stay inlined + UNLAYERED, so
+            they cascade ON TOP of the manifest's @layers — theme < app < components, by construction. *)
+         let app = Filename.concat apps_dir n in
+         let entry =
+           if Sys.file_exists (Filename.concat app "main.css") then Some "main.css"
+           else if Sys.file_exists (Filename.concat app "main.scss") then Some "main.scss"
+           else None
+         in
+         (match entry with
+          | None -> ()
+          | Some e ->
+            Buffer.add_string b
+              (Printf.sprintf
+                 "(rule\n (target %s.css)\n (deps (glob_files_rec %%{project_root}/%s/*.scss) (glob_files_rec %%{project_root}/%s/*.css))\n (action (run %%{bin:fennec} build --out-name %s.css -o . %%{project_root}/%s/apps/%s/%s)))\n"
+                 n rel_frontend rel_frontend n rel_frontend n e)));
   write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
 (* ---- HANDLERS (frontend/handlers/**.mlx) — one .mlx = one handler = one bundle ----

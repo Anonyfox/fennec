@@ -1,0 +1,18 @@
+/* A DROPPED base theme — the kind of vendor / white-label stylesheet you do NOT write inline in a
+   component. It owns the design tokens (CSS custom properties) + base element rules. main.css pulls it
+   into @layer theme; SWAP this file (or the @import line in main.css) to re-skin the whole app. This is
+   the CSS escape hatch: drop a .css/.scss into styles/, @import it where you want in the cascade. */
+:root {
+  --brand: #e8590c; /* a white-label tenant theme changes just these tokens */
+  --accent: #1971c2;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+a {
+  color: var(--accent);
+}

@@ -1,0 +1,26 @@
+/* The web app's stylesheet is an ordering MANIFEST — pure modern CSS, no SCSS toolchain in your head.
+   The `@layer` line declares the cascade order ONCE; each `@import` drops a source into a layer, and
+   Lightning CSS bundles it all into one flat sheet at build time (no runtime @imports). Drop ad-hoc /
+   vendor / theme CSS into styles/ and @import it where you want — WHITE-LABEL by swapping the theme line.
+   Component [%%style] stay inlined + unlayered, so they cascade ON TOP of every layer here:
+       theme  <  app  <  components
+   (admin/ ships main.scss instead — the @use alternative; both compile to one ordered sheet.) */
+@layer theme, app;
+
+@import url("styles/theme.css") layer(theme); /* ← the dropped base theme — swap to re-skin */
+
+@layer app {
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 42rem;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.5;
+  }
+  h1 {
+    color: var(--brand);
+  }
+  .page {
+    display: block;
+  }
+}
