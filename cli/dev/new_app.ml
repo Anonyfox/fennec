@@ -103,7 +103,10 @@ let hello_mlx =
 let frontend_dune ~comp_lib =
   Printf.sprintf
     "; The components library — every .mlx here is compiled with the Fur ppx and `-open Fur`, so\n\
-     ; `h`/`text`/JSX resolve. Add more .mlx files freely; no dune change needed.\n\
+     ; `h`/`text`/JSX resolve. Add .mlx files freely AND group them into subfolders if you like:\n\
+     ; (include_subdirs unqualified) folds the whole tree into this one lib (flat module names — a\n\
+     ; file's name is its module wherever it sits), so you never add a dune under a subfolder.\n\
+     (include_subdirs unqualified)\n\n\
      (library\n\
     \ (name %s)\n\
     \ (wrapped false)\n\
