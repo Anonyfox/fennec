@@ -6,6 +6,7 @@
 //! processing (`mod image`, for `fennec image`). Each is an isolated `#[no_mangle]` C surface.
 
 mod image;
+use lightningcss::bundler::{Bundler, FileProvider};
 use lightningcss::stylesheet::{MinifyOptions, ParserOptions, PrinterOptions, StyleSheet};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::ffi::{CStr, CString};
@@ -74,6 +75,33 @@ pub extern "C" fn fennec_css_scss_path(path: *const c_char, minify: c_int) -> *m
     match optimize(&css, minify != 0) {
         Some(out) => to_c(out),
         None => to_c(css),
+    }
+}
+
+/// Bundle a CSS *file*: resolve every `@import` (including `@import "…" layer(…)`) recursively from
+/// disk into ONE flat stylesheet (Lightning CSS Bundler + FileProvider), then optimize/minify. This is
+/// the modern-CSS twin of `scss_path` — an app's `main.css` is an ordering manifest of `@layer` +
+/// `@import`s, and after bundling the `@import`s are gone (no runtime fetches). Paths resolve relative
+/// to the importing file, so a dropped theme next to (or above) `main.css` is pulled in by one line.
+#[no_mangle]
+pub extern "C" fn fennec_css_bundle_path(path: *const c_char, minify: c_int) -> *mut c_char {
+    let p = match read(path) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let fs = FileProvider::new();
+    let mut bundler = Bundler::new(&fs, None, ParserOptions::default());
+    let mut sheet = match bundler.bundle(Path::new(&p)) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let m = minify != 0;
+    if m {
+        let _ = sheet.minify(MinifyOptions::default());
+    }
+    match sheet.to_css(PrinterOptions { minify: m, ..Default::default() }) {
+        Ok(r) => to_c(r.code),
+        Err(_) => std::ptr::null_mut(),
     }
 }
 

@@ -18,7 +18,9 @@ panic = "abort"
 strip = true
 
 [dependencies]
-lightningcss = "1.0.0-alpha.71"
+# "bundler" enables Lightning CSS's @import resolver (Bundler + FileProvider) — the modern-CSS twin of
+# grass's @use resolution, so an app's main.css can be an ordering manifest of @layer + @import.
+lightningcss = { version = "1.0.0-alpha.71", features = ["bundler"] }
 grass = { version = "0.13", default-features = false }
 # Cross-platform filesystem events (FSEvents / inotify / kqueue / Windows) — the
 # same crate cargo-watch/watchexec use. Powers the CLI dev supervisor's EVENTED

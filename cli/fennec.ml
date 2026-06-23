@@ -94,9 +94,10 @@ let build_one ~outdir ~minify ~format ~global_name ~external_ ~sourcemap ~banner
     match classify input with
     | Js ->
       (".js", build_js ~entry:input ~format ~global_name ~external_ ~minify ~sourcemap ~banner)
-    | Css -> (".css", Fennec_buildkit.Css.transform ~minify (read_file input))
-    (* path-aware: @use/@import resolve relative to the file, so a component's
-       stylesheet can sit next to it and be pulled into an app's entry sheet *)
+    (* both path-aware so the entry is an ORDERING MANIFEST: @import (CSS, resolved by Lightning CSS's
+       bundler — incl. @import "…" layer(…)) / @use (SCSS, grass) pull a dropped theme + partials in,
+       in the order you write them, into ONE flat sheet (no runtime @imports). *)
+    | Css -> (".css", Fennec_buildkit.Css.bundle_path ~minify input)
     | Scss -> (".css", Fennec_buildkit.Css.scss_path ~minify input)
     | Unknown ->
       failwith

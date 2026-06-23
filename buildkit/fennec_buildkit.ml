@@ -79,6 +79,7 @@ module Css = struct
   external _transform : string -> int -> string = "fennec_bk_css"
   external _scss : string -> int -> string = "fennec_bk_scss"
   external _scss_path : string -> int -> string = "fennec_bk_scss_path"
+  external _bundle_path : string -> int -> string = "fennec_bk_css_bundle_path"
 
   (** Optimize modern CSS — flatten nesting, reduce [calc()], dedupe, and
       (optionally) minify. *)
@@ -93,6 +94,13 @@ module Css = struct
       an app's entry sheet), then optimize/minify. *)
   let scss_path ?(minify = true) (path : string) : string =
     _scss_path path (if minify then 1 else 0)
+
+  (** Bundle a pure-CSS *file* by path: every [@import] (including [@import "…" layer(…)]) is resolved
+      recursively from disk into ONE flat sheet (Lightning CSS Bundler), then optimized/minified — the
+      modern-CSS twin of {!scss_path}. After bundling there are no [@import]s left (no runtime fetches),
+      so an app's [main.css] acts as an ordering manifest of [@layer] + [@import]s. *)
+  let bundle_path ?(minify = true) (path : string) : string =
+    _bundle_path path (if minify then 1 else 0)
 end
 
 (** Cross-platform filesystem events (the Rust [notify] crate: FSEvents / inotify

@@ -17,6 +17,7 @@ extern void fennec_esbuild_ctx_dispose(int handle);
 extern char *fennec_css_transform(const char *src, int minify);
 extern char *fennec_css_scss(const char *src, int minify);
 extern char *fennec_css_scss_path(const char *path, int minify);
+extern char *fennec_css_bundle_path(const char *path, int minify);
 extern void fennec_css_free(char *p);
 
 /* Rust staticlib (fennec_css): cross-platform fs watching */
@@ -91,6 +92,12 @@ CAMLprim value fennec_bk_scss_path(value path, value minify) {
   CAMLparam2(path, minify);
   CAMLreturn(copy_and_free(fennec_css_scss_path((char *)String_val(path), Int_val(minify)),
                            "scss: compile error"));
+}
+
+CAMLprim value fennec_bk_css_bundle_path(value path, value minify) {
+  CAMLparam2(path, minify);
+  CAMLreturn(copy_and_free(fennec_css_bundle_path((char *)String_val(path), Int_val(minify)),
+                           "lightningcss: bundle error (bad @import path?)"));
 }
 
 /* ---- fs watching ---- */
