@@ -44,6 +44,10 @@ let () =
   let w s = ignore (Unix.write_substring wr s 0 (String.length s)) in
   let rec drain n = if n <= 0 then None else match W.poll t ~timeout:0.2 with Some e -> Some e | None -> drain (n - 1) in
   w "********** NEW BUILD (a.ml changed) **********\n";
+  (* a complete NEW BUILD banner emits Build_started BEFORE any settle (the agent hook gates its
+     wait on it); consume that, then verify the SETTLE line — split across two reads — stays
+     pending until the trailing fragment rejoins it. *)
+  check "a complete NEW BUILD line emits Build_started" (W.poll t ~timeout:0.2 = Some W.Build_started);
   w "Succ";
   check "a settle split across reads yields no event until complete" (W.poll t ~timeout:0.2 = None);
   w "ess, waiting for filesystem changes...\n";
