@@ -1,15 +1,18 @@
 (* See contract.mli. The post-release human report + Dockerfile. Pure string-building (primitive args,
    not the pipeline's record types) so it is decoupled and unit-testable. *)
 
+(* This native binary is production BY DEFAULT (Fennec keys dev/prod off bytecode-vs-native, not an env
+   var), so the contract is only genuinely deploy-specific values. FENNEC_ENV is listed last, as the
+   optional override it now is — there is no mode flag to remember. *)
 let env_table =
-  [ ( "FENNEC_ENV",
-      "REQUIRED — set to `production`. Without it the server runs in DEV mode: it serves assets from a \
-       dir on disk (not the embedded ones → 404s), turns on livereload, and uses the dev port." );
-    ("FENNEC_PORT", "Base listen port. Precedence: FENNEC_PORT, else $PORT (PaaS), else 80.");
-    ( "MONGO_URL",
+  [ ( "MONGO_URL",
       "Data backend: burrow://<dir> (embedded, persistent), mongodb://… (real mongod), or :memory: \
-       (ephemeral, in-process)." );
-    ("MAIL_URL", "Outbound email transport (an SMTP URL). Unset → emails are logged to stdout.") ]
+       (ephemeral, in-process). Unset → no DB (database features fail when first used)." );
+    ("FENNEC_PORT", "Base listen port. Precedence: FENNEC_PORT, else $PORT (PaaS), else 443/80.");
+    ("MAIL_URL", "Outbound email transport (an SMTP URL). Unset → emails are logged to stdout.");
+    ( "FENNEC_ENV",
+      "Optional override — this native binary is already production. Set `development` only to run it \
+       in dev mode locally." ) ]
 
 let human_size bytes =
   let b = float_of_int bytes in
@@ -25,9 +28,9 @@ let render ~name:_ ~path ~bytes ~embedded =
   in
   let buf = Buffer.create 512 in
   let p fmt = Printf.ksprintf (Buffer.add_string buf) fmt in
-  p "\n  released  %s  (%s · native · prod-lean · %s)\n\n" path (human_size bytes) assets_line;
-  p "  run it:\n";
-  p "    FENNEC_ENV=production MONGO_URL=<url> %s\n\n" path;
+  p "\n  released  %s  (%s · native · production · prod-lean · %s)\n\n" path (human_size bytes) assets_line;
+  p "  run it (it is production by default — no mode flag needed):\n";
+  p "    MONGO_URL=<url> %s\n\n" path;
   p "  runtime environment:\n";
   List.iter (fun (k, desc) -> p "    %-11s  %s\n" k desc) env_table;
   Buffer.contents buf
@@ -48,7 +51,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY %s /app/%s
 
-ENV FENNEC_ENV=production
+# The native binary is production by default — no FENNEC_ENV needed.
 ENV FENNEC_PORT=8080
 EXPOSE 8080
 
@@ -63,16 +66,17 @@ let%test "human_size renders MB" = human_size (44 * 1024 * 1024) = "44.0 MB"
 let%test "human_size renders KB" = human_size 9728 = "9.5 KB"
 let%test "human_size renders bytes" = human_size 512 = "512 B"
 
-let%test "the run line carries the FENNEC_ENV=production footgun fix" =
+let%test "the run line needs no mode flag — production by default" =
   let s = render ~name:"server" ~path:"./dist/server" ~bytes:1000 ~embedded:(Some 3) in
-  Fennec_hunt_unit.str_contains s "FENNEC_ENV=production" && Fennec_hunt_unit.str_contains s "./dist/server"
+  (not (Fennec_hunt_unit.str_contains s "FENNEC_ENV=production"))
+  && Fennec_hunt_unit.str_contains s "MONGO_URL=<url> ./dist/server"
 
 let%test "the embed count is pluralised, API-only is labelled" =
   Fennec_hunt_unit.str_contains (render ~name:"s" ~path:"p" ~bytes:1 ~embedded:(Some 1)) "1 file)"
   && Fennec_hunt_unit.str_contains (render ~name:"s" ~path:"p" ~bytes:1 ~embedded:None) "API/SSR-only"
 
-let%test "the Dockerfile copies the staged binary and sets production" =
+let%test "the Dockerfile copies the staged binary; sets no mode directive (prod by default)" =
   let d = dockerfile ~name:"server" ~bin:"dist/server" in
   Fennec_hunt_unit.str_contains d "COPY dist/server /app/server"
-  && Fennec_hunt_unit.str_contains d "FENNEC_ENV=production"
+  && (not (Fennec_hunt_unit.str_contains d "ENV FENNEC_ENV"))
   && Fennec_hunt_unit.str_contains d {|CMD ["/app/server"]|}

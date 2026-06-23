@@ -23,6 +23,39 @@ let env_console_sock = "FENNEC_CONSOLE_SOCK" (* path of the console eval unix so
 let env_port = "FENNEC_PORT" (* the base port: dev allocates the block from here; prod listens on it *)
 let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) override; auto by default *)
 
+(* The single dev-vs-production decision. A prod build should just BE prod with no env var to remember,
+   so the default comes from how the binary was built, not the environment: `fennec dev` runs the
+   BYTECODE server (Sys.backend_type = Bytecode), `fennec release` builds NATIVE (= Native). So bytecode
+   ⇒ dev, native ⇒ prod. FENNEC_ENV is an explicit override either way. One home for the rule so the
+   facade / server / logger never diverge. (js_of_ocaml is Other _ ⇒ dev, but the client never calls
+   this — it is a server-side decision.) [is_dev_for] is the pure core, split out so the decision matrix
+   is unit-testable without mutating the process environment. *)
+let is_dev_for ~env_value ~(backend : Sys.backend_type) : bool =
+  match env_value with
+  | Some "production" -> false
+  | Some "development" -> true
+  | Some _ | None -> backend <> Sys.Native
+
+let is_dev () : bool = is_dev_for ~env_value:(Sys.getenv_opt env_mode) ~backend:Sys.backend_type
+
+let%test "no override: a native build defaults to PRODUCTION (a release just works)" =
+  is_dev_for ~env_value:None ~backend:Sys.Native = false
+
+let%test "no override: a bytecode build defaults to development (the dev loop)" =
+  is_dev_for ~env_value:None ~backend:Sys.Bytecode = true
+
+let%test "FENNEC_ENV=development overrides a native build back to dev" =
+  is_dev_for ~env_value:(Some "development") ~backend:Sys.Native = true
+
+let%test "FENNEC_ENV=production overrides a bytecode build to prod" =
+  is_dev_for ~env_value:(Some "production") ~backend:Sys.Bytecode = false
+
+let%test "an unrecognized FENNEC_ENV falls back to the build default" =
+  is_dev_for ~env_value:(Some "staging") ~backend:Sys.Native = false
+
+let%test "js_of_ocaml (Other) is treated as dev" =
+  is_dev_for ~env_value:None ~backend:(Sys.Other "js_of_ocaml") = true
+
 (* the per-suite target URL `fennec test` sets so each suite hits its own isolated instance.
    MIRROR of Fennec_hunt.Test_proto.env_url (the suite side) — the two live in independent
    packages (hunt has no framework dep; the CLI doesn't link hunt), and their equality is

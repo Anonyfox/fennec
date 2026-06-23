@@ -17,8 +17,18 @@
 
 (** {1 Environment the CLI sets for the server} *)
 
-(** [FENNEC_ENV] — ["development"] | ["production"]. *)
+(** [FENNEC_ENV] — ["development"] | ["production"]. An explicit {e override} for {!is_dev}; normally
+    unset, because the default is derived from the build (see {!is_dev}). *)
 val env_mode : string
+
+(** [is_dev ()] — the framework's single dev-vs-production decision. A production build should just run
+    as production, with no env var to remember, so the default is derived from how the binary was
+    {e built}: [fennec dev] runs the {e bytecode} server, [fennec release] builds a {e native} one — so
+    a bytecode binary defaults to development and a native binary to production ([Sys.backend_type]).
+    [FENNEC_ENV] = ["development"] | ["production"] overrides either way (e.g. to run a native build
+    locally in dev mode). The one home of this rule, so the facade, the HTTP server, and the logger
+    never diverge on what "dev" means. *)
+val is_dev : unit -> bool
 
 (** [FENNEC_LIVERELOAD] — path of the dev control unix socket. *)
 val env_livereload : string

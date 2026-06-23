@@ -344,18 +344,19 @@ let release_cmd =
       `P
         "The build itself is plain dune: $(b,dune build --profile release) yields the same binary. \
          $(b,fennec release) adds the parts that are easy to get wrong — the right incantation, the two \
-         silent-failure checks above, and the runtime deploy contract: the environment the binary needs \
-         to run correctly, above all $(b,FENNEC_ENV=production) (without it the server falls back to dev \
-         behaviour and serves its assets from disk instead of the embedded copy).";
+         silent-failure checks above, and the runtime deploy contract: the deploy-specific environment \
+         the binary needs (a $(b,MONGO_URL), the port). There is no mode flag to remember — the native \
+         binary is production by default (Fennec keys dev/prod off bytecode-vs-native, not an env var).";
       `S Manpage.s_examples;
       `Pre "  fennec release                 # build, verify, strip, stage ./dist/<server>";
       `Pre "  fennec release --docker        # also emit a runtime Dockerfile";
       `Pre "  fennec release --check         # verify only (CI gate); stage nothing";
       `S "WHAT SHIPS";
       `P
-        "A single self-contained native binary. For a web app the JS/CSS/static web root is embedded, so \
-         there is nothing else to deploy; an API/SSR-only server simply has no web root. Run it with \
-         $(b,FENNEC_ENV=production) and a $(b,MONGO_URL) (or none, for an in-memory backend)." ]
+        "A single self-contained native binary, production by default. For a web app the JS/CSS/static \
+         web root is embedded, so there is nothing else to deploy; an API/SSR-only server simply has no \
+         web root. Run it with a $(b,MONGO_URL) (or none, for an in-memory backend) — no mode flag. \
+         $(b,FENNEC_ENV=development) is available only if you want to run the native build in dev mode." ]
   in
   Cmd.v (Cmd.info "release" ~doc ~man) Term.(const go $ outdir_arg $ docker_arg $ no_strip_arg $ check_arg)
 

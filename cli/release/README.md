@@ -26,10 +26,12 @@ A plain release build lets two things fail without a word:
    (`lookup _ = None`) and the binary 404s every asset. `Verify` reads the generated module and refuses
    the stub. An API/SSR-only server (no web root at all) is fine — there is simply nothing to embed.
 
-And it surfaces the runtime **deploy contract** the binary hides — above all `FENNEC_ENV=production`,
-the switch that makes the server serve its *embedded* assets instead of looking for a `webroot/` dir on
-disk. Forgetting it is the classic single-binary-deploy footgun; the framework also warns about it at
-runtime (see `Fennec.web_source`).
+And it surfaces the runtime **deploy contract**: the deploy-specific environment the binary needs (a
+`MONGO_URL`, the port). There is **no mode flag** — the binary is production by default. Fennec keys
+dev-vs-production off how the binary was *built*, not an env var: the dev loop runs the **bytecode**
+`server.bc`, a release is the **native** `server.exe`, so `Sys.backend_type` decides
+(`Paw.Dev_proto.is_dev`). A release just runs as production. `FENNEC_ENV=development|production` remains
+an explicit override for either (e.g. running a native build locally in dev mode).
 
 ## The pieces (a pure pipeline, no Eio, no compiler, no app code)
 

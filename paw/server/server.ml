@@ -795,7 +795,7 @@ let peek_sni flow =
     with _ -> None)
 
 let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parallelism ?dev ?tls ?on_demand ?(on_error = default_on_error) ?on_access ?(on_listen = fun (_ : (string * string) list) -> ()) ~env (router : Endpoint.t Host_router.t) =
-  let dev = match dev with Some d -> d | None -> ( try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true) in
+  let dev = match dev with Some d -> d | None -> Dev_proto.is_dev () in
   (* worker domains for true multicore (the nginx-worker model): each handles whole connections.
      Auto — 1 in dev (deterministic; the livereload relay is shared), all cores in prod — or set
      ~parallelism / FENNEC_PARALLELISM. (Named "parallelism", not "domains", which now means hosts.) *)

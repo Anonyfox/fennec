@@ -140,7 +140,7 @@ let render ?(color = false) (fmt : format) (a : Access.t) : string =
 let default_format () : format =
   match Sys.getenv_opt Dev_proto.env_dev_ui with
   | Some ("1" | "on" | "true") -> Dev
-  | _ -> ( match Sys.getenv_opt Dev_proto.env_mode with Some "production" -> Json | _ -> Pretty)
+  | _ -> if Dev_proto.is_dev () then Pretty else Json
 
 (* colour only for Pretty, only when the default sink (stderr) is a real terminal and NO_COLOR is
    unset — the same restraint the old logger used, so piped/redirected logs stay clean. A custom
@@ -257,8 +257,13 @@ let%test "default_format: FENNEC_DEV_UI → Dev" =
 let%test "default_format: production → Json (DEV_UI unset)" =
   with_env Dev_proto.env_dev_ui None (fun () -> with_env Dev_proto.env_mode (Some "production") (fun () -> default_format () = Json))
 
-let%test "default_format: dev (neither set) → Pretty" =
-  with_env Dev_proto.env_dev_ui None (fun () -> with_env Dev_proto.env_mode None (fun () -> default_format () = Pretty))
+let%test "default_format: dev → Pretty (DEV_UI unset, FENNEC_ENV=development)" =
+  with_env Dev_proto.env_dev_ui None (fun () -> with_env Dev_proto.env_mode (Some "development") (fun () -> default_format () = Pretty))
+
+(* With no env override, dev-vs-prod follows the build (Sys.backend_type): a native `fennec release`
+   binary is production → Json, a bytecode dev server is Pretty. That backend-derived default is proven
+   deterministically by the {!Dev_proto.is_dev_for} matrix (passing the backend explicitly); we don't
+   re-assert it here because the inline-test runner's own backend would decide the live result. *)
 
 (* ──── the paw + sink wiring ──── *)
 let req_ ?(meth = Http.GET) path = Http.make_request ~meth ~path ()

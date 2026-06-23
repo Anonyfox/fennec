@@ -129,7 +129,7 @@ let readme ~name ~comp_lib:_ =
      ```sh\n\
      fennec release  # build native, verify, strip, stage ./dist/server\n\
      ```\n\n\
-     Run the staged binary with `FENNEC_ENV=production` (without it the server stays in dev mode).\n\
+     The staged binary is production by default — just run it (a `MONGO_URL` if you use a database).\n\
      It is a single self-contained binary; `fennec release --docker` also writes a runtime Dockerfile.\n\n\
      ## Layout\n\n\
      - `server.ml` — the server: one endpoint, renders the component on `GET /`.\n\

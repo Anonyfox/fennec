@@ -58,7 +58,7 @@ let serve ?tls ?acme ?on_error ?on_listen endpoints =
   | Ok router -> (
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let is_dev = try Sys.getenv Dev_proto.env_mode <> "production" with Not_found -> true in
+    let is_dev = Dev_proto.is_dev () in
     let net = Eio.Stdenv.net env in
     (* the ACME HTTP-01 token table; shared with the issuer when ~acme is set, empty for a BYO cert
        (then the :80 front is redirect-only). [tls_lock] guards it (and the issuer's cert tables)

@@ -75,7 +75,7 @@ let render () =
       "fennec release --docker        # also emit a runtime Dockerfile";
       "```";
       "";
-      "Plain `dune build --profile release` produces the same artifact; `fennec release` adds the incantation, the two silent-failure checks, and the run-time contract. Run the staged binary with `FENNEC_ENV=production` — without it the server falls back to dev behaviour and serves assets from disk instead of the embedded copy (the one footgun the command exists to prevent). Provide a `MONGO_URL` for a persistent backend, or none for in-memory.";
+      "Plain `dune build --profile release` produces the same artifact; `fennec release` adds the incantation, the two silent-failure checks, and the run-time contract. The binary is production by default — Fennec keys dev/prod off bytecode-vs-native (the dev loop runs `server.bc`, a release is native `server.exe`), so there is NO mode flag to set. Just run it with a `MONGO_URL` (or none for in-memory); `FENNEC_ENV=development` is an optional override to run the native build in dev mode.";
       "";
       "## Agent Fastlane";
       "";
