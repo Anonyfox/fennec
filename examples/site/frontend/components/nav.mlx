@@ -13,3 +13,8 @@ let make ~links () =
     {each links (fun (href, label) ->
       <a className="nav-link" key=href href=href>{label}</a>)}
   </nav>
+
+let%test "nav: renders the home href and the About label" =
+  let html = Fur.to_html (make ~links:[ ("/", "Home"); ("/about", "About") ] () ()) in
+  let has = Fennec_hunt_unit.str_contains html in
+  has {|href="/"|} && has "About"

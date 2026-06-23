@@ -6,7 +6,11 @@
 (library
  (name site_handlers)
  (modules :standard)
- (libraries fennec fennec.fur fennec.fur.html fennec.fur.handler fennec.pulse.sift site_components)
+ (libraries fennec fennec.fur fennec.fur.html fennec.fur.handler fennec.pulse.sift site_components fennec-hunt.unit)
+ ; inline let%test next to each handler (e.g. me.mlx's Mode-B view), scoped to the example like the
+ ; components — see ../../test/dune. Stripped from the -conn-client jsoo mirror below.
+ (inline_tests
+  (backend site_test_runner))
  (preprocess
   (pps fennec.fur.ppx -handler))
  (flags
@@ -24,6 +28,6 @@
   (modules :standard)
   (libraries fennec.fur fennec.fur.html fennec.fur.handler fennec.fur.client fennec.pulse.sift site_components)
   (preprocess
-   (pps fennec.fur.ppx -handler -conn-client))
+   (pps fennec.fur.ppx -handler -conn-client -fennec-drop-tests))
   (flags
    (:standard -w -a -open Fur))))

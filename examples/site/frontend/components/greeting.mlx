@@ -26,3 +26,25 @@ let view =
     <span className="gstatus">{if Data.loading g then " (loading)" else " (ready)"}</span>
     <button className="grefetch" id="refetch" onClick=(Data.refetch g)>refetch</button>
   </div>
+
+let%test_unit "greeting: co-located Data.local — fallback first, then the SSR seed shows the server value with no loading flash" =
+  let check = Fennec_hunt_unit.check in
+  (* with no SSR source set: fallback + loading + a refetch button render *)
+  Fur.Data.clear_seed ();
+  let g = Fur.to_html (make () ()) in
+  check "fallback shown" (Fennec_hunt_unit.str_contains g "…");
+  check "refetch button" (Fennec_hunt_unit.str_contains g {|id="refetch"|});
+  (* declaring the component REGISTERED its inline server fetcher under the derived path; replay what the
+     SSR driver does between render passes — fetch the producer, seed it, re-render — and the value
+     appears with the "(ready)" frame, not "(loading)" *)
+  (match Fur.Data.local_source "/api/greeting" with
+   | Some src ->
+     check "producer is text (not json)" (not (Fur.Data.src_is_json src));
+     Fur.Data.clear_seed ();
+     Fur.Data.put_seed "/api/greeting" (Fur.Data.src_produce src);
+     let seeded = Fur.to_html (make () ()) in
+     let hs h = Fennec_hunt_unit.str_contains seeded h in
+     check "SSR seed shows the server value, no loading flash"
+       (hs "Hello from the server" && hs "(ready)" && not (hs "(loading)"));
+     Fur.Data.clear_seed ()
+   | None -> check "producer registered under /api/greeting" false)

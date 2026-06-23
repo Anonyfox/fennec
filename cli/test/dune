@@ -22,10 +22,10 @@
  (libraries fennec_dev fennec_tty fennec-paw fennec_testcmd unix))
 
 ; The PRIMARY proof for the warm test worker: a direct socket drive (no dev server). It spawns the
-; worker and runs the example's test_components chain + the wwfix reload fixtures, asserting 42 checks
-; at low ms, a cross-file chain, changed-module reload across one worker, and the kill→fallback path.
-; Its own executable (it takes %{workspace_root} as an arg and needs explicit artifact deps), driven
-; by the rule below so `dune runtest` exercises it.
+; worker and runs the example's COMPONENT inline-test chain + the wwfix reload fixtures, asserting the
+; component tests run scoped + at low ms, a cross-file chain, changed-module reload across one worker,
+; and the kill→fallback path. Its own executable (it takes %{workspace_root} as an arg and needs
+; explicit artifact deps), driven by the rule below so `dune runtest` exercises it.
 (executable
  (name test_warm_worker)
  (modules test_warm_worker)
@@ -36,12 +36,14 @@
  (deps
   ; the worker binary the client spawns
   %{project_root}/cli/dev/worker/fennec_test_worker.bc
-  ; the example's app libs (the Dynlinked chain) + the test's byte-mirror .bc (→ its .cmo)
+  ; the example's app libs (the Dynlinked chain): site_components + its app-local deps, byte .cma's
   %{project_root}/examples/site/frontend/store/site_store.cma
-  %{project_root}/examples/site/frontend/components/site_components.cma
   %{project_root}/examples/site/frontend/styles/site_styles.cma
-  %{project_root}/examples/site/frontend/handlers/site_handlers.cma
-  %{project_root}/examples/site/frontend_test/byte/test_components.bc
+  %{project_root}/examples/site/frontend/components/site_components.cma
+  ; the site_components inline-test runner (its mtime drives the integrated edit) + its generated
+  ; byte .cmo (the chain tail — loading it runs the registrations site_components.cma carries)
+  %{project_root}/examples/site/frontend/components/.site_components.inline-tests/inline-test-runner.exe
+  %{project_root}/examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo
   ; the reload + cross-file fixtures
   wwfix/dep/wwfix_dep.cma
   wwfix/v1/wwfix_v1.cma

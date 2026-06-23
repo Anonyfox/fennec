@@ -154,8 +154,8 @@ let cma_of ~build_prefix (l : lib) =
   Filename.concat dir (l.name ^ ".cma")
 
 (* the test module's own .cmo, from the workspace-relative exe target (e.g.
-   examples/site/frontend_test/test_components.exe →
-   examples/site/frontend_test/.test_components.eobjs/byte/dune__exe__Test_components.cmo).
+   examples/site/widget_test/widget_test.exe →
+   examples/site/widget_test/.widget_test.eobjs/byte/dune__exe__Widget_test.cmo).
    The dune__exe__ prefix + Capitalized module is dune's executable-module mangling. *)
 let cmo_of_target target =
   let dir = Filename.dirname target in
@@ -164,6 +164,14 @@ let cmo_of_target target =
   Filename.concat
     (Filename.concat dir (Printf.sprintf ".%s.eobjs" base))
     (Filename.concat "byte" (Printf.sprintf "dune__exe__%s.cmo" modname))
+
+(* The byte .cmo of an INLINE-test runner. dune generates the runner from the [(inline_tests (backend
+   …))] backend's [generate_runner] (a one-liner [let () = exit (Fennec_hunt_unit.run …)]) into a fixed
+   pseudo-exe named [t]: <dir>/.<lib>.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo. Loading the test
+   lib's [.cma] (above it in the chain) REGISTERS its inline tests; loading THIS object runs them. The
+   path is dune-internal but stable for a given dune; a miss simply yields a cold fallback. *)
+let inline_runner_cmo ~runner_target =
+  Filename.concat (Filename.dirname runner_target) ".t.eobjs/byte/dune__exe__Main.cmo"
 
 (* [derive ~describe ~watch_roots ~preloaded ~test_libs ~target]:
    - [describe]    : the [dune describe workspace] text
@@ -228,6 +236,16 @@ let derive ?(build_prefix = default_build_prefix) ~describe ~watch_roots ~preloa
 (* the full ordered object list the worker loads: cmas (deps first) then the test cmo *)
 let objects t = t.cmas @ [ t.cmo ]
 
+(* [derive_inline …]: the chain for an INLINE-test runner of library [lib] (an [(inline_tests …)]
+   stanza, no conventional [(test)] file). It is the same closure walk as {!derive} seeded by [lib]
+   ITSELF — so [lib]'s own [.cma] (which carries the registrations) lands in the chain alongside its
+   app-local deps — capped with the dune-generated runner [.cmo] ({!inline_runner_cmo}) instead of an
+   authored test module's. [runner_target] is the workspace-relative inline-test-runner.exe path. *)
+let derive_inline ?build_prefix ~describe ~watch_roots ~preloaded ~lib ~runner_target () =
+  match derive ?build_prefix ~describe ~watch_roots ~preloaded ~test_libs:[ lib ] ~target:runner_target () with
+  | Error _ as e -> e
+  | Ok t -> Ok { t with cmo = inline_runner_cmo ~runner_target }
+
 (* ═══════════════════════════════════════════════════════════════════════════ *)
 (*  Tests — pure derivation over a synthetic describe fixture                 *)
 (* ═══════════════════════════════════════════════════════════════════════════ *)
@@ -260,9 +278,9 @@ let fixture =
  (library
   ((name fmt) (uid u_fmt) (local false) (requires ())
    (source_dir /opam/lib/fmt)))
- (executables ((names (snapshot_html)) (requires (u_fur)) (modules ()))))|}
+ (executables ((names (other_exe)) (requires (u_fur)) (modules ()))))|}
 
-let test_target = "examples/site/frontend_test/test_components.exe"
+let test_target = "examples/site/widget_test/widget_test.exe"
 let watch_roots = [ "examples/site" ]
 let preloaded = [ "fennec.fur"; "fennec" ]
 
@@ -286,7 +304,7 @@ let%test "chain: local app libs in dep order, framework skipped, test cmo last" 
     ordered
     && idx "site_styles" <> None
     && not (List.exists (fun p -> Fennec_hunt_unit.str_contains p "fennec/fur") cmas)
-    && t.cmo = "examples/site/frontend_test/.test_components.eobjs/byte/dune__exe__Test_components.cmo"
+    && t.cmo = "examples/site/widget_test/.widget_test.eobjs/byte/dune__exe__Widget_test.cmo"
 
 let%test "chain: .cma path is <rel source_dir>/<name>.cma" =
   match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target () with
@@ -333,3 +351,23 @@ let%test "a leaf-only test (no app libs) yields an empty cma list + just the cmo
   match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "fennec.fur" ] ~target:test_target () with
   | Ok t -> t.cmas = [] && objects t = [ t.cmo ]
   | Error _ -> false
+
+let%test "inline_runner_cmo points at dune's generated .t.eobjs/byte/dune__exe__Main.cmo" =
+  inline_runner_cmo ~runner_target:"a/b/.mylib.inline-tests/inline-test-runner.exe"
+  = "a/b/.mylib.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo"
+
+let%test "derive_inline: the lib's OWN .cma is in the chain (after its deps), capped by the runner .cmo" =
+  let runner = "examples/site/frontend/components/.site_components.inline-tests/inline-test-runner.exe" in
+  match derive_inline ~describe:fixture ~watch_roots ~preloaded ~lib:"site_components" ~runner_target:runner () with
+  | Error _ -> false
+  | Ok t ->
+    let idx name = List.find_index (fun p -> Fennec_hunt_unit.str_contains p name) t.cmas in
+    (match (idx "site_store", idx "site_components") with Some a, Some b -> a < b | _ -> false)
+    && t.cmo = "examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo"
+    && (match List.rev (objects t) with last :: _ -> last = t.cmo | [] -> false)
+
+let%test "derive_inline: an unknown lib is reported (⇒ cold fallback)" =
+  match derive_inline ~describe:fixture ~watch_roots ~preloaded ~lib:"nope_lib"
+          ~runner_target:"x/.nope_lib.inline-tests/inline-test-runner.exe" () with
+  | Error (Unknown_lib "nope_lib") -> true
+  | _ -> false

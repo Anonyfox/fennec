@@ -1,7 +1,7 @@
 (* Behavioural proof of the fur.ppx JSX desugars — every NEW userland form compiles through the
    ppx AND renders to the expected HTML (via Fur.to_html, the native SSR path). This is the
-   ppx-level twin of examples/site/frontend_test: it pins that the sugar lowers to the right
-   runtime calls (text/node/frag/get) by checking the OUTPUT, not the pretty-printed source.
+   ppx-level twin of the example components' inline `let%test`s: it pins that the sugar lowers to the
+   right runtime calls (text/node/frag/get) by checking the OUTPUT, not the pretty-printed source.
 
    Covered (userland writes the JSX-identical `{expr}` value escape; the .mlx pre-pass lowers it to
    the paren value-child the ppx then desugars):

@@ -51,3 +51,8 @@ let make () =
     <button className="hf-submit" disabled=(not (Form.valid form)) onClick=(submit ())>Greet</button>
     {if !greeting <> "" then <p className="hf-ok">{!greeting}</p> else <span />}
   </div>
+
+let%test "name_form: the typed client form gets required + maxlength=40 off the codec; Greet disabled while invalid" =
+  let html = Fur.to_html (make () ()) in
+  let has = Fennec_hunt_unit.str_contains html in
+  has {|id="hf-name"|} && has {|required="required"|} && has {|maxlength="40"|} && has "disabled"

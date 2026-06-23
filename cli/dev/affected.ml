@@ -140,5 +140,5 @@ let%test "short is compact" =
   Fennec_hunt_unit.str_contains (short a) "backend" && Fennec_hunt_unit.str_contains (short a) "component nav"
 
 let%test "classifies conventional unit test path" =
-  let a = classify [ "examples/site/frontend_test/test_components.ml changed" ] in
-  a.tests = [ "examples/site/frontend_test/test_components.ml" ] && Fennec_hunt_unit.str_contains (short a) "tests"
+  let a = classify [ "examples/site/test/http/api_test.ml changed" ] in
+  a.tests = [ "examples/site/test/http/api_test.ml" ] && Fennec_hunt_unit.str_contains (short a) "tests"

@@ -89,8 +89,8 @@ The live signals (`user`, `user_id`, `logging_in`) and the verbs (`login_with_pa
 is `Accounts.user_id conn` in a handler. A worked end-to-end example of the skeleton→snap pattern —
 a fixed-slot badge that renders "Sign in" for SSR and "Hello, …" after hydration — is
 [`examples/site/frontend/components/user_badge.mlx`](../../examples/site/frontend/components/user_badge.mlx)
-(mounted in the web app's `layout.mlx`; its SSR `None`-frame is asserted in
-`examples/site/frontend_test/test_components.ml`).
+(mounted in the web app's `layout.mlx`; its SSR `None`-frame is asserted by the inline `let%test` in
+that same file).
 
 That is **Mode A** — a file-tree SPA page (`Paw.app (Fur_ssr.handler …)`), which is Conn-blind by
 design. There is a second mode for the pages a classical server-rendered, authenticated app is built
@@ -168,8 +168,7 @@ personalization can fill in a beat later.
 A worked, runnable example is
 [`examples/site/frontend/handlers/me.mlx`](../../examples/site/frontend/handlers/me.mlx) (mounted at
 `/me` in `examples/site/server.ml`, alongside the `/login` + `/logout` routes that make it live; its
-personalized SSR frame is asserted next to the Mode-A one in
-`examples/site/frontend_test/test_components.ml`).
+personalized SSR frame is asserted by the inline `let%test_unit` in that same file).
 
 ---
 

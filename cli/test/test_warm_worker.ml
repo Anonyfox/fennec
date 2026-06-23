@@ -3,8 +3,9 @@
    server would race the watcher; a direct drive does not).
 
    It proves, end to end:
-     A. the example's test_components chain runs all 42 checks via the worker, at low single/double-digit
-        ms (vs the ~320-450ms cold relink+launch baseline);
+     A. the example's component inline-test chain runs the app's component tests via the worker — scoped
+        to examples/site/ (no preloaded framework tests leak in) — at low single/double-digit ms (vs the
+        ~320-450ms cold relink+launch baseline);
      B. a CROSS-FILE chain works (a dep .cma Dynlinked before the leaf module that uses it);
      C. CHANGED-MODULE reload across two requests to ONE worker — load Widget v1, then Widget v2 (same
         module name) — with no "already loaded" conflict, because each run forks;
@@ -50,13 +51,15 @@ let str_contains hay needle =
   let rec go i = if i + nn > nh then false else if String.sub hay i nn = needle then true else go (i + 1) in
   nn = 0 || go 0
 
-(* ── the example test_components chain (dependency order, then the test .cmo from the byte mirror) ── *)
+(* ── the example's COMPONENT inline-test chain: the app-local lib .cma's (dependency order) then the
+   dune-generated inline-test-runner .cmo. Loading site_components.cma REGISTERS its inline let%test;
+   loading the runner .cmo runs them (the site_test_runner backend scopes the run to examples/site/, so
+   the framework tests the worker preloaded are filtered out — the run is purely the app's). ── *)
 let example_chain =
   [ bp "examples/site/frontend/store/site_store.cma";
-    bp "examples/site/frontend/components/site_components.cma";
     bp "examples/site/frontend/styles/site_styles.cma";
-    bp "examples/site/frontend/handlers/site_handlers.cma";
-    bp "examples/site/frontend_test/byte/.test_components.eobjs/byte/dune__exe__Test_components.cmo" ]
+    bp "examples/site/frontend/components/site_components.cma";
+    bp "examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo" ]
 
 let () =
   (* This drive test runs against the real `dune runtest` build in `_build/default`; {!Build_dir}
@@ -84,22 +87,26 @@ let () =
    | Some w ->
      check "worker spawns + handshakes" true;
 
-     (* ── A. the example test, warm ─────────────────────────────────────────────────────────── *)
+     (* ── A. the example component inline tests, warm ───────────────────────────────────────── *)
      (match Fennec_dev.Test_worker.run w ~chain:example_chain with
-      | None -> check "A: example test_components runs via worker" false
+      | None -> check "A: example component tests run via worker" false
       | Some r ->
         check "A: example exit code 0" (r.exit_code = 0);
-        check "A: example ran all 42 checks" (ok_lines r.output = 42);
+        check "A: ran the inline component tests (>= 10)" (ok_lines r.output >= 10);
+        (* the backend scopes the run to examples/site/, so the framework tests the worker preloaded
+           (with -linkall) must NOT appear — no test line carries a fennec/ source path *)
+        check "A: the run is SCOPED to the app (no framework tests leaked in)" (not (str_contains r.output "fennec/"));
         check "A: example output is clean (no timing sentinel leak)" (not (str_contains r.output "FENNEC_TW_TIMING"));
         (* the warm cost must be a fraction of the ~320-450ms cold baseline — generous ceiling for CI *)
         check (Printf.sprintf "A: warm total %.1fms ≪ cold ~400ms (dynlink %.1f + run %.1f)" r.total_ms r.dynlink_ms r.run_ms)
           (r.total_ms < 200.0);
-        Printf.printf "    [measured] example: total=%.1fms dynlink=%.1fms run=%.1fms (42 checks)\n%!"
-          r.total_ms r.dynlink_ms r.run_ms);
+        Printf.printf "    [measured] example: total=%.1fms dynlink=%.1fms run=%.1fms (%d component checks)\n%!"
+          r.total_ms r.dynlink_ms r.run_ms (ok_lines r.output));
 
-     (* a second run of the SAME example chain in the same worker (warm-warm) must also be green *)
+     (* a second run of the SAME example chain in the same worker (warm-warm) must also be green + scoped *)
      (match Fennec_dev.Test_worker.run w ~chain:example_chain with
-      | Some r -> check "A2: example re-run in same worker still 42 ok" (r.exit_code = 0 && ok_lines r.output = 42)
+      | Some r -> check "A2: example re-run in same worker still green + scoped"
+                    (r.exit_code = 0 && ok_lines r.output >= 10 && not (str_contains r.output "fennec/"))
       | None -> check "A2: example re-run in same worker" false);
 
      (* ── B. cross-file chain (dep .cma before the leaf that references it) ──────────────────── *)
@@ -124,41 +131,44 @@ let () =
         check "C: v2 body actually ran (fresh bytes, not the cached v1)" (str_contains r.output "v2"));
 
      (* ── E. INTEGRATED dev-loop edit: Dev_tests.run_changed through the worker ──────────────────
-        The end-to-end path the supervisor uses: an edit rebuilds the test runner → run_changed sees
-        its mtime advance → derives the chain from `dune describe` + the test's (libraries …) → runs it
-        via the worker → parses the tally. We inject a hand-built describe (mirroring the real example
-        graph; spawning `dune describe` here would deadlock under dune runtest) and simulate the edit
-        by bumping the runner exe's mtime. Asserts a WARM summary of all 42 checks. *)
+        The end-to-end path the supervisor uses: an edit rebuilds the inline-test runner → run_changed
+        sees its mtime advance → derives the chain (for an (inline_tests) runner: the tested lib + its
+        app-local deps + the generated runner .cmo, via Test_chain.derive_inline) → runs it via the
+        worker → parses the tally. We inject a hand-built describe (mirroring the real example graph;
+        spawning `dune describe` here would deadlock under dune runtest) and simulate the edit by
+        bumping the runner exe's mtime. Asserts a WARM, scoped summary of the component tests. *)
      (* source_dirs use the real _build/default-relative form describe emits (Test_chain strips that
-        prefix to workspace-relative, then run_via_worker re-roots under <src_root>/_build/default). *)
+        prefix to workspace-relative, then run_via_worker re-roots under <src_root>/_build/default).
+        site_components requires site_store + site_styles + fennec.fur.server (its real deps). *)
      let describe =
        {|((root /r) (build_context _build/default)
  (library ((name site_styles) (uid u_sty) (local true) (requires ()) (source_dir _build/default/examples/site/frontend/styles)))
  (library ((name site_store) (uid u_sto) (local true) (requires (u_fur)) (source_dir _build/default/examples/site/frontend/store)))
- (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_fur)) (source_dir _build/default/examples/site/frontend/components)))
- (library ((name site_handlers) (uid u_hnd) (local true) (requires (u_cmp u_fur)) (source_dir _build/default/examples/site/frontend/handlers)))
+ (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_sty u_srv u_fur)) (source_dir _build/default/examples/site/frontend/components)))
  (library ((name fennec.fur) (uid u_fur) (local true) (requires ()) (source_dir _build/default/fennec/fur)))
  (library ((name fennec.fur.server) (uid u_srv) (local true) (requires (u_fur)) (source_dir _build/default/fennec/fur/server)))
  (library ((name fennec.pulse.sift) (uid u_sft) (local true) (requires ()) (source_dir _build/default/fennec/pulse/sift))))|}
      in
-     (* the SOURCE project root (parent of _build/default): chain_for reads the test's dune from here,
-        and run_via_worker re-roots the .cma/.cmo under <src_root>/_build/default. *)
+     (* the SOURCE project root (parent of _build/default): run_via_worker re-roots the .cma/.cmo under
+        <src_root>/_build/default. *)
      let src_root = Filename.dirname (Filename.dirname bd) in
      let watch_roots = [ "examples/site" ] in
      let dt = Fennec_dev.Dev_tests.create ~watch_roots ~root:src_root () in
      Fennec_dev.Dev_tests.set_worker dt (Some w);
      Fennec_dev.Dev_tests.set_describe_for_test dt describe;
-     (* register exactly the real frontend_test runner (skip filesystem discovery so the test is
-        hermetic), prime its mtime as "seen", then bump it to simulate an edit-triggered rebuild *)
-     let exe_abs = bp "examples/site/frontend_test/test_components.exe" in
+     (* register exactly the real site_components inline-test runner (skip filesystem discovery so the
+        test is hermetic), prime its mtime as "seen", then bump it to simulate an edit-triggered rebuild *)
+     let runner_target = "examples/site/frontend/components/.site_components.inline-tests/inline-test-runner.exe" in
+     let exe_abs = bp runner_target in
      Fennec_dev.Dev_tests.set_runners_for_test dt
-       [ { Fennec_dev.Dev_tests.lib = "frontend_test"; exe = exe_abs; target = "examples/site/frontend_test/test_components.exe" } ];
+       [ { Fennec_dev.Dev_tests.lib = "site_components"; exe = exe_abs; target = runner_target } ];
      Fennec_dev.Dev_tests.prime dt;
      (let st = Unix.stat exe_abs in Unix.utimes exe_abs st.Unix.st_atime (st.Unix.st_mtime +. 5.0));
      (match Fennec_dev.Dev_tests.run_changed dt with
       | None -> check "E: integrated run_changed produced a result" false
       | Some s ->
-        check "E: integrated 42 passed, 0 failed" (s.Fennec_dev.Dev_tests.total_passed = 42 && s.Fennec_dev.Dev_tests.total_failed = 0);
+        check "E: integrated run is green + scoped (>= 10 passed, 0 failed)"
+          (s.Fennec_dev.Dev_tests.total_passed >= 10 && s.Fennec_dev.Dev_tests.total_failed = 0);
         let warm = List.for_all (fun (r : Fennec_dev.Dev_tests.result) -> r.Fennec_dev.Dev_tests.via = Fennec_dev.Dev_tests.Warm) s.Fennec_dev.Dev_tests.results in
         check "E: integrated path took the WARM worker (not cold fallback)" warm;
         (match s.Fennec_dev.Dev_tests.results with

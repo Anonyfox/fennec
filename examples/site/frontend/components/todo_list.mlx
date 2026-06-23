@@ -44,3 +44,8 @@ let view =
          </li>)}
     </ul>
   </div>
+
+let%test "todo_list: input + add button, codec-driven maxlength=80, add disabled while the draft is invalid" =
+  let html = Fur.to_html (make () ()) in
+  let has = Fennec_hunt_unit.str_contains html in
+  has {|id="todo-input"|} && has {|id="add"|} && has {|maxlength="80"|} && has "disabled"

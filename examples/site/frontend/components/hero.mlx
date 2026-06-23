@@ -15,3 +15,8 @@ let make ~title ~subtitle () =
     <p className="hero-subtitle">{subtitle}</p>
     <a className="hero-cta" href="/about">Learn more</a>
   </section>
+
+let%test "hero: renders the section, the title + subtitle text, and the CTA" =
+  let html = Fur.to_html (make ~title:"Pricing" ~subtitle:"Free in beta" () ()) in
+  let has = Fennec_hunt_unit.str_contains html in
+  has {|class="hero"|} && has "Pricing" && has "Free in beta" && has "hero-cta"

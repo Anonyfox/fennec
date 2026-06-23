@@ -25,3 +25,8 @@ let make ?(label = "count") ?(start = 0) () =
     <span className="count">{!count}</span>
     <button className="cbtn inc" onClick=(count += 1)>+</button>
   </span>
+
+let%test "counter: renders the counter class, the label, the initial 0, and a scope attr" =
+  let html = Fur.to_html (make ~label:"seats" () ()) in
+  let has = Fennec_hunt_unit.str_contains html in
+  has {|class="counter"|} && has "seats:" && has ">0<" && has "data-fur="

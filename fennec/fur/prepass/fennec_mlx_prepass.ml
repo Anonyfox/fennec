@@ -241,7 +241,8 @@ let copy_comment st =
    ════════════════════════════════════════════════════════════════════════════════════════ *)
 
 (* JSX whitespace collapse for one bare-text run — the canonical React/Babel algorithm
-   (`cleanJSXElementLiteralChild`), which is what the existing `frontend_test` HTML asserts against:
+   (`cleanJSXElementLiteralChild`), which is what the components' inline `let%test` HTML assertions
+   check:
 
      · split on newlines;
      · strip the LEADING blank of every line except the first, and the TRAILING blank of every line

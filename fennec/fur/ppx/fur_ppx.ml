@@ -367,25 +367,29 @@ let rec componentize str =
     else str
   else if not (List.exists (item_defines "view") str) then str
   else begin
-    (* Transform A: no [make], a [view] — fold module-level setup + [view] into [make]. *)
-    let setup = ref [] and view_expr = ref None and others = ref [] in
-    List.iter (fun item -> match item.pstr_desc with
+    (* Transform A: no [make], a [view] — fold the module-level setup [let]s that PRECEDE [view] into
+       [make]'s body (run once per mount) and emit [make] AT [view]'s position. Every OTHER item —
+       [%%style], nested modules, types, and trailing inline [let%test]s — passes through unchanged in
+       source order. Emitting [make] in place (not appended last) is what lets a [let%test] written
+       BELOW the component reference the generated [make] (forward references don't resolve). *)
+    let setup = ref [] and emitted = ref false in
+    List.concat_map (fun item -> match item.pstr_desc with
       | Pstr_value (_, vbs) when List.exists (fun vb -> pat_name vb.pvb_pat = Some "view") vbs ->
         (match List.find_opt (fun vb -> pat_name vb.pvb_pat = Some "view") vbs with
-         | Some vb -> view_expr := Some vb.pvb_expr | None -> ())
-      | Pstr_value (rf, vbs) -> setup := (rf, vbs) :: !setup
-      | _ -> others := item :: !others) str;
-    match !view_expr with
-    | None -> str
-    | Some ve ->
-      let loc = ve.pexp_loc in
-      let render = [%expr fun () -> [%e ve]] in
-      (* lint the module-level setup bindings too (a [let x = get s] above [view] is the same
-         once-only footgun), then fold them in source order in front of the render thunk. *)
-      let body = List.fold_left
-          (fun body (rf, vbs) -> pexp_let ~loc rf (List.map lint_setup_binding vbs) body)
-          render !setup in
-      List.rev !others @ [ [%stri let make () = [%e body]] ]
+         | Some vb ->
+           let loc = vb.pvb_expr.pexp_loc in
+           let render = [%expr fun () -> [%e vb.pvb_expr]] in
+           (* lint the setup bindings ([let x = get s] above [view] is the same once-only footgun),
+              then fold them in source order in front of the render thunk. *)
+           let body = List.fold_left
+               (fun body (rf, vbs) -> pexp_let ~loc rf (List.map lint_setup_binding vbs) body)
+               render !setup in
+           emitted := true;
+           [ [%stri let make () = [%e body]] ]
+         | None -> [ item ])
+      | Pstr_value (rf, vbs) when not !emitted -> setup := (rf, vbs) :: !setup; []
+      | _ -> [ item ])
+      str
   end
 
 (* <template>…</template> block: a top-level JSX <template> expression. Rewrite it to

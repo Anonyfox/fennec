@@ -48,6 +48,25 @@ val derive :
 (** The full ordered object list the worker loads: [cmas] then [cmo]. *)
 val objects : t -> string list
 
+(** The byte [.cmo] of an [(inline_tests …)] runner, given its workspace-relative
+    [inline-test-runner.exe] target. dune generates the runner main into a fixed pseudo-exe [t], so the
+    object is [<dir>/.<lib>.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo]. Loading it runs the tests the
+    chain's library [.cma]s registered. *)
+val inline_runner_cmo : runner_target:string -> string
+
+(** [derive_inline … ~lib ~runner_target] — the warm chain for an [(inline_tests)] runner of [lib]:
+    {!derive}'s closure seeded by [lib] itself (so [lib]'s own [.cma] is in the chain), capped with
+    {!inline_runner_cmo} instead of an authored test module. *)
+val derive_inline :
+  ?build_prefix:string ->
+  describe:string ->
+  watch_roots:string list ->
+  preloaded:string list ->
+  lib:string ->
+  runner_target:string ->
+  unit ->
+  (t, error) result
+
 (** Parse the [library] entries out of a [dune describe workspace] document. Exposed for callers that
     want the graph directly; [derive] is the usual entry point. *)
 type lib = {

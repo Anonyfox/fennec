@@ -17,3 +17,24 @@ let make ~name ~url () =
     <p><a className="mailw-cta" href={url}>Confirm email</a></p>
     <p className="mailw-foot">— The Fennec team</p>
   </div>
+
+let%test_unit "email_welcome: renders through Fur_email with the app's installed styles — [%%style] inlined, var() build-resolved" =
+  let check = Fennec_hunt_unit.check in
+  Fur_email.install Site_styles.inline;
+  let mail = Fur_email.to_email (make ~name:"Ada" ~url:"https://x.test/confirm" () ()) in
+  let has = Fennec_hunt_unit.str_contains mail in
+  check "wrapper styles inlined from [%%style]" (has "max-width: 480px");
+  check "var(--brand) resolved to a literal at build time" (has "background: #e8590c");
+  check "no var() left in the output" (not (has "var("));
+  check "dynamic content rendered" (has "Welcome, Ada!");
+  check "href preserved" (has "https://x.test/confirm")
+
+(* the inlining engine in isolation (an explicit stylesheet by (scope, class)) — the machinery the email
+   above relies on: a matched scoped class flattens into style=, an unscoped element is left untouched. *)
+let%test_unit "fur_email engine: a matched (scope,class) decl inlines into style=, an unscoped element gets none" =
+  let check = Fennec_hunt_unit.check in
+  let ss = Fur_email.of_rules [ ("s1", "box", "color:red"); ("s1", "p", "margin:0") ] in
+  let boxed = Fur_email.to_email ~stylesheet:ss (Fur.h "div" [ Fur.attr "data-fur" "s1"; Fur.class_ "box" ] [ Fur.text "hi" ]) in
+  check "matched class decls land in style=" (Fennec_hunt_unit.str_contains boxed {|style="color:red"|});
+  let unscoped = Fur_email.to_email ~stylesheet:ss (Fur.h "div" [] [ Fur.text "x" ]) in
+  check "an unscoped element gets no style attr" (not (Fennec_hunt_unit.str_contains unscoped "style="))

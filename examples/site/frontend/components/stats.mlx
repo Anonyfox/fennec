@@ -5,3 +5,7 @@
 |scss}]
 
 let view = <div className="stats">todos in store: {List.length !Store.todos}</div>
+
+let%test "stats: reads the (empty) global store — 0 todos" =
+  let html = Fur.to_html (make () ()) in
+  Fennec_hunt_unit.str_contains html "todos in store: 0"

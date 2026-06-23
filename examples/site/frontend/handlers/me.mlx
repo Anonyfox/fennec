@@ -75,3 +75,19 @@ let view (p : t) =
 
     <a className="me-logout" href="/logout">Sign out</a>
   </main>
+
+(* the Mode-B contract: [view] renders the user's data PERSONALIZED server-side straight from its typed
+   payload (what [load] read off the Conn + seeded) — so the first paint is already personalized and the
+   same tree hydrates byte-identical. Here we feed [view] a payload directly (no Conn) and assert the SSR. *)
+let%test_unit "me (Mode B): the personalized server-render names the user, the role, and the verified email" =
+  let check = Fennec_hunt_unit.check in
+  let html =
+    Fur.to_html
+      (view { username = "alice"; roles = [ "admin" ];
+              emails = [ { Email.address = "alice@example.com"; verified = true } ] })
+  in
+  let has = Fennec_hunt_unit.str_contains html in
+  check "names the user" (has "Signed in as alice");
+  check "role rendered" (has "admin");
+  check "verified email rendered" (has "alice@example.com");
+  check "verified marker" (has "verified")

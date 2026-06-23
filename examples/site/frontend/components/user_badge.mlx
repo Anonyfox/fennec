@@ -52,3 +52,8 @@ let make () =
        </span>
      | Some u -> <span className="ub-hello">{"Hello, " ^ name u}</span>}
   </span>
+
+let%test "user_badge: the cacheable SSR frame is the anonymous one (Sign in / Guest, never personalized)" =
+  let html = Fur.to_html (make () ()) in
+  let has = Fennec_hunt_unit.str_contains html in
+  has {|class="user-badge"|} && has "Sign in" && has "Guest" && not (has "Hello,")

@@ -1,0 +1,18 @@
+; Inline-test backend for the example's frontend libraries (site_components, site_handlers, …). It is
+; the SAME as fennec-hunt.runner, except it scopes the run to tests whose file is under examples/site/.
+;
+; That scoping is a MONOREPO-ONLY need. Here the framework is compiled FROM SOURCE in the dev profile,
+; so its own inline let%test are present (not dropped) — and the app's runner links fennec.fur &c., so
+; without scoping the app's runner would also run the framework's hundreds of tests. A real downstream
+; app uses plain (backend fennec-hunt.runner): its `fennec` comes from opam, built released, so the
+; framework ships testless and there is nothing to scope out.
+;
+; (modules ()) — this library is only the backend declaration; it compiles no code of its own. The
+; sibling test/{http,system,browser,lean} suites are separate dune scopes, untouched by this.
+(library
+ (name site_test_runner)
+ (modules ())
+ (inline_tests.backend
+  (runner_libraries fennec-hunt.unit)
+  (generate_runner
+   (echo "let () = exit (Fennec_hunt_unit.run ~roots:[\"examples/site/\"] ())"))))

@@ -8,12 +8,22 @@
   fennec.fur
   fennec.fur.html
   fennec.fur.form
+  fennec.fur.server
   site_store
+  site_styles
   fennec.pulse.live.client
   fennec.accounts.client
   fennec-mongo.bson
   fennec.pulse.sift
-  fennec.pulse.sift.mongo)
+  fennec.pulse.sift.mongo
+  fennec-hunt.unit)
+ ; Each component carries its own inline let%test (render via Fur.to_html, assert on the HTML) right
+ ; below the component — the fur ppx expands them (it ships the hunt test rules), and dune generates the
+ ; runner. `fennec test` runs them; a release build drops every body to () (prod-lean), and the client
+ ; mirror below adds -fennec-drop-tests so they never reach the jsoo bundle. fennec.fur.server + site_styles
+ ; are TEST-ONLY deps here — email_welcome's test renders through Fur_email with the app's Site_styles.
+ (inline_tests
+  (backend site_test_runner))
  (preprocess
   (pps fennec.fur.ppx))
  (flags
@@ -41,7 +51,9 @@
    fennec-mongo.bson
    fennec.pulse.sift
    fennec.pulse.sift.mongo)
+  ; -fennec-drop-tests rewrites every inline let%test body to () BEFORE jsoo sees it, so the hunt test
+  ; runtime (and its unix dep) never bloats the browser bundle. The server lib above keeps the tests.
   (preprocess
-   (pps fennec.fur.ppx -data-client))
+   (pps fennec.fur.ppx -data-client -fennec-drop-tests))
   (flags
    (:standard -w -a -open Fur))))

@@ -212,25 +212,29 @@ let targets t = List.map (fun (r : runner) -> r.target) (ensure t)
 
 (* The warm worker loads a BYTECODE build of the test, which a native-only [(test)] stanza doesn't
    produce. The convention: a conventional test [<dir>/<name>.exe] has a byte MIRROR exe at
-   [<dir>/byte/<name>.exe] (the same source compiled byte-only into a sibling dir — see e.g.
-   examples/site/frontend_test/dune). That keeps `@runtest`/`fennec test` running ONLY the native test
-   (a byte (test) would double-run the suite + need CAML_LD_LIBRARY_PATH). A test WITHOUT a byte mirror
-   simply has no warm chain ⇒ cold fallback. *)
+   [<dir>/byte/<name>.exe] (the same source compiled byte-only into a sibling dir — the byte-mirror
+   convention a conventional dev-loop [(test)] follows). That keeps `@runtest`/`fennec test` running
+   ONLY the native test (a byte (test) would double-run the suite + need CAML_LD_LIBRARY_PATH). A test
+   WITHOUT a byte mirror simply has no warm chain ⇒ cold fallback. *)
 let byte_mirror_target tg =
   (* <dir>/<name>.exe → <dir>/byte/<name>.exe *)
   let dir = Filename.dirname tg and base = Filename.basename tg in
   Filename.concat (Filename.concat dir "byte") base
 
-(* the BYTECODE targets the warm worker needs built alongside the native runners: each conventional
-   [(test)] runner's byte-mirror [.bc]. It transitively pulls the test's own .cmo AND the app libs'
-   .cma's. Inline-test runners (…/inline-test-runner.exe) are skipped (no mirror ⇒ cold). Adding these
-   to the watch means a green settle has the byte artifacts ready when the worker loads them. Only
-   meaningful when a worker is active; the supervisor merges them into the watch only then. *)
+(* the BYTECODE targets the warm worker needs built alongside the native runners. Two shapes:
+   - a conventional [(test)] runner ⇒ its byte-mirror [.bc] ([<dir>/byte/<name>.bc]), which transitively
+     pulls the test's own .cmo AND the app libs' .cma's;
+   - an [(inline_tests)] runner ⇒ the dune-generated runner's byte [.cmo]
+     ({!Test_chain.inline_runner_cmo}), which pulls the tested lib's byte [.cma] (carrying its
+     registrations) and that lib's deps.
+   Adding these to the watch means a green settle has the byte artifacts ready when the worker loads
+   them. Only meaningful when a worker is active; the supervisor merges them into the watch only then. *)
 let byte_targets t =
   ensure t
   |> List.filter_map (fun (r : runner) ->
          let tg = r.target in
-         if ends_with "/inline-test-runner.exe" tg || tg = "inline-test-runner.exe" then None
+         if ends_with "/inline-test-runner.exe" tg || tg = "inline-test-runner.exe" then
+           Some (Test_chain.inline_runner_cmo ~runner_target:tg)
          else if ends_with ".exe" tg then
            let m = byte_mirror_target tg in
            Some (String.sub m 0 (String.length m - 4) ^ ".bc")
@@ -407,22 +411,33 @@ let chain_for t (r : runner) : (Test_chain.t, string) Stdlib.result =
     let result =
       match fetch_describe t with
       | None -> Error "no dune describe"
-      | Some describe -> (
-        (* libs come from the NATIVE test's dune (the (test … (libraries …)) stanza); the test .cmo
-           comes from the BYTE MIRROR (<dir>/byte/<name>.exe → its eobjs), since the native test has no
-           bytecode object. The mirror must exist (built via byte_targets) or the worker run fails →
-           cold fallback. *)
-        let dune_path = Filename.concat (Filename.concat t.root (Filename.dirname r.target)) "dune" in
-        let dune_text = try In_channel.with_open_text dune_path In_channel.input_all with _ -> "" in
-        match libraries_from_dune dune_text ~exe:(Filename.remove_extension (Filename.basename r.target)) with
-        | [] -> Error "could not read the test's (libraries …)"
-        | test_libs -> (
-          match
-            Test_chain.derive ~build_prefix:(Build_dir.describe_prefix ~root:t.root) ~describe ~watch_roots:t.watch_roots
-              ~preloaded:Test_worker.preloaded ~test_libs ~target:(byte_mirror_target r.target) ()
-          with
-          | Ok chain -> Ok chain
-          | Error e -> Error (Test_chain.error_to_string e)))
+      | Some describe ->
+        if ends_with "/inline-test-runner.exe" r.target || r.target = "inline-test-runner.exe" then
+          (* an (inline_tests) runner: the chain is the tested LIBRARY [r.lib] (its .cma carries the
+             registrations) + its app-local deps, capped by the dune-generated runner .cmo. No dune to
+             parse — the lib name comes straight off the .<lib>.inline-tests dir name. *)
+          (match
+             Test_chain.derive_inline ~build_prefix:(Build_dir.describe_prefix ~root:t.root) ~describe
+               ~watch_roots:t.watch_roots ~preloaded:Test_worker.preloaded ~lib:r.lib ~runner_target:r.target ()
+           with
+           | Ok chain -> Ok chain
+           | Error e -> Error (Test_chain.error_to_string e))
+        else (
+          (* a conventional [(test)]: libs come from its dune's (test … (libraries …)) stanza; the test
+             .cmo comes from the BYTE MIRROR (<dir>/byte/<name>.exe → its eobjs), since the native test
+             has no bytecode object. The mirror must exist (built via byte_targets) or the worker run
+             fails → cold fallback. *)
+          let dune_path = Filename.concat (Filename.concat t.root (Filename.dirname r.target)) "dune" in
+          let dune_text = try In_channel.with_open_text dune_path In_channel.input_all with _ -> "" in
+          match libraries_from_dune dune_text ~exe:(Filename.remove_extension (Filename.basename r.target)) with
+          | [] -> Error "could not read the test's (libraries …)"
+          | test_libs -> (
+            match
+              Test_chain.derive ~build_prefix:(Build_dir.describe_prefix ~root:t.root) ~describe ~watch_roots:t.watch_roots
+                ~preloaded:Test_worker.preloaded ~test_libs ~target:(byte_mirror_target r.target) ()
+            with
+            | Ok chain -> Ok chain
+            | Error e -> Error (Test_chain.error_to_string e)))
     in
     (* breadcrumb: when a worker is up but a runner can't warm-path, say why ONCE (cached ⇒ once per
        target). Makes "why did my test run cold?" debuggable instead of silent. *)
@@ -490,26 +505,26 @@ let run_changed t =
   end
 
 let%test "parses conventional dune test names" =
-  test_names_from_dune "(test\n (name test_components)\n (libraries fennec.fur))\n"
-  = [ "test_components" ]
+  test_names_from_dune "(test\n (name widget_test)\n (libraries fennec.fur))\n"
+  = [ "widget_test" ]
 
 let%test "discovers conventional unit test targets under watched roots" =
   let root = Filename.concat (Filename.get_temp_dir_name ()) ("fennec-dev-tests-" ^ string_of_int (Unix.getpid ())) in
-  let app = Filename.concat root "examples/site/frontend_test" in
+  let app = Filename.concat root "examples/site/widget_test" in
   let rec mkdir_p dir =
     if dir = "" || dir = "." || dir = "/" || Sys.file_exists dir then ()
     else (mkdir_p (Filename.dirname dir); Unix.mkdir dir 0o755)
   in
   mkdir_p app;
   Out_channel.with_open_text (Filename.concat app "dune") (fun oc ->
-      output_string oc "(test\n (name test_components)\n (modules test_components))\n");
+      output_string oc "(test\n (name widget_test)\n (modules widget_test))\n");
   let runners = discover root [ "examples/site" ] in
   let ok =
     List.exists
       (fun (r : runner) ->
-        r.lib = "frontend_test"
-        && r.target = "examples/site/frontend_test/test_components.exe"
-        && Filename.basename r.exe = "test_components.exe")
+        r.lib = "widget_test"
+        && r.target = "examples/site/widget_test/widget_test.exe"
+        && Filename.basename r.exe = "widget_test.exe")
       runners
   in
   (try Sys.remove (Filename.concat app "dune") with _ -> ());
@@ -521,17 +536,17 @@ let%test "discovers conventional unit test targets under watched roots" =
 
 let%test "libraries_from_dune reads a (test) stanza's libraries by exe name" =
   let text =
-    "(test\n (name test_components)\n (modes byte exe)\n (modules test_components)\n (libraries fennec.fur fennec.fur.server site_components site_store))\n\
-     (executable (name snapshot_html) (libraries other_lib))\n"
+    "(test\n (name widget_test)\n (modes byte exe)\n (modules widget_test)\n (libraries fennec.fur fennec.fur.server site_components site_store))\n\
+     (executable (name other_exe) (libraries other_lib))\n"
   in
-  libraries_from_dune text ~exe:"test_components"
+  libraries_from_dune text ~exe:"widget_test"
   = [ "fennec.fur"; "fennec.fur.server"; "site_components"; "site_store" ]
 
 let%test "libraries_from_dune picks the RIGHT stanza when several exes share a dune" =
   let text =
-    "(test (name test_components) (libraries a b))\n(executable (name snapshot_html) (libraries c d))\n"
+    "(test (name widget_test) (libraries a b))\n(executable (name other_exe) (libraries c d))\n"
   in
-  libraries_from_dune text ~exe:"snapshot_html" = [ "c"; "d" ]
+  libraries_from_dune text ~exe:"other_exe" = [ "c"; "d" ]
 
 let%test "libraries_from_dune handles a (tests (names …)) plural stanza" =
   let text = "(tests (names foo bar) (libraries x y))\n" in
@@ -540,15 +555,16 @@ let%test "libraries_from_dune handles a (tests (names …)) plural stanza" =
 let%test "libraries_from_dune returns [] for an unknown exe (⇒ cold fallback)" =
   libraries_from_dune "(test (name a) (libraries z))" ~exe:"nope" = []
 
-let%test "byte_targets maps conventional .exe runners to the byte-mirror .bc and skips inline runners" =
+let%test "byte_targets: conventional .exe → byte-mirror .bc; (inline_tests) runner → its generated byte .cmo" =
   let t = create ~watch_roots:[ "x" ] ~root:"/r" () in
   t.runners <-
     Some
-      [ { lib = "frontend_test"; exe = "/r/_build/default/x/ft/test_components.exe"; target = "x/ft/test_components.exe" };
+      [ { lib = "widget_test"; exe = "/r/_build/default/x/wt/widget_test.exe"; target = "x/wt/widget_test.exe" };
         { lib = "some_lib"; exe = "/r/_build/default/x/.some_lib.inline-tests/inline-test-runner.exe";
           target = "x/.some_lib.inline-tests/inline-test-runner.exe" } ];
-  byte_targets t = [ "x/ft/byte/test_components.bc" ]
+  byte_targets t
+  = [ "x/wt/byte/widget_test.bc"; "x/.some_lib.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo" ]
 
 let%test "byte_mirror_target puts the byte exe in a sibling byte/ dir" =
-  byte_mirror_target "examples/site/frontend_test/test_components.exe"
-  = "examples/site/frontend_test/byte/test_components.exe"
+  byte_mirror_target "examples/site/widget_test/widget_test.exe"
+  = "examples/site/widget_test/byte/widget_test.exe"

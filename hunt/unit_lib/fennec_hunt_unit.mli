@@ -53,8 +53,16 @@ val str_contains : string -> string -> bool
 
 (** Run every registered test. Returns [0] if all passed, [1] otherwise. Filters by
     [--grep] from [Sys.argv] (substring match on the test name, same semantics as
-    {!Http} and {!Live}). *)
-val run : unit -> int
+    {!Http} and {!Live}).
+
+    [?roots] scopes the run to tests whose source file matches one of the given path
+    fragments (substring, so it tolerates absolute vs workspace-relative paths). The
+    default [[]] runs everything — the right choice for a per-library runner, whose
+    registry only holds its own (+ its deps') tests. An APP runner built in a monorepo
+    where the framework is compiled from source (so its inline tests are present, not
+    dropped) passes its own roots (e.g. [["examples/site/"]]) to run ONLY the app's
+    tests, never the framework's — the same way a released/opam build never sees them. *)
+val run : ?roots:string list -> unit -> int
 
 (** How many tests are registered (for diagnostics / dry-run). *)
 val count : unit -> int
