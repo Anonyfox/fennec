@@ -20,15 +20,19 @@ examples/site/
       rest__.mlx         catch-all / not_found (web app)
       main.scss          the ONE external stylesheet: global/base + design tokens (CSS vars)
     components/        shared single-file components — markup + colocated [%%style] + inline
-                       `let%test` (render via Fur.to_html) ALL in one .mlx, impossible to miss
-    store/             global state (Store.todos …) — shared signals, plain .ml
+                       `let%test` (render via Fur.to_html) ALL in one .mlx, impossible to miss.
+      marketing/hero.mlx   GROUP INTO SUBFOLDERS FREELY — no dune anywhere under here. The whole
+      forms/name_form.mlx  tree folds into one lib, FLAT namespace (<Hero/> wherever hero.mlx sits).
+    store/             global state (Store.todos …) — shared signals; nests the same way
     styles/            GENERATED: style_extract → Site_styles.css (inlined component styles)
-    templates/         server-only document shells (default, admin_shell)
-    handlers/          standalone HANDLERS, one .mlx each, mounted in server.ml: an SPA handler
-                       (load/view, own jsoo bundle — greet.mlx) OR a server-rendered FORM handler
-                       (view/submit, no bundle, redirect/re-render with preserved input — hello.mlx)
-  _client/             GENERATED per-app jsoo client bundles — build plumbing, do NOT edit (the
-                       leading _ = generated, like _build/; see _client/README.md)
+    templates/         server-only document shells (default, admin_shell); nests the same way
+    handlers/          standalone HANDLERS, one .mlx each, mounted in server.ml — an SPA handler
+                       (load/view, own jsoo bundle) or a server-rendered FORM handler (view/submit).
+      demo/greet.mlx     also nests freely (Site_handlers.Greet wherever greet.mlx sits)
+      account/me.mlx
+  _client/             GENERATED — build plumbing, do NOT edit (leading _ = generated, like _build/).
+                       Holds the dual-compile mirrors (components, templates, handlers/mirror) + the
+                       per-app/-handler jsoo bundles, all auto-regenerated. See _client/README.md.
   test/                the ONE test dir (component unit tests live inline in their .mlx, not here):
     dune                 the site_test_runner backend — scopes inline tests to examples/site/
     http/                Http suites (fennec-hunt);            `fennec test http`
@@ -44,6 +48,13 @@ examples/site/
   a page recompiles just that module. `route_gen --glue` reads the file tree and emits
   the wiring — `routes.ml` (router + mount) and `paths.ml` (typed path builders) — without
   ever inlining your source.
+- **Group into subfolders freely — zero config.** Every authored category (`components`,
+  `handlers`, `store`, `templates`) uses `(include_subdirs unqualified)`: drop a file into any
+  subfolder, **no dune anywhere under it**, and it folds into the one library with a FLAT module
+  namespace — a file's name is its module wherever it sits (`<Hero/>` whether `hero.mlx` is at the
+  root or in `marketing/`). The only rule: no two files share a basename across subfolders (dune
+  says so plainly if you slip). The `-data-client`/`-conn-client` browser mirror of the nested tree
+  regenerates itself (`route_gen --mirror`) into `_client/` — you never touch it.
 - **Strict per-app bundle isolation.** Separate app libs mean the web client bundle never
   links the admin app's code (asserted by the browser suite). Each app's client boot is generated
   (`route_gen --boots`), so there are no hand-written entry files.
