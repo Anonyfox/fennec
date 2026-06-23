@@ -110,6 +110,14 @@ let loc_str e =
   if e.file = "" then "" else Printf.sprintf " %s(%s:%d)%s" (color "2" "") e.file e.line (color "0" "")
 
 let run () =
+  (* A test run is a DEVELOPMENT context, never production — declare it once, before any test body
+     runs. The framework decides dev-vs-prod from how the binary was built (Paw.Dev_proto.is_dev), but
+     a test runner can be NATIVE just like a release, so the build alone can't tell them apart; this is
+     the robust signal that it can't (the runtime that runs the tests sets it, independent of the
+     runner's name or backend). We never override an explicit FENNEC_ENV — a test that wants to exercise
+     production behaviour sets it itself. ([FENNEC_ENV] is the framework's env name; hard-coded here so
+     this minimal runtime keeps its dependency-free footprint.) *)
+  (match Sys.getenv_opt "FENNEC_ENV" with Some s when s <> "" -> () | _ -> Unix.putenv "FENNEC_ENV" "development");
   let tests = List.rev !registered in
   let n = List.length tests in
   let passed = ref 0 and failed = ref 0 and skipped = ref 0 in

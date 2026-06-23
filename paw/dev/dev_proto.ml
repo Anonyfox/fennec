@@ -29,7 +29,13 @@ let env_parallelism = "FENNEC_PARALLELISM" (* optional worker-domain (per-core) 
    ⇒ dev, native ⇒ prod. FENNEC_ENV is an explicit override either way. One home for the rule so the
    facade / server / logger never diverge. (js_of_ocaml is Other _ ⇒ dev, but the client never calls
    this — it is a server-side decision.) [is_dev_for] is the pure core, split out so the decision matrix
-   is unit-testable without mutating the process environment. *)
+   is unit-testable without mutating the process environment.
+
+   The THIRD context — a `fennec test` / `dune runtest` run — is also development, but its runner is
+   NATIVE (like a release), so the build alone can't tell test from prod. That is resolved at the right
+   layer: the test runtime ({!Fennec_hunt_unit.run}) sets FENNEC_ENV=development before any test body
+   runs, which lands in the [Some "development"] case below. (Doing it there is robust to dune running
+   the tests through more than one executable, which a name/path heuristic here is not.) *)
 let is_dev_for ~env_value ~(backend : Sys.backend_type) : bool =
   match env_value with
   | Some "production" -> false
@@ -44,7 +50,7 @@ let%test "no override: a native build defaults to PRODUCTION (a release just wor
 let%test "no override: a bytecode build defaults to development (the dev loop)" =
   is_dev_for ~env_value:None ~backend:Sys.Bytecode = true
 
-let%test "FENNEC_ENV=development overrides a native build back to dev" =
+let%test "FENNEC_ENV=development overrides a native build back to dev (and is how a test run reports dev)" =
   is_dev_for ~env_value:(Some "development") ~backend:Sys.Native = true
 
 let%test "FENNEC_ENV=production overrides a bytecode build to prod" =
@@ -55,6 +61,10 @@ let%test "an unrecognized FENNEC_ENV falls back to the build default" =
 
 let%test "js_of_ocaml (Other) is treated as dev" =
   is_dev_for ~env_value:None ~backend:(Sys.Other "js_of_ocaml") = true
+
+(* the test runtime sets FENNEC_ENV=development before any body runs (see Fennec_hunt_unit.run), so the
+   live decision reports development here — proof the "tests are a dev context" wiring actually fires. *)
+let%test "live: is_dev () is true inside the test runner (FENNEC_ENV=development set by the runtime)" = is_dev ()
 
 (* the per-suite target URL `fennec test` sets so each suite hits its own isolated instance.
    MIRROR of Fennec_hunt.Test_proto.env_url (the suite side) — the two live in independent
