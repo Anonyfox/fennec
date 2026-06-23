@@ -125,3 +125,34 @@ CAMLprim value fennec_bk_watch_free(value handle) {
   fennec_watch_free((void *)Nativeint_val(handle));
   CAMLreturn(Val_unit);
 }
+
+/* ---- image processing (Rust staticlib) ---- */
+/* Binary in/out (the payload is image bytes, not a C string), so we carry an explicit length like the
+   esbuild rebuild path rather than the CSS copy_and_free. On error the Rust side writes a message into
+   err and returns NULL with out_len < 0. */
+
+extern unsigned char *fennec_image_process(const unsigned char *input, int input_len, const char *format,
+                                           const char *opts, int *out_len, char *err_buf, int err_cap);
+extern void fennec_image_free(unsigned char *ptr, int len);
+
+CAMLprim value fennec_bk_image_process(value input, value format, value opts) {
+  CAMLparam3(input, format, opts);
+  CAMLlocal1(res);
+  int out_len = 0;
+  char err[1024];
+  err[0] = '\0';
+  unsigned char *out =
+      fennec_image_process((const unsigned char *)Bytes_val(input), (int)caml_string_length(input),
+                           String_val(format), String_val(opts), &out_len, err, (int)sizeof(err));
+  if (out == NULL || out_len < 0) {
+    char buf[1024];
+    strncpy(buf, err[0] ? err : "image: processing failed", sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    if (out) fennec_image_free(out, 0);
+    caml_failwith(buf);
+  }
+  res = caml_alloc_string(out_len);
+  memcpy((char *)Bytes_val(res), out, out_len);
+  fennec_image_free(out, out_len);
+  CAMLreturn(res);
+}

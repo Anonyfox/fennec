@@ -17,6 +17,7 @@
   fennec_console
   fennec_dev
   fennec_release
+  fennec_image
   fennec_fastlane
   fennec_testcmd
   fennec_docs

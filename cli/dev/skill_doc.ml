@@ -16,6 +16,7 @@ let render () =
       "fennec test docs               # doc coverage, warn-only by default";
       "fennec build INPUT...          # native JS/CSS/SCSS bundling";
       "fennec release                 # build + verify + stage a production deployable";
+      "fennec image in.jpg out.webp   # convert/resize/favicon images (no ImageMagick)";
       "fennec doctor                  # check the .mlx toolchain when a frontend app won't build";
       "```";
       "";

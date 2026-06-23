@@ -125,3 +125,18 @@ module Watch = struct
 
   let free (h : t) : unit = _free h
 end
+
+(** Local image processing — decode a common format, optionally resize / center-crop, and re-encode to
+    a web format. Powers the [fennec image] subcommand via the vendored Rust [image] + libwebp engine.
+    The {e typed} surface (formats, geometry, fit) lives in the [fennec_image] library; here we expose
+    only the raw binary seam: encoded input bytes + a target-format name + a [k=v;…] options string in,
+    encoded bytes out. *)
+module Image = struct
+  external _process : bytes -> string -> string -> bytes = "fennec_bk_image_process"
+
+  (** [process ~input ~format ~opts] decodes [input] (by content), applies [opts] — e.g.
+      ["w=800;h=600;fit=cover;q=80;strip=1"], any subset, an absent key keeping the default — and
+      re-encodes to [format] (one of ["jpeg"] / ["png"] / ["gif"] / ["webp"] / ["ico"]).
+      @raise Failure with the engine's message on a decode/encode error. *)
+  let process ~(input : bytes) ~(format : string) ~(opts : string) : bytes = _process input format opts
+end

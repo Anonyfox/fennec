@@ -1,0 +1,10 @@
+; `fennec image` — local image processing, as a clean isolated library of small typed modules: Format /
+; Geometry / Op (pure, type-system-enforced), Engine (the one FFI boundary into the vendored Rust image
+; engine via fennec_buildkit), and Favicon (the icon set). The CLI `image` subcommand is a thin call in.
+(library
+ (name fennec_image)
+ (libraries fennec_buildkit unix fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

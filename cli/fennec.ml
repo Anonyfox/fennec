@@ -393,6 +393,103 @@ let release_cmd =
   Cmd.v (Cmd.info "release" ~doc ~man)
     Term.(const go $ outdir_arg $ docker_arg $ no_strip_arg $ check_arg $ target_arg $ image_arg $ build_image_arg)
 
+(* `fennec image` — local image processing (convert / resize / centre-crop / strip + favicons), powered
+   by the vendored Rust image engine. A standalone tool: nothing here touches the Fennec framework. The
+   typed core lives in the isolated [fennec_image] library; this is just the cmdliner shell. The flags
+   parse straight into the typed [Format.t] / [Geometry.t] (via [Arg.conv]) so the rest stays total. *)
+module Img = Fennec_image
+
+let image_cmd =
+  let format_conv =
+    let parse s =
+      match Img.Format.of_string s with
+      | Some f -> Ok f
+      | None -> Error (`Msg (Printf.sprintf "unknown image format %S (try jpg, png, gif, webp, or ico)" s))
+    in
+    Arg.conv ~docv:"FMT" (parse, fun ppf f -> Format.fprintf ppf "%s" (Img.Format.to_string f))
+  in
+  let geometry_conv =
+    let parse s = match Img.Geometry.of_string s with Ok g -> Ok g | Error m -> Error (`Msg m) in
+    let print ppf = function
+      | Img.Geometry.Width w -> Format.fprintf ppf "%d" w
+      | Img.Geometry.Height h -> Format.fprintf ppf "x%d" h
+      | Img.Geometry.Box (w, h) -> Format.fprintf ppf "%dx%d" w h
+    in
+    Arg.conv ~docv:"GEOM" (parse, print)
+  in
+  let positionals = Arg.(value & pos_all string [] & info [] ~docv:"INPUT [OUTPUT]" ~doc:"Source image then optional output path; or $(b,favicon INPUT).") in
+  let out_flag = Arg.(value & opt (some string) None & info [ "o"; "out" ] ~docv:"PATH" ~doc:"Output path (convert) or output directory (favicon); alternative to the OUTPUT positional.") in
+  let format_arg =
+    Arg.(
+      value
+      & opt (some format_conv) None
+      & info [ "f"; "format" ] ~doc:"Output format ($(b,jpg)|$(b,png)|$(b,gif)|$(b,webp)|$(b,ico)); else inferred from the output extension.")
+  in
+  let resize_arg =
+    Arg.(
+      value
+      & opt (some geometry_conv) None
+      & info [ "r"; "resize" ] ~doc:"Resize: $(b,800) (width), $(b,x600) (height), or $(b,800x600) (box; aspect preserved).")
+  in
+  let fit_arg =
+    Arg.(
+      value
+      & opt (enum [ ("contain", Img.Op.Contain); ("cover", Img.Op.Cover) ]) Img.Op.Contain
+      & info [ "fit" ] ~doc:"For a $(b,WxH) box: $(b,contain) (fit inside, default) or $(b,cover) (fill + centre-crop).")
+  in
+  let quality_arg = Arg.(value & opt (some int) None & info [ "q"; "quality" ] ~docv:"N" ~doc:"Quality 1-100 for lossy formats (jpeg/webp); a sane per-format default otherwise.") in
+  let strip_arg = Arg.(value & flag & info [ "s"; "strip" ] ~doc:"Drop metadata (EXIF / XMP / ICC).") in
+  let convert ~input ~output ~format ~resize ~fit ~quality ~strip =
+    match (match format with Some f -> Some f | None -> Option.bind output Img.Format.of_extension) with
+    | None -> Printf.eprintf "fennec image: no output format — give an OUTPUT path with a known extension, or pass -f FORMAT\n%!"; 1
+    | Some format ->
+      let output = match output with Some o -> o | None -> Filename.remove_extension input ^ "." ^ Img.Format.extension format in
+      let op = { Img.Op.resize; fit; quality; strip } in
+      ( match Img.Engine.process_file ~input ~output ~format ~op with
+        | Ok () -> Printf.printf "wrote %s\n%!" output; 0
+        | Error e -> Printf.eprintf "fennec image: %s\n%!" e; 1 )
+  in
+  let favicon ~input ~dir =
+    match Img.Engine.read_file input with
+    | Error e -> Printf.eprintf "fennec image: %s\n%!" e; 1
+    | Ok bytes -> (
+      match Img.Favicon.generate ~input:bytes ~dir with
+      | Error e -> Printf.eprintf "fennec image: %s\n%!" e; 1
+      | Ok snippet -> Printf.printf "wrote the favicon set to %s/\n\nadd to your <head>:\n%s\n%!" dir snippet; 0)
+  in
+  (* ONE command, dispatching `favicon` off the first positional — so `fennec image in.jpg out.webp`
+     just works (a cmdliner group's default term can't absorb positionals that look like a subcommand). *)
+  let go positionals out_flag format resize fit quality strip =
+    match positionals with
+    | "favicon" :: rest -> (
+      match rest with
+      | input :: _ -> favicon ~input ~dir:(Option.value out_flag ~default:".")
+      | [] -> Printf.eprintf "fennec image favicon: needs an INPUT image\n%!"; 1)
+    | input :: rest ->
+      let output = match out_flag with Some _ -> out_flag | None -> ( match rest with o :: _ -> Some o | [] -> None) in
+      convert ~input ~output ~format ~resize ~fit ~quality ~strip
+    | [] -> Printf.eprintf "fennec image: needs an INPUT (plus an OUTPUT path or -f FORMAT) — see `fennec image --help`\n%!"; 1
+  in
+  let doc = "Convert, resize, and optimize images — and build favicons" in
+  let man =
+    [ `S Manpage.s_description;
+      `P
+        "Local image processing, batteries included: convert between $(b,jpg)/$(b,png)/$(b,gif)/$(b,webp)/\
+         $(b,ico), resize, centre-crop, and strip metadata — powered by a native engine linked into the \
+         CLI, with no ImageMagick or node tooling to install. The output format comes from the OUTPUT \
+         extension (or $(b,-f)).";
+      `P
+        "$(b,fennec image favicon INPUT) instead generates the favicon set (ico + apple-touch + PWA \
+         192/512 + manifest) into $(b,-o DIR) and prints the $(b,<head>) snippet.";
+      `S Manpage.s_examples;
+      `Pre "  fennec image in.jpg out.webp                        # convert";
+      `Pre "  fennec image hero.jpg hero.webp -r 1280 -q 80       # resize to 1280 wide, quality 80";
+      `Pre "  fennec image in.png out.webp -r 800x600 --fit cover # fill + centre-crop";
+      `Pre "  fennec image photo.jpg -f webp                      # -> photo.webp";
+      `Pre "  fennec image favicon logo.png -o public/            # the favicon set + <head> snippet" ]
+  in
+  Cmd.v (Cmd.info "image" ~doc ~man) Term.(const go $ positionals $ out_flag $ format_arg $ resize_arg $ fit_arg $ quality_arg $ strip_arg)
+
 let dev_cmd =
   let target_arg =
     let doc = "Override the dune target(s) to build and watch (default: derived from the server)." in
@@ -1115,6 +1212,6 @@ let main_cmd =
        markdown when piped). `fennec skill` keeps the canonical raw markdown for agents. *)
     Term.(const (fun () -> print_string (Fennec_dev.Skill_doc.render_human ()); 0) $ const ())
   in
-  Cmd.group info ~default [ build_cmd; release_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; console_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
+  Cmd.group info ~default [ build_cmd; release_cmd; image_cmd; dev_cmd; new_cmd; clean_cmd; discover_cmd; console_cmd; doctor_cmd; agent_cmd; skill_cmd; test_cmd; gen_doctests_cmd; worker_cmd; mlx_pp_cmd ]
 
 let () = exit (Cmd.eval' main_cmd)

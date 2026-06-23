@@ -1,6 +1,11 @@
 //! CSS/SCSS for Fennec: SCSS (grass: vars, mixins, @for, functions) -> optimize,
 //! flatten nesting, reduce calc, minify, autoprefix-via-targets (Lightning CSS).
 //! Exposed as a C staticlib statically linked into the OCaml binary.
+//!
+//! This staticlib also carries fs-watching (`notify`, for the dev supervisor) and local image
+//! processing (`mod image`, for `fennec image`). Each is an isolated `#[no_mangle]` C surface.
+
+mod image;
 use lightningcss::stylesheet::{MinifyOptions, ParserOptions, PrinterOptions, StyleSheet};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::ffi::{CStr, CString};

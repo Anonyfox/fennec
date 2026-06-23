@@ -24,3 +24,8 @@ grass = { version = "0.13", default-features = false }
 # same crate cargo-watch/watchexec use. Powers the CLI dev supervisor's EVENTED
 # watch of the built server exe (no polling). Vendored into the static archive.
 notify = "6"
+# Local image processing (the `fennec image` subcommand): decode any common format,
+# resize/crop, re-encode. Pure-Rust core (`image`) + libwebp (`webp`) for lossy WebP.
+# AVIF is intentionally left out for now (its rav1e encoder is the heaviest crate).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico", "bmp", "webp"] }
+webp = { version = "0.3", default-features = false }

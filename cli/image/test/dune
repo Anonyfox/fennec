@@ -1,0 +1,6 @@
+; Integration test: drive the typed Fennec_image API on a real (hand-built) image through the vendored
+; Rust engine — proving the whole FFI roundtrip + favicon generation, not just the pure parts.
+(test
+ (name test_image)
+ (modes native)
+ (libraries fennec_image unix))
