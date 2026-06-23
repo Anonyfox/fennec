@@ -329,8 +329,29 @@ let release_cmd =
       & info [ "check" ]
           ~doc:"Build and verify only (prod-lean + an embedded web root); stage nothing and write nothing — a CI / pre-deploy gate.")
   in
-  let go outdir docker no_strip check =
-    Fennec_release.Release.run { outdir; docker; strip = not no_strip; check_only = check }
+  let target_arg =
+    Arg.(
+      value & opt_all string []
+      & info [ "target" ] ~docv:"PLATFORM"
+          ~doc:
+            "Cross-build for a platform via Docker, e.g. $(b,linux/amd64) or $(b,linux/arm64) (repeatable, \
+             or comma-separated). The binary lands in $(b,./dist/<os-arch>/). Omit to build for this host. \
+             Only Linux targets are Docker-buildable; macOS/Windows need a native host or CI.")
+  in
+  let image_arg =
+    Arg.(
+      value & opt (some string) None
+      & info [ "image" ] ~docv:"TAG"
+          ~doc:"With $(b,--target), build a slim runtime Docker image tagged $(i,TAG) instead of a loose binary (a per-arch suffix is added for multiple targets).")
+  in
+  let build_image_arg =
+    Arg.(
+      value & opt (some string) None
+      & info [ "build-image" ] ~docv:"IMG"
+          ~doc:"The base image cross-builds compile inside (default a self-contained $(b,ocaml/opam) recipe). Point at a pre-baked image to skip the toolchain install — see the cross-build docs.")
+  in
+  let go outdir docker no_strip check targets image build_image =
+    Fennec_release.Release.run { outdir; docker; strip = not no_strip; check_only = check; targets; image; build_image }
   in
   let doc = "Build, verify, and stage a production deployable" in
   let man =
@@ -348,9 +369,20 @@ let release_cmd =
          the binary needs (a $(b,MONGO_URL), the port). There is no mode flag to remember — the native \
          binary is production by default (Fennec keys dev/prod off bytecode-vs-native, not an env var).";
       `S Manpage.s_examples;
-      `Pre "  fennec release                 # build, verify, strip, stage ./dist/<server>";
-      `Pre "  fennec release --docker        # also emit a runtime Dockerfile";
-      `Pre "  fennec release --check         # verify only (CI gate); stage nothing";
+      `Pre "  fennec release                       # build, verify, strip, stage ./dist/<server>";
+      `Pre "  fennec release --docker              # also emit a runtime Dockerfile";
+      `Pre "  fennec release --check               # verify only (CI gate); stage nothing";
+      `Pre "  fennec release --target linux/amd64  # cross-build (Docker) -> ./dist/linux-amd64/<server>";
+      `Pre "  fennec release --target linux/amd64,linux/arm64 --image myapp:1   # deployable images";
+      `S "CROSS-COMPILATION";
+      `P
+        "With $(b,--target) the build runs $(i,inside) a Docker image of the target platform (buildx) and \
+         the result is extracted to $(b,./dist/<os-arch>/) — the robust path, since OCaml's native \
+         cross-compilation with C stubs is impractical. Docker reaches $(b,linux/amd64) and \
+         $(b,linux/arm64); macOS and Windows have no buildable containers, so build those on a native \
+         host (a Mac makes the macOS binary directly) or a CI matrix. The first cross-build is slow (it \
+         installs the toolchain and compiles every dependency); buildx caches layers, and \
+         $(b,--build-image) can point at a pre-baked image to skip the toolchain install.";
       `S "WHAT SHIPS";
       `P
         "A single self-contained native binary, production by default. For a web app the JS/CSS/static \
@@ -358,7 +390,8 @@ let release_cmd =
          web root. Run it with a $(b,MONGO_URL) (or none, for an in-memory backend) — no mode flag. \
          $(b,FENNEC_ENV=development) is available only if you want to run the native build in dev mode." ]
   in
-  Cmd.v (Cmd.info "release" ~doc ~man) Term.(const go $ outdir_arg $ docker_arg $ no_strip_arg $ check_arg)
+  Cmd.v (Cmd.info "release" ~doc ~man)
+    Term.(const go $ outdir_arg $ docker_arg $ no_strip_arg $ check_arg $ target_arg $ image_arg $ build_image_arg)
 
 let dev_cmd =
   let target_arg =
