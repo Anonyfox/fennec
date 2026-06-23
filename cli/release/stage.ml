@@ -6,16 +6,6 @@
    the OCaml/Rust/Go link leaves behind. If `strip` is missing or fails, the unstripped binary is still
    a valid deployable, so we warn and carry on rather than fail the release. *)
 
-let mkdir_p dir =
-  let rec go d =
-    if d = "" || d = "." || d = "/" || Sys.file_exists d then ()
-    else begin
-      go (Filename.dirname d);
-      (try Unix.mkdir d 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
-    end
-  in
-  go dir
-
 let copy src dst =
   In_channel.with_open_bin src (fun ic ->
       Out_channel.with_open_bin dst (fun oc ->
@@ -35,7 +25,7 @@ let run ~built_exe ~outdir ~name ~strip : (staged, string) result =
   if not (Sys.file_exists built_exe) then Error (Printf.sprintf "built binary not found at %s" built_exe)
   else
     match
-      mkdir_p outdir;
+      Util.mkdir_p outdir;
       let path = Filename.concat outdir name in
       copy built_exe path;
       Unix.chmod path 0o755;

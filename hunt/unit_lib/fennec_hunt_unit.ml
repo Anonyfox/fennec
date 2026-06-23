@@ -77,11 +77,16 @@ let check_eq name ~expected ~got =
 (*  Test helpers                                                                          *)
 (* ═══════════════════════════════════════════════════════════════════════════════════════ *)
 
-(* substring search — self-contained, no fennec-hunt dep *)
+(* substring search — self-contained, no fennec-hunt dep. Allocation-free (compares char-by-char rather
+   than cutting a [String.sub] at every position), so it stays cheap even on a multi-MB haystack such as
+   a release binary — which is why the `fennec release` prod-lean scan reuses it. *)
 let contains hay needle =
   let hl = String.length hay and nl = String.length needle in
-  let rec go i = i + nl <= hl && (String.sub hay i nl = needle || go (i + 1)) in
-  nl = 0 || go 0
+  if nl = 0 then true
+  else
+    let rec matches i j = j = nl || (hay.[i + j] = needle.[j] && matches i (j + 1)) in
+    let rec go i = i + nl <= hl && (matches i 0 || go (i + 1)) in
+    go 0
 
 let str_contains = contains
 

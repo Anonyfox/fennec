@@ -10,25 +10,13 @@ type verdict =
   | Clean
   | Leaked of string list
 
-(* allocation-free substring test (the haystack is a multi-MB binary) *)
-let contains hay ndl =
-  let hl = String.length hay and nl = String.length ndl in
-  if nl = 0 then true
-  else begin
-    let rec matches i j = j = nl || (hay.[i + j] = ndl.[j] && matches i (j + 1)) in
-    let rec scan i = i + nl <= hl && (matches i 0 || scan (i + 1)) in
-    scan 0
-  end
-
+(* [Fennec_hunt_unit.str_contains] is the allocation-free substring search (it does not cut a
+   [String.sub] per position), so it stays cheap scanning the multi-MB binary here. *)
 let needles_in (bytes : string) : verdict =
-  match List.filter (fun ndl -> contains bytes ndl) forbidden with [] -> Clean | leaked -> Leaked leaked
-
-let read_file path =
-  let ic = open_in_bin path in
-  Fun.protect ~finally:(fun () -> close_in ic) (fun () -> really_input_string ic (in_channel_length ic))
+  match List.filter (Fennec_hunt_unit.str_contains bytes) forbidden with [] -> Clean | leaked -> Leaked leaked
 
 let scan ~exe : (verdict, string) result =
-  match read_file exe with bytes -> Ok (needles_in bytes) | exception Sys_error msg -> Error msg
+  match Util.read_file exe with bytes -> Ok (needles_in bytes) | exception Sys_error msg -> Error msg
 
 (* ──── tests ──── *)
 

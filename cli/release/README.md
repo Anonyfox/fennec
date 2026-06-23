@@ -48,6 +48,7 @@ Target.resolve  →  Build.run  →  gate (Lean + Verify)  →  Stage.run  →  
 | `Stage` | copy the artifact out of `_build/`, chmod, and `strip` it into `./dist`. |
 | `Contract` | the staged-artifact report, the run line, the env table, and the optional Dockerfile. |
 | `Release` | the orchestrator the CLI subcommand calls (`Release.run : opts -> int`). |
+| `Util` | the few filesystem primitives the phases share (`read_file` / `mkdir_p` / `count_files`). |
 
 ## Wiring
 

@@ -56,8 +56,11 @@ let%test "FENNEC_ENV=development overrides a native build back to dev (and is ho
 let%test "FENNEC_ENV=production overrides a bytecode build to prod" =
   is_dev_for ~env_value:(Some "production") ~backend:Sys.Bytecode = false
 
-let%test "an unrecognized FENNEC_ENV falls back to the build default" =
+let%test "an unrecognized FENNEC_ENV falls back to the build default (native ⇒ prod)" =
   is_dev_for ~env_value:(Some "staging") ~backend:Sys.Native = false
+
+let%test "an unrecognized FENNEC_ENV falls back to the build default (bytecode ⇒ dev)" =
+  is_dev_for ~env_value:(Some "staging") ~backend:Sys.Bytecode = true
 
 let%test "js_of_ocaml (Other) is treated as dev" =
   is_dev_for ~env_value:None ~backend:(Sys.Other "js_of_ocaml") = true

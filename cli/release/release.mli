@@ -10,7 +10,9 @@ type opts = {
   check_only : bool;  (** verify (build + prod-lean + embed) but stage nothing and write nothing *)
 }
 
-(** Run the pipeline, streaming progress + the deploy contract (or an actionable error). Returns the
-    process exit code: [0] on success, [1] on any failure (discovery, build, a prod-lean leak, a missing
-    web-root embed, or staging). *)
+(** Run the pipeline, streaming progress + the deploy contract (or an actionable error). Filesystem side
+    effects, relative to the current working directory (the project root, where [fennec release] is
+    run): it stages the stripped binary under [opts.outdir] (default [dist]), and with [opts.docker]
+    writes a [./Dockerfile]. Returns the process exit code: [0] on success, [1] on any failure
+    (discovery, build, a prod-lean leak, a missing web-root embed, or staging). *)
 val run : opts -> int
