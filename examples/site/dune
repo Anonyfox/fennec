@@ -9,14 +9,19 @@
 ; so dev livereload hot-swaps a CSS edit and reloads only on a JS edit. Each app is a
 ; few rules here; pages/components inside an app need no dune change.
 
-; The per-app client bundle IS the js_of_ocaml output (client/<app>.bc.js, built from
+; The per-app client bundle IS the js_of_ocaml output (_client/<app>.bc.js, built from
 ; a route_gen-generated boot): a self-contained browser script, no further bundling
 ; needed (esbuild can't bundle the jsoo runtime's node-guarded requires, and there are
 ; no npm deps to resolve). It is --included into the web root below, at its served path.
 
+; `_client/` holds the generated client-bundle plumbing. dune ignores `_`-prefixed directories by
+; default (the same rule that hides `_build`), so we re-include it here: the leading underscore still
+; tells a human "generated, don't touch" (see _client/README.md), while dune still builds it.
+(dirs :standard _client)
+
 ; ---- assemble the SERVED web root: just merge the staged trees. Apps and handlers each generate
 ; their own isolated bundles (+ app css) into served/_apps|_handlers/<name>/main.{js,css} via
-; route_gen + dynamic_include (client/apps, client/handlers); here we only --public them next to the
+; route_gen + dynamic_include (_client/apps, _client/handlers); here we only --public them next to the
 ; shared public/ tree. Adding an app OR a handler needs NO change in this file. ----
 
 (rule
@@ -24,8 +29,8 @@
   (dir webroot))
  (deps
   (source_tree public)
-  (glob_files_rec client/apps/run/served/*)
-  (glob_files_rec client/handlers/run/served/*))
+  (glob_files_rec _client/apps/run/served/*)
+  (glob_files_rec _client/handlers/run/served/*))
  (action
   (run
    %{bin:fennec}
@@ -35,9 +40,9 @@
    --public
    public
    --public
-   client/apps/run/served
+   _client/apps/run/served
    --public
-   client/handlers/run/served)))
+   _client/handlers/run/served)))
 
 ; ---- prod embed module (release bakes the web root in; dev = empty stub) ----
 
@@ -120,16 +125,5 @@
   fennec.pwa
   fennec.pulse.app))
 
-; ---- prod-lean guarantee (enforced): the served binary must NOT link the e2e/CDP test
-; machinery or its yojson dep. A pure-OCaml guard reads the native server.exe and fails if
-; any forbidden module-name appears. Runs under `dune runtest`, so a regression trips CI. ----
-
-(executable
- (name check_lean)
- (modules check_lean))
-
-(rule
- (alias runtest)
- (deps server.exe)
- (action
-  (run %{exe:check_lean.exe} %{dep:server.exe})))
+; The prod-lean guarantee (the server.exe must not link the e2e/CDP test machinery) is enforced by a
+; `dune runtest` guard in test/lean/ — kept beside the other tests, not loose in the app root.

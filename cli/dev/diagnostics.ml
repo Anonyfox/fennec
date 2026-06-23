@@ -180,9 +180,9 @@ let%test_unit "a frontend error and its byte-identical client mirror echo count 
      Error: Syntax error: ']' expected\n\
      File \"examples/site/frontend/apps/web/layout.mlx\", line 7, characters 15-16:\n\
     \  This '[' might be unmatched\n\
-     File \"examples/site/client/apps/web_client/layout.mlx\", line 13, characters 5-7:\n\
+     File \"examples/site/_client/apps/web_client/layout.mlx\", line 13, characters 5-7:\n\
      Error: Syntax error: ']' expected\n\
-     File \"examples/site/client/apps/web_client/layout.mlx\", line 7, characters 15-16:\n\
+     File \"examples/site/_client/apps/web_client/layout.mlx\", line 7, characters 15-16:\n\
     \  This '[' might be unmatched\n"
   in
   let ps = parse echoed in
@@ -193,7 +193,7 @@ let%test_unit "a frontend error and its byte-identical client mirror echo count 
   | _ -> chk "expected one problem" false
 
 let%test "a client-mirror error with NO authored twin is kept (real errors never hidden)" =
-  let only = "File \"examples/site/client/apps/web_client/main.mlx\", line 4, characters 0-1:\nError: Unbound value x\n" in
+  let only = "File \"examples/site/_client/apps/web_client/main.mlx\", line 4, characters 0-1:\nError: Unbound value x\n" in
   count (parse only) = (1, 0)
 
 let%test "two real errors -> count (2,0)" =

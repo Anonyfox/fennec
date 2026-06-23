@@ -1,0 +1,15 @@
+; The prod-lean guarantee, as a `dune runtest` guard so a regression trips CI: the served native
+; server.exe must NOT link the heavy e2e/CDP test machinery (fennec-hunt's Cdp/Chrome/Http_client) or its
+; yojson dep. A pure-OCaml scan reads the built binary and fails if a forbidden module name appears.
+; (`fennec release` runs the same check on the artifact it ships — see cli/release/lean.ml; the two
+; needle lists are kept in sync by hand so this guard stays zero-dependency.)
+(executable
+ (name check_lean)
+ (modules check_lean))
+
+(rule
+ (alias runtest)
+ (deps
+  (file %{project_root}/examples/site/server.exe))
+ (action
+  (run %{exe:check_lean.exe} %{project_root}/examples/site/server.exe)))

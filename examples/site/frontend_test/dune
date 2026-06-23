@@ -10,13 +10,6 @@
  (modules test_components)
  (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))
 
-; BYTE-EXACT HTML oracle for the bare-text migration (manual proof tool, not in the test alias).
-; `dune exec` it before + after the .mlx migration; the two dumps must be byte-identical.
-(executable
- (name snapshot_html)
- (modules snapshot_html)
- (libraries fennec.fur fennec.fur.server fennec.pulse.sift site_components site_store site_styles site_handlers))
-
 ; The BYTECODE mirror the warm test worker Dynlinks per edit in the `fennec dev` loop (see
 ; cli/dev/test_worker.ml + cli/dev/worker/). The SAME test source, compiled byte-only into a sibling
 ; dir so it is NOT a (test) — `@runtest`/`fennec test` never run it (running a byte test there would

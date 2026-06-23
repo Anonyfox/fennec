@@ -351,7 +351,7 @@ let evidence_of_file ~root mention_index file =
        || rel_path = "examples/site/assets.ml"
        || Filename.basename rel_path = "routes.ml"
        || Filename.basename rel_path = "paths.ml"
-       || (String.length rel_path >= 21 && String.sub rel_path 0 21 = "examples/site/client/")
+       || (String.length rel_path >= 22 && String.sub rel_path 0 22 = "examples/site/_client/")
     then []
     else
     let package = package_of_path rel_path in
