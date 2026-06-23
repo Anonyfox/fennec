@@ -214,13 +214,54 @@ let emit_handler_bundles dir out_dir client_lib =
               n n client_mod m n n client_lib));
   write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
+(* ---- MIRROR (the dual-compile client mirror of an authored category) -------------------------------
+   The server library of frontend/<cat>/ uses (include_subdirs unqualified): nested subfolders are
+   authored freely, no dune anywhere under them, FLAT module namespace. Its client twin must compile the
+   SAME nested tree with a different ppx flag (-data-client / -conn-client), but dune can't compile one
+   source dir into two libraries — so the twin lives in _client/<cat>/run/ and copies the sources in.
+
+   This mode emits the dune.inc that run/ (dynamic_include)s: one [copy_files#] per authored subdir that
+   holds a .mlx, every one FLATTENING into run/ — exactly mirroring how (include_subdirs unqualified)
+   flattens the server lib, so a nested file lands under the same module name on both sides. We can't use
+   (subdir …) here (forbidden inside dynamic_include), hence the flatten. The naming convention this
+   implies — no two .mlx share a basename across subfolders — is the same one (include_subdirs unqualified)
+   enforces on the server lib, so dune reports a single, consistent error either way.
+
+   [src_dir] is the authored category dir (absolute, via %{project_root}); [rel_src] its project-relative
+   path (for the %{project_root}-anchored copy globs); [out_dir] where dune.inc is written. *)
+let emit_mirror src_dir out_dir rel_src =
+  (* every directory at/under src_dir (the root included) that DIRECTLY contains a .mlx, as a path
+     relative to src_dir ([] = the root). Sorted for a stable, deterministic dune.inc. *)
+  let rec scan dir rel acc =
+    let entries = try Sys.readdir dir |> Array.to_list |> List.sort compare with _ -> [] in
+    let acc = if List.exists (fun n -> Filename.check_suffix n ".mlx") entries then rel :: acc else acc in
+    List.fold_left
+      (fun acc n ->
+        let full = Filename.concat dir n in
+        if (try Sys.is_directory full with _ -> false) then scan full (rel @ [ n ]) acc else acc)
+      acc entries
+  in
+  let rels = List.rev (scan src_dir [] []) in
+  let b = Buffer.create 1024 in
+  Buffer.add_string b
+    (Printf.sprintf
+       "; GENERATED — do not edit. One copy_files# per authored subdir under %s/, each FLATTENING the\n; nested tree into this client mirror (matches the server lib's (include_subdirs unqualified)).\n"
+       rel_src);
+  List.iter
+    (fun rel ->
+      let path = match rel with [] -> rel_src | _ -> rel_src ^ "/" ^ String.concat "/" rel in
+      Buffer.add_string b (Printf.sprintf "(copy_files# (files %%{project_root}/%s/*.mlx))\n" path))
+    rels;
+  write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--glue" :: app_dir :: out_dir :: _ -> emit_glue app_dir out_dir
   | _ :: "--app-bundles" :: apps_dir :: out_dir :: rel_frontend :: _ -> emit_app_bundles apps_dir out_dir rel_frontend
   | _ :: "--handler-bundles" :: dir :: out_dir :: client_lib :: _ -> emit_handler_bundles dir out_dir client_lib
+  | _ :: "--mirror" :: src_dir :: out_dir :: rel_src :: _ -> emit_mirror src_dir out_dir rel_src
   | _ :: apps_dir :: out_dir :: _ -> emit_routes apps_dir out_dir
   | _ ->
     prerr_endline
-      "usage: route_gen --glue <dir> <out> | --app-bundles <apps_dir> <out> <rel_frontend> | --handler-bundles <dir> <out> <client_lib> | <dir> <out>";
+      "usage: route_gen --glue <dir> <out> | --app-bundles <apps_dir> <out> <rel_frontend> | --handler-bundles <dir> <out> <client_lib> | --mirror <src_dir> <out> <rel_src> | <dir> <out>";
     exit 2

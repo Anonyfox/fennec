@@ -1,0 +1,24 @@
+; GENERATED client mirror of site_components — the SAME .mlx tree, flattened in from ../gen/dune.inc's
+; copy_files#, compiled with -data-client so every inline Data.local/model_local server fetcher body is
+; STRIPPED from the jsoo bundle, and -fennec-drop-tests so inline let%test never reach it. The app bundles
+; link THIS lib (site_components_client); the server links the un-stripped site_components. Do not edit —
+; nesting/adding a component under frontend/components regenerates this automatically.
+(library
+ (name site_components_client)
+ (wrapped false)
+ (libraries
+  fennec.fur
+  fennec.fur.html
+  fennec.fur.form
+  site_store
+  fennec.pulse.live.client
+  fennec.accounts.client
+  fennec-mongo.bson
+  fennec.pulse.sift
+  fennec.pulse.sift.mongo)
+ (preprocess
+  (pps fennec.fur.ppx -data-client -fennec-drop-tests))
+ (flags
+  (:standard -w -a -open Fur)))
+
+(dynamic_include ../gen/dune.inc)

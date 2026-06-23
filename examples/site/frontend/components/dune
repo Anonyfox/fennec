@@ -1,5 +1,9 @@
-; Shared single-file components. Each .mlx colocates its [%%style] block; style_extract
-; (see ../styles) collects them. site_store gives Todo_list/Stats the global state module.
+; Shared single-file components. Each .mlx colocates its [%%style] block + inline let%test; group them
+; into subfolders freely — (include_subdirs unqualified) folds the whole nested tree into ONE library
+; with a FLAT module namespace (a file's name is its module, wherever it sits), so you NEVER add a dune
+; inside a subfolder. style_extract (../styles) already scans recursively; the client mirror is generated
+; into ../../_client/components (route_gen --mirror) — you only ever touch THIS tree.
+(include_subdirs unqualified)
 
 (library
  (name site_components)
@@ -19,8 +23,8 @@
   fennec-hunt.unit)
  ; Each component carries its own inline let%test (render via Fur.to_html, assert on the HTML) right
  ; below the component — the fur ppx expands them (it ships the hunt test rules), and dune generates the
- ; runner. `fennec test` runs them; a release build drops every body to () (prod-lean), and the client
- ; mirror below adds -fennec-drop-tests so they never reach the jsoo bundle. fennec.fur.server + site_styles
+ ; runner. `fennec test` runs them; a release build drops every body to () (prod-lean), and the generated
+ ; client mirror adds -fennec-drop-tests so they never reach the jsoo bundle. fennec.fur.server + site_styles
  ; are TEST-ONLY deps here — email_welcome's test renders through Fur_email with the app's Site_styles.
  (inline_tests
   (backend site_test_runner))
@@ -28,32 +32,3 @@
   (pps fennec.fur.ppx))
  (flags
   (:standard -w -a -open Fur)))
-
-; the CLIENT mirror — the SAME component .mlx, compiled with -data-client so every inline
-; [Data.local]/[Data.model_local] server fetcher body is STRIPPED (the jsoo bundle never sees
-; [compute_*]/secrets — only the resource path crosses). copy_files# keeps it inside this folder
-; (no parallel components_client dir); the app-bundle client mirror (web_app/client) links this lib.
-; This is the component analog of site_handlers_client (the -conn-client mirror of site_handlers).
-(subdir
- client
- (copy_files#
-  (files ../*.mlx))
- (library
-  (name site_components_client)
-  (wrapped false)
-  (libraries
-   fennec.fur
-   fennec.fur.html
-   fennec.fur.form
-   site_store
-   fennec.pulse.live.client
-   fennec.accounts.client
-   fennec-mongo.bson
-   fennec.pulse.sift
-   fennec.pulse.sift.mongo)
-  ; -fennec-drop-tests rewrites every inline let%test body to () BEFORE jsoo sees it, so the hunt test
-  ; runtime (and its unix dep) never bloats the browser bundle. The server lib above keeps the tests.
-  (preprocess
-   (pps fennec.fur.ppx -data-client -fennec-drop-tests))
-  (flags
-   (:standard -w -a -open Fur))))
