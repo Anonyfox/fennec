@@ -35,8 +35,10 @@ and nothing an OCaml beginner couldn't read.**
 
 > **Collections** are the data ground truth (declarative, one concept per file). **Workflows** are business
 > processes — *ordinary OCaml functions over ambient data and effects*, multiple to a module, sized by the
-> dev. **Reactions & schedules** are *annotations* on workflow functions — `[@after fn]`, `[@cron …]`,
-> `[@every …]` — the only lifecycle hooks, wired and **circuit-checked** by the ppx.
+> dev. **Reactions & schedules** are *annotations* on workflow functions — `[@after fn]` / `[@before fn]`
+> (function-coupled), `[@on_change Coll]` (state-coupled), `[@cron …]` / `[@every …]` (scheduled) — the only
+> lifecycle hooks, each a **real typed reference** to its target (so go-to-references *is* the graph view),
+> wired and **circuit-checked** by the ppx.
 >
 > There is **no `db`, no dependency injection, no `Flow` object, no monad, no binding operators, and no
 > control-flow vocabulary**. Data and mail *just exist* (Meteor-style ambient). Control flow is `raise`.
@@ -122,37 +124,79 @@ rolled back; per-app mappings for the ones you want rendered nicely). The workfl
 ## 4. Reactions & schedules — the lifecycle annotations
 
 A **workflow module is a recognized kind** (like components and handlers), and it is the *only* kind allowed
-to carry lifecycle annotations. The ppx assembles them, wires them, and **runs the circuit-check** (§6).
-There are exactly three:
+to carry lifecycle annotations. The ppx assembles them, wires them (leaf-first, §6), and **runs the
+circuit-check**. There are four — and each names its target as a **real symbol**, which is what makes the
+whole graph navigable (see "Discoverability" below).
 
 ```ocaml
-(* still orders.ml — processes + their reactions + their schedules, all ordinary functions *)
+(* orders.ml — processes + their reactions + schedules, all ordinary functions *)
 
-(* @after fn — a reaction: runs AFTER that function commits, typed to its result. Co-located. *)
+(* @after fn — a reaction AFTER a specific function commits; receives its result. FUNCTION-coupled. *)
 let[@after place] send_receipt (order : Order.t) =
-  Mail.send (Receipt.render order)
+  Mail.send (Receipt.render order)              (* an EFFECT: post-commit, async, exactly-once via idem *)
 
-(* hook a transition, not a process, to catch "whenever paid, by any path" *)
-let[@after Order.pay] award_loyalty (order : Order.t) =
-  Loyalty.add order.customer ~points:(order.total / 100)
+(* @on_change Coll — a reaction to a DATA change by ANY path; receives the typed change. STATE-coupled. *)
+let[@on_change Order] reindex (ch : Order.t change) =
+  Search.apply ch                               (* a DERIVATION: runs in-transaction, converges, replay-safe *)
 
-(* @cron / @every — a scheduled workflow. The function MUST take no input, enforced by the type system:
-   the generated runner calls [f ()], so a function that needs args simply won't compile as a cron. *)
+(* @before fn — a GUARD before a function, inside its transaction; may veto by raising. Use sparingly. *)
+let[@before refund] within_window (order : Order.t) =
+  if Clock.age order.paid_at > days 30 then raise Refund.Too_late
+
+(* @cron / @every — a scheduled workflow. The type system FORCES no input: the generated runner calls
+   [f ()], so a function that needs args simply won't compile as a cron. *)
 let[@cron "*/5 * * * *"] expire_abandoned () =
   Orders.find ~where:Order.(pending_longer_than ~min:15)
   |> List.iter (fun o -> Inventory.release o.lines; Orders.cancel o)
 ```
 
-- **`[@after fn]`** runs after the named function *commits*, receiving its *result* (typed: `send_receipt`'s
-  `Order.t` must match `place`'s return, or it won't compile; args are also available if needed). Hook a
-  *process* or a *transition*. Reactions run **post-commit** (a rolled-back workflow fires none) and each in
-  its own transaction context, so they compose and stay atomic.
-- **`[@cron expr]` / `[@every dur]`** is a scheduled workflow. The type system *forces* the no-input form —
-  ill-shaped cron jobs don't compile. Same workflow machinery; just a timer trigger.
-- **The cleanup cron is the cliff's compensation** (§7): `expire_abandoned` handles "charge failed → order
-  left Pending" with no inline `try/with` — the forward workflow stays clean; the undo is a declared rule.
+**Function-coupled vs state-coupled — the distinction that matters:**
+- **`[@after fn]`** runs after that function *commits*, receiving its *result*. Use it for "after THIS
+  process." It will **not** fire if the same state is reached by a different path.
+- **`[@on_change Coll]`** runs whenever the collection changes, by **any** path (a bulk admin update, a
+  migration, another workflow), receiving the typed `change` (`Added`/`Changed`/`Removed`). Use it for
+  derivations and "whenever the data reaches state X regardless of cause" — exactly the case `@after fn`
+  misses. A derivation flavour runs *in the triggering write's transaction* (single-run on the writing
+  replica, atomic with the source — no cross-replica claim); an effect flavour rides the outbox (§8).
 
-Naming (`@after`/`@cron`/`@every`) is bikeshed-open; the shape is fixed.
+**Each reaction is one of two delivery disciplines** (the §8 split applied to the hook) — and which one is
+*part of the declaration*, not a guess:
+- a **derivation** (maintains a derived collection / search index — a *view* of the data) runs **in the
+  triggering transaction**, is idempotent, and **converges** (replay-safe; rebuilds after a restart). It may
+  *block* the operation, by necessity.
+- an **effect** (email, webhook, charge, analytics — it *escapes* the system) runs **post-commit,
+  asynchronously (never blocks the response), exactly-once** via its idem key (the outbox, §7–§8).
+
+**`[@before fn]` is a guard, not a reaction** — it runs *before* the function, *inside* its transaction, and
+may **veto by raising** (→ the whole operation rolls back). Because a hidden veto is the spookiest thing a
+hook can do (Rails' `before_save`-returns-false), the bias is: **a guard that is part of one operation's
+logic should be a visible call at the top of the function body; cross-cutting auth/rate-limit belongs in
+edge middleware.** `@before` earns its keep only for a domain pre-condition that genuinely spans many
+workflows and must be enforced uniformly. It may read and veto; it must not fire effects (it is pre-commit).
+
+**Ordering.** Multiple hooks on one target are **independent and unordered** — that keeps them additive and
+composable. If one genuinely must precede another, declare it (`hook_b [@after hook_a]`) — just another edge
+the circuit-check governs.
+
+**`[@cron]` / `[@every]`** is a scheduled workflow; the no-input form is type-forced. The cleanup cron is also
+the cliff's compensation (§7).
+
+### Discoverability is the toolchain, not a tool
+
+Callbacks rot when behavior fires *invisibly* (the Rails lesson). We avoid that **not** with a bespoke
+"show me the hooks" command, but by making every hook a **real typed reference to its target**:
+
+- **Go-to-references on `Order.pay`** lists the transition *and* every `[@after Order.pay]` / `[@before …]` —
+  the "what fires around this" view, through the find-references your editor already has.
+- **Rename** the target → its hooks update; **delete** it → its orphaned hooks are **compile errors** (no
+  silent orphans, unlike Rails). There are **no stringly event names** to typo.
+- The ppx **materializes the wiring as a readable generated file** (route_gen-style, in the tree — not a
+  hidden runtime registry), so the whole leaf-first graph is *one openable file* when you want the overview.
+- **Bounded blast radius:** after-hooks are post-commit, isolated, idempotent, async; `@on_change`
+  derivations converge; `@before` can only veto. So an unnoticed hook cannot cause Rails-style damage even
+  before you go looking.
+
+Naming (`@after`/`@before`/`@on_change`/`@cron`/`@every`) is bikeshed-open; the shapes are fixed.
 
 ---
 
@@ -233,9 +277,12 @@ a relay delivers it; the idem key makes the handler idempotent — **exactly-onc
 
 ## 8. At-most-once across replicas — synced schedules & exactly-once effects
 
-`@after` reactions run **in-process on the replica that ran the function**, so they are single-run by
-construction. Two things *do* cross replicas and need a claim: **scheduled jobs** (every replica's scheduler
-fires) and the **outbox relay** (every replica could drain it). One mechanism handles both.
+Most hooks are single-run by construction: `@after`/`@before` run **in-process on the replica that ran the
+target**, and an `@on_change` **derivation** runs **inside the triggering write's transaction** (on whichever
+replica did the write) — so none of them need a claim. Only **two** things genuinely cross replicas:
+**scheduled jobs** (every replica's timer fires the slot) and the **outbox relay** (every replica could drain
+the shared queue — this is also how `@after`/`@on_change` *effects* reach the world exactly-once). One claim
+handles both.
 
 **The claim = a per-tick unique insert** (Meteor's "synced cron" trick, made transparent by the annotation):
 
@@ -254,8 +301,9 @@ fires) and the **outbox relay** (every replica could drain it). One mechanism ha
 - **Engages only with a shared DB** (real Mongo). Embedded burrow / in-memory is a single process → no
   cluster → the job runs directly. Transparent either way; the dev only writes `[@cron]`.
 
-The **outbox relay uses the same claim** (claim an effect row before delivering), so cron-dedup and
-exactly-once-effects share one internal primitive.
+**One primitive, two uses:** a cron claims `(job, slot)`; the outbox relay claims `(effect-id)` before
+delivering. Synced schedules and exactly-once effects ride the same unique-insert claim — `@after`/`@before`
+and in-transaction derivations need none of it.
 
 ---
 
@@ -310,10 +358,14 @@ where its concept lives; folders mark the kind/realm, never the call graph.
 ## 11. Settled vs. open
 
 **Settled:** the three kinds; workflows as ordinary ambient functions (no `db`/DI/`Flow`/monad); multiple
-public functions per module, dev-sized; `raise` as the only control flow; `[@after]` / `[@cron]` / `[@every]`
-as the only lifecycle annotations; the circuit-breaker (compile error on cyclic reactions); read-your-writes
-within the transparent transaction; exactly-once effects and at-most-once schedules via the unique-insert
-claim; tests by just calling the function against ambient in-memory data.
+public functions per module, dev-sized; `raise` as the only control flow; the lifecycle annotations
+`[@after]` / `[@before]` (function-coupled) / `[@on_change]` (state-coupled) / `[@cron]` / `[@every]`, each a
+**real typed reference** so the standard toolchain (go-to-references, rename, the compiler) *is* the graph
+view — no bespoke "show the hooks" command; the per-hook delivery discipline (derivation = in-tx + converge;
+effect = post-commit + async + exactly-once); hooks on a target are independent/unordered unless an explicit
+edge is declared; the circuit-breaker (compile error on cyclic reactions, holding across before+after as one
+happens-before graph); read-your-writes within the transparent transaction; at-most-once schedules + exactly-
+once effects via the one unique-insert claim; tests by just calling the function against ambient in-memory data.
 
 **Open — deliberately not yet decided:**
 - **The transparent transaction context is the one build item** — doesn't exist today; the fiber-local +
@@ -322,8 +374,10 @@ claim; tests by just calling the function against ambient in-memory data.
 - **Folder layout** — a horizontal `web/` + a non-web peer (`data/`? `core/`?) vs vertical feature slices.
   Leaning horizontal peer, domain-organized inside; `web/` is already horizontal. Concepts settled; the
   top-level shape is not.
-- **`@after` passes the result by default** (args available if a reaction needs them) — confirm.
-- **Annotation names** (`@after`/`@cron`/`@every`) — bikeshed.
+- **`@before` reach** — bias toward a visible call at the top of the function / edge middleware; `@before`
+  only for cross-cutting domain pre-conditions. Confirm where the line sits.
+- **Hooks pass the target's result/args by default** (the change for `@on_change`) — confirm the signatures.
+- **Annotation names** (`@after`/`@before`/`@on_change`/`@cron`/`@every`) — bikeshed.
 - **At-least-once schedules** (the lease variant) — deferred until a job genuinely needs it.
 
 **Sequencing (Gel's gravestone):** *do not boil the ocean.* Build the core — ambient workflows + the
