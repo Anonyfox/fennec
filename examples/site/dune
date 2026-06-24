@@ -90,7 +90,7 @@
   fennec.fur
   fennec.fur.server
   fennec.pulse.sift
-  web_app
+  main_app
   site_handlers
   admin_app
   site_components
@@ -116,7 +116,7 @@
   fennec.fur
   fennec.fur.server
   fennec.pulse.sift
-  web_app
+  main_app
   site_handlers
   admin_app
   site_components

@@ -119,7 +119,7 @@ let count problems =
 let%test_unit "parse: single error diagnostic" =
   let chk = Fennec_hunt_unit.check in
   let sample =
-    "File \"frontend/apps/web/index.mlx\", line 11, characters 8-16:\n\
+    "File \"frontend/apps/main/index.mlx\", line 11, characters 8-16:\n\
     \  11 |     <h1>{greeting}</h1>\n\
     \             ^^^^^^^^\n\
      Error: Unbound value greeting\n"
@@ -128,7 +128,7 @@ let%test_unit "parse: single error diagnostic" =
   chk "one problem parsed" (List.length ps = 1);
   match ps with
   | [ p ] ->
-    chk "file" (p.file = "frontend/apps/web/index.mlx");
+    chk "file" (p.file = "frontend/apps/main/index.mlx");
     chk "line" (p.line = 11);
     chk "col is 1-based (characters 8 -> col 9)" (p.col = 9);
     chk "severity Error" (p.severity = Error);
@@ -138,7 +138,7 @@ let%test_unit "parse: single error diagnostic" =
 
 let%test "count = (1 error, 0 warnings)" =
   let sample =
-    "File \"frontend/apps/web/index.mlx\", line 11, characters 8-16:\n\
+    "File \"frontend/apps/main/index.mlx\", line 11, characters 8-16:\n\
     \  11 |     <h1>{greeting}</h1>\n\
     \             ^^^^^^^^\n\
      Error: Unbound value greeting\n"
@@ -176,13 +176,13 @@ let%test_unit "a frontend error and its byte-identical client mirror echo count 
   (* the exact shape the build emits when a `.mlx` syntax error hits both the authored source AND its
      generated `copy_files#` mirror under client/…/<app>_client/ *)
   let echoed =
-    "File \"examples/site/frontend/apps/web/layout.mlx\", line 13, characters 5-7:\n\
+    "File \"examples/site/frontend/apps/main/layout.mlx\", line 13, characters 5-7:\n\
      Error: Syntax error: ']' expected\n\
-     File \"examples/site/frontend/apps/web/layout.mlx\", line 7, characters 15-16:\n\
+     File \"examples/site/frontend/apps/main/layout.mlx\", line 7, characters 15-16:\n\
     \  This '[' might be unmatched\n\
-     File \"examples/site/_client/apps/web_client/layout.mlx\", line 13, characters 5-7:\n\
+     File \"examples/site/_client/apps/main_client/layout.mlx\", line 13, characters 5-7:\n\
      Error: Syntax error: ']' expected\n\
-     File \"examples/site/_client/apps/web_client/layout.mlx\", line 7, characters 15-16:\n\
+     File \"examples/site/_client/apps/main_client/layout.mlx\", line 7, characters 15-16:\n\
     \  This '[' might be unmatched\n"
   in
   let ps = parse echoed in
@@ -193,7 +193,7 @@ let%test_unit "a frontend error and its byte-identical client mirror echo count 
   | _ -> chk "expected one problem" false
 
 let%test "a client-mirror error with NO authored twin is kept (real errors never hidden)" =
-  let only = "File \"examples/site/_client/apps/web_client/main.mlx\", line 4, characters 0-1:\nError: Unbound value x\n" in
+  let only = "File \"examples/site/_client/apps/main_client/main.mlx\", line 4, characters 0-1:\nError: Unbound value x\n" in
   count (parse only) = (1, 0)
 
 let%test "two real errors -> count (2,0)" =

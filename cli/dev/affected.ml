@@ -128,11 +128,11 @@ let%test "classifies component path" =
   a.components = [ "greeting" ] && a.paths = [ "examples/site/frontend/components/greeting.mlx" ]
 
 let%test "classifies app route" =
-  let a = classify [ "examples/site/frontend/apps/web/products/id_.mlx changed" ] in
+  let a = classify [ "examples/site/frontend/apps/main/products/id_.mlx changed" ] in
   a.apps = [ "web" ] && a.routes = [ "/products/:id" ]
 
 let%test "short is compact" =
-  let a = classify ~backend:true [ "examples/site/frontend/components/nav.mlx changed"; "examples/site/frontend/apps/web/index.mlx changed" ] in
+  let a = classify ~backend:true [ "examples/site/frontend/components/nav.mlx changed"; "examples/site/frontend/apps/main/index.mlx changed" ] in
   Fennec_hunt_unit.str_contains (short a) "backend" && Fennec_hunt_unit.str_contains (short a) "component nav"
 
 let%test "classifies conventional unit test path" =

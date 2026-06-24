@@ -16,12 +16,12 @@
   (glob_files_rec %{project_root}/examples/site/frontend/components/*.mlx)
   ; the brand tokens (:root custom props) now live in the web app's dropped theme; style_extract reads
   ; them so var(--brand) resolves to a literal for the EMAIL inliner (the web cascade resolves at runtime)
-  %{project_root}/examples/site/frontend/apps/web/styles/theme.css
+  %{project_root}/examples/site/frontend/apps/main/styles/theme.css
   %{project_root}/fennec/fur/tools/style_extract.exe)
  (action
   (run
    %{project_root}/fennec/fur/tools/style_extract.exe
    site_styles.ml
    --tokens
-   %{project_root}/examples/site/frontend/apps/web/styles/theme.css
+   %{project_root}/examples/site/frontend/apps/main/styles/theme.css
    %{project_root}/examples/site/frontend/components)))

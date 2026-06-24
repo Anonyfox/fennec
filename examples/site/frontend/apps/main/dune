@@ -1,4 +1,4 @@
-; The WEB app as a real, self-contained Dune library — its .mlx (pages, layout, main,
+; The MAIN (public) app as a real, self-contained Dune library — its .mlx (pages, layout, main,
 ; nested route folders) are REAL modules, so Merlin/LSP works and editing a page
 ; recompiles only that module. (include_subdirs qualified) maps folders to module
 ; paths (products/id_.mlx -> Products.Id_). route_gen --glue emits the wiring
@@ -7,7 +7,7 @@
 (include_subdirs qualified)
 
 (library
- (name web_app)
+ (name main_app)
  (libraries fennec.fur fennec.fur.html site_components site_documents)
  (preprocess
   (pps fennec.fur.ppx))

@@ -8,7 +8,7 @@
    The render is [Fur_ssr.handler] — synchronous (no Eio): exactly the (path -> html
    option) shape [Endpoint.app] consumes. It is given ~styles (the inlined component
    [%%style], from Site_styles) and ~source (the in-process data fetcher below), so the
-   web app gets server-rendered data + fast-render seeds. The SAME frontend lib is
+   main app gets server-rendered data + fast-render seeds. The SAME frontend lib is
    compiled to JS via js_of_ocaml for the client (./client). *)
 
 (* Paw is the HTTP foundation, re-exported by fennec — used directly, no Fennec.* proxy. *)
@@ -111,9 +111,9 @@ let setup_realtime () =
 
 (* shared pipeline: logging, security headers, the custom paw, and ONE static web
    root (public/ + every app's bundle, assembled together) served to all apps. *)
-(* the web app as an installable PWA: generated manifest + service worker (precise precache of the
+(* the main app as an installable PWA: generated manifest + service worker (precise precache of the
    app's own bundle assets; content-addressed cache version → atomic swap per deploy) *)
-let web_pwa =
+let main_pwa =
   Pwa.v "Fennec Site" ~theme_color:"#0f172a"
     ~icons:[ Pwa.icon ~sizes:"512x512" "/icon-512.png" ]
 
@@ -161,18 +161,18 @@ let auth_routes e =
   |> Paw.post "/login" do_login
   |> Paw.get "/logout" (fun c -> Conn.redirect (Accounts.logout (Accounts.current ()) c) "/")
 
-(* The app's component styles, declared for BOTH surfaces in one place: the web endpoints below pass
+(* The app's component styles, declared for BOTH surfaces in one place: the app endpoints below pass
    [~styles:Site_styles.css] (the document <style>), and this installs the SAME rules — var(--brand)
    already resolved at build — for email, so [Fur_email.to_email component] inlines them with nothing
    per render. Two halves of one styling story; the [%%style] blocks are the single source for both. *)
 let () = Fur_email.install Site_styles.inline
 
-let web =
-  Paw.endpoint ~name:"web" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
-  |> Paw.use (Pwa.paw web_pwa ~assets:Assets.lookup ~precache:[ "/_apps/web/main.js"; "/_apps/web/main.css" ])
+let main =
+  Paw.endpoint ~name:"main" ~hosts:[ "*" ] () (* the default app: catches every host not claimed below *)
+  |> Paw.use (Pwa.paw main_pwa ~assets:Assets.lookup ~precache:[ "/_apps/main/main.js"; "/_apps/main/main.css" ])
   |> Paw.use realtime_ddp
   |> Paw.pipe common
-  |> Paw.get "/api/health" (fun c -> c |> Paw.json {|{"ok":true,"app":"web"}|})
+  |> Paw.get "/api/health" (fun c -> c |> Paw.json {|{"ok":true,"app":"main"}|})
   (* NOTE: no [/api/greeting] route here — it is auto-mounted by the framework from the co-located
      [Data.local] declaration in greeting.mlx (the SSR seed + refetch route both come from that one file). *)
   |> Paw.get "/api/browser-only" (fun c -> c |> Paw.text browser_only)
@@ -218,8 +218,8 @@ let web =
                         ~text:"Welcome aboard — confirm your email to get started." ~html ()));
                 c |> Paw.text "sent — open /dev/mailbox"))
   |> Paw.app
-       (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html web_pwa)
-          ~source:api_source ~mounts:[ Web_app.Routes.mount ])
+       (Fur_ssr.handler ~styles:Site_styles.css ~head_extra:(Pwa.head_html main_pwa)
+          ~source:api_source ~mounts:[ Main_app.Routes.mount ])
 
 let admin =
   Paw.endpoint ~name:"admin" ~hosts:[ "admin.localhost" ] () (* scoped by host; more specific, so it wins *)
@@ -236,4 +236,4 @@ let admin =
 let () =
   Fennec.serve ~accounts:Accounts.defaults
     ~on_start:(fun ~sw:_ ~sleep:_ ~net:_ -> setup_realtime ())
-    [ web; admin ]
+    [ main; admin ]

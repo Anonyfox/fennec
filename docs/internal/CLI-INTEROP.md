@@ -385,7 +385,7 @@ selected by Host pattern). See `examples/site/` for the full surface.
 - Full framework unit suite (core + paw + ws/gzip/deflate + endpoint/static/head +
   Fennec.Fur) + the curl SSR integration test + colocated mlx component tests. ✓
 
-SSR and CSR are the SAME source now: each app is one real Dune library (`web_app`,
+SSR and CSR are the SAME source now: each app is one real Dune library (`main_app`,
 `admin_app`) linked natively into the server (SSR via `Fur_ssr.handler`) and compiled
 to JS via `js_of_ocaml` for the client (the `client/` executables, `(modes js)`) — no
 React lib, no `[@react.component]` ppx, no Melange, so no `copy_files` mirror and no

@@ -11,15 +11,15 @@ examples/site/
   public/              ONE shared static tree, served at / (favicon, robots.txt)
   frontend/            the authored userland — every file is a REAL Dune module (LSP works).
                        100% yours; five plain-named categories. See frontend/README.md.
-    apps/<name>/       a self-contained app library (web_app, admin_app):
+    apps/<name>/       a self-contained app library (main_app, admin_app):
       main.mlx           config: base + which document shell
       layout.mlx         the app shell (nav + (outlet ()))
       index.mlx          /            (file name = route)
       about.mlx          /about
       products/index.mlx /products    (folders nest)
       products/id_.mlx   /products/:id  (dynamic param — see "Routing")
-      rest__.mlx         catch-all / not_found (web app)
-      main.css           CSS ORDERING MANIFEST: @layer + @import (web) — or main.scss + @use (admin)
+      rest__.mlx         catch-all / not_found (main app)
+      main.css           CSS ORDERING MANIFEST: @layer + @import (main app) — or main.scss + @use (admin)
       styles/            CSS escape hatch — drop .css/.scss (a theme, a vendor sheet), @import it
       scripts/           JS escape hatch — drop .js/.ts (a vendor lib); esbuild → loaded before jsoo
     components/        shared single-file components — markup + colocated [%%style] + inline
@@ -46,7 +46,7 @@ examples/site/
 ```
 
 ## How it fits together
-- **`frontend/apps/<name>/`** is its own Dune library (`web_app`, `admin_app`). The
+- **`frontend/apps/<name>/`** is its own Dune library (`main_app`, `admin_app`). The
   pages/layout/main are real modules, so editor tooling (Merlin/LSP) works and editing
   a page recompiles just that module. `route_gen --glue` reads the file tree and emits
   the wiring — `routes.ml` (router + mount) and `paths.ml` (typed path builders) — without
@@ -64,7 +64,7 @@ examples/site/
   root or in `marketing/`). The only rule: no two files share a basename across subfolders (dune
   says so plainly if you slip). The `-data-client`/`-conn-client` browser mirror of the nested tree
   regenerates itself (`route_gen --mirror`) into `_client/` — you never touch it.
-- **Strict per-app bundle isolation.** Separate app libs mean the web client bundle never
+- **Strict per-app bundle isolation.** Separate app libs mean the main client bundle never
   links the admin app's code (asserted by the browser suite). Each app's client boot is generated
   (`route_gen --boots`), so there are no hand-written entry files.
 - **`server.ml`** is pipelines + endpoints only — no HTML strings. Each endpoint mounts one

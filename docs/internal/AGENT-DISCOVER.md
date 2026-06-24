@@ -413,7 +413,7 @@ Example/test ids include kind, package/library/app, semantic label or module,
 and a short content/path hash suffix for collision safety:
 
 ```text
-test:site_browser:web_test:hydration_seed#8fd3a1
+test:site_browser:main_test:hydration_seed#8fd3a1
 example:site:server:admin_basic_auth#91cc02
 ```
 

@@ -21,9 +21,9 @@ let replace s ~old ~by =
   done;
   Buffer.contents b
 
-(* dev port model: gateway=4000, web endpoint=4001 *)
+(* dev port model: gateway=4000, main endpoint=4001 *)
 let page = 4001 and page_path = "/"
-let bundle_path = "/_apps/web/main.js"
+let bundle_path = "/_apps/main/main.js"
 let disk = "Welcome to the Fennec site"
 let mark = "LIVERELOAD_MARK_XYZ"
 
@@ -35,7 +35,7 @@ let cache_no_cache port path =
   with _ -> false
 
 let%system "single instance, startup freshness, no-cache, edit+revert propagation" = fun sb ->
-  let src = Filename.concat (S.app_dir ()) "frontend/apps/web/index.mlx" in
+  let src = Filename.concat (S.app_dir ()) "frontend/apps/main/index.mlx" in
   let d1 = S.dev sb in
   S.wait_ready d1 ~port:page ();
 

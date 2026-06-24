@@ -1,5 +1,5 @@
 (* Server-only document shell for the web app. References the app's external GLOBAL
-   stylesheet + bundle (served at /_apps/web/main.{css,js}), while the SSR driver fills
+   stylesheet + bundle (served at /_apps/main/main.{css,js}), while the SSR driver fills
    the framework slots: (Doc.head) resolved head metadata, (Doc.styles) the inlined,
    scoped component [%%style], (Doc.outlet) the body to hydrate, (Doc.data) the
    fast-render seed. So: one external sheet for global/base + tokens, component styles
@@ -10,16 +10,16 @@ let make ctx =
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       {Doc.head ctx}
-      <link rel="stylesheet" href="/_apps/web/main.css" />
+      <link rel="stylesheet" href="/_apps/main/main.css" />
       <style>{Doc.styles ctx}</style>
       (* the JS escape hatch: the bundled scripts/ vendor, in <head> + deferred so it runs BEFORE the
          jsoo app bundle in <body> — its window globals are then FFI-reachable at hydration. One line;
          remove it if the app drops no scripts. *)
-      <script src="/_apps/web/vendor.js" defer=true></script>
+      <script src="/_apps/main/vendor.js" defer=true></script>
     </head>
     <body className="web">
       <div id="app">{Doc.outlet ctx}</div>
       {Doc.data ctx}
-      <script src="/_apps/web/main.js" defer=true></script>
+      <script src="/_apps/main/main.js" defer=true></script>
     </body>
   </html>

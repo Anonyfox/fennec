@@ -1,4 +1,4 @@
-; The ADMIN app as its own real Dune library (mirrors apps/web). Separate lib => its
+; The ADMIN app as its own real Dune library (mirrors apps/main). Separate lib => its
 ; client bundle never links the web app's code.
 
 (library

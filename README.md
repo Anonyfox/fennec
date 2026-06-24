@@ -52,7 +52,7 @@ git clone https://github.com/Anonyfox/fennec
 cd fennec/examples/site && fennec dev        # → http://localhost:4000, hot-reloading
 ```
 
-Edit `frontend/apps/web/index.mlx` and save — the page hot-reloads ([`examples/site`](./examples/site)
+Edit `frontend/apps/main/index.mlx` and save — the page hot-reloads ([`examples/site`](./examples/site)
 is the full tour). Prefer to build the CLI yourself (adds Go + Rust)? See
 [Build from source](#build-from-source-contributors).
 

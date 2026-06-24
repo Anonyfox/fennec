@@ -1,6 +1,6 @@
-; The WEB app's CLIENT mirror — the SAME page/layout/main .mlx tree, compiled with -data-client so the
+; The MAIN (public) app's CLIENT mirror — the SAME page/layout/main .mlx tree, compiled with -data-client so the
 ; whole client closure (pages → components → documents) strips every inline [Data.local] server fetcher.
-; The jsoo bundle links THIS lib (Web_app_client.Routes.mount) instead of the server-side web_app, so no
+; The jsoo bundle links THIS lib (Main_app_client.Routes.mount) instead of the server-side main_app, so no
 ; component fetcher body reaches the browser. copy_files# brings the tree in (the nested products/ folder
 ; is mirrored by its own subdir copy below); route_gen --glue regenerates the router + mount against the
 ; copied modules. It depends on the -data-client leaves (site_components_client / site_documents_client).
@@ -9,15 +9,15 @@
 (include_subdirs qualified)
 
 (copy_files#
- (files %{project_root}/examples/site/frontend/apps/web/*.mlx))
+ (files %{project_root}/examples/site/frontend/apps/main/*.mlx))
 
 (subdir
  products
  (copy_files#
-  (files %{project_root}/examples/site/frontend/apps/web/products/*.mlx)))
+  (files %{project_root}/examples/site/frontend/apps/main/products/*.mlx)))
 
 (library
- (name web_app_client)
+ (name main_app_client)
  (libraries fennec.fur fennec.fur.html site_components_client site_documents_client)
  (preprocess
   (pps fennec.fur.ppx -data-client))

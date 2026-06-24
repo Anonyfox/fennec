@@ -1,4 +1,4 @@
-; The ADMIN app's CLIENT mirror — same .mlx, compiled with -data-client (see ../web_client/dune). The
+; The ADMIN app's CLIENT mirror — same .mlx, compiled with -data-client (see ../main_client/dune). The
 ; admin app has no co-located [Data.local] today, but the bundle links the stripped mirror UNIFORMLY so
 ; any future co-located fetcher in an admin page is stripped from its bundle too. No nested route folders
 ; here, so a single copy_files# suffices.

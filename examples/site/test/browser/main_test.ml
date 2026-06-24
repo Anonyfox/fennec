@@ -1,4 +1,4 @@
-(* The site's browser suite for `fennec test browser` — the web app's end-to-end behaviours
+(* The site's browser suite for `fennec test browser` — the main app's end-to-end behaviours
    driven through a real headless Chrome over CDP (zero npm, no chromedriver). No base_url: the
    harness boots a DEDICATED isolated instance per suite and hands it via FENNEC_TEST_URL; a
    leading-'/' path resolves against it. Each [test] runs in its own fresh isolated context (own
@@ -79,11 +79,11 @@ let%browser "catch-all renders not_found with the unmatched path" = fun page ->
   |> expect_text ".missing" "no route: /nope/xyz"
   |> ignore
 
-let%browser "per-app bundle isolation: web bundle excludes admin code" = fun page ->
+let%browser "per-app bundle isolation: main bundle excludes admin code" = fun page ->
   page
   |> goto "/" |> hydrated
-  |> expect_js ~descr:"web bundle does not contain 'admin actions'"
-       "(async()=>!(await (await fetch('/_apps/web/main.js')).text()).includes('admin actions'))()"
+  |> expect_js ~descr:"main bundle does not contain 'admin actions'"
+       "(async()=>!(await (await fetch('/_apps/main/main.js')).text()).includes('admin actions'))()"
   |> ignore
 
 (* forced-race stress: navigation + execution-context swaps. With loaderId-matched loads and
@@ -136,7 +136,7 @@ let%browser "realtime DDP: subscribe renders seeded tasks; addTask pushes live" 
   |> expect_text ".tasks .task-items" "Task 1"
   |> ignore
 
-(* the JS escape hatch: the dropped scripts/main.ts (TS) was bundled by esbuild into /_apps/web/vendor.js
+(* the JS escape hatch: the dropped scripts/main.ts (TS) was bundled by esbuild into /_apps/main/vendor.js
    and loaded in <head> BEFORE the jsoo app bundle — so its side effect ran (data-vendor) and the window
    global it defines is reachable (as OCaml would reach it via js_of_ocaml FFI: ...##.fennecVendor). *)
 let%browser "JS escape hatch: scripts/ vendor bundle runs before hydration; its globals are FFI-ready" = fun page ->
