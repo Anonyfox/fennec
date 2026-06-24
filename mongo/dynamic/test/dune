@@ -1,0 +1,4 @@
+; The transparent transaction context (Fennec_mongo_dynamic.Tx) over the in-memory backend.
+(test
+ (name test_tx)
+ (libraries fennec-mongo.dynamic fennec-mongo.bson fennec-mongo.minimongo fennec-mongo.backend))

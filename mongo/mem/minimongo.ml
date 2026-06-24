@@ -297,6 +297,61 @@ let remove_id t (id : string) : bool =
   if removed then Fanout.pump t.fan;
   removed
 
+(* ---- transactions (in-memory atomic rollback) -----------------------------
+   The non-web core's transparent transaction context snapshots a collection on the FIRST write to
+   it inside a transaction, and — if the workflow raises — restores it. We capture the store, the
+   insertion order, the unique side-maps, the index set, and the validator under [t.lock]. Document
+   values are immutable [Bson.t], so [Hashtbl.copy] is a true point-in-time snapshot; the unique
+   side-maps (the only other mutable state a write touches) are copied too. [tx_restore] overwrites
+   the live state back to the snapshot and, so a live observer that already saw the rolled-back
+   writes converges, enqueues the COMPENSATING change events (the diff between the doomed state and
+   the snapshot) and pumps. Cost is O(size) per snapshot — paid only inside a transaction, on the
+   in-memory dev/test backend. *)
+type snapshot = {
+  s_store : (string, doc) Hashtbl.t;
+  s_rorder : string list;
+  s_uniq : (string * (string list * bool * (Bson.t option list, string) Hashtbl.t)) list;
+  s_indexes : (string * (string list * bool * bool)) list;
+  s_validator : Bson.t option;
+}
+
+let tx_snapshot t : snapshot =
+  with_lock t.lock (fun () ->
+      {
+        s_store = Hashtbl.copy t.store;
+        s_rorder = t.rorder;
+        s_uniq = List.map (fun (n, (f, s, m)) -> (n, (f, s, Hashtbl.copy m))) t.uniq;
+        s_indexes = t.indexes;
+        s_validator = t.validator;
+      })
+
+let tx_restore t (snap : snapshot) : unit =
+  with_lock t.lock (fun () ->
+      (* compensating events vs the current (doomed) store, computed BEFORE we overwrite it: a doc
+         present now but absent in the snapshot was inserted → Remove; absent now but present in the
+         snapshot was removed → Insert; present in both but different was updated → Update back. *)
+      Hashtbl.iter
+        (fun id cur ->
+          if not (Hashtbl.mem snap.s_store id) then
+            Fanout.enqueue t.fan { op = Remove; id; new_doc = None; old_doc = Some cur })
+        t.store;
+      Hashtbl.iter
+        (fun id snapd ->
+          match Hashtbl.find_opt t.store id with
+          | None -> Fanout.enqueue t.fan { op = Insert; id; new_doc = Some snapd; old_doc = None }
+          | Some cur ->
+              if not (Bson.equal cur snapd) then
+                Fanout.enqueue t.fan { op = Update; id; new_doc = Some snapd; old_doc = Some cur })
+        snap.s_store;
+      (* overwrite the live state back to the snapshot *)
+      Hashtbl.clear t.store;
+      Hashtbl.iter (fun id d -> Hashtbl.replace t.store id d) snap.s_store;
+      t.rorder <- snap.s_rorder;
+      t.uniq <- snap.s_uniq;
+      t.indexes <- snap.s_indexes;
+      t.validator <- snap.s_validator);
+  Fanout.pump t.fan
+
 (* ---- cursors / queries ---------------------------------------------------- *)
 
 type cursor = {

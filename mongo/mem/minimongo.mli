@@ -114,6 +114,21 @@ val remove : t -> doc -> int
     was present. *)
 val remove_id : t -> string -> bool
 
+(** {2 Transactions} (the transparent transaction context's in-memory atomic rollback) *)
+
+(** An opaque point-in-time snapshot of a collection, captured by {!tx_snapshot}. *)
+type snapshot
+
+(** [tx_snapshot t] captures the collection's full state — documents, insertion order, unique
+    side-maps, index set, and validator. The transparent transaction context takes one on the first
+    write to a collection inside a transaction. O(size); document values are shared (immutable). *)
+val tx_snapshot : t -> snapshot
+
+(** [tx_restore t snap] reverts [t] to [snap] (rolling back a transaction whose workflow raised) and,
+    so a live observer that already saw the rolled-back writes converges, emits the compensating
+    change events — the diff between the current (doomed) state and [snap]. *)
+val tx_restore : t -> snapshot -> unit
+
 (** {2 Cursors & queries} *)
 
 (** A query over a collection: selector + sort/skip/limit/projection. Lazy — evaluated by

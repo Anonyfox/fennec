@@ -163,6 +163,65 @@ let bw_observe e (q : Backend.query) ~added ~changed ~removed =
    ONE Backend.S, so an app picks at boot (real mongo / burrow:// / :memory:) with no type change
    downstream. The per-op dispatch references the outer (native / burrow) ops — non-recursive [let],
    so no shadowing. *)
+
+(* ---- the transparent transaction context ----------------------------------
+   A workflow (or any code wrapped in [Tx.run]) runs inside ONE transaction: writes commit when it
+   returns and roll back when it raises, with read-your-writes throughout (writes apply eagerly to
+   the live store). The context is AMBIENT — fiber-local via the same Eio-key + global-fallback idiom
+   the seeded-id seam uses, so it works inside the server's fibers AND in plain unit tests (no
+   scheduler). The dispatcher's in-memory write ops consult [Tx.current]: the first write to a
+   collection snapshots it; [commit] drops the snapshots, [rollback] restores them.
+
+   Atomicity + rollback are implemented for the in-memory ([:memory:]) backend — what `fennec test`
+   and the dev seed exercise. On burrow/mongo the bracket is transparent and writes commit-on-success
+   (durable as they happen); backend-native rollback (an LMDB parent-txn / a mongo session) is a
+   scoped follow-on, so a workflow that RAISES on those backends may leave the writes it already made.
+   Outermost transactions serialize under one Eio mutex (so two in-flight in-memory transactions
+   cannot corrupt each other's snapshots); a nested [run] joins the enclosing transaction — the whole
+   call tree is one atomic unit, matching "a workflow calling a workflow is still one transaction". *)
+module Tx = struct
+  type entry = { coll : Minimongo.t; snap : Minimongo.snapshot }
+  type t = { mutable touched : entry list }
+
+  let _key : t Eio.Fiber.key = Eio.Fiber.create_key ()
+  let _fallback : t option ref = ref None
+
+  (* the active transaction for this fiber (or the global fallback outside an Eio scheduler), if any *)
+  let current () : t option =
+    match (try Eio.Fiber.get _key with Stdlib.Effect.Unhandled _ -> None) with
+    | Some _ as v -> v
+    | None -> !_fallback
+
+  (* snapshot a collection the first time this transaction writes to it (idempotent per collection) *)
+  let touch (tx : t) (m : Minimongo.t) : unit =
+    if not (List.exists (fun e -> e.coll == m) tx.touched) then
+      tx.touched <- { coll = m; snap = Minimongo.tx_snapshot m } :: tx.touched
+
+  let commit (tx : t) : unit = tx.touched <- [] (* writes already applied + delivered; drop snapshots *)
+
+  let rollback (tx : t) : unit =
+    List.iter (fun e -> Minimongo.tx_restore e.coll e.snap) tx.touched;
+    tx.touched <- []
+
+  let _serialize = Eio.Mutex.create ()
+
+  (* [run f] executes [f] in one transaction (commit on return, rollback on raise). Re-entrant: a
+     nested [run] joins the outer transaction rather than opening a new one. *)
+  let run : type a. (unit -> a) -> a =
+   fun f ->
+    match current () with
+    | Some _ -> f () (* already inside a transaction — join it (flatten to one atomic unit) *)
+    | None ->
+        let tx = { touched = [] } in
+        let go () = match f () with v -> commit tx; v | exception e -> rollback tx; raise e in
+        (* serialize + bind ambient under Eio; outside a scheduler (unit tests) a global ref stands in *)
+        (match (try `Eio (ignore (Eio.Fiber.get _key : t option)) with Stdlib.Effect.Unhandled _ -> `Plain) with
+        | `Eio () -> Eio.Mutex.use_rw ~protect:true _serialize (fun () -> Eio.Fiber.with_binding _key tx go)
+        | `Plain ->
+            _fallback := Some tx;
+            Fun.protect go ~finally:(fun () -> _fallback := None))
+end
+
 module Dynamic = struct
   module Mini = Backend.Mini
 
@@ -224,21 +283,26 @@ module Dynamic = struct
     | Some sw -> from_env ?poll ~sw ~name ()
     | None -> missing "Fennec data layer is not booted — Fennec.serve installs the Eio switch at startup"
 
+  (* before an in-memory write, let the active transaction (if any) snapshot the collection so a
+     later [raise] can roll it back. A no-op when no transaction is in flight — so the
+     non-transactional path stays byte-identical to before. *)
+  let in_tx_touch (m : Minimongo.t) = match Tx.current () with Some tx -> Tx.touch tx m | None -> ()
+
   let insert c d =
     match c with
-    | Mem m -> Mini.insert m d
+    | Mem m -> in_tx_touch m; Mini.insert m d
     | Native r -> insert r d
     | Embedded e -> Burrow_engine.insert e.eng e.ecoll d
     | Missing message -> unavailable message
   let update c ~multi ~upsert s m =
     match c with
-    | Mem mm -> Mini.update mm ~multi ~upsert s m
+    | Mem mm -> in_tx_touch mm; Mini.update mm ~multi ~upsert s m
     | Native r -> update r ~multi ~upsert s m
     | Embedded e -> Burrow_engine.update e.eng e.ecoll ~multi ~upsert s m
     | Missing message -> unavailable message
   let remove c s =
     match c with
-    | Mem m -> Mini.remove m s
+    | Mem m -> in_tx_touch m; Mini.remove m s
     | Native r -> remove r s
     | Embedded e -> Burrow_engine.remove e.eng e.ecoll s
     | Missing message -> unavailable message
