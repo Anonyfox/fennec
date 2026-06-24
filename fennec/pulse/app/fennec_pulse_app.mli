@@ -73,3 +73,53 @@ val publish : ?where:(Bson.t list -> Filter.t list) -> 'a Def.t -> unit
 (** Register a typed method handler — the single client write path. The handler shares the method's
     declarations with the client stub, so a renamed field/method is a compile error in every file. *)
 val method_ : ('a, 'r) Method.t -> (R.invocation -> 'a -> 'r) -> unit
+
+(** {1 The non-web core} — re-exported so a server / collections / workflows file opens ONE module. *)
+
+(** Run a block in the transparent transaction: commit on return, roll back on raise, with
+    read-your-writes throughout. Re-entrant — a nested call joins the enclosing transaction. *)
+val transaction : (unit -> 'a) -> 'a
+
+(** Workflows — ordinary functions wrapped in the transaction, carrying their [before]/[after]
+    reactions. See {!Fennec_pulse_workflow.Workflow}. *)
+module Workflow : module type of Fennec_pulse_workflow.Workflow
+
+(** Recurring jobs that run at-most-once across replicas — the [@every] / [@cron] targets. *)
+module Schedule : sig
+  (** [every seconds ~name body] runs [body] every [seconds] (one slot per duration window). *)
+  val every : float -> name:string -> (unit -> unit) -> unit
+
+  (** [cron expr ~name body] runs [body] on a 5-field UTC crontab schedule. *)
+  val cron : string -> name:string -> (unit -> unit) -> unit
+
+  (** [cron_matches expr t] — does [expr] fire at unix time [t] (UTC)? (Exposed for tests.) *)
+  val cron_matches : string -> float -> bool
+end
+
+(** Collections' write API — [create] / [delete] / named [transition]s (never raw field mutation),
+    each a {!Workflow} that runs in the transparent transaction and carries its [@after] reactions.
+    Reads are one-shot ([get]/[all]/[find]); live data is a {!publish}ed publication. *)
+module Collection : sig
+  (** [get def id] — the aggregate with [_id = id], or [None]. *)
+  val get : 'a Def.t -> string -> 'a option
+
+  (** All aggregates (a one-shot server read). *)
+  val all : 'a Def.t -> 'a list
+
+  (** [find def ~where] — aggregates matching [where] (a one-shot server read). *)
+  val find : 'a Def.t -> where:Filter.t list -> 'a list
+
+  (** [put def v] persists a full aggregate by its [_id], validating it (raises {!Invalid} on a bad
+      value, rolling back the enclosing transaction). The low-level write transitions build on. *)
+  val put : 'a Def.t -> 'a -> unit
+
+  (** [create def] — the insert workflow: stores a fresh aggregate and returns it with its minted id. *)
+  val create : 'a Def.t -> ('a, 'a) Workflow.t
+
+  (** [delete def] — the delete workflow: removes the aggregate by its [_id]. *)
+  val delete : 'a Def.t -> ('a, unit) Workflow.t
+
+  (** [transition def name f] — a named state change [f : 'a -> 'a], persisted by [_id], as a workflow.
+      [f] may [raise] to veto (the transaction rolls back). [@after] reactions attach to its result. *)
+  val transition : 'a Def.t -> string -> ('a -> 'a) -> ('a, 'a) Workflow.t
+end

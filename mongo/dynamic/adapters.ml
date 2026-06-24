@@ -233,7 +233,9 @@ module Tx = struct
         (* serialize + bind ambient under Eio; outside a scheduler (unit tests) a global ref stands in *)
         let result =
           match (try `Eio (ignore (Eio.Fiber.get _key : t option)) with Stdlib.Effect.Unhandled _ -> `Plain) with
-          | `Eio () -> Eio.Mutex.use_rw ~protect:true _serialize (fun () -> Eio.Fiber.with_binding _key tx go)
+          (* use_ro (not use_rw): a raising transaction is normal — [go] has already rolled back, so the
+             resource is consistent; we want the mutex UNLOCKED + the exception re-raised, never disabled *)
+          | `Eio () -> Eio.Mutex.use_ro _serialize (fun () -> Eio.Fiber.with_binding _key tx go)
           | `Plain ->
               _fallback := Some tx;
               Fun.protect go ~finally:(fun () -> _fallback := None)

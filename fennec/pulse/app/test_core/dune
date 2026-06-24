@@ -1,0 +1,14 @@
+; The Collections write-API (create / transition / delete + reads) end to end over the ambient
+; in-memory backend under a real Eio switch. A standalone Eio exe run via a runtest rule.
+(executable
+ (name test_collection)
+ (libraries fennec.pulse.app fennec.pulse.sift fennec.pulse.sift.mongo fennec-mongo.dynamic
+   fennec-mongo.bson eio eio_main eio.unix unix)
+ (preprocess
+  (pps fennec.pulse.sift.ppx)))
+
+(rule
+ (alias runtest)
+ (deps test_collection.exe)
+ (action
+  (run ./test_collection.exe)))
