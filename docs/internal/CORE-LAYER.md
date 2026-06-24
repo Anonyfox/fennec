@@ -36,9 +36,10 @@ and nothing an OCaml beginner couldn't read.**
 > **Collections** are the data ground truth (declarative, one concept per file). **Workflows** are business
 > processes — *ordinary OCaml functions over ambient data and effects*, multiple to a module, sized by the
 > dev. **Reactions & schedules** are *annotations* on workflow functions — `[@after fn]` / `[@before fn]`
-> (function-coupled), `[@on_change Coll]` (state-coupled), `[@cron …]` / `[@every …]` (scheduled) — the only
-> lifecycle hooks, each a **real typed reference** to its target (so go-to-references *is* the graph view),
-> wired and **circuit-checked** by the ppx.
+> and `[@cron …]` / `[@every …]` — the only lifecycle hooks, each a **real typed reference** to its target
+> (so go-to-references *is* the graph view), wired and **circuit-checked** by the ppx. There is *no*
+> data-change hook: Fennec owns its database and a collection's only writes are named transitions, so every
+> change goes through an explicit function and `@after` catches it.
 >
 > There is **no `db`, no dependency injection, no `Flow` object, no monad, no binding operators, and no
 > control-flow vocabulary**. Data and mail *just exist* (Meteor-style ambient). Control flow is `raise`.
@@ -57,20 +58,23 @@ it *Collection*, not "entity," to stay familiar). It owns:
 
 - **schema + validity-as-types** — illegal states unrepresentable (`status : [Pending|Paid|Cancelled]`,
   `lines : line list [@min_len 1]`). Validity lives in the types and Sift refinements, not in code.
-- **single-aggregate transitions** — operations whose invariant is about *this one* aggregate
-  (`Order.pay` refuses a non-pending order). A transition that represents a meaningful state change is also
-  where a reaction hooks (`[@after Order.pay]`), so events are a property of the *transition*, not something
-  a workflow emits by hand. The moment a rule spans two collections it is a Workflow — so a Collection can
-  never grow into a god-module.
+- **single-aggregate transitions are the write API** — a collection exposes `create`, `delete`, and named
+  transitions (`Order.pay` refuses a non-pending order); it does **not** expose raw field mutation to
+  userland. So a meaningful state change can *only* happen through a named function — which is exactly where a
+  reaction hooks (`[@after Order.pay]`), and why `@after` catches every payment **by construction** (no
+  data-change hook needed). Events are a property of the *transition*, not something a workflow emits by hand.
+  The moment a rule spans two collections it is a Workflow — so a Collection can never grow into a god-module.
 - **declarative policy** — a pure total `(row, actor) -> bool` (deny-by-default; an op with no policy is a
   compile error; `~as_admin` bypass; inputs limited to `(row, actor)`, never cross-collection joins). This
   is the thing the TS sync-engine wave (Zero, Electric) *retreated* from — for codegen-ceiling reasons OCaml
   doesn't have, since the policy is a plain function that dual-compiles to server authority and client
   prediction.
 
-Server-authoritative; the *shape* is isomorphic (Sift compiles both sides). Reads are **live-or-not by
-type**: `find` is the one-shot default; `watch : … -> 'a Live.t` opts into reactivity and *requires* a
-bound (an unbounded live query won't typecheck) — the over-reactivity guard, felt at the call site.
+Server-authoritative; the *shape* is isomorphic (Sift compiles both sides). **Server-side reads are
+one-shot** (`find` / `find_one` / `count`) — a workflow reads, computes, writes; it never sits subscribed.
+**Live data is a *publication*** (the existing `Pulse.publish`: a client subscribes, the browser's Fur
+signals update) — a client-facing concern, *not* a core read primitive. Liveness there is opt-in and
+**bounded** (the over-reactivity guard); its cross-replica propagation is §8.
 
 ---
 
@@ -131,13 +135,12 @@ whole graph navigable (see "Discoverability" below).
 ```ocaml
 (* orders.ml — processes + their reactions + schedules, all ordinary functions *)
 
-(* @after fn — a reaction AFTER a specific function commits; receives its result. FUNCTION-coupled. *)
+(* @after fn — a reaction AFTER a function (or a collection transition) commits; receives its result. *)
 let[@after place] send_receipt (order : Order.t) =
   Mail.send (Receipt.render order)              (* an EFFECT: post-commit, async, exactly-once via idem *)
 
-(* @on_change Coll — a reaction to a DATA change by ANY path; receives the typed change. STATE-coupled. *)
-let[@on_change Order] reindex (ch : Order.t change) =
-  Search.apply ch                               (* a DERIVATION: runs in-transaction, converges, replay-safe *)
+let[@after Order.pay] reindex (order : Order.t) =
+  Search.index order                            (* a DERIVATION: runs in the transition's transaction, converges *)
 
 (* @before fn — a GUARD before a function, inside its transaction; may veto by raising. Use sparingly. *)
 let[@before refund] within_window (order : Order.t) =
@@ -150,14 +153,13 @@ let[@cron "*/5 * * * *"] expire_abandoned () =
   |> List.iter (fun o -> Inventory.release o.lines; Orders.cancel o)
 ```
 
-**Function-coupled vs state-coupled — the distinction that matters:**
-- **`[@after fn]`** runs after that function *commits*, receiving its *result*. Use it for "after THIS
-  process." It will **not** fire if the same state is reached by a different path.
-- **`[@on_change Coll]`** runs whenever the collection changes, by **any** path (a bulk admin update, a
-  migration, another workflow), receiving the typed `change` (`Added`/`Changed`/`Removed`). Use it for
-  derivations and "whenever the data reaches state X regardless of cause" — exactly the case `@after fn`
-  misses. A derivation flavour runs *in the triggering write's transaction* (single-run on the writing
-  replica, atomic with the source — no cross-replica claim); an effect flavour rides the outbox (§8).
+**Why `@after` is enough — and there is no data-change hook.** Because **Fennec owns its database and a
+collection's only writes are named transitions** (§2), every state change goes through a known function. So
+`[@after fn]` (and `[@after Order.pay]` on a *transition* for "whenever paid, by any in-app path") covers
+every reaction. There is no `@on_change` / observe-the-stream primitive — and so none of its cost: no
+cross-replica change feed, no "which change" predicate, no old/new diffing. The one thing it excludes is a
+write made *outside* the app (a legacy system on a shared DB, a manual `mongosh`); that is a rare, explicit
+**escape hatch** (an opt-in oplog tap) and the *only* place Meteor's change-stream cost reappears.
 
 **Each reaction is one of two delivery disciplines** (the §8 split applied to the hook) — and which one is
 *part of the declaration*, not a guess:
@@ -192,11 +194,11 @@ Callbacks rot when behavior fires *invisibly* (the Rails lesson). We avoid that 
   silent orphans, unlike Rails). There are **no stringly event names** to typo.
 - The ppx **materializes the wiring as a readable generated file** (route_gen-style, in the tree — not a
   hidden runtime registry), so the whole leaf-first graph is *one openable file* when you want the overview.
-- **Bounded blast radius:** after-hooks are post-commit, isolated, idempotent, async; `@on_change`
-  derivations converge; `@before` can only veto. So an unnoticed hook cannot cause Rails-style damage even
-  before you go looking.
+- **Bounded blast radius:** after-hooks are post-commit, isolated, idempotent, async; `@before` can only
+  veto in-transaction (no other reach). So an unnoticed hook cannot cause Rails-style damage even before you
+  go looking.
 
-Naming (`@after`/`@before`/`@on_change`/`@cron`/`@every`) is bikeshed-open; the shapes are fixed.
+Naming (`@after`/`@before`/`@cron`/`@every`) is bikeshed-open; the shapes are fixed.
 
 ---
 
@@ -278,11 +280,12 @@ a relay delivers it; the idem key makes the handler idempotent — **exactly-onc
 ## 8. At-most-once across replicas — synced schedules & exactly-once effects
 
 Most hooks are single-run by construction: `@after`/`@before` run **in-process on the replica that ran the
-target**, and an `@on_change` **derivation** runs **inside the triggering write's transaction** (on whichever
-replica did the write) — so none of them need a claim. Only **two** things genuinely cross replicas:
-**scheduled jobs** (every replica's timer fires the slot) and the **outbox relay** (every replica could drain
-the shared queue — this is also how `@after`/`@on_change` *effects* reach the world exactly-once). One claim
-handles both.
+target**, and a derivation (`@after` a transition) runs **inside that transition's transaction** (on whichever
+replica did the write, updating the shared derived collection atomically) — so none of them need a claim. Two
+things genuinely cross replicas and share one **claim**: **scheduled jobs** (every replica's timer fires the
+slot) and the **outbox relay** (every replica could drain the shared queue — also how `@after` *effects* reach
+the world exactly-once). A third — **live publications** — needs cross-replica *propagation* but no claim (see
+the end of this section).
 
 **The claim = a per-tick unique insert** (Meteor's "synced cron" trick, made transparent by the annotation):
 
@@ -305,6 +308,21 @@ handles both.
 delivering. Synced schedules and exactly-once effects ride the same unique-insert claim — `@after`/`@before`
 and in-transaction derivations need none of it.
 
+### Live publications across replicas — propagation, not a claim
+
+A browser's subscription lives on one replica; a write that affects it may happen on another. Because every
+write is app-originated (§2), **the write path knows the precise delta and emits it post-commit as a change
+event** — the *same* outbox/effect mechanism — which subscriber-replicas relay to their clients. So it is a
+*propagation* tier, not a claim, and it is **precise, targeted fanout — not oplog tailing**:
+
+- **single server** (burrow-embedded / one node): in-process — **free**.
+- **multi-replica with live subscriptions**: the change events go over a **pub/sub bus** (Redis/NATS).
+- the *only* thing that would force blind oplog tailing is reacting to **external** writes (the §4 escape
+  hatch) — quarantined, opt-in, the one place Meteor's cost reappears.
+
+The real defense is keeping the live surface small: most reads are one-shot `find`; liveness is opt-in and
+bounded; server reactions are in-tx derivations. Only genuinely-live client data pays.
+
 ---
 
 ## 9. Typing & safety — what is mechanically prevented
@@ -321,7 +339,7 @@ The point is that the dangerous things are *unrepresentable*, not discouraged:
   delivery is at-least-once + idempotent (§7–§8).
 - **No ill-formed cron** — `[@cron]` forces a no-input function via the generated `f ()` (§4).
 - **No forgotten authorization** — a Collection op with no policy is a compile error (§2).
-- **No unbounded live query** — `watch` requires a bound (§2).
+- **No unbounded live publication** — a publication declares its bound (§2).
 
 **Refuse (ceremony that rots — the Gel/Wasp "don't boil the ocean" trap):** a plan/saga *monad* or binding
 operators in userland; rank-2 phantom regions to make the cliff airtight (Eio/Mirage/Jane Street all stop at
@@ -358,14 +376,17 @@ where its concept lives; folders mark the kind/realm, never the call graph.
 ## 11. Settled vs. open
 
 **Settled:** the three kinds; workflows as ordinary ambient functions (no `db`/DI/`Flow`/monad); multiple
-public functions per module, dev-sized; `raise` as the only control flow; the lifecycle annotations
-`[@after]` / `[@before]` (function-coupled) / `[@on_change]` (state-coupled) / `[@cron]` / `[@every]`, each a
-**real typed reference** so the standard toolchain (go-to-references, rename, the compiler) *is* the graph
-view — no bespoke "show the hooks" command; the per-hook delivery discipline (derivation = in-tx + converge;
+public functions per module, dev-sized; `raise` as the only control flow; **the app owns its database and a
+collection's writes are named transitions** — so every change goes through a known function and there is **no
+data-change hook**; the lifecycle annotations `[@after]` / `[@before]` / `[@cron]` / `[@every]`, each a **real
+typed reference** so the standard toolchain (go-to-references, rename, the compiler) *is* the graph view — no
+bespoke command; the per-hook delivery discipline (derivation = `@after` a transition, in-tx + converge;
 effect = post-commit + async + exactly-once); hooks on a target are independent/unordered unless an explicit
 edge is declared; the circuit-breaker (compile error on cyclic reactions, holding across before+after as one
-happens-before graph); read-your-writes within the transparent transaction; at-most-once schedules + exactly-
-once effects via the one unique-insert claim; tests by just calling the function against ambient in-memory data.
+happens-before graph); read-your-writes within the transparent transaction; **at-most-once schedules +
+exactly-once effects via the one unique-insert claim, and live publications via write-emitted post-commit
+change-events** (in-process single-server; a pub/sub bus multi-replica) — no oplog tailing; tests by just
+calling the function against ambient in-memory data.
 
 **Open — deliberately not yet decided:**
 - **The transparent transaction context is the one build item** — doesn't exist today; the fiber-local +
@@ -376,8 +397,11 @@ once effects via the one unique-insert claim; tests by just calling the function
   top-level shape is not.
 - **`@before` reach** — bias toward a visible call at the top of the function / edge middleware; `@before`
   only for cross-cutting domain pre-conditions. Confirm where the line sits.
-- **Hooks pass the target's result/args by default** (the change for `@on_change`) — confirm the signatures.
-- **Annotation names** (`@after`/`@before`/`@on_change`/`@cron`/`@every`) — bikeshed.
+- **The external-write escape hatch** (an opt-in oplog tap, for a non-Fennec writer on a shared DB) — the one
+  feature that reintroduces change-stream cost; keep it quarantined and rare.
+- **The multi-replica pub/sub bus** for live publications (Redis/NATS) — only when a second replica serves
+  live subscriptions; single-server needs none.
+- **Annotation names** (`@after`/`@before`/`@cron`/`@every`) — bikeshed.
 - **At-least-once schedules** (the lease variant) — deferred until a job genuinely needs it.
 
 **Sequencing (Gel's gravestone):** *do not boil the ocean.* Build the core — ambient workflows + the
