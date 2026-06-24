@@ -138,6 +138,13 @@ let readme ~name ~comp_lib:_ =
      - `server.ml` — the server: one endpoint, renders the component on `GET /`.\n\
      - `web/hello.mlx` — your first `.mlx` component (edit this).\n\
      - `dune-project` — declares the `.mlx` dialect + deps.\n\n\
+     ## Data and business logic\n\n\
+     When you need a database, add two more top-level folders alongside `web/` (Fennec's home for the\n\
+     non-web half — see `examples/site/{collections,workflows}` in the Fennec repo for a worked one):\n\n\
+     - `collections/` — your data, one persisted concept per file (`[@@deriving model]` + `Def.v`).\n\
+     - `workflows/` — business logic: workflows (ordinary functions that run in one atomic\n\
+     transaction), transitions (the guarded write API), and reactions (`[@after]` / `[@cron]`). No\n\
+     `db` is threaded anywhere — data just exists. Open `Fennec_pulse_app` for `Collection`/`Workflow`.\n\n\
      ## Editor not lighting up on `.mlx`?\n\n\
      Run `fennec doctor` — it checks the whole `.mlx` toolchain and prints the exact fix for\n\
      anything missing.\n\n\
