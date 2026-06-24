@@ -80,11 +80,7 @@ let classify ?(backend = false) triggers =
   let apps = List.filter_map app_name paths |> uniq in
   let routes = List.filter_map route_name paths |> uniq in
   let styles =
-    List.exists
-      (fun p ->
-        Filename.extension p = ".scss" || Filename.extension p = ".css"
-        || starts_with p "examples/site/frontend/styles/")
-      paths
+    List.exists (fun p -> Filename.extension p = ".scss" || Filename.extension p = ".css") paths
   in
   let assets =
     List.exists

@@ -57,7 +57,7 @@ let str_contains hay needle =
    the framework tests the worker preloaded are filtered out — the run is purely the app's). ── *)
 let example_chain =
   [ bp "examples/site/frontend/store/site_store.cma";
-    bp "examples/site/frontend/styles/site_styles.cma";
+    bp "examples/site/_client/styles/site_styles.cma";
     bp "examples/site/frontend/components/site_components.cma";
     bp "examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo" ]
 
@@ -142,7 +142,7 @@ let () =
         site_components requires site_store + site_styles + fennec.fur.server (its real deps). *)
      let describe =
        {|((root /r) (build_context _build/default)
- (library ((name site_styles) (uid u_sty) (local true) (requires ()) (source_dir _build/default/examples/site/frontend/styles)))
+ (library ((name site_styles) (uid u_sty) (local true) (requires ()) (source_dir _build/default/examples/site/_client/styles)))
  (library ((name site_store) (uid u_sto) (local true) (requires (u_fur)) (source_dir _build/default/examples/site/frontend/store)))
  (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_sty u_srv u_fur)) (source_dir _build/default/examples/site/frontend/components)))
  (library ((name fennec.fur) (uid u_fur) (local true) (requires ()) (source_dir _build/default/fennec/fur)))

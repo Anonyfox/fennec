@@ -26,15 +26,15 @@ examples/site/
       marketing/hero.mlx   GROUP INTO SUBFOLDERS FREELY — no dune anywhere under here. The whole
       forms/name_form.mlx  tree folds into one lib, FLAT namespace (<Hero/> wherever hero.mlx sits).
     store/             global state (Store.todos …) — shared signals; nests the same way
-    styles/            GENERATED: style_extract → Site_styles.css (inlined component styles)
     templates/         server-only document shells (default, admin_shell); nests the same way
     handlers/          standalone HANDLERS, one .mlx each, mounted in server.ml — an SPA handler
                        (load/view, own jsoo bundle) or a server-rendered FORM handler (view/submit).
       demo/greet.mlx     also nests freely (Site_handlers.Greet wherever greet.mlx sits)
       account/me.mlx
   _client/             GENERATED — build plumbing, do NOT edit (leading _ = generated, like _build/).
-                       Holds the dual-compile mirrors (components, templates, handlers/mirror) + the
-                       per-app/-handler jsoo bundles, all auto-regenerated. See _client/README.md.
+                       Holds the dual-compile mirrors (components, templates, handlers/mirror), the
+                       Site_styles extractor (styles/), + the per-app/-handler jsoo bundles, all
+                       auto-regenerated. See _client/README.md. frontend/ is now 100% yours.
   test/                the ONE test dir (component unit tests live inline in their .mlx, not here):
     dune                 the site_test_runner backend — scopes inline tests to examples/site/
     http/                Http suites (fennec-hunt);            `fennec test http`

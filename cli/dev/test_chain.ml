@@ -259,7 +259,7 @@ let fixture =
  (build_context _build/default)
  (library
   ((name site_styles) (uid u_styles) (local true) (requires ())
-   (source_dir _build/default/examples/site/frontend/styles)))
+   (source_dir _build/default/examples/site/_client/styles)))
  (library
   ((name site_store) (uid u_store) (local true) (requires (u_fur))
    (source_dir _build/default/examples/site/frontend/store)))
