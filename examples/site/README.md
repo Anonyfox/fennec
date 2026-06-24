@@ -9,7 +9,8 @@ examples/site/
   server.ml            endpoints + paw pipeline + serve. SSR = Fur_ssr.handler per app,
                        with ~source (in-process data) + ~styles (inlined component CSS).
   public/              ONE shared static tree, served at / (favicon, robots.txt)
-  frontend/            the authored userland — every file is a REAL Dune module (LSP works)
+  frontend/            the authored userland — every file is a REAL Dune module (LSP works).
+                       100% yours; five plain-named categories. See frontend/README.md.
     apps/<name>/       a self-contained app library (web_app, admin_app):
       main.mlx           config: base + which document shell
       layout.mlx         the app shell (nav + (outlet ()))
