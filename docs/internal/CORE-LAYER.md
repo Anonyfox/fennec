@@ -1,9 +1,24 @@
 # The non-web core — Collections, Workflows, Reactions
 
-**Status:** design RFC. Not implemented. The circuit-breaker was validated by a throwaway compiled spike;
-the rest is grounded in the *actual* ambient Pulse runtime (the data layer resolves its backend from a
-fiber-local Eio switch installed at `Fennec.serve` boot; minimongo gives tests a fresh in-memory DB; mail
-is ambient). This is the reference the implementation builds against.
+**Status: IMPLEMENTED** (Jun 25 2026). The runtime, the ppx, and the example all ship; this document is
+both the design rationale and the as-built reference. What's where:
+
+| Concept | Module | Lib |
+| --- | --- | --- |
+| Transparent transaction | `Fennec_mongo_dynamic.Tx` (+ `Minimongo.tx_snapshot/restore`) | `fennec-mongo.dynamic` |
+| Workflows + reactions | `Workflow` (make/call/before/after) | `fennec.pulse.workflow` |
+| Schedules + the claim | `Schedule` (every/cron + `_fennec_cron`) | `fennec.pulse.workflow` |
+| `@after`/`@before`/`@cron`/`@every` + circuit-breaker | the ppx | `fennec.pulse.workflow.ppx` |
+| Collections write-API (create/delete/transition) | `Fennec_pulse_app.Collection` | `fennec.pulse.app` |
+| Userland homes | `collections/` + `workflows/` (peers of `web/`) | the app |
+
+Honest scope of the v1 build: **atomic rollback is implemented for the in-memory (`:memory:`) backend**
+(what `fennec test` and the dev seed exercise) via snapshot-and-restore; on burrow/mongo the transaction
+bracket is transparent and writes commit-on-success, with backend-native rollback (an LMDB parent-txn / a
+mongo session) a scoped follow-on. The circuit-breaker is compile-time for the `@after`/`@before` graph
+(intra-module via the ppx, cross-module via module dependency cycles) plus a runtime re-entrancy guard for
+body-level cascades. See `fennec/pulse/workflow/README.md` for the API and the example's
+`collections/` + `workflows/` READMEs for the 2-minute teach.
 
 **Scope:** the *non-web* half of a Fennec app — data ground truth, business logic, and everything that
 reacts to or is scheduled around it. The `web/` layer (Phoenix-style userland interface) is its peer; web
@@ -388,21 +403,29 @@ exactly-once effects via the one unique-insert claim, and live publications via 
 change-events** (in-process single-server; a pub/sub bus multi-replica) — no oplog tailing; tests by just
 calling the function against ambient in-memory data.
 
-**Open — deliberately not yet decided:**
-- **The transparent transaction context is the one build item** — doesn't exist today; the fiber-local +
-  `Dynamic.collection` seam is proven; each backend needs its batch-commit. (This is the make-or-break to
-  build first.)
-- **Folder layout** — a horizontal `web/` + a non-web peer (`data/`? `core/`?) vs vertical feature slices.
-  Leaning horizontal peer, domain-organized inside; `web/` is already horizontal. Concepts settled; the
-  top-level shape is not.
-- **`@before` reach** — bias toward a visible call at the top of the function / edge middleware; `@before`
-  only for cross-cutting domain pre-conditions. Confirm where the line sits.
+**Built (was open, now shipped):**
+- **The transparent transaction context** — built on the fiber-local + `Dynamic.collection` seam, with
+  full atomic snapshot-rollback on the in-memory backend (commit-on-return, rollback-on-raise,
+  read-your-writes, nested-flatten, serialized). Proven by 12 + 8 assertions.
+- **Folder layout** — settled: top-level `collections/` and `workflows/`, flat peers of `web/`. Built in
+  the example; server-only, `(include_subdirs unqualified)`, no client mirror.
+- **`@before` reach** — built as an in-transaction guard that may `raise` to veto; use it for
+  cross-cutting domain pre-conditions, a visible call at the top of the body for the rest.
+
+**Open — deferred follow-ons:**
+- **Backend-native transaction rollback** for burrow (an LMDB parent-txn) and mongo (a client session) —
+  today those backends commit-on-success; the in-memory backend has full rollback. The seam is uniform,
+  so this is additive.
 - **The external-write escape hatch** (an opt-in oplog tap, for a non-Fennec writer on a shared DB) — the one
   feature that reintroduces change-stream cost; keep it quarantined and rare.
 - **The multi-replica pub/sub bus** for live publications (Redis/NATS) — only when a second replica serves
   live subscriptions; single-server needs none.
-- **Annotation names** (`@after`/`@before`/`@cron`/`@every`) — bikeshed.
+- **`fennec new` scaffolding** of `collections/`/`workflows/` — the convention is taught by the example +
+  READMEs; the minimal scaffold stays a hello-world for now.
+- **A materialized wiring manifest** (route_gen-style) — would force-link pure-`@cron` workflows and give an
+  openable reaction-graph overview; today referencing a workflow from `server.ml` links its module.
 - **At-least-once schedules** (the lease variant) — deferred until a job genuinely needs it.
+- **Annotation names** (`@after`/`@before`/`@cron`/`@every`) — bikeshed.
 
 **Sequencing (Gel's gravestone):** *do not boil the ocean.* Build the core — ambient workflows + the
 transparent transaction + `@after`/`@cron` + the claim — first; keep layers independently replaceable; stay
