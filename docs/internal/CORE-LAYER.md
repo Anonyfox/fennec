@@ -235,7 +235,70 @@ The point of the whole design is that the dangerous things are *unrepresentable*
 
 ---
 
-## 8. How the web layer uses it
+## 8. Mechanical safety — out-of-the-box footgun elimination
+
+§5–§7 give the structural guarantees. This section is the broader toolkit: how a *long, linear* workflow
+(length is fine — Go-style; splitting for length is itself an anti-pattern) is made **unable to silently
+break**, mechanically, with no new ceremony. The wins come from abstract types + capability-passing + a
+plan value + a handful of lints + Eio's structured concurrency — all mainline OCaml 5. Validated against a
+research round (compensation, atomicity, typed effects, error handling, typestate, exactly-once, reactive cost).
+
+**The one tweak that subsumes the most — workflows *describe*, the framework *performs*.** A workflow body
+is `snapshot -> plan`: it may only *read* the snapshot and *return* a typed `plan` (writes + scheduled
+effects); the framework owns `commit`. Because `plan` is opaque and no IO capability is in scope,
+**half-commit, mid-transaction effect, and accidental multi-transaction splitting become type errors** —
+Datomic/Convex's "a mutation is a transaction," enforced here at *compile time* by the body's only output
+being data (Convex needs a runtime sandbox for the same property). The body still reads long-and-linear; it
+appends to a plan instead of performing. Limit: no auto-retry of an arbitrary closure (no determinism
+enforcement without a sandbox) — retry the pure plan-production only, never effect dispatch.
+
+### Adopt (ranked by leverage ÷ ceremony)
+
+| footgun killed | mechanism | cost |
+|---|---|---|
+| half-commit / mid-tx effect / multi-tx split | **Plan model** (`snapshot -> plan`, opaque, framework commits) | structural; the spine |
+| **forgot to compensate** past the cliff | **`step ~forward ~undo`** — can't obtain the forward result without its undo; undos auto-run LIFO on failure, discarded on success; back with Eio `Switch.on_release_cancellable` | ~1 labelled arg per step |
+| **effect fired twice** | **abstract `Idem.t` derived from the triggering change** (a random uuid won't construct one) + transactional outbox + unique-index dedup (free on Mongo & Burrow) | low |
+| **wrong delivery discipline** | **`Effect` vs `Derivation` as two types**, different verbs; `Effect.enqueue` requires an `Idem.t` and has no `perform_now`; a `Derivation` materializer is pure by **capability-withholding** (no clock/RNG/IO/tx in scope) | low; resolves the §10 delivery-tag |
+| **derived view drifted** | pure materializer + free `rebuild` / `scrub` / `reconcile` (recompute-from-source diff) | low (the 80/20; not full IVM) |
+| **illegal step order** (charge-before-reserve) | **parse-don't-validate stage types** — `Unvalidated→Validated→Priced→Paid`; `ship` demands a `Paid` only payment mints; `let*`-chained | low; composes with Sift |
+| external call inside a tx (**the cliff**) | **capability-passing** — external effects are values passed in, never ambient; not threaded into the plan body + a lint flagging `Http`/`Unix` inside it | near-free |
+| **silent error swallow** | engineered must-use: `result`-returning steps (drop one → warnings 10/26, free); **ban polymorphic `ignore` / bare `let _ =`** in workflow code; `-warn-error +5+10+26` across all profiles; closed error ADT default, polyvar rows annotated-closed at the `.mli`; ban error catch-alls + lossy `map_error` | lints + dune flags + a convention |
+| **over-reactivity** (the 9 TB/day class) | **live-is-a-type**: `find` one-shot (the default) vs `watch : … -> 'a Live.t`; `watch` *requires* a `~limit`/`~window` (unbounded-live unrepresentable); no-op writes emit no invalidation (ppx-derived equality); per-query cost a first-class value + build lint | low |
+| **data races / leaked subscriptions** | single-domain store + **suspension-free commit** (Eio: no lock needed if single-domain + no fiber switch → the write-then-fire cycle is atomic for free); subscriptions tied to the connection `Switch` (auto-teardown) | architectural rule |
+
+The last four rows are purely **additive** (abstract types, lints, Eio) — no ceremony. The first three are
+structural refinements to §3–§6.
+
+### Refuse (ceremony that rots — avoiding footguns is not the same as piling on type theory)
+
+Every research thread independently flagged these as the Gel/Wasp "don't boil the ocean" trap:
+- **Rank-2 phantom regions** to make the cliff airtight — Eio, MirageOS, and Jane Street all deliberately
+  stop at structural confinement + a lint; the airtight version needs `'a.` annotations everywhere and
+  rank-2-only-in-records. ~95% of the safety at ~5% of the cost; the residual is a *malicious-insider*
+  threat, not the model.
+- **GADT / multi-axis typestate** for persisted workflows — breaks `[@@deriving model]`, opaque errors,
+  cartesian impl explosion. Parse-don't-validate gives ~80% of the benefit and serializes fine.
+- **OCaml 5 effect handlers / free monads as the *enforcement* layer** — OCaml effects are *untyped* (a
+  wrong effect is a runtime error, not a compile one). Use the opaque plan + capability instead.
+- **Tagless-final "capability typeclass that lists effects"** — De Goes' "unconstrain rather than
+  constrain"; it is theater (the ambient `Http.post` sits one line below).
+- **Session types, full IVM / differential dataflow, stringly `(_, string) result`, designing around
+  OxCaml modes** — academic, boil-the-ocean, or not-mainline.
+
+### The honest ceiling (where OCaml can't mechanize — keep the cheap substitute)
+
+- No **linear types** → types can't stop *double-spend* (a stage value reused twice). **Keep the
+  idempotency key**; don't let stage types fool you into dropping it.
+- No **data-race freedom** in the type system → confine the store to one domain, don't pretend threads are checked.
+- No **typed effects** → *withhold* the clock/IO capability (so it's unreachable) rather than *tracking*
+  effects in types; a lint covers the residual ambient hole.
+
+These are exactly where Eio, MirageOS, and Jane Street stop too — Fennec draws the line in good company.
+
+---
+
+## 9. How the web layer uses it
 
 `web/` stays a thin interface: a page/handler **calls a workflow** and renders the result; nothing more.
 When web logic itself becomes nontrivial (a multi-step wizard's server coordination), it becomes its
@@ -244,30 +307,33 @@ uniform: **logic lives where its concept lives; folders mark the kind/realm, nev
 
 ---
 
-## 9. Settled vs. open
+## 10. Settled vs. open
 
-**Settled (validated by the spike, aligned with the principles):**
+**Settled (validated by the spike + the mechanical-safety round; aligned with the principles):**
 - The three kinds (Collections / Workflows / Reactions) and folder-ignorant, by-reference composition.
 - The wiring law (circular = compile error) and its scope.
 - The cliff shape (plain function + compensation; idem-keyed effects; step-DAG deferred).
-- The typing guarantees of §7.
+- The typing guarantees of §7 and the mechanical-safety toolkit of §8.
 - Reactions = one sink model, two kinds (side-effect vs read-projection).
 
-**Open — deliberately not yet decided (see `nonweb-layer-research` for the evidence on each):**
+**Resolved by §8 (were open):**
+- **The `derivation` vs `effect` delivery tag** → two distinct types — `Effect` (requires an `Idem.t`,
+  outbox-delivered, fire-once) vs `Derivation` (a pure, capability-withheld materializer with free
+  `rebuild`/`scrub`/`reconcile`). The dev cannot pick the wrong discipline.
+- **Cliff hardening** → capability-passing (external effects are values, never ambient) + a lint flagging
+  `Http`/`Unix` inside the tx body; rank-2 phantom regions deliberately *rejected* as ceremony-that-rots
+  (the residual is a malicious-insider threat, not the design's model).
+
+**Still open — deliberately not yet decided (see `nonweb-layer-research` for the evidence on each):**
 - **Folder layout.** A horizontal `web/` + a non-web peer (`data/`? `core/`?) vs vertical feature
   slices. Leaning: a horizontal peer, *domain-organized inside* (the least-premature commitment for a
   tangled, client-replicated domain) — but `web/` is already horizontal, and reversing it into feature
   slices is on the table. **Concepts are settled; the folder name and top-level shape are not.**
 - **Policy home.** On the Collection (this RFC's lean) vs a separate typed policy referenced by both —
   Instant's "schema and authz evolve on different axes" is the live counter-argument.
-- **The `derivation` vs `effect` delivery tag** (§4) — the one runtime distinction to formalize so the
-  unified wiring doesn't blur.
 - **The ppx ergonomics layer.** A later ppx may hoist `let%on E` / co-located policy/schedule into the
   composition root — but it **must regenerate the same leaf-first `let` chain**, never a runtime
   registry, or it throws away the free acyclicity guarantee (§5).
-- **Cliff hardening.** OCaml won't *stop* a determined author from calling an external effect inside a
-  `Tx.run` (capability capture). Region/rank-2 types would; heavier. Structure + idem-key is the lean
-  V1 choice.
 - **Multi-step sagas** (the step-DAG) — deferred until a real 3+-external-step case appears.
 
 **The sequencing discipline (Gel's gravestone):** *do not boil the ocean.* Ship the core (Collections +
