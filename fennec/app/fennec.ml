@@ -336,6 +336,9 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error
      the ACME challenge from the shared table). Dev keeps a single plain/forced port — no :80. *)
   if Option.is_some tls_source && not is_dev then Paw.Acme.serve_http_front ~sw ~net:(Eio.Stdenv.net env) ~lock:tls_lock ~challenges;
   (match on_start with Some f -> f ~sw ~sleep:(Eio.Time.sleep (Eio.Stdenv.clock env)) ~net:(Eio.Stdenv.net env) | None -> ());
+  (* start the at-most-once scheduler for any [@cron]/[@every] jobs (a no-op when there are none, and
+     only in the HTTP-serving server — never the console). After [on_start] so seeding runs first. *)
+  Fennec_pulse_workflow.Schedule.start ~sw ~clock:(Eio.Stdenv.clock env);
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
      line first. The dev supervisor owns the terminal: report named URLs for its banner, else stay quiet. *)

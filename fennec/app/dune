@@ -16,6 +16,7 @@
   fennec.mail
   fennec.web
   fennec.pulse.sift
+  fennec.pulse.workflow
   fennec-mongo.driver
   fennec-mongo.dynamic
   eio

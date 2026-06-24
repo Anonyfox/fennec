@@ -1,0 +1,13 @@
+; The non-web core end to end in the example — the ticket domain (collections/ + workflows/) over the
+; ambient in-memory backend under a real Eio switch. A standalone Eio exe run via a runtest rule (the
+; full flows need the ambient backend, which an inline let%test cannot boot).
+(executable
+ (name test_tickets)
+ (libraries fennec.pulse.app fennec-mongo.dynamic fennec-mongo.bson site_collections site_workflows
+   eio eio_main eio.unix unix))
+
+(rule
+ (alias runtest)
+ (deps test_tickets.exe)
+ (action
+  (run ./test_tickets.exe)))

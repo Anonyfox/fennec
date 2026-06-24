@@ -1,0 +1,16 @@
+; workflows/ — the app's business logic: workflows, transitions, and reactions over the collections
+; (peer of web/ and collections/). Server-only. (include_subdirs unqualified) folds nested folders into
+; this one flat-namespace lib. Two ppxes: the reactions ppx (@after/@before/@cron/@every) and hunt
+; (inline let%test of the pure transition rules). The full flows are exercised by an Eio test under
+; test/ (they need the ambient backend, which a let%test cannot boot).
+(include_subdirs unqualified)
+
+(library
+ (name site_workflows)
+ (wrapped false)
+ (libraries fennec.pulse.app fennec.pulse.workflow fennec.pulse.sift.mongo fennec-mongo.bson
+   site_collections fennec-hunt.unit)
+ (inline_tests
+  (backend site_test_runner))
+ (preprocess
+  (pps fennec.pulse.workflow.ppx fennec-hunt.ppx)))

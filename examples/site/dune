@@ -96,6 +96,8 @@
   site_components
   site_styles
   site_store
+  site_collections
+  site_workflows
   fennec.pwa
   fennec.pulse.app))
 
@@ -122,6 +124,8 @@
   site_components
   site_styles
   site_store
+  site_collections
+  site_workflows
   fennec.pwa
   fennec.pulse.app))
 

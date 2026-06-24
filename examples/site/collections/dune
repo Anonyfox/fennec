@@ -1,0 +1,12 @@
+; collections/ — the app's data ground truth, one collection per file (peer of web/ and workflows/).
+; Server-only: the SSR binary links these; clients see the data through publications, never by linking
+; the models. (include_subdirs unqualified) folds any nested folders into this one flat-namespace lib,
+; so you never add a dune under a subfolder. [@@deriving model] + Def.v need only Sift.
+(include_subdirs unqualified)
+
+(library
+ (name site_collections)
+ (wrapped false)
+ (libraries fennec.pulse.sift fennec.pulse.sift.mongo fennec-mongo.bson)
+ (preprocess
+  (pps fennec.pulse.sift.ppx)))
