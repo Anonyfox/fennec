@@ -6,7 +6,7 @@ open Fennec_hunt.Http
 
 let%http "site api (http)" = fun () ->
   check "health endpoint: JSON shape + timing" (fun () ->
-    get "/api/health" ~expect:[ status 200; is_json; json_path_is "ok" "true"; json_path_is "app" "web"; max_elapsed 500.0 ]);
+    get "/api/health" ~expect:[ status 200; is_json; json_path_is "ok" "true"; json_path_is "app" "main"; max_elapsed 500.0 ]);
 
   check "send_chunked stream reassembles in order" (fun () ->
     get "/api/stream" ~expect:[ status 200; body_contains "chunk-1"; body_contains "chunk-2"; body_contains "chunk-3" ]);
@@ -16,7 +16,7 @@ let%http "site api (http)" = fun () ->
 
   check "extract + assert a JSON field" (fun () ->
     get "/api/health";
-    assert (json_field "app" = "web"));
+    assert (json_field "app" = "main"));
 
   (* the TYPED resource endpoint (Data.model's refetch source): /api/site-info serves the SAME bytes
      Sift.encode_json Site_info.codec produced — the typed field shape the client decodes back *)

@@ -4,10 +4,10 @@
 open Fennec_hunt.Http
 
 let%http "site (http)" = fun () ->
-  check "web health endpoint" (fun () ->
-    get "/api/health" ~expect:[status 200; is_json; json_path_is "ok" "true"; json_path_is "app" "web"]);
+  check "health endpoint" (fun () ->
+    get "/api/health" ~expect:[status 200; is_json; json_path_is "ok" "true"; json_path_is "app" "main"]);
 
-  check "web home page" (fun () ->
+  check "home page" (fun () ->
     get "/" ~expect:[status 200; is_html; body_contains "Welcome to the Fennec site"]);
 
   (* SSR renders the live data: the realtime task list's seeded docs appear in the server-rendered
