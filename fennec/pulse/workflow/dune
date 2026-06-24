@@ -1,0 +1,9 @@
+; fennec.pulse.workflow — the non-web core's runtime: Workflow (ordinary functions wrapped in the
+; transparent transaction, carrying their before/after reactions) and Schedule (cron/every jobs run
+; at-most-once across replicas via a unique-insert claim). Server-only — it links the concrete data
+; backend (for Tx + the claim collection) and Eio (for the scheduler fiber). The reactions ppx
+; desugars [@before]/[@after]/[@cron]/[@every] into calls here.
+(library
+ (name fennec_pulse_workflow)
+ (public_name fennec.pulse.workflow)
+ (libraries fennec-mongo.dynamic fennec-mongo.minimongo fennec-mongo.bson eio unix))

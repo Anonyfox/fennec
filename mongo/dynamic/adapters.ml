@@ -181,7 +181,11 @@ let bw_observe e (q : Backend.query) ~added ~changed ~removed =
    call tree is one atomic unit, matching "a workflow calling a workflow is still one transaction". *)
 module Tx = struct
   type entry = { coll : Minimongo.t; snap : Minimongo.snapshot }
-  type t = { mutable touched : entry list }
+
+  type t = {
+    mutable touched : entry list; (* collections snapshotted for rollback *)
+    mutable on_commit : (unit -> unit) list; (* post-commit reactions/effects, fired after the OUTERMOST commit *)
+  }
 
   let _key : t Eio.Fiber.key = Eio.Fiber.create_key ()
   let _fallback : t option ref = ref None
@@ -201,25 +205,41 @@ module Tx = struct
 
   let rollback (tx : t) : unit =
     List.iter (fun e -> Minimongo.tx_restore e.coll e.snap) tx.touched;
-    tx.touched <- []
+    tx.touched <- [];
+    tx.on_commit <- [] (* a rolled-back transaction fires no post-commit reactions *)
+
+  (* [on_commit thunk] runs [thunk] after the OUTERMOST transaction commits — the seam post-commit
+     reactions and exactly-once effects ride on. A nested workflow's after-hooks register here and all
+     fire together once the whole transaction is durable. Outside any transaction, runs immediately. *)
+  let on_commit (thunk : unit -> unit) : unit =
+    match current () with Some tx -> tx.on_commit <- tx.on_commit @ [ thunk ] | None -> thunk ()
 
   let _serialize = Eio.Mutex.create ()
 
-  (* [run f] executes [f] in one transaction (commit on return, rollback on raise). Re-entrant: a
-     nested [run] joins the outer transaction rather than opening a new one. *)
+  (* run the post-commit callbacks, isolated (one failing reaction must not starve the rest) *)
+  let _run_post cbs =
+    List.iter (fun f -> try f () with (Stack_overflow | Out_of_memory) as e -> raise e | _ -> ()) cbs
+
+  (* [run f] executes [f] in one transaction (commit on return, rollback on raise) and then fires the
+     post-commit callbacks. Re-entrant: a nested [run] joins the outer transaction rather than opening
+     a new one (so its on_commit callbacks defer to the outermost commit). *)
   let run : type a. (unit -> a) -> a =
    fun f ->
     match current () with
     | Some _ -> f () (* already inside a transaction — join it (flatten to one atomic unit) *)
     | None ->
-        let tx = { touched = [] } in
+        let tx = { touched = []; on_commit = [] } in
         let go () = match f () with v -> commit tx; v | exception e -> rollback tx; raise e in
         (* serialize + bind ambient under Eio; outside a scheduler (unit tests) a global ref stands in *)
-        (match (try `Eio (ignore (Eio.Fiber.get _key : t option)) with Stdlib.Effect.Unhandled _ -> `Plain) with
-        | `Eio () -> Eio.Mutex.use_rw ~protect:true _serialize (fun () -> Eio.Fiber.with_binding _key tx go)
-        | `Plain ->
-            _fallback := Some tx;
-            Fun.protect go ~finally:(fun () -> _fallback := None))
+        let result =
+          match (try `Eio (ignore (Eio.Fiber.get _key : t option)) with Stdlib.Effect.Unhandled _ -> `Plain) with
+          | `Eio () -> Eio.Mutex.use_rw ~protect:true _serialize (fun () -> Eio.Fiber.with_binding _key tx go)
+          | `Plain ->
+              _fallback := Some tx;
+              Fun.protect go ~finally:(fun () -> _fallback := None)
+        in
+        _run_post tx.on_commit; (* outermost committed — fire reactions OUTSIDE the tx binding (fresh txns) *)
+        result
 end
 
 module Dynamic = struct
