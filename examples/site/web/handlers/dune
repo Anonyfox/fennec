@@ -1,4 +1,4 @@
-; Standalone HANDLERS — one .mlx = one handler, all under frontend/ as first-class citizens. The fur ppx
+; Standalone HANDLERS — one .mlx = one handler, all under web/ as first-class citizens. The fur ppx
 ; (-handler) fuses each file's payload/load/view into a server `serve` (this lib, e.g.
 ; Site_handlers.Greet.serve) and a client `boot` (the generated mirror). You mount each serve MANUALLY in
 ; server.ml at any path you like — central-router DX. Group handlers into subfolders freely:

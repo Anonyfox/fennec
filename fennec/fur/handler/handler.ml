@@ -1,4 +1,4 @@
-(* A HANDLER — a standalone, full HTTP handler authored as ONE .mlx (frontend/handlers/<name>.mlx):
+(* A HANDLER — a standalone, full HTTP handler authored as ONE .mlx (web/handlers/<name>.mlx):
    a server [load] (conn -> outcome) fused with an isomorphic [view] (payload -> vnode). On [render
    payload] the framework seeds exactly that — a Sift-typed value — SSRs the view, and ships the
    handler's OWN jsoo bundle so it hydrates into a tiny SPA. [load] can also [redirect]/[error] — a

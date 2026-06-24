@@ -1,4 +1,4 @@
-(* The /greet HANDLER at the HTTP layer — a standalone .mlx (frontend/handlers/greet.mlx) mounted
+(* The /greet HANDLER at the HTTP layer — a standalone .mlx (web/handlers/greet.mlx) mounted
    MANUALLY at /greet and reused at /hi/:name. It is a FULL HTTP handler: the SAME view + payload is
    content-negotiated into a hydrated SPA, a JSON body, or static no-JS HTML — and it stays leak-proof
    (request data + Server_only secrets never cross). *)

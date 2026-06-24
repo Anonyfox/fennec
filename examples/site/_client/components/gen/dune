@@ -1,15 +1,15 @@
-; GENERATOR: route_gen --mirror reads the EXTERNAL frontend/components/ tree and emits dune.inc — one
+; GENERATOR: route_gen --mirror reads the EXTERNAL web/components/ tree and emits dune.inc — one
 ; copy_files# per authored subdir, flattening the nested tree into the client mirror in ../run. Globbing
 ; the external source (never ../run) avoids the dynamic_include cycle. Nest a component = it just appears.
 (rule
  (deps
-  (source_tree %{project_root}/examples/site/frontend/components)
+  (source_tree %{project_root}/examples/site/web/components)
   %{project_root}/fennec/fur/tools/route_gen.exe)
  (target dune.inc)
  (action
   (run
    %{project_root}/fennec/fur/tools/route_gen.exe
    --mirror
-   %{project_root}/examples/site/frontend/components
+   %{project_root}/examples/site/web/components
    .
-   examples/site/frontend/components)))
+   examples/site/web/components)))

@@ -88,7 +88,7 @@ The live signals (`user`, `user_id`, `logging_in`) and the verbs (`login_with_pa
 …) are the browser-side `Fennec_accounts_client` facade (`fennec.accounts.client`); the server side
 is `Accounts.user_id conn` in a handler. A worked end-to-end example of the skeleton→snap pattern —
 a fixed-slot badge that renders "Sign in" for SSR and "Hello, …" after hydration — is
-[`examples/site/frontend/components/user_badge.mlx`](../../examples/site/frontend/components/user_badge.mlx)
+[`examples/site/web/components/user_badge.mlx`](../../examples/site/web/components/user_badge.mlx)
 (mounted in the web app's `layout.mlx`; its SSR `None`-frame is asserted by the inline `let%test` in
 that same file).
 
@@ -98,7 +98,7 @@ from, and it makes the *opposite* trade.
 
 ### Mode B — the personalized server handler (seeded, no snap)
 
-A **standalone handler** (`frontend/handlers/<name>.mlx`, mounted with `Paw.get "/path"
+A **standalone handler** (`web/handlers/<name>.mlx`, mounted with `Paw.get "/path"
 Handler.serve`) is the other half of the story. Unlike a Mode-A page, its server entry point —
 `load : conn -> 'p outcome` — **has the Conn**. So it can read the request user *server-side*, render
 the page **already personalized**, and **seed exactly that payload**; the client then decodes the same
@@ -116,7 +116,7 @@ Inside `load`, both `Accounts.user_id conn` and `Accounts.current_user (Accounts
 named:
 
 ```ocaml
-(* frontend/handlers/me.mlx — a personalized dashboard, authored as ONE .mlx *)
+(* web/handlers/me.mlx — a personalized dashboard, authored as ONE .mlx *)
 module Email = struct
   type t = { address : string; verified : bool } [@@deriving model]
 end
@@ -166,7 +166,7 @@ private and must be correct on the first byte; pick Mode A when the shell is pub
 personalization can fill in a beat later.
 
 A worked, runnable example is
-[`examples/site/frontend/handlers/me.mlx`](../../examples/site/frontend/handlers/me.mlx) (mounted at
+[`examples/site/web/handlers/me.mlx`](../../examples/site/web/handlers/me.mlx) (mounted at
 `/me` in `examples/site/server.ml`, alongside the `/login` + `/logout` routes that make it live; its
 personalized SSR frame is asserted by the inline `let%test_unit` in that same file).
 

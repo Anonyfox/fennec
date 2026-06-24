@@ -70,7 +70,7 @@ val summary : Sift.error list -> error_summary
 
 (** {2 Form-handler view-state + outcome}
 
-    A [frontend/handlers/<name>.mlx] FORM handler is [view : ctx -> vnode] + [submit : conn -> t -> outcome]
+    A [web/handlers/<name>.mlx] FORM handler is [view : ctx -> vnode] + [submit : conn -> t -> outcome]
     (the fur ppx generates GET/POST/serve). The [view] reads this {!ctx}; [submit] returns an {!outcome}. *)
 
 (** The per-render context a form handler's [view] receives: the conn (for {!csrf} + {!value}), the

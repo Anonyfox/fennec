@@ -173,8 +173,8 @@ let tests_of_summary = function
             s.Dev_tests.results }
 
 let%test "build ok summary includes affected surface and tests" =
-  let affected = Affected.classify [ "examples/site/frontend/components/nav.mlx changed" ] in
-  let v = Build_ok { trigger = [ "examples/site/frontend/components/nav.mlx changed" ]; served = Full_reload; build_ms = Some 12.; tests = Tests_passed { passed = 3; libs = 1; ms = 4.; warm = None }; affected } in
+  let affected = Affected.classify [ "examples/site/web/components/nav.mlx changed" ] in
+  let v = Build_ok { trigger = [ "examples/site/web/components/nav.mlx changed" ]; served = Full_reload; build_ms = Some 12.; tests = Tests_passed { passed = 3; libs = 1; ms = 4.; warm = None }; affected } in
   let s = summary v in
   Fennec_hunt_unit.str_contains s "reload" && Fennec_hunt_unit.str_contains s "affected: component nav"
   && Fennec_hunt_unit.str_contains s "tests 3 passed"

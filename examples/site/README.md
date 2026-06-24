@@ -9,8 +9,8 @@ examples/site/
   server.ml            endpoints + paw pipeline + serve. SSR = Fur_ssr.handler per app,
                        with ~source (in-process data) + ~styles (inlined component CSS).
   public/              ONE shared static tree, served at / (favicon, robots.txt)
-  frontend/            the authored userland — every file is a REAL Dune module (LSP works).
-                       100% yours; five plain-named categories. See frontend/README.md.
+  web/                 the authored userland — every file is a REAL Dune module (LSP works).
+                       100% yours; five plain-named categories. See web/README.md.
     apps/<name>/       a self-contained app library (main_app, admin_app):
       main.mlx           config: base + which document shell
       layout.mlx         the app shell (nav + (outlet ()))
@@ -35,7 +35,7 @@ examples/site/
   _client/             GENERATED — build plumbing, do NOT edit (leading _ = generated, like _build/).
                        Holds the dual-compile mirrors (components, documents, handlers/mirror), the
                        Site_styles extractor (styles/), + the per-app/-handler jsoo bundles, all
-                       auto-regenerated. See _client/README.md. frontend/ is now 100% yours.
+                       auto-regenerated. See _client/README.md. web/ is now 100% yours.
   test/                the ONE test dir (component unit tests live inline in their .mlx, not here):
     dune                 the site_test_runner backend — scopes inline tests to examples/site/
     http/                Http suites (fennec-hunt);            `fennec test http`
@@ -46,7 +46,7 @@ examples/site/
 ```
 
 ## How it fits together
-- **`frontend/apps/<name>/`** is its own Dune library (`main_app`, `admin_app`). The
+- **`web/apps/<name>/`** is its own Dune library (`main_app`, `admin_app`). The
   pages/layout/main are real modules, so editor tooling (Merlin/LSP) works and editing
   a page recompiles just that module. `route_gen --glue` reads the file tree and emits
   the wiring — `routes.ml` (router + mount) and `paths.ml` (typed path builders) — without

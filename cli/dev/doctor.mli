@@ -1,4 +1,4 @@
-(** [fennec doctor] — the one command a stuck beginner (or AI agent) runs when a frontend Fennec app
+(** [fennec doctor] — the one command a stuck beginner (or AI agent) runs when a Fennec web app
     won't build or the editor's [.mlx] IntelliSense is dead.
 
     It verifies the whole [.mlx] dialect toolchain reaches the user's machine — now SELF-CONTAINED in

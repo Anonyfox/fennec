@@ -1,7 +1,7 @@
 (** The `fennec dev` orchestration loop — the composition root.
 
     It drives entirely off {!Dune_watch}'s settled-build events: restart the server on a good
-    backend build, hot-reload on a frontend-only change, keep the last good server on a failed
+    backend build, hot-reload on a client-only change, keep the last good server on a failed
     build, and survive anything (a total, exception-wrapped loop). The substantive logic lives in
     the tested sibling modules — {!Artifact}, {!Pidfile}, {!Assets}, {!Crash_limiter}, the server
     child + its line classifier ({!Server_proc}), held-port reclaim ({!Port}), and the shared

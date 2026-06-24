@@ -8,7 +8,7 @@
    The render is [Fur_ssr.handler] — synchronous (no Eio): exactly the (path -> html
    option) shape [Endpoint.app] consumes. It is given ~styles (the inlined component
    [%%style], from Site_styles) and ~source (the in-process data fetcher below), so the
-   main app gets server-rendered data + fast-render seeds. The SAME frontend lib is
+   main app gets server-rendered data + fast-render seeds. The SAME web lib is
    compiled to JS via js_of_ocaml for the client (./client). *)
 
 (* Paw is the HTTP foundation, re-exported by fennec — used directly, no Fennec.* proxy. *)
@@ -16,7 +16,7 @@ module Conn = Paw.Conn (* the conn verbs: before_send, body_param, redirect, sen
 module Accounts = Fennec.Accounts
 
 (* The app's data. [/api/greeting] is GONE from here — it is now CO-LOCATED in the component
-   (frontend/components/greeting.mlx, via [Data.local]): the value, the SSR seed source AND the refetch
+   (web/components/greeting.mlx, via [Data.local]): the value, the SSR seed source AND the refetch
    route all live in that one file, auto-registered by the framework. No api_source arm, no Paw.get here.
 
    The remaining keys are the OTHER demo shapes: [browser-only] (client-only data, no SSR seed) and the
@@ -184,7 +184,7 @@ let main =
        (fun c -> Conn.send_chunked c (fun emit -> emit "chunk-1"; emit "chunk-2"; emit "chunk-3"))
   |> Paw.get "/api/download" (fun c -> c |> Paw.send_file ~path:download_path)
   (* the middle layer: a server-rendered FORM HANDLER at /hello (typed form input + validation + CSRF +
-     flash, no client JS — see frontend/handlers/hello.mlx). Session + CSRF paws back its flash + token;
+     flash, no client JS — see web/handlers/hello.mlx). Session + CSRF paws back its flash + token;
      [Paw.form] registers GET+POST to the one ppx-generated [serve] (it dispatches by method). *)
   |> Paw.use (Paw.Session.make ~secret:hello_secret ())
   |> Paw.use (Paw.Csrf.make ~secret:hello_secret ())
@@ -198,7 +198,7 @@ let main =
   |> Paw.get "/hi/:name" Site_handlers.Greet.serve
   (* Mode B — a PERSONALIZED, authenticated server handler: [load] reads the userId from the conn,
      renders the user's dashboard server-side, and seeds that payload so the client hydrates already
-     personalized (no snap). Anonymous ⇒ it redirects to /login. See frontend/handlers/me.mlx. *)
+     personalized (no snap). Anonymous ⇒ it redirects to /login. See web/handlers/me.mlx. *)
   |> Paw.get "/me" Site_handlers.Me.serve
   (* the dev mailbox — mounted ONLY in dev (Fennec.dev_only); in production these routes do not exist.
      "/dev/send-test-mail" is a demo trigger: hit it and the email shows up at /dev/mailbox live. *)

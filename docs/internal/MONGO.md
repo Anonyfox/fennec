@@ -259,7 +259,7 @@ over `Bson.t` + a shared `query = {selector; sort; skip; limit; fields}` + `obse
 ## 7. Consumers (the "where we use it")
 
 ### 7a. Pulse realtime (the main consumer)
-Collections defined by `[@@deriving collection ~name:"x"]` (e.g. `examples/site/frontend/store/task.ml`)
+Collections defined by `[@@deriving collection ~name:"x"]` (e.g. `examples/site/web/store/task.ml`)
 flow through the facade above. The browser runs the **same Minimongo** as a client cache, fed DDP
 deltas via `merge_store` (per-field precedence merge), with optimistic stubs (sim writes) and the
 write fence. So Mongo semantics are identical on both ends of the wire.

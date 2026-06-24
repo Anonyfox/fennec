@@ -1,7 +1,7 @@
 (* The resident WARM TEST WORKER — the dev loop's per-edit test runner.
 
    It pays the macOS "first-exec of a new Mach-O" tax (dyld + code-sign validation, ~320-450ms) ONCE,
-   at dev boot, by linking the stable frontend-test framework into THIS bytecode binary with -linkall.
+   at dev boot, by linking the stable web-test framework into THIS bytecode binary with -linkall.
    Thereafter each edit costs a fork + a handful of Dynlink.loadfile calls + the test run — measured at
    ~8-9ms, ~40-50x faster than relinking and cold-launching a native test exe every save.
 

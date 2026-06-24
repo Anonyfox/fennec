@@ -17,7 +17,7 @@ let render () =
       "fennec build INPUT...          # native JS/CSS/SCSS bundling";
       "fennec release                 # build + verify + stage a production deployable";
       "fennec image in.jpg out.webp   # convert/resize/favicon images (no ImageMagick)";
-      "fennec doctor                  # check the .mlx toolchain when a frontend app won't build";
+      "fennec doctor                  # check the .mlx toolchain when a web app won't build";
       "```";
       "";
       "The project remains a normal dune project. `fennec` adds source-backed task discovery, restart/livereload, native asset bundling, app test orchestration, doc coverage, and agent-facing feedback.";
@@ -43,7 +43,7 @@ let render () =
       "fennec dev";
       "```";
       "";
-      "With no server path, Fennec asks dune for the executable that calls `Fennec.serve`. Dune remains the sole source watcher and builder. Backend changes restart the server; frontend changes reload or hot-swap CSS; build failures keep the last good server serving when possible.";
+      "With no server path, Fennec asks dune for the executable that calls `Fennec.serve`. Dune remains the sole source watcher and builder. Backend changes restart the server; client changes reload or hot-swap CSS; build failures keep the last good server serving when possible.";
       "";
       "Useful variants:";
       "";

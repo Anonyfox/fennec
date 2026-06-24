@@ -118,7 +118,7 @@ running. The next Edit tool fired the PostToolUse hook and injected:
 
 ```text
 Fennec dev feedback after this tool:
-examples/site/frontend/components/stats.mlx changed backend restart
+examples/site/web/components/stats.mlx changed backend restart
 affected: backend; component stats
 tests 15 passed, 0 failed · 1 lib
 ```

@@ -1,15 +1,15 @@
-; GENERATOR: route_gen reads the EXTERNAL frontend/apps/* and emits dune.inc — per app, the boot
+; GENERATOR: route_gen reads the EXTERNAL web/apps/* and emits dune.inc — per app, the boot
 ; rule + a private jsoo (executable) + the CSS rule. Globbing the external apps dir (never ../run)
-; avoids the dynamic_include cycle. Adding an app = drop a folder under frontend/apps; no edit here.
+; avoids the dynamic_include cycle. Adding an app = drop a folder under web/apps; no edit here.
 (rule
  (deps
-  (source_tree %{project_root}/examples/site/frontend/apps)
+  (source_tree %{project_root}/examples/site/web/apps)
   %{project_root}/fennec/fur/tools/route_gen.exe)
  (target dune.inc)
  (action
   (run
    %{project_root}/fennec/fur/tools/route_gen.exe
    --app-bundles
-   %{project_root}/examples/site/frontend/apps
+   %{project_root}/examples/site/web/apps
    .
-   examples/site/frontend)))
+   examples/site/web)))

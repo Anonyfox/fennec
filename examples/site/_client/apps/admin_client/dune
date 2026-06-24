@@ -4,7 +4,7 @@
 ; here, so a single copy_files# suffices.
 
 (copy_files#
- (files %{project_root}/examples/site/frontend/apps/admin/*.mlx))
+ (files %{project_root}/examples/site/web/apps/admin/*.mlx))
 
 (library
  (name admin_app_client)

@@ -118,7 +118,7 @@ let render (tty : Tty.t) ~(tools : tool list) ~(project : project) : string * bo
   let all_ok = missing_required = [] && not dialect_bad in
   line "";
   if all_ok then begin
-    line "%s" (green "toolchain OK — your frontend .mlx app will build and the editor will light up.");
+    line "%s" (green "toolchain OK — your web app will build and the editor will light up.");
     if missing_optional <> [] then
       List.iter
         (fun t -> line "%s %s" (yellow "note:") (Printf.sprintf "%s is absent (optional) — %s" t.name t.remedy))

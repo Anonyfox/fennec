@@ -10,7 +10,7 @@
    Backend reloads need no frame at all: when the CLI restarts the server the
    socket simply drops, and the client script reloads on reconnect. So this module
    exists only to (a) hold the browser sockets ([register]) and (b) deliver the
-   CLI's frontend-edit signal to them ([broadcast]).
+   CLI's client-edit signal to them ([broadcast]).
 
    Wire it by pointing the [Dev.endpoint] websocket at [register]; the
    dev control listener (see Fennec.serve) calls [broadcast]. *)

@@ -1,6 +1,6 @@
 # HANDLERS — standalone full HTTP handlers (one .mlx, own bundle)
 
-**What a handler is (settled).** A *handler* is ONE file — `frontend/handlers/<name>.mlx` — that is a
+**What a handler is (settled).** A *handler* is ONE file — `web/handlers/<name>.mlx` — that is a
 full HTTP handler: a server `load : conn -> outcome` fused with an isomorphic `view : payload -> vnode`,
 over a `payload` type (`type t [@@deriving model]`). `load` is a **full HTTP action** — the SAME
 `view`/`payload` can be served as a hydrated SPA (`render p` — seed + SSR + own bundle), as plain
@@ -10,7 +10,7 @@ or as `text`/`redirect`/`not_found`/`error`. You **mount it yourself** in `serve
 paths/endpoints. Central-router DX; no auto route table.
 
 ```ocaml
-(* frontend/handlers/greet.mlx — the whole handler. No key/bundle/boot/dune. *)
+(* web/handlers/greet.mlx — the whole handler. No key/bundle/boot/dune. *)
 type t = { who : string; count : int } [@@deriving model]
 let load conn =                                  (* server-only; stripped from the bundle *)
   match Conn.param conn "name" with Some n -> render { who = n; count = String.length n }
@@ -21,7 +21,7 @@ let view (p : t) = <main><h1>(node ("Hello, " ^ p.who))</h1><Counter start=(p.co
 **Two kinds, dispatched by shape.** A file with a `load` (above) is an **SPA handler** — hydrated, its
 own jsoo bundle, content-negotiated. A file with a `submit` instead is a **form handler** — server-
 rendered HTML, NO bundle, the redirect-vs-rerender form flow (below). The fur ppx routes on `load` vs
-`submit`; both author the view in `.mlx` JSX, both live in `frontend/handlers/`, both mount manually.
+`submit`; both author the view in `.mlx` JSX, both live in `web/handlers/`, both mount manually.
 
 ## The model: cross-stage persistence (unchanged, still the science)
 
@@ -53,8 +53,8 @@ stanza it evaluates in the same pass** (every `dynamic_include` of a rule-genera
 dir* is a dependency cycle — verified four ways). The escape (from the official *Using Rule Generation*
 howto) is **two sibling subdirs where the generator depends only on the EXTERNAL source dir**:
 
-- `client/handlers/gen/` runs `route_gen --handler-bundles <frontend/handlers> . site_handlers_client`,
-  globbing `frontend/handlers/*.mlx` (never `../run`), emitting `dune.inc` with, **per handler, a boot
+- `client/handlers/gen/` runs `route_gen --handler-bundles <web/handlers> . site_handlers_client`,
+  globbing `web/handlers/*.mlx` (never `../run`), emitting `dune.inc` with, **per handler, a boot
   rule + a private jsoo `(executable)`**;
 - `client/handlers/run/` is just `(dynamic_include ../gen/dune.inc)` + one fixed staging rule that
   copies the generated `*.bc.js` into a served tree `served/_handlers/<name>/main.js`.
@@ -63,10 +63,10 @@ The webroot `--public`s that tree (so `fennec build`'s `--public` became repeata
 compilation** (the dev-profile default) compiles each module to JS once and links per-executable, so the
 N bundles share artifacts and stay incremental — touch one handler, only its bundle relinks.
 
-Net userland footprint to add a handler: **drop a `.mlx` in `frontend/handlers/` + one
+Net userland footprint to add a handler: **drop a `.mlx` in `web/handlers/` + one
 `Endpoint.get` line.** No per-handler dune, no boots, no webroot edits, no external CLI step.
 
-**Apps use the same mechanism.** `route_gen --app-bundles` emits, per `frontend/apps/<app>/`, its boot
+**Apps use the same mechanism.** `route_gen --app-bundles` emits, per `web/apps/<app>/`, its boot
 rule + private jsoo `(executable)` + CSS rule into `client/apps/gen/dune.inc`; `client/apps/run`
 consumes it and stages `served/_apps/<app>/{main.js,main.css}`. `client/dune` is gone. The webroot is
 just three `--public`s (public + apps + handlers). Adding an app OR a handler is drop-a-folder with
@@ -88,7 +88,7 @@ A **form handler** is the same one-file idea for the classic POST/redirect/re-re
 layer between an inline paw and a full SPA. It has NO client bundle (server-rendered HTML, zero JS):
 
 ```ocaml
-(* frontend/handlers/hello.mlx *)
+(* web/handlers/hello.mlx *)
 type t = { name : string [@trim] [@non_empty] [@max_len 40] } [@@deriving model]
 let view (f : Form.ctx) =                         (* the form — flash, per-field errors, kept input *)
   <main className="page">(Form.flash f)

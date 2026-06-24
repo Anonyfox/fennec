@@ -44,13 +44,13 @@ let uniq xs =
   go [] xs
 
 let component_name path =
-  let prefix = "examples/site/frontend/components/" in
+  let prefix = "examples/site/web/components/" in
   if starts_with path prefix && Filename.extension path = ".mlx" then
     Some (drop_suffix (Filename.basename path) ".mlx")
   else None
 
 let app_name path =
-  let prefix = "examples/site/frontend/apps/" in
+  let prefix = "examples/site/web/apps/" in
   if starts_with path prefix then
     match String.split_on_char '/' (String.sub path (String.length prefix) (String.length path - String.length prefix)) with
     | app :: _ when app <> "" -> Some app
@@ -58,7 +58,7 @@ let app_name path =
   else None
 
 let route_name path =
-  let prefix = "examples/site/frontend/apps/" in
+  let prefix = "examples/site/web/apps/" in
   let route_segment file =
     let base = drop_suffix file ".mlx" in
     if String.length base > 0 && base.[String.length base - 1] = '_' then
@@ -124,15 +124,15 @@ let short t =
   | _ -> String.concat "; " parts
 
 let%test "classifies component path" =
-  let a = classify [ "examples/site/frontend/components/greeting.mlx changed" ] in
-  a.components = [ "greeting" ] && a.paths = [ "examples/site/frontend/components/greeting.mlx" ]
+  let a = classify [ "examples/site/web/components/greeting.mlx changed" ] in
+  a.components = [ "greeting" ] && a.paths = [ "examples/site/web/components/greeting.mlx" ]
 
 let%test "classifies app route" =
-  let a = classify [ "examples/site/frontend/apps/main/products/id_.mlx changed" ] in
-  a.apps = [ "web" ] && a.routes = [ "/products/:id" ]
+  let a = classify [ "examples/site/web/apps/main/products/id_.mlx changed" ] in
+  a.apps = [ "main" ] && a.routes = [ "/products/:id" ]
 
 let%test "short is compact" =
-  let a = classify ~backend:true [ "examples/site/frontend/components/nav.mlx changed"; "examples/site/frontend/apps/main/index.mlx changed" ] in
+  let a = classify ~backend:true [ "examples/site/web/components/nav.mlx changed"; "examples/site/web/apps/main/index.mlx changed" ] in
   Fennec_hunt_unit.str_contains (short a) "backend" && Fennec_hunt_unit.str_contains (short a) "component nav"
 
 let%test "classifies conventional unit test path" =

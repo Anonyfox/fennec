@@ -1,16 +1,16 @@
-; GENERATOR: route_gen --mirror reads the EXTERNAL frontend/handlers/ tree and emits dune.inc — one
+; GENERATOR: route_gen --mirror reads the EXTERNAL web/handlers/ tree and emits dune.inc — one
 ; copy_files# per authored subdir, flattening the nested tree into the -conn-client mirror in ../run.
 ; (Kept in its OWN _client/handlers/mirror/ dir, NOT next to the per-handler bundle boots in
 ; _client/handlers/run/, because a boot greet.ml and the mirror's greet.mlx would be the same module.)
 (rule
  (deps
-  (source_tree %{project_root}/examples/site/frontend/handlers)
+  (source_tree %{project_root}/examples/site/web/handlers)
   %{project_root}/fennec/fur/tools/route_gen.exe)
  (target dune.inc)
  (action
   (run
    %{project_root}/fennec/fur/tools/route_gen.exe
    --mirror
-   %{project_root}/examples/site/frontend/handlers
+   %{project_root}/examples/site/web/handlers
    .
-   examples/site/frontend/handlers)))
+   examples/site/web/handlers)))

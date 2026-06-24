@@ -56,10 +56,10 @@ let str_contains hay needle =
    loading the runner .cmo runs them (the site_test_runner backend scopes the run to examples/site/, so
    the framework tests the worker preloaded are filtered out — the run is purely the app's). ── *)
 let example_chain =
-  [ bp "examples/site/frontend/store/site_store.cma";
+  [ bp "examples/site/web/store/site_store.cma";
     bp "examples/site/_client/styles/site_styles.cma";
-    bp "examples/site/frontend/components/site_components.cma";
-    bp "examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo" ]
+    bp "examples/site/web/components/site_components.cma";
+    bp "examples/site/web/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo" ]
 
 let () =
   (* This drive test runs against the real `dune runtest` build in `_build/default`; {!Build_dir}
@@ -143,8 +143,8 @@ let () =
      let describe =
        {|((root /r) (build_context _build/default)
  (library ((name site_styles) (uid u_sty) (local true) (requires ()) (source_dir _build/default/examples/site/_client/styles)))
- (library ((name site_store) (uid u_sto) (local true) (requires (u_fur)) (source_dir _build/default/examples/site/frontend/store)))
- (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_sty u_srv u_fur)) (source_dir _build/default/examples/site/frontend/components)))
+ (library ((name site_store) (uid u_sto) (local true) (requires (u_fur)) (source_dir _build/default/examples/site/web/store)))
+ (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_sty u_srv u_fur)) (source_dir _build/default/examples/site/web/components)))
  (library ((name fennec.fur) (uid u_fur) (local true) (requires ()) (source_dir _build/default/fennec/fur)))
  (library ((name fennec.fur.server) (uid u_srv) (local true) (requires (u_fur)) (source_dir _build/default/fennec/fur/server)))
  (library ((name fennec.pulse.sift) (uid u_sft) (local true) (requires ()) (source_dir _build/default/fennec/pulse/sift))))|}
@@ -158,7 +158,7 @@ let () =
      Fennec_dev.Dev_tests.set_describe_for_test dt describe;
      (* register exactly the real site_components inline-test runner (skip filesystem discovery so the
         test is hermetic), prime its mtime as "seen", then bump it to simulate an edit-triggered rebuild *)
-     let runner_target = "examples/site/frontend/components/.site_components.inline-tests/inline-test-runner.exe" in
+     let runner_target = "examples/site/web/components/.site_components.inline-tests/inline-test-runner.exe" in
      let exe_abs = bp runner_target in
      Fennec_dev.Dev_tests.set_runners_for_test dt
        [ { Fennec_dev.Dev_tests.lib = "site_components"; exe = exe_abs; target = runner_target } ];

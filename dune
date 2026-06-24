@@ -12,7 +12,7 @@
   (env-vars
    (FENNEC_DROP_TESTS true)))
  ; `fennec dev` builds under this custom profile = dev minus `-g`. The bytecode link of the SSR server
- ; otherwise re-serializes the debug section of the WHOLE image (opam + fennec + frontend) on every
+ ; otherwise re-serializes the debug section of the WHOLE image (opam + fennec + web) on every
  ; edit — ~180ms, the dominant cost of an incremental rebuild. Dropping `-g` makes the link ~7x faster.
  ; `fennec dev --debug` uses the standard `dev` profile to restore line-numbered backtraces.
  ;
@@ -23,7 +23,7 @@
  ; No `-g`, so the bytecode carries no debug info — which means jsoo's source maps would map to
  ; nothing. dune still requests them in a dev-like profile, so jsoo warns ("--source-map enabled but
  ; compiled with no debugging information") and wastes time emitting useless maps on every client
- ; rebuild. Drop the source-map flags here so `fennec dev`'s frontend builds are clean + a touch faster.
+ ; rebuild. Drop the source-map flags here so `fennec dev`'s client builds are clean + a touch faster.
  ; (Source-mapped debugging is still available via `fennec dev --debug`, which uses the `dev` profile.)
  (fastdev
   (ocamlc_flags

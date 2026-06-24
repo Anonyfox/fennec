@@ -14,6 +14,6 @@ let () = ignore (R.publish : string -> _ -> unit)
 let () = ignore (Fennec_mongo_backend.query : ?selector:_ -> ?sort:_ -> ?skip:_ -> ?limit:_ -> ?fields:_ -> unit -> _)
 
 (* also pin the browser-shipped Accounts client into the closure — it transitively links Fur + the DDP
-   client, so if a native dependency ever leaks into the client-side accounts facade (or its frontend
+   client, so if a native dependency ever leaks into the client-side accounts facade (or its client
    deps), it surfaces in this same closure check instead of breaking a real client bundle silently *)
 let () = ignore (Fennec_accounts_client.current_user_id : unit -> _)

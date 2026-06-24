@@ -1,4 +1,4 @@
-; The site example — ONE shared public/ + a single isomorphic frontend/ tree (apps,
+; The site example — ONE shared public/ + a single isomorphic web/ tree (apps,
 ; components, documents), on Fennec.Fur: signals + SSR + js_of_ocaml hydration. No
 ; Melange, no React, no preact runtime, no require-shim — the client bundle is a
 ; self-contained jsoo build, so there is no shared /react.js and no native/CSR mirror.

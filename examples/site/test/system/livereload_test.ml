@@ -6,7 +6,7 @@
      1. SINGLE INSTANCE: a second `fennec dev` reaps the first (no stale supervisor wins the port).
      2. STARTUP FRESHNESS: the server serves the CURRENT on-disk source, not a stale _build.
      3. NO-CACHE: page + client bundle are served no-cache in dev.
-     4. EDIT PROPAGATION: editing a frontend source reaches BOTH the SSR and the rebuilt bundle.
+     4. EDIT PROPAGATION: editing a web source reaches BOTH the SSR and the rebuilt bundle.
      5. REVERT PROPAGATION: undoing the edit (while dev is alive) leaves no stale _build. *)
 
 module S = Fennec_hunt.System
@@ -35,7 +35,7 @@ let cache_no_cache port path =
   with _ -> false
 
 let%system "single instance, startup freshness, no-cache, edit+revert propagation" = fun sb ->
-  let src = Filename.concat (S.app_dir ()) "frontend/apps/main/index.mlx" in
+  let src = Filename.concat (S.app_dir ()) "web/apps/main/index.mlx" in
   let d1 = S.dev sb in
   S.wait_ready d1 ~port:page ();
 
@@ -54,7 +54,7 @@ let%system "single instance, startup freshness, no-cache, edit+revert propagatio
   S.check "page is served no-cache in dev" (cache_no_cache page page_path);
   S.check "client bundle is served no-cache in dev" (cache_no_cache page bundle_path);
 
-  (* 4) edit propagation — an edit to a frontend source reaches the RUNNING app. We assert it on the
+  (* 4) edit propagation — an edit to a web source reaches the RUNNING app. We assert it on the
      SSR'd page (what the user actually sees), which is the source-map-independent proof: `fennec dev`
      builds in the `fastdev` profile, which drops jsoo source maps (no -g ⇒ they'd map to nothing — see
      the top-level dune env), and Fennec hydrates static page text from the SSR'd DOM, so a static

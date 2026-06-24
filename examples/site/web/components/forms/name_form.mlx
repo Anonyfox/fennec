@@ -1,5 +1,5 @@
 (* A TYPED CLIENT FORM — the headline of Form.signal. This SPA form is bound to Hello_form.codec, the
-   SAME Sift model the SERVER-rendered handler at /hello validates (frontend/handlers/hello.mlx). So the
+   SAME Sift model the SERVER-rendered handler at /hello validates (web/handlers/hello.mlx). So the
    [@trim][@non_empty][@max_len 40] refinements fire HERE, in the browser, reactively and offline — type
    a 41st character and the error appears with no round-trip — and they fire IDENTICALLY on the server,
    because both sides validate one codec. There is no hand-written "is it empty / too long" check: the

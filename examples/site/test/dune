@@ -1,4 +1,4 @@
-; Inline-test backend for the example's frontend libraries (site_components, site_handlers, …). It is
+; Inline-test backend for the example's web libraries (site_components, site_handlers, …). It is
 ; the SAME as fennec-hunt.runner, except it scopes the run to tests whose file is under examples/site/.
 ;
 ; That scoping is a MONOREPO-ONLY need. Here the framework is compiled FROM SOURCE in the dev profile,

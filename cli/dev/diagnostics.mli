@@ -25,7 +25,7 @@ type problem = {
     secondary location with no Error/Warning of its own (e.g. a syntax error's "might be
     unmatched" hint) is folded into the preceding problem's [related], so the count stays honest.
 
-    A problem in a generated client mirror (the [copy_files#] twin of an authored [frontend/…] file,
+    A problem in a generated client mirror (the [copy_files#] twin of an authored [web/…] file,
     under [client/…/<app>_client/…]) is dropped when the SAME error is reported for its authored
     source — the dev edits one file, so the panel shows one problem, not the source-plus-copy echo.
     A mirror problem with no authored twin (a genuinely client-only failure) is kept. *)

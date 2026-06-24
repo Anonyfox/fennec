@@ -37,13 +37,13 @@
   ; the worker binary the client spawns
   %{project_root}/cli/dev/worker/fennec_test_worker.bc
   ; the example's app libs (the Dynlinked chain): site_components + its app-local deps, byte .cma's
-  %{project_root}/examples/site/frontend/store/site_store.cma
+  %{project_root}/examples/site/web/store/site_store.cma
   %{project_root}/examples/site/_client/styles/site_styles.cma
-  %{project_root}/examples/site/frontend/components/site_components.cma
+  %{project_root}/examples/site/web/components/site_components.cma
   ; the site_components inline-test runner (its mtime drives the integrated edit) + its generated
   ; byte .cmo (the chain tail — loading it runs the registrations site_components.cma carries)
-  %{project_root}/examples/site/frontend/components/.site_components.inline-tests/inline-test-runner.exe
-  %{project_root}/examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo
+  %{project_root}/examples/site/web/components/.site_components.inline-tests/inline-test-runner.exe
+  %{project_root}/examples/site/web/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo
   ; the reload + cross-file fixtures
   wwfix/dep/wwfix_dep.cma
   wwfix/v1/wwfix_v1.cma

@@ -66,7 +66,7 @@ type lib = {
   uid : string;
   local : bool;
   requires : string list;  (* dep uids *)
-  source_dir : string;     (* e.g. _build/default/examples/site/frontend/store *)
+  source_dir : string;     (* e.g. _build/default/examples/site/web/store *)
 }
 
 let field name = function
@@ -262,13 +262,13 @@ let fixture =
    (source_dir _build/default/examples/site/_client/styles)))
  (library
   ((name site_store) (uid u_store) (local true) (requires (u_fur))
-   (source_dir _build/default/examples/site/frontend/store)))
+   (source_dir _build/default/examples/site/web/store)))
  (library
   ((name site_components) (uid u_comp) (local true) (requires (u_store u_fur))
-   (source_dir _build/default/examples/site/frontend/components)))
+   (source_dir _build/default/examples/site/web/components)))
  (library
   ((name site_handlers) (uid u_hand) (local true) (requires (u_comp u_fennec))
-   (source_dir _build/default/examples/site/frontend/handlers)))
+   (source_dir _build/default/examples/site/web/handlers)))
  (library
   ((name fennec.fur) (uid u_fur) (local true) (requires (u_fmt))
    (source_dir _build/default/fennec/fur)))
@@ -308,7 +308,7 @@ let%test "chain: local app libs in dep order, framework skipped, test cmo last" 
 
 let%test "chain: .cma path is <rel source_dir>/<name>.cma" =
   match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target () with
-  | Ok t -> t.cmas = [ "examples/site/frontend/store/site_store.cma" ]
+  | Ok t -> t.cmas = [ "examples/site/web/store/site_store.cma" ]
   | Error _ -> false
 
 let%test "fallback: a framework dep the worker did NOT preload is refused" =
@@ -341,7 +341,7 @@ let%test "fallback: empty describe yields No_describe" =
 
 let%test "objects appends the cmo after the cmas" =
   match derive ~describe:fixture ~watch_roots ~preloaded ~test_libs:[ "site_store" ] ~target:test_target () with
-  | Ok t -> objects t = [ "examples/site/frontend/store/site_store.cma"; t.cmo ]
+  | Ok t -> objects t = [ "examples/site/web/store/site_store.cma"; t.cmo ]
   | Error _ -> false
 
 let%test "cmo_of_target mangles dune__exe__ + capitalizes" =
@@ -357,13 +357,13 @@ let%test "inline_runner_cmo points at dune's generated .t.eobjs/byte/dune__exe__
   = "a/b/.mylib.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo"
 
 let%test "derive_inline: the lib's OWN .cma is in the chain (after its deps), capped by the runner .cmo" =
-  let runner = "examples/site/frontend/components/.site_components.inline-tests/inline-test-runner.exe" in
+  let runner = "examples/site/web/components/.site_components.inline-tests/inline-test-runner.exe" in
   match derive_inline ~describe:fixture ~watch_roots ~preloaded ~lib:"site_components" ~runner_target:runner () with
   | Error _ -> false
   | Ok t ->
     let idx name = List.find_index (fun p -> Fennec_hunt_unit.str_contains p name) t.cmas in
     (match (idx "site_store", idx "site_components") with Some a, Some b -> a < b | _ -> false)
-    && t.cmo = "examples/site/frontend/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo"
+    && t.cmo = "examples/site/web/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo"
     && (match List.rev (objects t) with last :: _ -> last = t.cmo | [] -> false)
 
 let%test "derive_inline: an unknown lib is reported (⇒ cold fallback)" =

@@ -25,7 +25,7 @@ cross-platform native fs-watcher (the `notify` crate):
 - the served **bundles** (the web root) → ping the framework's dev control socket
   to hot-swap CSS / full-reload on change.
 
-The framework watches nothing; it only relays the CLI's frontend signal to the
+The framework watches nothing; it only relays the CLI's client signal to the
 browser over the livereload socket. Nobody parses dune's stdout. Nobody runs a
 second source watcher. This is what keeps the parts decoupled.
 
@@ -65,7 +65,7 @@ the CLI package at build time: `dune-project` declares `(dialect (name mlx) (…
 %{bin:fennec} mlx-pp …))))`, so `dune build` runs `fennec mlx-pp` (and the editor runs
 `ocamlmerlin-fennec-mlx`) — the `fennec` binary itself plus one reader binary, both from
 `fennec-cli`. So "delete the CLI and `dune build` still works" holds for a pure-`.ml`/`.mli` project,
-but **not** for a `.mlx` frontend: there the dialect preprocessor is a genuine build dependency (and
+but **not** for a `.mlx` web app: there the dialect preprocessor is a genuine build dependency (and
 the merlin reader a genuine editor dependency). This is by design — the dialect is the one place the
 CLI package is load-bearing rather than convenience. But it is now a **zero-external-dependency**
 toolchain: the mlx parser is **vendored into `fennec-cli`** (same model as the vendored Go esbuild /
@@ -78,7 +78,7 @@ dialect binary on PATH. `opam install fennec-cli` installs all of it; `fennec do
 2. **dune → CLI**: asset rules call `%{bin:fennec} build …`. Outputs are ordinary dune targets.
 3. **CLI ↔ app**: process lifecycle (spawn / signal / wait) + a small wire defined in ONE place — `Fennec_core.Dev_proto`, referenced by both sides (constants + typed (de)serializers, round-tripped in tests) so it can't drift silently:
    - **CLI → app, via env**: `FENNEC_ENV`; `FENNEC_PORT` (the base port — dev allocates its block from here, prod listens on it); `FENNEC_LIVERELOAD` (a dev-only loopback socket path); `FENNEC_DEV_PARENT` (the supervisor's pid — the server self-exits when orphaned); `FENNEC_DEV_UI`; `FENNEC_ESBUILD_WORKER`; `FENNEC_PARALLELISM` (optional per-core worker override; auto otherwise).
-   - **CLI → app, on a frontend edit**: one line (`css`/`reload`) to the `FENNEC_LIVERELOAD` socket; the app relays it to browsers.
+   - **CLI → app, on a client edit**: one line (`css`/`reload`) to the `FENNEC_LIVERELOAD` socket; the app relays it to browsers.
    - **app → CLI, on stderr**: a dev-URL report (`[fennec:urls] web=… admin=…`, named `name=url` pairs parsed for the banner) and a port-conflict line paired with a distinct exit code, so the CLI self-heals a held port instead of crash-looping.
 4. **app ↔ browser**: the framework's livereload websocket (`/_fennec/pulse/livereload`) + an injected client script. Framework's concern entirely.
 5. **Shared state across all of them**: the `_build` output tree + the port block (from `FENNEC_PORT`, default 4000 dev / 80 prod). That's it. (The `_build` tree is split by profile — `dev`/`release` use `_build/default`, the `fennec dev` loop uses `_build/fastdev` — so the dev loop and a parallel `dune build`/`fennec test` never share a lock. One module owns those paths: `Fennec_dev.Build_dir`; see § The build ladder.)
@@ -101,7 +101,7 @@ watcher for everything. Example (an app's `dune`):
   dir to the JS rule. `npm install` stays the user's action (a `fennec install`
   convenience may come later). Nothing here changes the model.
 - `dune build --watch` rebuilds these incrementally on edit — that is what drives
-  frontend livereload.
+  client livereload.
 - Sources live in `src/` so input and output names never collide.
 
 ## Livereload, derived (not bolted on)
@@ -153,7 +153,7 @@ mode, so a prod build ships none of it.
   working dune project: it builds and serves, and a manual restart reloads the
   browser via the reconnect loop. You lose the *automation* — auto-restart and CSS
   hot-swap — because all output-watching lived in the CLI, by design. ← decoupling proof.
-  **Exception: a `.mlx` frontend.** This holds for the *automation* layer, but the `fennec-cli`
+  **Exception: a `.mlx` web app.** This holds for the *automation* layer, but the `fennec-cli`
   package IS the `.mlx` dialect preprocessor (`fennec mlx-pp`), which `dune build` invokes on every
   `.mlx` (per the `(dialect …)` stanza). So a project with any `.mlx` file does NOT build with the
   CLI package uninstalled — the dialect is a real build/editor dependency, not automation (see § The
@@ -171,7 +171,7 @@ mode, so a prod build ships none of it.
   state), and the server stays free of any native watch dependency. That is what
   lets "delete the CLI" leave a clean dune project, and it makes every hop of the
   dev loop evented. The framework exposes a dev-only loopback control socket
-  (`FENNEC_LIVERELOAD`) the CLI pings on a frontend edit; the server forwards the
+  (`FENNEC_LIVERELOAD`) the CLI pings on a client edit; the server forwards the
   frame to browsers. Chosen over an in-server watch (which would either add a
   native dep to every prod binary, or force a poll inside the server).
 - **No dev proxy.** The app binds the real port in dev exactly as in prod

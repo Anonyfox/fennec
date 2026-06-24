@@ -21,7 +21,7 @@ let replace s ~old ~by =
   done; Buffer.contents b
 
 let%system "error panel counts correctly + carries a message, and a revert-to-identical fix clears it" = fun sb ->
-  let layout = Filename.concat (S.app_dir ()) "frontend/apps/main/layout.mlx" in
+  let layout = Filename.concat (S.app_dir ()) "web/apps/main/layout.mlx" in
   let dev = S.dev sb in
   (* gateway=4000 — reaching "ready" means it bound the port *)
   S.wait_ready dev ~port:4000 ();

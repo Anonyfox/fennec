@@ -1,4 +1,4 @@
-# `frontend/` — your code. All of it.
+# `web/` — your code. All of it.
 
 Every file here is a **real Dune module you wrote** — `.mlx` (markup) or `.ml` — so Merlin/LSP
 works and editing one recompiles just that module. The build compiles this *same* tree twice (the

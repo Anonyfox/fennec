@@ -1,8 +1,8 @@
-(** [fennec new NAME] — scaffold a minimal, WORKING frontend Fennec app.
+(** [fennec new NAME] — scaffold a minimal, WORKING Fennec web app.
 
     Emits a self-contained dune project (its own [dune-project] carrying the [(dialect (name mlx) …)]
     stanza + the [fennec-cli]/[mlx] deps, a [server.ml] that renders a [.mlx] component to HTML via
-    [Fennec.Fur.Handler], and a starter [frontend/hello.mlx]) so that immediately after:
+    [Fennec.Fur.Handler], and a starter [web/hello.mlx]) so that immediately after:
 
     {[ cd NAME && dune build && fennec dev ]}
 

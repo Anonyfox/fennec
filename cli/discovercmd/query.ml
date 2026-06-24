@@ -253,7 +253,7 @@ let compare_card snapshot task terms uses evidence =
       let canonical (e : evidence) =
         (if contains_sub ~needle:leaf (String.lowercase_ascii (e.label ^ " " ^ e.text)) then 10 else 0)
         + (match e.kind with
-           | Example -> if starts_with e.source.path "examples/site/frontend/components" then 8 else 4
+           | Example -> if starts_with e.source.path "examples/site/web/components" then 8 else 4
            | Test -> 3
            | _ -> 0)
       in

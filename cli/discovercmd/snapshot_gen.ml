@@ -614,7 +614,7 @@ let build ~root =
   let mention_index = build_mention_index public_items in
   let evidence =
     List.concat_map (evidence_of_file ~root mention_index) example_files
-    @ List.filter_map (route_evidence ~root) (collect [] (Filename.concat root "examples/site/frontend/apps") ".mlx")
+    @ List.filter_map (route_evidence ~root) (collect [] (Filename.concat root "examples/site/web/apps") ".mlx")
     @ doc_evidence public_items
   in
   let evidence = List.sort_uniq (fun (a : evidence) (b : evidence) -> compare a.id b.id) evidence in

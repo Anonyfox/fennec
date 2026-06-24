@@ -27,7 +27,7 @@ module Sift = Sift (* the shape language — for hand-written codecs + the resou
 module Fur = struct
   include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
 
-  (* Standalone HANDLERS (frontend/handlers/*.mlx — view + load + own bundle) are authored as files and
+  (* Standalone HANDLERS (web/handlers/*.mlx — view + load + own bundle) are authored as files and
      wired by the fur ppx + route_gen, not via a facade module: the generated server `serve` references
      the {!Fennec_fur_handler.Handler} runtime + {!Conn} directly. So nothing for them here. *)
   module Handler = Fennec_web.Handler (* render a component to a static HTML response + redirect/flash/csrf *)
@@ -139,7 +139,7 @@ let dev_control ~sw ~net (lr : Livereload.t) : unit =
 
 (* Serve a list of endpoints, blocking. In dev, a livereload paw is prepended to
    every endpoint and a dev control socket is opened for the CLI to ping on a
-   frontend edit (the framework itself watches nothing). Owns Eio + the lifecycle. *)
+   client edit (the framework itself watches nothing). Owns Eio + the lifecycle. *)
 (* exactly one place starts the server. Many modules may LINK fennec, but a second [serve]
    call (a stray entrypoint in a library, a copy-pasted main) is a bug — fail loudly rather
    than half-start a second server. This is the runtime counterpart to the CLI's discovery,

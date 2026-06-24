@@ -7,7 +7,7 @@
      general-purpose bundler; in a Fennec project, dune rules call it.
    - [dev] runs the supervised livereload loop: discover the server (the executable calling
      [Fennec.serve], via {!Discover}), watch the build OUTPUTS, restart on a backend change, and
-     hot-reload the frontend without a restart.
+     hot-reload the client without a restart.
    - [test] runs and verifies the app — unit/http/browser/system tests plus doc-coverage
      ([fennec test docs]); delegates to {!Fennec_testcmd}.
    - [discover] answers task-shaped "what should I use?" questions from a source-generated
@@ -506,7 +506,7 @@ let dev_cmd =
   let assets_arg =
     let doc =
       "Name of the served web-root directory (a subdir of the server exe's build dir) whose \
-       bundles drive frontend livereload. Default: $(b,webroot)."
+       bundles drive client livereload. Default: $(b,webroot)."
     in
     Arg.(value & opt string "webroot" & info [ "assets" ] ~docv:"DIR" ~doc)
   in
@@ -661,7 +661,7 @@ let dev_cmd =
         (* explicit-exe override (multi-server repos): we don't run discovery, so we don't know the
            server's precise build targets. With no --target we watch [@@default] — broader than the
            discovered path's scoped [server.bc + webroot], so each edit rebuilds more than strictly
-           needed, but it's CORRECT: @@default includes the web root, so frontend livereload still
+           needed, but it's CORRECT: @@default includes the web root, so client livereload still
            works. Pass --target to scope it. (Supervisor.run blocks until killed; 0 is for the type.) *)
         let console_bc = console_bc_for ~root ~exe:exe_path in
         Fennec_dev.Supervisor.run ?port ?agent_dir ?console_bc ~targets:(match target with Some t -> [ t ] | None -> [ "@@default" ]) ~exe:exe_path ~assets;
@@ -691,7 +691,7 @@ let dev_cmd =
          and builder — including assets, which are dune rules that call $(b,fennec build)) and \
          supervise the server executable. The CLI watches the build OUTPUT with a native \
          filesystem-event watcher: a backend change rebuilds the exe and the server is \
-         restarted; a frontend-only edit live-reloads without a restart, the CLI signalling the \
+         restarted; a client-only edit live-reloads without a restart, the CLI signalling the \
          server's dev control socket to hot-swap CSS or reload.";
       `P
         "With no $(i,SERVER_EXE), the server is found by asking dune (via $(b,dune describe)) for \
@@ -831,15 +831,15 @@ let new_cmd =
     Arg.(required & pos 0 (some string) None & info [] ~docv:"NAME" ~doc)
   in
   let go name = Fennec_dev.New_app.run name in
-  let doc = "Scaffold a minimal working frontend app" in
+  let doc = "Scaffold a minimal working web app" in
   let man =
     [ `S Manpage.s_description;
       `P
-        "Create a new directory $(i,NAME) containing the smallest WORKING frontend Fennec app: its \
+        "Create a new directory $(i,NAME) containing the smallest WORKING Fennec web app: its \
          own $(b,dune-project) (with the $(b,.mlx) dialect stanza + the $(b,fennec)/$(b,fennec-cli) \
          deps — no external $(b,mlx), the parser is vendored), a $(b,server.ml) that renders a \
          $(b,.mlx) component to HTML, and a starter \
-         $(b,frontend/hello.mlx). Immediately after, $(b,cd NAME && dune build) compiles and \
+         $(b,web/hello.mlx). Immediately after, $(b,cd NAME && dune build) compiles and \
          $(b,fennec dev) serves it with livereload — and the editor lights up on the $(b,.mlx) with \
          no hand-assembly.";
       `P
@@ -855,7 +855,7 @@ let new_cmd =
 
 let doctor_cmd =
   let go () = Fennec_dev.Doctor.run () in
-  let doc = "Check the .mlx toolchain (the thing to run when a frontend app won't build)" in
+  let doc = "Check the .mlx toolchain (the thing to run when a web app won't build)" in
   let man =
     [ `S Manpage.s_description;
       `P
@@ -868,7 +868,7 @@ let doctor_cmd =
          piece it prints the exact remedy to run or paste; when everything required is present it \
          prints a green $(b,toolchain OK).";
       `P
-        "This is the first thing to run when a frontend Fennec app fails to build with a cryptic \
+        "This is the first thing to run when a Fennec web app fails to build with a cryptic \
          preprocessor error, or when $(b,.mlx) IntelliSense is dead in the editor. Exit status is \
          non-zero when something required is missing, so it doubles as a CI / setup gate.";
       `S Manpage.s_examples;

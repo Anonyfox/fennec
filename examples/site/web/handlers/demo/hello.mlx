@@ -8,7 +8,7 @@
    long) re-renders automatically before `submit` runs, with the per-field error AND the typed value.
 
    The model is SHARED, literally the SAME codec value: `type t = Hello_form.t` and `let codec =
-   Hello_form.codec` reuse the ONE Sift model that the browser SPA form (frontend/components/name_form.mlx)
+   Hello_form.codec` reuse the ONE Sift model that the browser SPA form (web/components/name_form.mlx)
    validates with `Form.signal`. So client and server enforce the SAME [@trim][@non_empty][@max_len 40]
    from one declaration — not two copies that could drift. The ppx-generated `serve` runs `Form.read
    codec`; the <input>'s HTML5 constraints come off the same codec via `Form.input_attrs

@@ -177,7 +177,7 @@ worth documenting.
 |---|---|
 | OpenAPI generation from schemas | Fennec is SSR/isomorphic, not API-first; the Fur component IS the contract |
 | tRPC-style procedure definitions | Fennec's data model is `source : path -> string option`, not RPC |
-| File-based routing for the server | Fennec already has file-based routing via `route_gen` for the frontend; the server's `server.ml` is explicit by design |
+| File-based routing for the server | Fennec already has file-based routing via `route_gen` for the web layer; the server's `server.ml` is explicit by design |
 | FrankenPHP-style boot-once/reset-per-request | OCaml processes are already long-lived; no cold-start problem |
 | io_uring / zero-allocation extreme | Eio already uses the best available backend per platform; the framework shouldn't special-case this |
 

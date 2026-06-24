@@ -9,12 +9,12 @@
 (include_subdirs qualified)
 
 (copy_files#
- (files %{project_root}/examples/site/frontend/apps/main/*.mlx))
+ (files %{project_root}/examples/site/web/apps/main/*.mlx))
 
 (subdir
  products
  (copy_files#
-  (files %{project_root}/examples/site/frontend/apps/main/products/*.mlx)))
+  (files %{project_root}/examples/site/web/apps/main/products/*.mlx)))
 
 (library
  (name main_app_client)

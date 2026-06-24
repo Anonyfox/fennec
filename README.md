@@ -52,13 +52,13 @@ git clone https://github.com/Anonyfox/fennec
 cd fennec/examples/site && fennec dev        # → http://localhost:4000, hot-reloading
 ```
 
-Edit `frontend/apps/main/index.mlx` and save — the page hot-reloads ([`examples/site`](./examples/site)
+Edit `web/apps/main/index.mlx` and save — the page hot-reloads ([`examples/site`](./examples/site)
 is the full tour). Prefer to build the CLI yourself (adds Go + Rust)? See
 [Build from source](#build-from-source-contributors).
 
-## Start your own frontend app
+## Start your own web app
 
-A Fennec frontend uses the `.mlx` dialect (JSX-identical: bare text + `{expr}`). The whole `.mlx`
+A Fennec web app uses the `.mlx` dialect (JSX-identical: bare text + `{expr}`). The whole `.mlx`
 toolchain is **`fennec-cli` and nothing else** — no external `mlx` package. The `fennec` binary IS
 the **build** preprocessor (`fennec mlx-pp`, which `dune` runs on every `.mlx`), with the mlx parser
 vendored straight into it; `ocamlmerlin-fennec-mlx` is the **editor** reader (also self-contained — it

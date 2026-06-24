@@ -50,7 +50,7 @@ let split_at_path s =
     | Some b when b > a -> (String.sub s (a + 1) (b - a - 1), String.sub s (b + 1) (String.length s - b - 1))
     | _ -> ("", s))
 
-(* The dev authors ONE `.mlx` under `frontend/…`. The build also compiles a byte-identical
+(* The dev authors ONE `.mlx` under `web/…`. The build also compiles a byte-identical
    `copy_files#` mirror of it under the generated client tree (`client/…/<app>_client/…`, built
    `-data-client` so server-only `Data.local` fetchers strip from the browser closure). A syntax/parse
    error in the source therefore surfaces TWICE — once in the authored file, once in its copy, a file
@@ -119,7 +119,7 @@ let count problems =
 let%test_unit "parse: single error diagnostic" =
   let chk = Fennec_hunt_unit.check in
   let sample =
-    "File \"frontend/apps/main/index.mlx\", line 11, characters 8-16:\n\
+    "File \"web/apps/main/index.mlx\", line 11, characters 8-16:\n\
     \  11 |     <h1>{greeting}</h1>\n\
     \             ^^^^^^^^\n\
      Error: Unbound value greeting\n"
@@ -128,7 +128,7 @@ let%test_unit "parse: single error diagnostic" =
   chk "one problem parsed" (List.length ps = 1);
   match ps with
   | [ p ] ->
-    chk "file" (p.file = "frontend/apps/main/index.mlx");
+    chk "file" (p.file = "web/apps/main/index.mlx");
     chk "line" (p.line = 11);
     chk "col is 1-based (characters 8 -> col 9)" (p.col = 9);
     chk "severity Error" (p.severity = Error);
@@ -138,7 +138,7 @@ let%test_unit "parse: single error diagnostic" =
 
 let%test "count = (1 error, 0 warnings)" =
   let sample =
-    "File \"frontend/apps/main/index.mlx\", line 11, characters 8-16:\n\
+    "File \"web/apps/main/index.mlx\", line 11, characters 8-16:\n\
     \  11 |     <h1>{greeting}</h1>\n\
     \             ^^^^^^^^\n\
      Error: Unbound value greeting\n"
@@ -171,14 +171,14 @@ let%test_unit "multi-location syntax error is ONE problem" =
       (List.exists (fun s -> Fennec_hunt_unit.str_contains s "might be unmatched") p.related)
   | _ -> chk "expected one problem" false
 
-let%test_unit "a frontend error and its byte-identical client mirror echo count as ONE" =
+let%test_unit "a web error and its byte-identical client mirror echo count as ONE" =
   let chk = Fennec_hunt_unit.check in
   (* the exact shape the build emits when a `.mlx` syntax error hits both the authored source AND its
      generated `copy_files#` mirror under client/…/<app>_client/ *)
   let echoed =
-    "File \"examples/site/frontend/apps/main/layout.mlx\", line 13, characters 5-7:\n\
+    "File \"examples/site/web/apps/main/layout.mlx\", line 13, characters 5-7:\n\
      Error: Syntax error: ']' expected\n\
-     File \"examples/site/frontend/apps/main/layout.mlx\", line 7, characters 15-16:\n\
+     File \"examples/site/web/apps/main/layout.mlx\", line 7, characters 15-16:\n\
     \  This '[' might be unmatched\n\
      File \"examples/site/_client/apps/main_client/layout.mlx\", line 13, characters 5-7:\n\
      Error: Syntax error: ']' expected\n\
@@ -202,12 +202,12 @@ let%test "two real errors -> count (2,0)" =
 
 let%test_unit "path with 'line' substring -> correct fields" =
   let chk = Fennec_hunt_unit.check in
-  let trapline = "File \"frontend/timeline2/x.ml\", line 7, characters 9-16:\nError: boom\n" in
+  let trapline = "File \"web/timeline2/x.ml\", line 7, characters 9-16:\nError: boom\n" in
   match parse trapline with
   | [ p ] ->
     chk "path with 'line' substring -> real line 7" (p.line = 7);
     chk "path with 'line' substring -> real col 10" (p.col = 10);
-    chk "path with 'line' substring -> file intact" (p.file = "frontend/timeline2/x.ml")
+    chk "path with 'line' substring -> file intact" (p.file = "web/timeline2/x.ml")
   | _ -> chk "expected one problem" false
 
 let%test_unit "path with 'characters' substring -> correct fields" =

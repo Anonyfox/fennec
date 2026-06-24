@@ -55,7 +55,7 @@ module Fur : sig
      [module type of Fur] would re-abstract them and break interop with Handler/Form) *)
   include module type of struct include Fur end
 
-  (* Standalone HANDLERS (frontend/handlers/*.mlx — view + load + own bundle) are authored as files and
+  (* Standalone HANDLERS (web/handlers/*.mlx — view + load + own bundle) are authored as files and
      wired by the fur ppx + route_gen; the generated server [serve] uses {!Fennec_fur_handler.Handler}
      + {!Paw.Conn} directly, so there is no handler facade module here. *)
   module Handler : module type of Fennec_web.Handler

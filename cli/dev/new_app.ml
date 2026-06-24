@@ -1,4 +1,4 @@
-(* [fennec new NAME] — scaffold a minimal working frontend Fennec app. See new_app.mli.
+(* [fennec new NAME] — scaffold a minimal working Fennec web app. See new_app.mli.
 
    The emitted project is the smallest thing that (a) builds, (b) serves real SSR HTML, and (c) lights
    up the editor on its .mlx — proven by building + running this exact file set during development.
@@ -97,10 +97,10 @@ let hello_mlx =
    let make ~name () =\n\
   \  <main className=\"hello\">\n\
   \    <h1 className=\"hello-title\">Hello from Fennec, {name}!</h1>\n\
-  \    <p className=\"hello-sub\">Edit frontend/hello.mlx and reload.</p>\n\
+  \    <p className=\"hello-sub\">Edit web/hello.mlx and reload.</p>\n\
   \  </main>\n"
 
-let frontend_dune ~comp_lib =
+let web_dune ~comp_lib =
   Printf.sprintf
     "; The components library — every .mlx here is compiled with the Fur ppx and `-open Fur`, so\n\
      ; `h`/`text`/JSX resolve. Add .mlx files freely AND group them into subfolders if you like:\n\
@@ -122,7 +122,7 @@ let gitignore = "_build/\n.fennec/\ndist/\n*.install\n.merlin\n"
 let readme ~name ~comp_lib:_ =
   Printf.sprintf
     "# %s\n\n\
-     A minimal frontend Fennec app (server-rendered).\n\n\
+     A minimal Fennec web app (server-rendered).\n\n\
      ## Run\n\n\
      ```sh\n\
      dune build      # compile (the .mlx is preprocessed by `fennec mlx-pp`)\n\
@@ -136,7 +136,7 @@ let readme ~name ~comp_lib:_ =
      It is a single self-contained binary; `fennec release --docker` also writes a runtime Dockerfile.\n\n\
      ## Layout\n\n\
      - `server.ml` — the server: one endpoint, renders the component on `GET /`.\n\
-     - `frontend/hello.mlx` — your first `.mlx` component (edit this).\n\
+     - `web/hello.mlx` — your first `.mlx` component (edit this).\n\
      - `dune-project` — declares the `.mlx` dialect + deps.\n\n\
      ## Editor not lighting up on `.mlx`?\n\n\
      Run `fennec doctor` — it checks the whole `.mlx` toolchain and prints the exact fix for\n\
@@ -174,8 +174,8 @@ let files ~(name : string) : (string * string) list =
     ("dune", server_dune ~comp_lib);
     ("server.ml", server_ml);
     ("console.ml", console_ml);
-    ("frontend/dune", frontend_dune ~comp_lib);
-    ("frontend/hello.mlx", hello_mlx);
+    ("web/dune", web_dune ~comp_lib);
+    ("web/hello.mlx", hello_mlx);
     (".gitignore", gitignore);
     ("README.md", readme ~name ~comp_lib) ]
 
@@ -217,7 +217,7 @@ let run ?(in_dir = Sys.getcwd ()) (name : string) : int =
     else begin
       let fs = files ~name in
       List.iter (fun (rel, contents) -> write_file (Filename.concat target rel) contents) fs;
-      Printf.printf "Created %s/ — a minimal frontend Fennec app:\n" name;
+      Printf.printf "Created %s/ — a minimal Fennec web app:\n" name;
       List.iter (fun (rel, _) -> Printf.printf "  %s/%s\n" name rel) fs;
       Printf.printf
         "\nNext:\n\
@@ -266,11 +266,11 @@ let%test "files: server.ml calls Fennec.serve and renders the component" =
   contains s "Fennec.serve" && contains s "Hello.make" && contains s "Handler.html"
 
 let%test "files: a starter .mlx component exists with bare-text JSX + {expr}" =
-  let m = find_file "demo" "frontend/hello.mlx" in
+  let m = find_file "demo" "web/hello.mlx" in
   contains m "let make ~name ()" && contains m "{name}" && contains m "[%%style"
 
-let%test "files: the frontend dune links the components under the derived lib name" =
-  contains (find_file "my-app" "frontend/dune") "(name my_app_components)"
+let%test "files: the web dune links the components under the derived lib name" =
+  contains (find_file "my-app" "web/dune") "(name my_app_components)"
 
 let%test "files: the server dune links that same components lib" =
   contains (find_file "my-app" "dune") "my_app_components"
@@ -278,4 +278,4 @@ let%test "files: the server dune links that same components lib" =
 let%test "files: the file set is exactly the expected paths" =
   let paths = List.map fst (files ~name:"demo") |> List.sort compare in
   paths = List.sort compare
-    [ "dune-project"; "dune"; "server.ml"; "console.ml"; "frontend/dune"; "frontend/hello.mlx"; ".gitignore"; "README.md" ]
+    [ "dune-project"; "dune"; "server.ml"; "console.ml"; "web/dune"; "web/hello.mlx"; ".gitignore"; "README.md" ]

@@ -34,7 +34,7 @@ val ready :
 (** A backend rebuild that restarted the server (the page will full-reload). *)
 val rebuilt : t -> trigger:string list -> ms:float option -> unit
 
-(** A frontend change that triggers a full page reload. *)
+(** A client change that triggers a full page reload. *)
 val reloaded : t -> trigger:string list -> ms:float option -> unit
 
 (** A CSS-only change, hot-swapped without a reload. *)

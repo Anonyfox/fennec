@@ -1,4 +1,4 @@
-(* File-tree routing codegen, multi-app. Scans frontend/apps/<name>/ — each app is a
+(* File-tree routing codegen, multi-app. Scans web/apps/<name>/ — each app is a
    folder with main.mlx (config: base + template), layout.mlx (the shell), and route
    files (index.mlx / [id].mlx / [...rest].mlx, nesting freely). Emits ONE module:
 
@@ -139,7 +139,7 @@ let emit_routes apps_dir out_dir =
   names |> List.iter (fun n ->
     let body = gen_app (Filename.concat apps_dir n) n in
     write (Filename.concat out_dir (mangle n ^ "_routes.mlx"))
-      (Printf.sprintf "(* GENERATED from frontend/apps/%s/ — do not edit. *)\n%s" n body));
+      (Printf.sprintf "(* GENERATED from web/apps/%s/ — do not edit. *)\n%s" n body));
   (* routes_index: the combined mount list, for the server / a single all-apps bundle.
      Per-app client bundles do NOT reference this (they boot <App>_routes directly), so
      it never pulls a sibling app's code into an isolated bundle. *)
@@ -147,14 +147,14 @@ let emit_routes apps_dir out_dir =
     (Printf.sprintf "(* GENERATED — combined mount list. *)\nlet apps : Fur.mount list = [ %s ]\n"
        (String.concat "; " (List.map (fun n -> route_mod n ^ ".mount") names)))
 
-(* app-bundles mode: emit a dune.inc (consumed via dynamic_include) with, per frontend/apps/<app>/,
+(* app-bundles mode: emit a dune.inc (consumed via dynamic_include) with, per web/apps/<app>/,
    its WHOLE bundle wiring — the boot rule (entry referencing only that app's lib, so bundles stay
    isolated), the private jsoo (executable), AND the CSS rule (compiles main.scss). No hand-written
-   client/dune stanza per app; adding an app = drop a folder. [rel_frontend] is the project-relative
-   path to the frontend/ dir, for the %{project_root}-anchored scss inputs the CSS rule needs. *)
-let emit_app_bundles apps_dir out_dir rel_frontend =
+   client/dune stanza per app; adding an app = drop a folder. [rel_src] is the project-relative
+   path to the web/ dir, for the %{project_root}-anchored scss inputs the CSS rule needs. *)
+let emit_app_bundles apps_dir out_dir rel_src =
   let b = Buffer.create 2048 in
-  Buffer.add_string b "; GENERATED — do not edit. One isolated jsoo bundle (+ css) per frontend/apps/<app>/.\n";
+  Buffer.add_string b "; GENERATED — do not edit. One isolated jsoo bundle (+ css) per web/apps/<app>/.\n";
   app_dirs apps_dir
   |> List.iter (fun n ->
          (* the bundle links the app's CLIENT MIRROR (<app>_app_client) — the SAME .mlx tree compiled
@@ -185,7 +185,7 @@ let emit_app_bundles apps_dir out_dir rel_frontend =
             Buffer.add_string b
               (Printf.sprintf
                  "(rule\n (target %s.css)\n (deps (glob_files_rec %%{project_root}/%s/*.scss) (glob_files_rec %%{project_root}/%s/*.css))\n (action (run %%{bin:fennec} build --out-name %s.css -o . %%{project_root}/%s/apps/%s/%s)))\n"
-                 n rel_frontend rel_frontend n rel_frontend n e));
+                 n rel_src rel_src n rel_src n e));
          (* The JS escape hatch: a scripts/main.{ts,js} entry (ES-imports your vendor libs in order) →
             esbuild → <app>.vendor.js (IIFE, so globals are FFI-reachable), staged to /_apps/<app>/vendor.js.
             Load it with ONE Head.script line in your layout — it lands in <head>, the jsoo app bundle in
@@ -201,10 +201,10 @@ let emit_app_bundles apps_dir out_dir rel_frontend =
             Buffer.add_string b
               (Printf.sprintf
                  "(rule\n (target %s.vendor.js)\n (deps (glob_files_rec %%{project_root}/%s/apps/%s/scripts/*))\n (action (run %%{bin:fennec} build --format iife --out-name %s.vendor.js -o . %%{project_root}/%s/apps/%s/%s)))\n"
-                 n rel_frontend n n rel_frontend n e)));
+                 n rel_src n n rel_src n e)));
   write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
-(* ---- HANDLERS (frontend/handlers/**.mlx) — one .mlx = one handler = one bundle ----
+(* ---- HANDLERS (web/handlers/**.mlx) — one .mlx = one handler = one bundle ----
    Recurses subfolders: a handler's module is its FLAT basename wherever it sits (the server lib +
    the client mirror both use (include_subdirs unqualified)), so you can group handlers by feature. *)
 let rec handler_files dir =
@@ -238,7 +238,7 @@ let is_spa_handler full = has_top_let "load" (read full)
 let emit_handler_bundles dir out_dir client_lib =
   let client_mod = String.capitalize_ascii client_lib in
   let b = Buffer.create 1024 in
-  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per SPA frontend/handlers/**.mlx (boot rule + executable). Form handlers (server-only, `let submit`) are skipped — no client bundle.\n";
+  Buffer.add_string b "; GENERATED — do not edit. One jsoo bundle per SPA web/handlers/**.mlx (boot rule + executable). Form handlers (server-only, `let submit`) are skipped — no client bundle.\n";
   handler_files dir
   |> List.filter (fun (_, full) -> is_spa_handler full)
   |> List.iter (fun (n, _) ->
@@ -250,7 +250,7 @@ let emit_handler_bundles dir out_dir client_lib =
   write (Filename.concat out_dir "dune.inc") (Buffer.contents b)
 
 (* ---- MIRROR (the dual-compile client mirror of an authored category) -------------------------------
-   The server library of frontend/<cat>/ uses (include_subdirs unqualified): nested subfolders are
+   The server library of web/<cat>/ uses (include_subdirs unqualified): nested subfolders are
    authored freely, no dune anywhere under them, FLAT module namespace. Its client twin must compile the
    SAME nested tree with a different ppx flag (-data-client / -conn-client), but dune can't compile one
    source dir into two libraries — so the twin lives in _client/<cat>/run/ and copies the sources in.
@@ -292,11 +292,11 @@ let emit_mirror src_dir out_dir rel_src =
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--glue" :: app_dir :: out_dir :: _ -> emit_glue app_dir out_dir
-  | _ :: "--app-bundles" :: apps_dir :: out_dir :: rel_frontend :: _ -> emit_app_bundles apps_dir out_dir rel_frontend
+  | _ :: "--app-bundles" :: apps_dir :: out_dir :: rel_src :: _ -> emit_app_bundles apps_dir out_dir rel_src
   | _ :: "--handler-bundles" :: dir :: out_dir :: client_lib :: _ -> emit_handler_bundles dir out_dir client_lib
   | _ :: "--mirror" :: src_dir :: out_dir :: rel_src :: _ -> emit_mirror src_dir out_dir rel_src
   | _ :: apps_dir :: out_dir :: _ -> emit_routes apps_dir out_dir
   | _ ->
     prerr_endline
-      "usage: route_gen --glue <dir> <out> | --app-bundles <apps_dir> <out> <rel_frontend> | --handler-bundles <dir> <out> <client_lib> | --mirror <src_dir> <out> <rel_src> | <dir> <out>";
+      "usage: route_gen --glue <dir> <out> | --app-bundles <apps_dir> <out> <rel_src> | --handler-bundles <dir> <out> <client_lib> | --mirror <src_dir> <out> <rel_src> | <dir> <out>";
     exit 2

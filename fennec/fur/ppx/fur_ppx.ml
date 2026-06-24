@@ -452,7 +452,7 @@ let inject_params str =
         pstr_value ~loc Nonrecursive [ vb ]) params in
       bindings @ str
 
-(* ---- handler files (frontend/handlers/<name>.mlx) ----
+(* ---- handler files (web/handlers/<name>.mlx) ----
    A HANDLER is ONE .mlx: an isomorphic `view : payload -> vnode` + a server `load : conn -> outcome`,
    over a `payload` type (which derives its `codec`). The fur ppx (-handler) derives key/bundle from
    the FILENAME and fuses them, so the file holds zero plumbing:
@@ -465,7 +465,7 @@ let inject_params str =
    split via one driver flag — no second source file, no userland ceremony. *)
 let handler_mode = ref false
 let () = Driver.add_arg "-handler" (Stdlib.Arg.Set handler_mode)
-    ~doc:"compile a frontend/handlers/*.mlx file (payload/load/view -> serve+boot)"
+    ~doc:"compile a web/handlers/*.mlx file (payload/load/view -> serve+boot)"
 let conn_client = ref false
 let () = Driver.add_arg "-conn-client" (Stdlib.Arg.Set conn_client)
     ~doc:"strip the server `load` (the client/jsoo build of a handler)"
