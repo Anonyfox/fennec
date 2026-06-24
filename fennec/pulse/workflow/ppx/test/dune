@@ -1,0 +1,6 @@
+; Behavioural test of the reactions ppx — the annotations desugar to real Workflow/Schedule calls.
+(test
+ (name test_reactions_ppx)
+ (libraries fennec.pulse.workflow)
+ (preprocess
+  (pps fennec.pulse.workflow.ppx)))

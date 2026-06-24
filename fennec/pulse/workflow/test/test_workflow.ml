@@ -66,4 +66,12 @@ let () =
   check "nested commit runs both writes" (count c = 2);
   check "nested afters fire post-commit, inner before outer" (List.rev !order = [ "inner-after"; "outer-after" ]);
 
+  (* 6. the re-entrancy guard: an after-hook that calls its own workflow is stopped (not infinite),
+     and the cascade halts at depth 1 (the guard raises Cyclic_reaction, contained by safe_after) *)
+  let n = ref 0 in
+  let a = W.make "a" (fun () -> ()) in
+  W.after a (fun () -> incr n; ignore (W.call a ()));
+  W.call a ();
+  check "re-entrancy guard halts a body-level reaction cycle at depth 1" (!n = 1);
+
   Printf.printf "all workflow tests passed\n%!"

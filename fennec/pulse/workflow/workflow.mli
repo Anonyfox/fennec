@@ -7,6 +7,12 @@
 
 type ('a, 'r) t
 
+(** Raised when a workflow is re-entered within its own reaction cascade — the runtime half of the
+    circuit-breaker, catching a body-level reaction cycle that the compile-time [@after]/[@before]
+    graph check cannot see (it is contained + logged by the after-hook isolation, so it breaks the
+    loop rather than crashing). The argument is the offending workflow's name. *)
+exception Cyclic_reaction of string
+
 (** [make name fn] wraps [fn] as a workflow. [name] is used in diagnostics and the wiring manifest. *)
 val make : string -> ('a -> 'r) -> ('a, 'r) t
 

@@ -1,0 +1,10 @@
+; The reactions ppx — desugars [@after]/[@before]/[@cron]/[@every] on let bindings into
+; Fennec_pulse_workflow runtime calls, and rejects an intra-module reaction cycle at compile time
+; (cross-module cycles are caught for free as module dependency cycles).
+(library
+ (name fennec_pulse_workflow_ppx)
+ (public_name fennec.pulse.workflow.ppx)
+ (kind ppx_rewriter)
+ (libraries ppxlib)
+ (preprocess
+  (pps ppxlib.metaquot)))
