@@ -1,11 +1,11 @@
 ; Server-only document shells (default, admin_shell). Group into subfolders freely — (include_subdirs
 ; unqualified) folds the whole tree into one lib, flat namespace, no dune in any subfolder. The
-; -data-client client mirror is generated into ../../_client/templates (route_gen --mirror); you only
+; -data-client client mirror is generated into ../../_client/documents (route_gen --mirror); you only
 ; ever touch THIS tree.
 (include_subdirs unqualified)
 
 (library
- (name site_templates)
+ (name site_documents)
  (wrapped false)
  (libraries fennec.fur fennec.fur.html)
  (preprocess

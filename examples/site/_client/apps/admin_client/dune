@@ -8,7 +8,7 @@
 
 (library
  (name admin_app_client)
- (libraries fennec.fur fennec.fur.html site_components_client site_templates_client)
+ (libraries fennec.fur fennec.fur.html site_components_client site_documents_client)
  (preprocess
   (pps fennec.fur.ppx -data-client))
  (flags

@@ -8,7 +8,7 @@ Everything here is driven by globs over `frontend/`, so **adding (or nesting int
 component, handler, or whole app needs zero changes in here** (or anywhere). dune:
 
 - compiles the `-data-client` / `-conn-client` *mirrors* of your `frontend/` (`components/`,
-  `templates/`, `handlers/mirror/`) — these strip every server-only fetcher body and `Conn` usage, so
+  `documents/`, `handlers/mirror/`) — these strip every server-only fetcher body and `Conn` usage, so
   secrets and server code never reach the browser bundle. Each `<cat>/gen` runs `route_gen --mirror`,
   which walks the authored tree and emits a `copy_files#` per subfolder (flattening the nested tree to
   match the server lib's `(include_subdirs unqualified)`); `<cat>/run` is the mirror library +

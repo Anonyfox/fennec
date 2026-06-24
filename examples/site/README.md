@@ -11,7 +11,7 @@ examples/site/
   public/              ONE shared static tree, served at / (favicon, robots.txt)
   frontend/            the authored userland — every file is a REAL Dune module (LSP works)
     apps/<name>/       a self-contained app library (web_app, admin_app):
-      main.mlx           config: base + which document template
+      main.mlx           config: base + which document shell
       layout.mlx         the app shell (nav + (outlet ()))
       index.mlx          /            (file name = route)
       about.mlx          /about
@@ -26,13 +26,13 @@ examples/site/
       marketing/hero.mlx   GROUP INTO SUBFOLDERS FREELY — no dune anywhere under here. The whole
       forms/name_form.mlx  tree folds into one lib, FLAT namespace (<Hero/> wherever hero.mlx sits).
     store/             global state (Store.todos …) — shared signals; nests the same way
-    templates/         server-only document shells (default, admin_shell); nests the same way
+    documents/         server-only document shells (default, admin_shell); nests the same way
     handlers/          standalone HANDLERS, one .mlx each, mounted in server.ml — an SPA handler
                        (load/view, own jsoo bundle) or a server-rendered FORM handler (view/submit).
       demo/greet.mlx     also nests freely (Site_handlers.Greet wherever greet.mlx sits)
       account/me.mlx
   _client/             GENERATED — build plumbing, do NOT edit (leading _ = generated, like _build/).
-                       Holds the dual-compile mirrors (components, templates, handlers/mirror), the
+                       Holds the dual-compile mirrors (components, documents, handlers/mirror), the
                        Site_styles extractor (styles/), + the per-app/-handler jsoo bundles, all
                        auto-regenerated. See _client/README.md. frontend/ is now 100% yours.
   test/                the ONE test dir (component unit tests live inline in their .mlx, not here):
@@ -57,7 +57,7 @@ examples/site/
   Symmetric for JS: a `apps/<name>/scripts/main.{ts,js}` entry is esbuild-bundled (TS too) and loaded in
   `<head>` before the jsoo app bundle, so its `window` globals are FFI-reachable at hydration.
 - **Group into subfolders freely — zero config.** Every authored category (`components`,
-  `handlers`, `store`, `templates`) uses `(include_subdirs unqualified)`: drop a file into any
+  `handlers`, `store`, `documents`) uses `(include_subdirs unqualified)`: drop a file into any
   subfolder, **no dune anywhere under it**, and it folds into the one library with a FLAT module
   namespace — a file's name is its module wherever it sits (`<Hero/>` whether `hero.mlx` is at the
   root or in `marketing/`). The only rule: no two files share a basename across subfolders (dune
