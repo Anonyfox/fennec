@@ -16,9 +16,9 @@ both the design rationale and the as-built reference. What's where:
 **burrow** (the durable dev/embedded default — one held LMDB parent txn via `begin_txn`/`commit_txn`/
 `abort_txn`), and **real replica-set Mongo** (a libmongoc client-session transaction —
 `session_start` / `*_s` ops / `session_commit`|`abort`). Each routes a workflow's reads + writes through
-its native transaction for read-your-writes, commits on return, and rolls back on `raise` — invisibly, no
-userland change. The one read-your-writes gap is `aggregate` inside a Mongo transaction (rare); the
-non-transactional path stays byte-identical on every backend. The circuit-breaker is compile-time for the `@after`/`@before` graph
+its native transaction, commits on return, and rolls back on `raise` — invisibly, no userland change.
+Read-your-writes is **complete** (every read — find/count/distinct/aggregate — sees the workflow's pending
+writes); the non-transactional path stays byte-identical on every backend. The circuit-breaker is compile-time for the `@after`/`@before` graph
 (intra-module via the ppx, cross-module via module dependency cycles) plus a runtime re-entrancy guard for
 body-level cascades. See `fennec/pulse/workflow/README.md` for the API and the example's
 `collections/` + `workflows/` READMEs for the 2-minute teach.
@@ -429,10 +429,6 @@ calling the function against ambient in-memory data.
   cross-cutting domain pre-conditions, a visible call at the top of the body for the rest.
 
 **Open — deferred follow-ons:**
-- **`aggregate` inside a Mongo transaction** — the one read-your-writes gap: a workflow that
-  re-aggregates its own *uncommitted* writes on real Mongo reads pre-transaction state (insert/update/
-  remove/find/count/distinct all route through the session; aggregate does not). Rare; additive on the
-  same seam when wanted.
 - **The external-write escape hatch** (an opt-in oplog tap, for a non-Fennec writer on a shared DB) — the one
   feature that reintroduces change-stream cost; keep it quarantined and rare.
 - **The multi-replica pub/sub bus** for live publications (Redis/NATS) — only when a second replica serves

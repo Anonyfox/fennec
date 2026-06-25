@@ -935,6 +935,78 @@ CAMLprim value ocaml_mongo_find_s(value v_session, value v_db, value v_coll, val
   CAMLreturn(res);
 }
 
+/* an aggregation inside the session's transaction (read-your-writes): the session is appended to the opts */
+CAMLprim value ocaml_mongo_aggregate_s(value v_session, value v_db, value v_coll, value v_pipeline, value v_opts) {
+  CAMLparam5(v_session, v_db, v_coll, v_pipeline, v_opts);
+  CAMLlocal1(res);
+  mongo_session *s = Session_val(v_session);
+  char *db = strdup(String_val(v_db));
+  char *coll = strdup(String_val(v_coll));
+  char *pipej = strdup(String_val(v_pipeline));
+  char *optsj = strdup(String_val(v_opts));
+  char *out = NULL;
+  int ok = 0;
+  bson_error_t error;
+  error.message[0] = '\0';
+
+  caml_enter_blocking_section();
+  {
+    const char *pj = (pipej && pipej[0] != '\0') ? pipej : "[]";
+    char *wrapped = bson_strdup_printf("{\"pipeline\": %s}", pj);
+    bson_t pipeline, opts;
+    int pp = bson_init_from_json(&pipeline, wrapped, -1, &error);
+    bson_free(wrapped);
+    if (pp) {
+      if (json_to_bson(optsj, &opts, &error)) {
+        if (mongoc_client_session_append(s->session, &opts, &error)) {
+          mongoc_collection_t *c = mongoc_client_get_collection(s->client, db, coll);
+          mongoc_cursor_t *cur = mongoc_collection_aggregate(c, MONGOC_QUERY_NONE, &pipeline, &opts, NULL);
+          strbuf buf;
+          sb_init(&buf);
+          sb_append(&buf, "[");
+          const bson_t *doc;
+          int first = 1, bad = 0;
+          while (mongoc_cursor_next(cur, &doc)) {
+            char *str = bson_as_canonical_extended_json(doc, NULL);
+            if (!str) { bad = 1; break; }
+            if (!first) sb_append(&buf, ",");
+            sb_append(&buf, str);
+            bson_free(str);
+            first = 0;
+          }
+          sb_append(&buf, "]");
+          if (bad || mongoc_cursor_error(cur, &error) || !buf.data) {
+            ok = 0;
+          } else {
+            out = strdup(buf.data);
+            ok = (out != NULL);
+          }
+          sb_free(&buf);
+          mongoc_cursor_destroy(cur);
+          mongoc_collection_destroy(c);
+        }
+        bson_destroy(&opts);
+      }
+      bson_destroy(&pipeline);
+    }
+  }
+  caml_leave_blocking_section();
+
+  free(db);
+  free(coll);
+  free(pipej);
+  free(optsj);
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "aggregate (txn): %s", error.message);
+    if (out) free(out);
+    caml_failwith(msg);
+  }
+  res = caml_copy_string(out);
+  free(out);
+  CAMLreturn(res);
+}
+
 #else /* !HAVE_MONGOC — native driver not built; every entry point raises a clear error */
 
 #include <caml/mlvalues.h>
@@ -967,6 +1039,7 @@ CAMLprim value ocaml_mongo_session_abort(value a) { (void)a; return mongo_unavai
 CAMLprim value ocaml_mongo_insert_one_s(value a, value b, value c, value d) { (void)a; (void)b; (void)c; (void)d; return mongo_unavailable(); }
 CAMLprim value ocaml_mongo_command_s(value a, value b, value c) { (void)a; (void)b; (void)c; return mongo_unavailable(); }
 CAMLprim value ocaml_mongo_find_s(value a, value b, value c, value d, value e) { (void)a; (void)b; (void)c; (void)d; (void)e; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_aggregate_s(value a, value b, value c, value d, value e) { (void)a; (void)b; (void)c; (void)d; (void)e; return mongo_unavailable(); }
 
 #endif
 

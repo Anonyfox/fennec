@@ -75,3 +75,6 @@ external command_s : session -> string -> string -> string = "ocaml_mongo_comman
 
 (* session -> db -> coll -> filter_json -> opts_json -> json-array-of-docs (read-your-writes) *)
 external find_s : session -> string -> string -> string -> string -> string = "ocaml_mongo_find_s"
+
+(* session -> db -> coll -> pipeline_json(array) -> opts_json -> json-array-of-docs (read-your-writes) *)
+external aggregate_s : session -> string -> string -> string -> string -> string = "ocaml_mongo_aggregate_s"

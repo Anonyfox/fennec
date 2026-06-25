@@ -69,6 +69,16 @@ let run rs =
    with Boom -> ());
   check "mongo: rollback reverts remove" (names c = [ "ada" ]);
 
+  (* 6. aggregate read-your-writes: inside the transaction, an aggregate sees the pending inserts too *)
+  let c = fresh "p6" in
+  Tx.run (fun () ->
+      ignore (D.insert c (person "ada"));
+      ignore (D.insert c (person "bob"));
+      let agg = D.aggregate c [ B.doc [ ("$count", B.str "n") ] ] in
+      check "mongo: aggregate read-your-writes (sees pending inserts)"
+        (match agg with [ d ] -> B.get_int d "n" = Some 2 | _ -> false));
+  check "mongo: aggregate's writes committed" (count c = 2);
+
   Printf.printf "all mongo transaction tests passed\n%!"
 
 let () =

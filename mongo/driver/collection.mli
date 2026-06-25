@@ -84,3 +84,6 @@ val command_s : session -> db:string -> Bson.t -> Bson.t
 
 (** [find_s s t ?filter ?opts ()] — read within the transaction (read-your-writes). *)
 val find_s : session -> t -> ?filter:Bson.t -> ?opts:Bson.t -> unit -> Bson.t list
+
+(** [aggregate_s s t ?pipeline ?opts ()] — aggregate within the transaction (read-your-writes). *)
+val aggregate_s : session -> t -> ?pipeline:Bson.t -> ?opts:Bson.t -> unit -> Bson.t list

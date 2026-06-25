@@ -77,9 +77,9 @@ let aggregate c ?lookup (pipeline : B.t list) =
 let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
 
 (* The same Backend.S ops, but issued inside a Mongo TRANSACTION (a held client session): the Dynamic
-   dispatch routes Native ops through these when a transaction is in flight, so a workflow's writes
-   commit or roll back together, and reads see its own pending writes (read-your-writes). aggregate
-   stays non-session — a workflow rarely re-aggregates its own uncommitted writes (the one gap). *)
+   dispatch routes Native ops through these when a transaction is in flight, so a workflow's writes commit
+   or roll back together, and every read (find / find_one / count / distinct / aggregate) sees its own
+   pending writes — read-your-writes, complete. *)
 let insert_s sess c (d : B.t) =
   let kvs = Diff.kvs_of d in
   let id, doc =
@@ -112,6 +112,10 @@ let distinct_s sess (c : Coll.t) key sel =
   match B.get (Coll.command_s sess ~db:c.Coll.db (B.doc [ ("distinct", B.str c.Coll.name); ("key", B.str key); ("query", sel) ])) "values" with
   | Some (B.Array xs) -> xs
   | _ -> []
+
+let aggregate_s sess c ?lookup (pipeline : B.t list) =
+  ignore lookup (* a real mongod resolves $lookup itself *);
+  Coll.aggregate_s sess c ~pipeline:(B.Array pipeline) ()
 
 (* BEST-EFFORT fence on the native driver: mongod's change-stream delivery is asynchronous (network)
    and v1 carries no resume-token plumbing, so the fence runs immediately — a method's [updated] may
@@ -435,7 +439,7 @@ module Dynamic = struct
   let aggregate c ?(lookup = fun _ -> []) p =
     match c with
     | Mem m -> Mini.aggregate m ~lookup p
-    | Native r -> aggregate r ~lookup p
+    | Native r -> (match in_tx_mongo r with Some sess -> aggregate_s sess r ~lookup p | None -> aggregate r ~lookup p)
     | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.aggregate_in sess e.ecoll ~lookup p | None -> Burrow_engine.aggregate e.eng e.ecoll ~lookup p)
     | Missing message -> unavailable message
   let distinct c k s =

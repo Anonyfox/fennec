@@ -138,3 +138,7 @@ let command_s (s : session) ~db cmd =
 let find_s (s : session) t ?(filter = Bson.Document []) ?(opts = Bson.Document []) () =
   Internal.run (fun () -> Mongo_ffi.find_s s t.db t.name (Bson_json.to_string filter) (Bson_json.to_string opts))
   |> Bson_json.list_of_string
+
+let aggregate_s (s : session) t ?(pipeline = Bson.Array []) ?(opts = Bson.Document []) () =
+  Internal.run (fun () -> Mongo_ffi.aggregate_s s t.db t.name (Bson_json.to_string pipeline) (Bson_json.to_string opts))
+  |> Bson_json.list_of_string
