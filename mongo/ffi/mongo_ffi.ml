@@ -55,3 +55,23 @@ external watch_open : pool -> string -> string -> string -> string -> change_str
 (* blocks up to the stream's maxAwaitTimeMS; None on timeout, Some json on event *)
 external watch_next : change_stream -> string option = "ocaml_mongo_watch_next"
 external watch_close : change_stream -> unit = "ocaml_mongo_watch_close"
+
+(* ---- multi-document transactions (replica-set Mongo) ----
+   A [session] is a client checked out of the pool for the workflow's lifetime + a libmongoc client
+   session with a transaction started. The workflow's writes/reads route through the [*_s] ops (the
+   session is appended to their opts, so the server applies them inside the transaction);
+   [session_commit] / [session_abort] finalize and return the client to the pool. Requires a replica set
+   (MongoDB transactions are replica-set only); a standalone mongod errors at [session_start]. *)
+type session
+
+external session_start : pool -> session = "ocaml_mongo_session_start"
+external session_commit : session -> unit = "ocaml_mongo_session_commit"
+external session_abort : session -> unit = "ocaml_mongo_session_abort"
+(* session -> db -> coll -> document_json -> reply_json *)
+external insert_one_s : session -> string -> string -> string -> string = "ocaml_mongo_insert_one_s"
+
+(* session -> db -> command_json -> reply_json (update / delete / count / distinct, in the transaction) *)
+external command_s : session -> string -> string -> string = "ocaml_mongo_command_s"
+
+(* session -> db -> coll -> filter_json -> opts_json -> json-array-of-docs (read-your-writes) *)
+external find_s : session -> string -> string -> string -> string -> string = "ocaml_mongo_find_s"

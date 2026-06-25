@@ -116,3 +116,25 @@ let list_indexes t =
 let count t ?(filter = Bson.Document []) () =
   let reply = Client.command t.client ~db:t.db (Bson.Document [ ("count", Bson.String t.name); ("query", filter) ]) in
   match Bson.get reply "n" with Some (Bson.Int n) -> n | Some (Bson.Float f) -> int_of_float f | _ -> 0
+
+(* ---- transactions (replica-set Mongo) ----
+   A [session] is a client checked out for a workflow's lifetime + a started multi-document transaction.
+   The workflow's writes/reads route through the [*_s] ops (the session is appended server-side), so they
+   commit or roll back together. The Dynamic backend opens one lazily on the first write and finalizes it
+   on commit/rollback. Each call runs off the scheduler in an Eio systhread, like every driver call. *)
+type session = Mongo_ffi.session
+
+let start_session t = Internal.run (fun () -> Mongo_ffi.session_start t.client.Client.pool)
+let commit_session (s : session) = Internal.run (fun () -> Mongo_ffi.session_commit s)
+let abort_session (s : session) = Internal.run (fun () -> Mongo_ffi.session_abort s)
+
+let insert_one_s (s : session) t doc =
+  Internal.run (fun () -> Mongo_ffi.insert_one_s s t.db t.name (Bson_json.to_string doc)) |> Bson_json.of_string
+
+(* a db-scoped command inside the transaction (update / delete / count / distinct) *)
+let command_s (s : session) ~db cmd =
+  Internal.run (fun () -> Mongo_ffi.command_s s db (Bson_json.to_string cmd)) |> Bson_json.of_string
+
+let find_s (s : session) t ?(filter = Bson.Document []) ?(opts = Bson.Document []) () =
+  Internal.run (fun () -> Mongo_ffi.find_s s t.db t.name (Bson_json.to_string filter) (Bson_json.to_string opts))
+  |> Bson_json.list_of_string

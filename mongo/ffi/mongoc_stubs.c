@@ -99,6 +99,46 @@ static struct custom_operations stream_ops = {
     custom_deserialize_default,
     custom_fixed_length_default};
 
+/* --------------------------------------------------------------- session --- */
+/* A multi-document transaction: a client checked out of the pool for the workflow's lifetime plus a
+ * libmongoc client session with a transaction started. The workflow's writes/reads route through it
+ * (session appended to their opts), then commit/abort finalizes and returns the client to the pool —
+ * the exact mirror of the change-stream's held-client pattern. */
+typedef struct {
+  mongoc_client_pool_t *pool; /* borrowed: where to push the client back */
+  mongoc_client_t *client;    /* checked out for the transaction's lifetime */
+  mongoc_client_session_t *session;
+  int done; /* committed or aborted — client already pushed back */
+} mongo_session;
+
+#define Session_val(v) (*((mongo_session **)Data_custom_val(v)))
+
+static void session_release(mongo_session *s) {
+  if (!s || s->done) return;
+  if (s->session) mongoc_client_session_destroy(s->session);
+  if (s->client) mongoc_client_pool_push(s->pool, s->client);
+  s->session = NULL;
+  s->client = NULL;
+  s->done = 1;
+}
+
+static void session_finalize(value v) {
+  mongo_session *s = Session_val(v);
+  if (s) {
+    session_release(s);
+    free(s);
+  }
+}
+
+static struct custom_operations session_ops = {
+    "mongo.session",
+    session_finalize,
+    custom_compare_default,
+    custom_hash_default,
+    custom_serialize_default,
+    custom_deserialize_default,
+    custom_fixed_length_default};
+
 /* --------------------------------------------------------------- helpers --- */
 
 /* A tiny growable byte buffer. The driver's bson_string_t was removed in
@@ -631,6 +671,270 @@ CAMLprim value ocaml_mongo_watch_close(value v_stream) {
   CAMLreturn(Val_unit);
 }
 
+/* --------------------------------------------------------------- session --- */
+
+CAMLprim value ocaml_mongo_session_start(value v_pool) {
+  CAMLparam1(v_pool);
+  CAMLlocal1(res);
+  mongo_pool *p = Pool_val(v_pool);
+  mongo_session *s = NULL;
+  int ok = 0;
+  bson_error_t error;
+  error.message[0] = '\0';
+
+  caml_enter_blocking_section();
+  {
+    mongoc_client_t *client = mongoc_client_pool_pop(p->pool);
+    mongoc_client_session_t *session = mongoc_client_start_session(client, NULL, &error);
+    if (session) {
+      if (mongoc_client_session_start_transaction(session, NULL, &error)) {
+        s = (mongo_session *)malloc(sizeof(mongo_session));
+        s->pool = p->pool;
+        s->client = client;
+        s->session = session;
+        s->done = 0;
+        ok = 1;
+      } else {
+        mongoc_client_session_destroy(session);
+        mongoc_client_pool_push(p->pool, client);
+      }
+    } else {
+      mongoc_client_pool_push(p->pool, client);
+    }
+  }
+  caml_leave_blocking_section();
+
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "session_start: %s", error.message);
+    caml_failwith(msg);
+  }
+  res = caml_alloc_custom(&session_ops, sizeof(mongo_session *), 0, 1);
+  Session_val(res) = NULL; /* NULL before the real pointer lands — finalizer-safe if a GC fires */
+  Session_val(res) = s;
+  CAMLreturn(res);
+}
+
+CAMLprim value ocaml_mongo_session_commit(value v_session) {
+  CAMLparam1(v_session);
+  mongo_session *s = Session_val(v_session);
+  if (s->done) caml_failwith("session_commit: transaction already finalized");
+  int ok = 0;
+  bson_error_t error;
+  error.message[0] = '\0';
+
+  caml_enter_blocking_section();
+  {
+    bson_t reply;
+    ok = mongoc_client_session_commit_transaction(s->session, &reply, &error);
+    bson_destroy(&reply);
+  }
+  caml_leave_blocking_section();
+
+  session_release(s); /* destroy the session + return the client regardless of the commit outcome */
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "session_commit: %s", error.message);
+    caml_failwith(msg);
+  }
+  CAMLreturn(Val_unit);
+}
+
+CAMLprim value ocaml_mongo_session_abort(value v_session) {
+  CAMLparam1(v_session);
+  mongo_session *s = Session_val(v_session);
+  if (s->done) CAMLreturn(Val_unit);
+  bson_error_t error;
+
+  caml_enter_blocking_section();
+  {
+    /* best-effort abort: even if it fails, session_release frees the session + returns the client, and
+       the server reaps an unfinished transaction on session end / timeout */
+    mongoc_client_session_abort_transaction(s->session, &error);
+  }
+  caml_leave_blocking_section();
+
+  session_release(s);
+  CAMLreturn(Val_unit);
+}
+
+/* a write inside the session's transaction: the session is appended to the op's opts so the server
+   applies it within the transaction (the writes commit/roll back together) */
+static value mongo_write_s(write_op op, mongo_session *s, char *db, char *coll, char *aj, char *bj) {
+  CAMLparam0();
+  CAMLlocal1(res);
+  char *out = NULL;
+  int ok = 0;
+  bson_error_t error;
+  error.message[0] = '\0';
+
+  caml_enter_blocking_section();
+  {
+    bson_t a, b, reply, opts;
+    int parsed = json_to_bson(aj, &a, &error);
+    int parsed_b = 1;
+    if (parsed && op == OP_UPDATE) parsed_b = json_to_bson(bj, &b, &error);
+    if (parsed && parsed_b) {
+      bson_init(&opts);
+      if (mongoc_client_session_append(s->session, &opts, &error)) {
+        mongoc_collection_t *c = mongoc_client_get_collection(s->client, db, coll);
+        switch (op) {
+          case OP_INSERT: ok = mongoc_collection_insert_one(c, &a, &opts, &reply, &error); break;
+          case OP_UPDATE: ok = mongoc_collection_update_one(c, &a, &b, &opts, &reply, &error); break;
+          case OP_DELETE: ok = mongoc_collection_delete_one(c, &a, &opts, &reply, &error); break;
+        }
+        if (ok) out = bson_as_relaxed_extended_json(&reply, NULL);
+        bson_destroy(&reply);
+        mongoc_collection_destroy(c);
+      }
+      bson_destroy(&opts);
+      if (op == OP_UPDATE && parsed_b) bson_destroy(&b);
+      bson_destroy(&a);
+    } else if (parsed) {
+      bson_destroy(&a);
+    }
+  }
+  caml_leave_blocking_section();
+
+  free(db);
+  free(coll);
+  free(aj);
+  free(bj); /* NULL for insert/delete — free(NULL) is a no-op */
+
+  if (!ok || !out) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "write (txn): %s", ok ? "could not encode reply to JSON" : error.message);
+    if (out) bson_free(out);
+    caml_failwith(msg);
+  }
+  res = caml_copy_string(out);
+  bson_free(out);
+  CAMLreturn(res);
+}
+
+CAMLprim value ocaml_mongo_insert_one_s(value v_session, value v_db, value v_coll, value v_doc) {
+  CAMLparam4(v_session, v_db, v_coll, v_doc);
+  mongo_session *s = Session_val(v_session);
+  char *db = strdup(String_val(v_db));
+  char *coll = strdup(String_val(v_coll));
+  char *doc = strdup(String_val(v_doc));
+  value r = mongo_write_s(OP_INSERT, s, db, coll, doc, NULL);
+  CAMLreturn(r);
+}
+
+/* a command inside the session's transaction (update / delete-many / count / distinct): the session is
+   appended to the command's opts so the server applies it within the transaction */
+CAMLprim value ocaml_mongo_command_s(value v_session, value v_db, value v_cmd) {
+  CAMLparam3(v_session, v_db, v_cmd);
+  CAMLlocal1(res);
+  mongo_session *s = Session_val(v_session);
+  char *db = strdup(String_val(v_db));
+  char *cmdj = strdup(String_val(v_cmd));
+  char *out = NULL;
+  int ok = 0;
+  bson_error_t error;
+  error.message[0] = '\0';
+
+  caml_enter_blocking_section();
+  {
+    bson_t cmd, opts;
+    if (json_to_bson(cmdj, &cmd, &error)) {
+      bson_init(&opts);
+      if (mongoc_client_session_append(s->session, &opts, &error)) {
+        bson_t reply;
+        if (mongoc_client_command_with_opts(s->client, db, &cmd, NULL, &opts, &reply, &error)) {
+          out = bson_as_relaxed_extended_json(&reply, NULL);
+          ok = (out != NULL);
+        }
+        bson_destroy(&reply); /* command_with_opts initializes reply on success AND failure */
+      }
+      bson_destroy(&opts);
+      bson_destroy(&cmd);
+    }
+  }
+  caml_leave_blocking_section();
+
+  free(db);
+  free(cmdj);
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "command (txn): %s", error.message);
+    if (out) bson_free(out);
+    caml_failwith(msg);
+  }
+  res = caml_copy_string(out);
+  bson_free(out);
+  CAMLreturn(res);
+}
+
+/* a read inside the session's transaction (read-your-writes): the session is appended to the find opts */
+CAMLprim value ocaml_mongo_find_s(value v_session, value v_db, value v_coll, value v_filter, value v_opts) {
+  CAMLparam5(v_session, v_db, v_coll, v_filter, v_opts);
+  CAMLlocal1(res);
+  mongo_session *s = Session_val(v_session);
+  char *db = strdup(String_val(v_db));
+  char *coll = strdup(String_val(v_coll));
+  char *filterj = strdup(String_val(v_filter));
+  char *optsj = strdup(String_val(v_opts));
+  char *out = NULL;
+  int ok = 0;
+  bson_error_t error;
+  error.message[0] = '\0';
+
+  caml_enter_blocking_section();
+  {
+    bson_t filter, opts;
+    if (json_to_bson(filterj, &filter, &error)) {
+      if (json_to_bson(optsj, &opts, &error)) {
+        if (mongoc_client_session_append(s->session, &opts, &error)) {
+          mongoc_collection_t *c = mongoc_client_get_collection(s->client, db, coll);
+          mongoc_cursor_t *cur = mongoc_collection_find_with_opts(c, &filter, &opts, NULL);
+          strbuf buf;
+          sb_init(&buf);
+          sb_append(&buf, "[");
+          const bson_t *doc;
+          int first = 1, bad = 0;
+          while (mongoc_cursor_next(cur, &doc)) {
+            char *str = bson_as_canonical_extended_json(doc, NULL);
+            if (!str) { bad = 1; break; }
+            if (!first) sb_append(&buf, ",");
+            sb_append(&buf, str);
+            bson_free(str);
+            first = 0;
+          }
+          sb_append(&buf, "]");
+          if (bad || mongoc_cursor_error(cur, &error) || !buf.data) {
+            ok = 0;
+          } else {
+            out = strdup(buf.data);
+            ok = (out != NULL);
+          }
+          sb_free(&buf);
+          mongoc_cursor_destroy(cur);
+          mongoc_collection_destroy(c);
+        }
+        bson_destroy(&opts);
+      }
+      bson_destroy(&filter);
+    }
+  }
+  caml_leave_blocking_section();
+
+  free(db);
+  free(coll);
+  free(filterj);
+  free(optsj);
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "find (txn): %s", error.message);
+    if (out) free(out);
+    caml_failwith(msg);
+  }
+  res = caml_copy_string(out);
+  free(out);
+  CAMLreturn(res);
+}
+
 #else /* !HAVE_MONGOC — native driver not built; every entry point raises a clear error */
 
 #include <caml/mlvalues.h>
@@ -657,6 +961,12 @@ CAMLprim value ocaml_mongo_delete_one(value a, value b, value c, value d) { (voi
 CAMLprim value ocaml_mongo_watch_open(value a, value b, value c, value d, value e) { (void)a; (void)b; (void)c; (void)d; (void)e; return mongo_unavailable(); }
 CAMLprim value ocaml_mongo_watch_next(value a) { (void)a; return mongo_unavailable(); }
 CAMLprim value ocaml_mongo_watch_close(value a) { (void)a; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_session_start(value a) { (void)a; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_session_commit(value a) { (void)a; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_session_abort(value a) { (void)a; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_insert_one_s(value a, value b, value c, value d) { (void)a; (void)b; (void)c; (void)d; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_command_s(value a, value b, value c) { (void)a; (void)b; (void)c; return mongo_unavailable(); }
+CAMLprim value ocaml_mongo_find_s(value a, value b, value c, value d, value e) { (void)a; (void)b; (void)c; (void)d; (void)e; return mongo_unavailable(); }
 
 #endif
 

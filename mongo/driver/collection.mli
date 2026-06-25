@@ -62,3 +62,25 @@ val list_indexes : t -> Bson.t list
 
 (** [count t ?filter ()] — the number of documents matching [filter]. *)
 val count : t -> ?filter:Bson.t -> unit -> int
+
+(** {1 Transactions (replica-set Mongo)}
+
+    A [session] is a client checked out for a workflow's lifetime + a started multi-document transaction.
+    Writes and reads issued through the [*_s] ops are applied within the transaction (the session is
+    appended server-side), so they commit or roll back together. The Dynamic backend opens one lazily per
+    transaction and finalizes it on commit/rollback. Requires a replica set. *)
+type session
+
+val start_session : t -> session
+val commit_session : session -> unit
+val abort_session : session -> unit
+
+(** [insert_one_s s t doc] — insert within the transaction. *)
+val insert_one_s : session -> t -> Bson.t -> Bson.t
+
+(** [command_s s ~db cmd] — run a db-scoped command (update / delete / count / distinct) within the
+    transaction; returns the reply. *)
+val command_s : session -> db:string -> Bson.t -> Bson.t
+
+(** [find_s s t ?filter ?opts ()] — read within the transaction (read-your-writes). *)
+val find_s : session -> t -> ?filter:Bson.t -> ?opts:Bson.t -> unit -> Bson.t list

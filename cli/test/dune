@@ -31,6 +31,15 @@
  (modules test_warm_worker)
  (libraries fennec_dev unix))
 
+; The transparent transaction over REAL replica-set Mongo (the libmongoc client-session path). Its own
+; executable — NOT in the runtest alias — because it spins up a managed mongod (slow, and opt-in like the
+; other --mongo paths); it SKIPS cleanly when no mongod is installed. Run it directly to verify the
+; native-rollback path: `dune exec cli/test/test_mongo_txn.exe`.
+(executable
+ (name test_mongo_txn)
+ (modules test_mongo_txn)
+ (libraries fennec_dev fennec-mongo.dynamic fennec-mongo.bson fennec-mongo.backend eio_main eio unix))
+
 (rule
  (alias runtest)
  (deps

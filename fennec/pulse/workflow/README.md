@@ -82,9 +82,10 @@ nested workflows join the enclosing transaction, so a workflow calling a workflo
 unit**, and after-hooks fire once, after the *outermost* commit. On **burrow** (the durable dev /
 embedded default) rollback is just as real: the transaction holds ONE LMDB parent txn for the whole
 workflow — reads and writes route through it (read-your-writes, since an LMDB write txn reads its own
-pending writes), `commit` makes it durable in one fsync, `raise` aborts it. On **real Mongo** the
-bracket is still transparent and writes commit-on-success; a client-session transaction is the one
-remaining follow-on. None of this is visible in userland — you write `raise`.
+pending writes), `commit` makes it durable in one fsync, `raise` aborts it. On **real replica-set Mongo**
+rollback is real too: the transaction is a libmongoc client session — the workflow's writes and reads
+carry it, so the server commits or aborts them together. None of this is visible in userland — you write
+`raise`, and a workflow leaves nothing behind on every backend.
 
 ## The circuit-breaker (reaction cycles can't infinite-loop)
 

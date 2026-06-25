@@ -76,6 +76,43 @@ let aggregate c ?lookup (pipeline : B.t list) =
   Coll.aggregate c ~pipeline:(B.Array pipeline) ()
 let distinct c key sel = Coll.distinct c ~key ~filter:sel ()
 
+(* The same Backend.S ops, but issued inside a Mongo TRANSACTION (a held client session): the Dynamic
+   dispatch routes Native ops through these when a transaction is in flight, so a workflow's writes
+   commit or roll back together, and reads see its own pending writes (read-your-writes). aggregate
+   stays non-session — a workflow rarely re-aggregates its own uncommitted writes (the one gap). *)
+let insert_s sess c (d : B.t) =
+  let kvs = Diff.kvs_of d in
+  let id, doc =
+    match List.assoc_opt "_id" kvs with
+    | Some v -> (Diff.id_to_string v, d)
+    | None -> let id = Id.random_id () in (id, B.Document (("_id", B.String id) :: kvs))
+  in
+  ignore (Coll.insert_one_s sess c doc);
+  id
+
+let update_s sess (c : Coll.t) ~multi ~upsert sel m =
+  int_field
+    (Coll.command_s sess ~db:c.Coll.db
+       (B.doc
+          [ ("update", B.str c.Coll.name);
+            ("updates", B.array [ B.doc [ ("q", sel); ("u", m); ("multi", B.bool multi); ("upsert", B.bool upsert) ] ]) ]))
+    "n"
+
+let remove_s sess (c : Coll.t) sel =
+  int_field
+    (Coll.command_s sess ~db:c.Coll.db
+       (B.doc [ ("delete", B.str c.Coll.name); ("deletes", B.array [ B.doc [ ("q", sel); ("limit", B.int 0) ] ]) ]))
+    "n"
+
+let find_s sess c (q : Backend.query) = Coll.find_s sess c ~filter:q.Backend.selector ~opts:(native_opts q) ()
+let find_one_s sess c (q : Backend.query) = match find_s sess c { q with Backend.limit = 1 } with x :: _ -> Some x | [] -> None
+let count_s sess (c : Coll.t) sel = int_field (Coll.command_s sess ~db:c.Coll.db (B.doc [ ("count", B.str c.Coll.name); ("query", sel) ])) "n"
+
+let distinct_s sess (c : Coll.t) key sel =
+  match B.get (Coll.command_s sess ~db:c.Coll.db (B.doc [ ("distinct", B.str c.Coll.name); ("key", B.str key); ("query", sel) ])) "values" with
+  | Some (B.Array xs) -> xs
+  | _ -> []
+
 (* BEST-EFFORT fence on the native driver: mongod's change-stream delivery is asynchronous (network)
    and v1 carries no resume-token plumbing, so the fence runs immediately — a method's [updated] may
    precede its stream deltas under lag (an optimistic client then briefly shows the pre-method state;
@@ -197,6 +234,9 @@ module Tx = struct
     mutable burrow : (Burrow_engine.t * Burrow_engine.session) option;
         (* a burrow backend's native parent txn, opened lazily on the first burrow write and
            committed/aborted with the transaction (the durable analogue of [touched]) *)
+    mutable mongo : Coll.session option;
+        (* a real-Mongo backend's native client-session transaction, opened lazily on the first native
+           write and committed/aborted with the transaction *)
   }
 
   let _key : t Eio.Fiber.key = Eio.Fiber.create_key ()
@@ -214,17 +254,21 @@ module Tx = struct
       tx.touched <- { coll = m; snap = Minimongo.tx_snapshot m } :: tx.touched
 
   let commit (tx : t) : unit =
-    (* commit the burrow parent txn (makes its writes durable + reveals them to observers) before
-       dropping the in-memory snapshots; both backends are now committed *)
+    (* commit the native backend transactions (burrow parent txn / Mongo client session) before dropping
+       the in-memory snapshots; all backends are now committed *)
     (match tx.burrow with Some (eng, s) -> Burrow_engine.commit_txn eng s | None -> ());
     tx.burrow <- None;
+    (match tx.mongo with Some s -> Coll.commit_session s | None -> ());
+    tx.mongo <- None;
     tx.touched <- [] (* in-memory writes already applied + delivered; drop snapshots *)
 
   let rollback (tx : t) : unit =
-    (* discard the burrow parent txn (its pending writes were never made visible) and restore the
-       in-memory snapshots (emitting compensating change events so live observers converge) *)
+    (* discard the native backend transactions (their pending writes were never made visible) and restore
+       the in-memory snapshots (emitting compensating change events so live observers converge) *)
     (match tx.burrow with Some (eng, s) -> Burrow_engine.abort_txn eng s | None -> ());
     tx.burrow <- None;
+    (match tx.mongo with Some s -> Coll.abort_session s | None -> ());
+    tx.mongo <- None;
     List.iter (fun e -> Minimongo.tx_restore e.coll e.snap) tx.touched;
     tx.touched <- [];
     tx.on_commit <- [] (* a rolled-back transaction fires no post-commit reactions *)
@@ -249,7 +293,7 @@ module Tx = struct
     match current () with
     | Some _ -> f () (* already inside a transaction — join it (flatten to one atomic unit) *)
     | None ->
-        let tx = { touched = []; on_commit = []; burrow = None } in
+        let tx = { touched = []; on_commit = []; burrow = None; mongo = None } in
         let go () = match f () with v -> commit tx; v | exception e -> rollback tx; raise e in
         (* serialize + bind ambient under Eio; outside a scheduler (unit tests) a global ref stands in *)
         let result =
@@ -346,32 +390,46 @@ module Dynamic = struct
         tx.Tx.burrow <- Some (e.eng, s);
         Some s)
 
+  (* the real-Mongo analogue: if a transaction is in flight, lazily start a client-session transaction
+     (held for the whole workflow, stored on the Tx so commit/rollback finalize it) and route the native
+     op through it. A no-op outside a transaction — the non-tx path is unchanged. *)
+  let in_tx_mongo (r : Coll.t) : Coll.session option =
+    match Tx.current () with
+    | None -> None
+    | Some tx -> (
+      match tx.Tx.mongo with
+      | Some _ as s -> s
+      | None ->
+        let s = Coll.start_session r in
+        tx.Tx.mongo <- Some s;
+        Some s)
+
   let insert c d =
     match c with
     | Mem m -> in_tx_touch m; Mini.insert m d
-    | Native r -> insert r d
+    | Native r -> (match in_tx_mongo r with Some sess -> insert_s sess r d | None -> insert r d)
     | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.insert_in sess e.ecoll d | None -> Burrow_engine.insert e.eng e.ecoll d)
     | Missing message -> unavailable message
   let update c ~multi ~upsert s m =
     match c with
     | Mem mm -> in_tx_touch mm; Mini.update mm ~multi ~upsert s m
-    | Native r -> update r ~multi ~upsert s m
+    | Native r -> (match in_tx_mongo r with Some sess -> update_s sess r ~multi ~upsert s m | None -> update r ~multi ~upsert s m)
     | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.update_in sess e.ecoll ~multi ~upsert s m | None -> Burrow_engine.update e.eng e.ecoll ~multi ~upsert s m)
     | Missing message -> unavailable message
   let remove c s =
     match c with
     | Mem m -> in_tx_touch m; Mini.remove m s
-    | Native r -> remove r s
+    | Native r -> (match in_tx_mongo r with Some sess -> remove_s sess r s | None -> remove r s)
     | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.remove_in sess e.ecoll s | None -> Burrow_engine.remove e.eng e.ecoll s)
     | Missing message -> unavailable message
   let find c q =
-    match c with Mem m -> Mini.find m q | Native r -> find r q | Embedded e -> (match in_tx_burrow e with Some sess -> bw_find_in sess e q | None -> bw_find e q) | Missing message -> unavailable message
+    match c with Mem m -> Mini.find m q | Native r -> (match in_tx_mongo r with Some sess -> find_s sess r q | None -> find r q) | Embedded e -> (match in_tx_burrow e with Some sess -> bw_find_in sess e q | None -> bw_find e q) | Missing message -> unavailable message
   let find_one c q =
-    match c with Mem m -> Mini.find_one m q | Native r -> find_one r q | Embedded e -> (match in_tx_burrow e with Some sess -> bw_find_one_in sess e q | None -> bw_find_one e q) | Missing message -> unavailable message
+    match c with Mem m -> Mini.find_one m q | Native r -> (match in_tx_mongo r with Some sess -> find_one_s sess r q | None -> find_one r q) | Embedded e -> (match in_tx_burrow e with Some sess -> bw_find_one_in sess e q | None -> bw_find_one e q) | Missing message -> unavailable message
   let count c s =
     match c with
     | Mem m -> Mini.count m s
-    | Native r -> count r s
+    | Native r -> (match in_tx_mongo r with Some sess -> count_s sess r s | None -> count r s)
     | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.count_in sess e.ecoll ~selector:s | None -> Burrow_engine.count e.eng e.ecoll ~selector:s)
     | Missing message -> unavailable message
   let aggregate c ?(lookup = fun _ -> []) p =
@@ -383,7 +441,7 @@ module Dynamic = struct
   let distinct c k s =
     match c with
     | Mem m -> Mini.distinct m k s
-    | Native r -> distinct r k s
+    | Native r -> (match in_tx_mongo r with Some sess -> distinct_s sess r k s | None -> distinct r k s)
     | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.distinct_in sess e.ecoll ~key:k ~selector:s | None -> Burrow_engine.distinct e.eng e.ecoll ~key:k ~selector:s)
     | Missing message -> unavailable message
 
