@@ -115,7 +115,13 @@ Four properties make this safe *without* anything in the body:
 1. **A module holds as many public process functions as cohere** — `Orders.place`, `Orders.cancel`,
    `Orders.refund` — with sub-steps as private functions. The dev sizes the module by cohesion, exactly as a
    component file may hold a private sub-component. "One thing per file" holds: for workflows the *thing* is
-   a process area. (This dissolves the one-tiny-file-per-use-case sprawl: related verbs cluster.)
+   a process area. (This dissolves the one-tiny-file-per-use-case sprawl: related verbs cluster.) **And a
+   single workflow function may be *long*** when the process genuinely has many sequential steps: a linear
+   top-to-bottom read is the *simplest* form it can take — the whole story in one place, in order.
+   Splitting it into sub-functions purely to shorten it is itself an anti-pattern (the lasagna in
+   miniature): it scatters one story across call sites and hides the order you must follow. Factor a step
+   out **only** when it is independently reused or a genuinely distinct sub-process — **never for line
+   count.**
 2. **The framework runs each invocation in one transparent transaction** (§5): ambient writes batch into a
    real transaction with **read-your-writes**, commit on normal return, **roll back on any `raise`**.
 3. **Imperative read-then-use just works.** The dominant pattern — *use a write's return value in the next

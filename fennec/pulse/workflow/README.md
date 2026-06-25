@@ -40,6 +40,11 @@ the collection** (`Ticket.create` / `save` / `delete` / `find_one` / `where` / `
 `[@@deriving collection]` generates — they run server-side over an isomorphic seam the framework installs
 at boot. `[%q …]` is the typed Sift query (compile-checked, dotted subpaths typed).
 
+**On length.** A workflow may be *long* when the process simply has many sequential steps — a top-to-bottom
+read is the clearest form it can take (the whole story, in order, in one place). Splitting it into
+sub-functions just to shorten it scatters that one story across call sites and hides the order — an
+anti-pattern. Factor a step out only when it is reused or a distinct sub-process, **never for line count**.
+
 ## API — what the ppx targets (you rarely call these directly)
 
 ```ocaml
