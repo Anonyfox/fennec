@@ -1,11 +1,11 @@
-(* add_task — the slot form: a method IS a typed function. The fur ppx reads the signature
-   (string -> Task.t) to DERIVE the wire contract, registers the body as the server handler, and strips
-   that body from the client bundle — the client keeps only the typed decl and calls it with
+(* add_task — a method IS a typed function. The fur ppx reads the signature (string -> Task.t) to derive
+   the wire contract and registers THIS body as the server handler; it is stripped from the client bundle
+   wholesale, so nothing it touches (workflows, secrets, C deps) can leak. A component calls it with
    `Pulse.call Add_task.add_task title`. *)
 let add_task (title : string) : Task.t = Task.create { Task.id = ""; title; body = "" }
 
-(* + the optimistic slot (additive): the client's instant guess. Pure OCaml — the SAME Task.create the
-   handler uses, which the ppx runs under the call's sim so it predicts the local cache (the row appears
-   immediately; its id mints from the seed and converges when the server's write arrives). Omit this
-   slot and the row simply appears a round-trip later, over the reactive subscription. *)
-let%optimistic add_task title = ignore (Task.create { Task.id = ""; title; body = "" })
+(* + the optional optimistic slot: a SEPARATE, client-only function — the instant guess. It can differ
+   from the handler (here it doesn't), and being separate it can never pull in server code. Pure OCaml in
+   the verbs you already use; the framework runs it against the local cache so the row appears immediately
+   (ids converge on the server's write). Omit it and the row simply appears a round-trip later. *)
+let%optimistic add_task title = Task.create { Task.id = ""; title; body = "" }

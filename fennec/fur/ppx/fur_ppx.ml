@@ -635,8 +635,10 @@ let method_args_ctor ~loc (codecs : expression list) : expression =
 let desugar_method str =
   let open Ast_builder.Default in
   let name = handler_name str in
-  (* pass 1: pull out the optional [let%optimistic … = …] slot (the client's latency-compensation guess),
-     dropping the item; we splice its function into the method's ?stub below. *)
+  (* pass 1: pull out the optional [let%optimistic … = …] slot — the client's latency-compensation guess.
+     It is a SEPARATE function from the (server-only, stripped) handler, so it can differ intelligently
+     AND no server code can ever leak into it: the handler is removed from the client build wholesale,
+     while the slot is the only thing that runs there. We drop the item and splice it into ?stub below. *)
   let optimistic = ref None in
   let str =
     List.filter
@@ -648,7 +650,8 @@ let desugar_method str =
         | _ -> true)
       str
   in
-  (* pass 2: lower the filename-named function into the Rpc.method_ seam, deriving the contract. *)
+  (* pass 2: lower the filename-named function (the server handler) into the Rpc.method_ seam, deriving
+     the contract from its signature. *)
   List.map
     (fun item ->
       match item.pstr_desc with
@@ -677,9 +680,10 @@ let desugar_method str =
             (* the handler receives the args by the SAME patterns the author wrote (a tuple if >1) *)
             let argpat = match List.map snd parts with [ p ] -> p | ps -> ppat_tuple ~loc ps in
             let server_fn = [%expr fun _inv [%p argpat] -> [%e body]] in
-            (* the optimistic stub (if a [let%optimistic] slot was given): run the slot's function under
-               [Coll_writer.with_sim] so its model verbs predict against the local cache. The slot is
-               applied to fresh argument vars matching the contract's arity. *)
+            (* the optimistic stub: run the slot's body under [Coll_writer.with_sim] so its model verbs
+               predict the local cache. The slot fn is applied to fresh arg vars matching the contract's
+               arity, and its result is [ignore]d HERE — so the slot body stays a straight expression,
+               no [ignore] in userland. *)
             let stub_opt =
               Option.map
                 (fun slot_fn ->
