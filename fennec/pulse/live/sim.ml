@@ -24,6 +24,33 @@ let insert_t (w : Method.sim_writes) (def : 'a Def.t) (v : 'a) : string =
   | Ok _ -> invalid_arg "Sim.insert_t: codec must encode a document"
   | Error es -> failwith ("invalid document: " ^ Sift.errors_to_string es)
 
+let _doc_id where kvs =
+  match List.assoc_opt "_id" kvs with
+  | Some (Bson.String s) | Some (Bson.Object_id s) -> s
+  | _ -> failwith (where ^ ": the value has no _id (read it from a query before saving/deleting)")
+
+(* TYPED optimistic save: predict a full-document update by [_id] against the cache (the client mirror of
+   the server's $set-by-_id). Validates with the same battery. No-op until the client has the doc. *)
+let save_t (w : Method.sim_writes) (def : 'a Def.t) (v : 'a) : unit =
+  match Sift.encode_checked (Def.codec def) v with
+  | Ok (Bson.Document kvs) ->
+      let id = _doc_id "Sim.save_t" kvs in
+      let fields = List.filter (fun (k, _) -> k <> "_id") kvs in
+      let sel = Bson.Document [ ("_id", Bson.String id) ] in
+      let modifier = Bson.Document [ ("$set", Bson.Document fields) ] in
+      ignore (w.Method.update (Def.name def) sel modifier)
+  | Ok _ -> invalid_arg "Sim.save_t: codec must encode a document"
+  | Error es -> failwith ("invalid document: " ^ Sift.errors_to_string es)
+
+(* TYPED optimistic delete: tombstone the doc by [_id] for the simulation (server truth restores on
+   reveal). Takes the value (so the verb mirrors the server's [delete]); only its [_id] is used. *)
+let remove_t (w : Method.sim_writes) (def : 'a Def.t) (v : 'a) : unit =
+  match Sift.encode_checked (Def.codec def) v with
+  | Ok (Bson.Document kvs) ->
+      ignore (w.Method.remove (Def.name def) (Bson.Document [ ("_id", Bson.String (_doc_id "Sim.remove_t" kvs)) ]))
+  | Ok _ -> invalid_arg "Sim.remove_t: codec must encode a document"
+  | Error es -> failwith ("invalid document: " ^ Sift.errors_to_string es)
+
 let writes (box : MS.t) ~sim ~seed : Method.sim_writes =
   MS.begin_sim box sim;
   let streams : (string, int -> int) Hashtbl.t = Hashtbl.create 4 in

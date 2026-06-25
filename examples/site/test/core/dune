@@ -13,7 +13,8 @@
 (executable
  (name test_optimistic)
  (modules test_optimistic)
- (libraries fennec.pulse.live.client fennec.pulse.method fennec.pulse.live site_methods site_store))
+ (libraries fennec.pulse.live.client fennec.pulse.method fennec.pulse.live fennec.pulse.sift.mongo
+   site_methods site_store))
 
 (rule
  (alias runtest)

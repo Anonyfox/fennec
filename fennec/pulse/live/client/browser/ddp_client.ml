@@ -655,8 +655,18 @@ let () =
               ignore (Fennec_pulse_live.Sim.insert_t w def v);
               v
           | None -> failwith "Fennec: a collection write ran on the client outside a method's optimistic slot");
-      save = (fun _ _ -> failwith "Fennec: optimistic `save` in a method slot isn't supported yet (only `create`)");
-      delete = (fun _ _ -> failwith "Fennec: optimistic `delete` in a method slot isn't supported yet (only `create`)");
+      save =
+        (fun def v ->
+          match Coll_writer.current_sim () with
+          | Some w ->
+              Fennec_pulse_live.Sim.save_t w def v;
+              v
+          | None -> failwith "Fennec: a collection write ran on the client outside a method's optimistic slot");
+      delete =
+        (fun def v ->
+          match Coll_writer.current_sim () with
+          | Some w -> Fennec_pulse_live.Sim.remove_t w def v
+          | None -> failwith "Fennec: a collection write ran on the client outside a method's optimistic slot");
       find_one = (fun _ _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");
       where = (fun _ _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");
       all = (fun _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");

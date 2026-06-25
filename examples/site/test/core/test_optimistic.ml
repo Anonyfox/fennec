@@ -35,4 +35,18 @@ let () =
   stub w "Buy milk";
   check "the slot's Task.create routed through Coll_writer (predicting the cache)" (!creates = 1);
   check "...inside the call's sim context (with_sim bound the ambient sim)" !saw_sim;
+
+  (* Sim.save_t / remove_t — the typed surface a save/delete optimistic slot uses, against a real merge
+     store: insert -> save (full-doc update) -> delete, the cache reflecting each step. *)
+  let open Fennec_pulse_live in
+  let store = Merge_store.create () in
+  let w = Sim.writes store ~sim:"sim_sd" ~seed:"seed_sd" in
+  let count () = Array.length (Merge_store.fetch store (Def.name Task.collection) ()) in
+  let id = Sim.insert_t w Task.collection { Task.id = ""; title = "old"; body = "" } in
+  check "insert_t put one row in the cache" (count () = 1);
+  Sim.save_t w Task.collection { Task.id; title = "new"; body = "" };
+  check "save_t kept the row (a full-doc update, not a remove)" (count () = 1);
+  Sim.remove_t w Task.collection { Task.id; title = "new"; body = "" };
+  check "remove_t tombstoned the row" (count () = 0);
+
   Printf.printf "all optimistic-slot tests passed\n%!"

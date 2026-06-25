@@ -15,6 +15,14 @@
     stub-failure machinery (logged, simulation skipped, server decides). Empty [_id] = mint. *)
 val insert_t : Method.sim_writes -> 'a Def.t -> 'a -> string
 
+(** Typed optimistic save: a full-document update by [_id] against the cache (mirrors the server's
+    $set-by-_id). Validates; a no-op until the client holds the doc. *)
+val save_t : Method.sim_writes -> 'a Def.t -> 'a -> unit
+
+(** Typed optimistic delete: tombstone the doc by its [_id] for the simulation (server truth restores
+    on reveal). Only the value's [_id] is used. *)
+val remove_t : Method.sim_writes -> 'a Def.t -> 'a -> unit
+
 (** [writes box ~sim ~seed] registers [sim] (via {!Merge_store.begin_sim}) and returns the write
     surface bound to it. *)
 val writes : Merge_store.t -> sim:string -> seed:string -> Method.sim_writes
