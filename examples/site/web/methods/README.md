@@ -56,6 +56,12 @@ let%optimistic add_task title          = Task.create { Task.id = ""; title; body
 - **The guess is just a guess; the server is authoritative.** Insert ids mint from the call seed on both
   sides, so a string-id collection's optimistic row converges with the real one when the server's write
   arrives — no duplicate-then-vanish. Omit the slot entirely and you simply lose the instant feedback.
+- **A rejected method reverts itself.** If the server raises — a `let%authorize` deny, a failed
+  validation, any error — the optimistic guess is undone automatically (the predicted row disappears) and
+  the call surfaces the error. There is no rollback code: dropping the guess reveals server truth, which
+  is Meteor's latency-compensation revert. One caveat: if a handler *wrote* before it raised, that write
+  persists unless the body is transactional — wrap it in `Pulse.transaction` or make it a `[@workflow]`,
+  and the server rolls back too (so "raise = nothing happened" holds on both sides).
 
 ## `let%authorize` — a server-side guard
 
