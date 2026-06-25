@@ -183,8 +183,12 @@ let with_runtime ?accounts (f : env:_ -> sw:Eio.Switch.t -> unit) : unit =
   (* install the ambient Eio switch (app + accounts collections open by name — no [sw] threading) and,
      for a burrow:// URL with an authority, front the embedded engine over the MongoDB wire protocol *)
   Fennec_mongo_dynamic.boot ~sw ~net ();
-  (* outbound email transport from MAIL_URL (unset ⇒ dev log), on the server's Eio loop *)
-  Fennec_mail.boot ~sw ~net ();
+  (* outbound email transport from MAIL_URL (unset ⇒ dev log), on the server's Eio loop; then bridge Mail
+     through the effects outbox, so a send made inside a workflow/reaction is recorded durably and
+     delivered exactly-once by the worker (a direct send stays inline) *)
+  let mail_transport = Fennec_mail.transport_of_env ~sw ~net () in
+  Fennec_mail.set_transport mail_transport;
+  Mail_outbox.install ~transport:mail_transport ();
   (* the ambient outbound-HTTPS transport the Accounts SSO presets use for token-exchange / JWKS calls *)
   Accounts.set_http_transport (Accounts.Http_transport.default ~net ());
   (* eager accounts: build the (memoized) store now so indexes are ensured at boot, not first request *)

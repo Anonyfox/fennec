@@ -97,6 +97,12 @@ val set_dev_capture : (t -> unit) -> unit
 (** Remove the {!set_dev_capture} observer. *)
 val clear_dev_capture : unit -> unit
 
+(** Install a deferred-send hook. A message the hook ACCEPTS (returns [true]) is taken by it — the effects
+    outbox — and NOT sent inline; {!Fennec.serve} wires this so a send made inside a workflow or reaction
+    is recorded in the transaction and delivered durably + exactly-once by the outbox worker. A send made
+    outside that context (the hook returns [false]) is sent inline as before. Default: no hook. *)
+val set_deferred_send : (t -> bool) -> unit
+
 (** Send through the ambient transport (or {!log_transport} if {!boot} has not run). Runs the
     {!on_before_send} hooks first. *)
 val send : t -> (unit, error) result

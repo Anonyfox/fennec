@@ -40,6 +40,7 @@ let enqueue ~kind ~(payload : B.t) : unit =
             ("at", B.int (now_s ())) ]))
 
 let lease_seconds = 60
+let max_attempts = 12 (* give up on a poison effect after this many failures (dead-letter to the log) *)
 
 (* reclaim intents stuck "sending" past the lease (a worker died mid-delivery) — back to pending; the
    handler's idempotency covers the possible double-send. *)
@@ -80,13 +81,20 @@ let tick coll ~now =
                h ~id payload;
                (* delivered: drop the intent *)
                ignore (D.remove coll (B.doc [ ("_id", idv) ]))
-             with _ ->
-               (* failed: back to pending (+ an attempt), retried next tick *)
-               (try
-                  ignore
-                    (D.update coll ~multi:false ~upsert:false (B.doc [ ("_id", idv) ])
-                       (B.doc [ ("$set", B.doc [ ("status", B.str "pending") ]); ("$inc", B.doc [ ("attempts", B.int 1) ]) ]))
-                with _ -> ()))))
+             with exn ->
+               let attempts = Option.value ~default:0 (B.get_int intent "attempts") + 1 in
+               if attempts >= max_attempts then (
+                 (* poison: give up — dead-letter to the log and drop it, so it can't spin forever *)
+                 Printf.eprintf "fennec: outbox effect %s (kind %s) gave up after %d attempts: %s\n%!" id kind attempts
+                   (Printexc.to_string exn);
+                 try ignore (D.remove coll (B.doc [ ("_id", idv) ])) with _ -> ())
+               else
+                 (* failed: back to pending (+ an attempt), retried next tick *)
+                 try
+                   ignore
+                     (D.update coll ~multi:false ~upsert:false (B.doc [ ("_id", idv) ])
+                        (B.doc [ ("$set", B.doc [ ("status", B.str "pending") ]); ("$inc", B.doc [ ("attempts", B.int 1) ]) ]))
+                 with _ -> ())))
     (D.find coll pending_query)
 
 (* ---- the resident worker fiber ---------------------------------------------------------------- *)

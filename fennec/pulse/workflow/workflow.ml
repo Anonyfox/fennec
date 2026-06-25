@@ -36,6 +36,26 @@ let safe_after name r h =
   | (Stack_overflow | Out_of_memory) as e -> raise e
   | e -> Printf.eprintf "fennec: reaction after %s raised: %s\n%!" name (Printexc.to_string e)
 
+(* an ambient flag, set while an after-hook (a post-commit reaction/effect) runs. An effect verb such as
+   [Mail.send] reads it to tell it is in an EFFECT context and should hand the effect to the durable
+   outbox — even though the transaction has already committed and so [Tx.current ()] is now [None].
+   Fiber-local, with the usual no-scheduler fallback for unit tests. *)
+let _in_effect_key : bool Eio.Fiber.key = Eio.Fiber.create_key ()
+let _in_effect_fallback = ref false
+
+let in_effect () =
+  match (try Eio.Fiber.get _in_effect_key with Stdlib.Effect.Unhandled _ -> None) with
+  | Some b -> b
+  | None -> !_in_effect_fallback
+
+let with_effect f =
+  match (try `Eio (ignore (Eio.Fiber.get _in_effect_key : bool option)) with Stdlib.Effect.Unhandled _ -> `Plain) with
+  | `Eio () -> Eio.Fiber.with_binding _in_effect_key true f
+  | `Plain ->
+      let saved = !_in_effect_fallback in
+      _in_effect_fallback := true;
+      Fun.protect f ~finally:(fun () -> _in_effect_fallback := saved)
+
 (* [exec ~name ~befores ~afters arg body] is what a [@workflow] function compiles to: run the
    before-guards then the body in ONE transparent transaction (commit on return, roll back on raise,
    read-your-writes); on commit, fire the after-hooks with the RESULT — deferred to the outermost
@@ -46,5 +66,5 @@ let exec ~name ~befores ~afters arg body =
   if List.mem name (active ()) then raise (Cyclic_reaction name);
   with_active name (fun () ->
       let r = Tx.run (fun () -> List.iter (fun g -> g arg) befores; body ()) in
-      List.iter (fun h -> Tx.on_commit (fun () -> safe_after name r h)) afters;
+      List.iter (fun h -> Tx.on_commit (fun () -> with_effect (fun () -> safe_after name r h))) afters;
       r)

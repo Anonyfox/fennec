@@ -19,5 +19,6 @@
   fennec.pulse.workflow
   fennec-mongo.driver
   fennec-mongo.dynamic
+  fennec-mongo.bson
   eio
   eio_main))

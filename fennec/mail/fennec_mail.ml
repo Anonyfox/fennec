@@ -166,13 +166,20 @@ let set_dev_capture f = _dev_capture := Some f
 let clear_dev_capture () = _dev_capture := None
 let boot ~sw ~net () = set_transport (transport_of_env ~sw ~net ())
 
+(* the effects-outbox seam: when a deferred-send hook is installed ({!Fennec.serve} wires the durable
+   outbox), a message it ACCEPTS (returns [true]) is taken by it — recorded for exactly-once async
+   delivery — instead of being sent inline. Default: no-op, so every send stays inline. *)
+let _deferred : (t -> bool) ref = ref (fun _ -> false)
+let set_deferred_send f = _deferred := f
+
 let send m =
   if not (List.for_all (fun h -> h m) !_hooks) then Ok () (* a before-send hook dropped it *)
   else (
     (* the dev outbox tees a copy of every accepted message here BEFORE the real transport runs, so the
        mailbox shows what was sent regardless of the transport (log/smtp). Never raises into [send]. *)
     (match !_dev_capture with Some f -> ( try f m with _ -> ()) | None -> ());
-    match !_transport with Some tr -> tr m | None -> log_transport () m)
+    if !_deferred m then Ok () (* a workflow effect: handed to the durable outbox, delivered async + exactly-once *)
+    else match !_transport with Some tr -> tr m | None -> log_transport () m)
 
 (* ---- inline tests (the socket-level SMTP test lives in test/ — it needs a real Eio loop) ---- *)
 

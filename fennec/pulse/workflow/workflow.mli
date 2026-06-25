@@ -14,3 +14,8 @@ exception Cyclic_reaction of string
     [afters result] — deferred to the outermost commit, isolated. Re-entrancy raises {!Cyclic_reaction}. *)
 val exec :
   name:string -> befores:('a -> unit) list -> afters:('r -> unit) list -> 'a -> (unit -> 'r) -> 'r
+
+(** [true] while a post-commit reaction/effect (an [@after] hook) is running. An effect verb (e.g.
+    [Mail.send]) reads it to know it is in an effect context and should hand the effect to the durable
+    outbox — even though the transaction has already committed ([Tx.current () = None] by then). *)
+val in_effect : unit -> bool
