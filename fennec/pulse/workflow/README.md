@@ -19,35 +19,35 @@ one module.
 ## Userland — what you write
 
 ```ocaml
-open Fennec_pulse_app   (* the data verbs + the [@workflow] machinery *)
+open Ticket   (* the model's fields AND its methods (create/save/where/find_one) in scope *)
 
 let[@workflow] open_ticket subject =                 (* a normal function; the tx is invisible *)
-  let t = create Ticket.collection { Ticket.id = ""; subject; status = "open" } in
-  ignore (create Audit.collection { Audit.id = ""; ref_ = t.Ticket.id });
+  let t = create { id = ""; subject; status = "open" } in
+  ignore (Ticket_event.create { Ticket_event.id = ""; ref_ = t.id });
   t                                                  (* both writes commit together, or neither does *)
 
-let[@workflow] close (t : Ticket.t) =                (* a transition: read, change, save *)
-  if t.Ticket.status <> "open" then failwith "not open";   (* raise = veto *)
-  save Ticket.collection { t with Ticket.status = "closed" }
+let[@workflow] close (t : t) =                       (* a transition: read, change, save *)
+  if t.status <> "open" then failwith "not open";    (* raise = veto *)
+  save { t with status = "closed" }
 
-let[@after close] notify (t : Ticket.t) = Mail.send …       (* post-commit effect, isolated *)
-let[@cron "0 * * * *"] sweep () = …                         (* at-most-once across replicas *)
+let[@after close] notify (t : t) = Mail.send …              (* post-commit effect, isolated *)
+let[@cron "0 * * * *"] sweep () =                           (* at-most-once across replicas *)
+  where [%q status = "open"] |> List.iter (fun t -> ignore (close t))   (* typed Meteor query *)
 ```
 
-You call them like any function: `open_ticket "…"`, `close ticket`.
+You call them like any function: `open_ticket "…"`, `close ticket`. The data verbs are the **methods on
+the collection** (`Ticket.create` / `save` / `delete` / `find_one` / `where` / `all` / `count`) that
+`[@@deriving collection]` generates — they run server-side over an isomorphic seam the framework installs
+at boot. `[%q …]` is the typed Sift query (compile-checked, dotted subpaths typed).
 
 ## API — what the ppx targets (you rarely call these directly)
 
 ```ocaml
 val transaction : (unit -> 'a) -> 'a               (* one block, one transaction; re-entrant (nested joins) *)
 
-(* the data verbs (fennec.pulse.app), ambient + validating, in the enclosing [@workflow]'s transaction *)
-val create : 'a Def.t -> 'a -> 'a                  (* insert, mint id, return the stored value *)
-val save   : 'a Def.t -> 'a -> 'a                  (* persist a full aggregate by _id (the transition write) *)
-val delete : 'a Def.t -> 'a -> unit
-val get    : 'a Def.t -> string -> 'a option
-val all    : 'a Def.t -> 'a list
-val find   : 'a Def.t -> where:Filter.t list -> 'a list
+(* the verbs above are the generated collection methods over the Coll_writer seam; the same logic is
+   also exposed flat on Fennec_pulse_app (create/save/delete/get/all/find) as the installed backend +
+   an escape hatch, e.g. when you hold only a `Def.t`. *)
 
 module Workflow : sig
   (* what `let[@workflow] f arg = body` lowers to: run befores + body in a tx, fire afters post-commit *)

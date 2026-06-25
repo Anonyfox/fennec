@@ -13,4 +13,4 @@
  (inline_tests
   (backend site_test_runner))
  (preprocess
-  (pps fennec.pulse.workflow.ppx fennec-hunt.ppx)))
+  (pps fennec.pulse.sift.ppx fennec.pulse.workflow.ppx fennec-hunt.ppx)))

@@ -2,64 +2,67 @@
 
 A top-level peer of `web/` and `collections/`. Workflows are **ordinary OCaml functions**. You tag a
 business function `[@workflow]` and write normal imperative code inside — the transaction and the
-reactions are invisible. There is no `db` passed around, no wrappers, no ceremony.
+reactions are invisible. Data changes through the collection's own **methods** (`Ticket.create`,
+`Ticket.save`, `Ticket.where …`), Meteor-style — no `db`, no free-floating verbs.
 
-Read [`tickets.ml`](tickets.ml) top to bottom; it shows everything.
+Read [`tickets.ml`](tickets.ml) top to bottom; it shows everything. It opens its primary collection so
+the methods + fields are in scope, exactly like a component does:
+
+```ocaml
+open Ticket   (* brings Ticket's fields AND its methods (create/save/where/find_one) into scope *)
+```
 
 ### 1. A workflow is a function. It's atomic.
 
 ```ocaml
-open Fennec_pulse_app   (* the data verbs: create / save / find, and the [@workflow] machinery *)
-
 let[@workflow] open_ticket subject =
-  let t = create Ticket.collection { Ticket.id = ""; subject; status = "open"; opened_at = stamp () } in
-  ignore (create Ticket_event.collection { Ticket_event.id = ""; ticket_id = t.Ticket.id; action = "opened"; at = stamp () });
+  let t = create { id = ""; subject; status = "open"; opened_at = stamp () } in
+  ignore (Ticket_event.create { Ticket_event.id = ""; ticket_id = t.id; action = "opened"; at = stamp () });
   t
 ```
 
-`open_ticket` writes **two collections** and you call it like any function: `open_ticket "Printer on
-fire"`. They commit together or not at all — if anything `raise`s (say the subject fails
-`[@non_empty]`), *neither* row is written. You wrote no transaction code; `[@workflow]` runs the body in
-one transparent transaction. `create` / `save` / `find` are plain calls.
+`open_ticket` writes **two collections** (`create` is `Ticket.create`, brought in by the `open`; the
+audit row is qualified). You call it like any function: `open_ticket "Printer on fire"`. They commit
+together or not at all — if anything `raise`s, *neither* row is written. `[@workflow]` runs the body in
+one transparent transaction. No transaction code, no `db`.
 
 ### 2. A transition is just a workflow that saves.
 
 ```ocaml
-let[@workflow] close (t : Ticket.t) =
-  if t.Ticket.status <> "open" then failwith "ticket is not open";   (* a raise vetoes the whole call *)
-  save Ticket.collection { t with Ticket.status = "closed" }
+let[@workflow] close (t : t) =
+  if t.status <> "open" then failwith "ticket is not open";   (* a raise vetoes the whole call *)
+  save { t with status = "closed" }
 ```
 
-No special "transition" type — `close` reads, changes, and `save`s. Call it `close ticket`; it
-validates, persists by `_id`, and rolls back if the body raises. Control flow is just `raise`.
+No special "transition" type — `close` reads, changes, and `Ticket.save`s. Call it `close ticket`.
 
 ### 3. Reactions are annotations.
 
 ```ocaml
-let[@after close] notify_closed (t : Ticket.t) =
-  Printf.printf "ticket %s closed — notifying the reporter\n%!" t.Ticket.id
+let[@after close] notify_closed (t : t) =
+  Printf.printf "ticket %s closed — notifying the reporter\n%!" t.id
 ```
 
-`[@after close]` fires *after* the close commits, isolated (a failure here never rolls back the close),
-and receives the workflow's **result**. `[@before f]` is the mirror — a guard that runs *in* the
-transaction and may `raise` to veto. Reactions are real, type-checked references: go-to-references on
-`close` lists everything that fires around it, rename is safe, and a reaction graph that loops is a
-**compile error** (the ppx checks intra-module; a cross-module loop is a module dependency cycle).
+`[@after close]` fires *after* the close commits, isolated, with the workflow's **result**. `[@before
+f]` is the mirror — a guard that runs *in* the transaction and may `raise` to veto. Reactions are real,
+type-checked references: go-to-references on `close` lists everything that fires around it, rename is
+safe, and a reaction graph that loops is a **compile error**.
 
-### 4. Schedules are annotations too.
+### 4. Schedules are annotations too — and the queries are typed.
 
 ```ocaml
 let[@cron "0 * * * *"] auto_close_stale () =
-  find Ticket.collection ~where:[ Filter.raw (Bson.doc [ ("status", Bson.str "open") ]) ]
-  |> List.iter (fun t -> try ignore (close t) with _ -> ())
+  where [%q status = "open"] |> List.iter (fun t -> try ignore (close t) with _ -> ())
 ```
 
-`[@cron]` (or `[@every 60.]`) registers a job that runs **at-most-once across all your replicas** — no
-configuration, no duplicate runs. The `unit -> unit` shape is forced by the annotation.
+`where [%q status = "open"]` is the typed Meteor query (`Ticket.where` over the model's `Fields`) — reads
+like `db.tickets.find({status: "open"})`, but `[%q status = 5]` is a compile error, and dotted subpaths
+(`assignee.email`) stay typed. `[@cron]` (or `[@every 60.]`) runs the job **at-most-once across all your
+replicas** — no configuration, no duplicate runs.
 
 ---
 
-That's the whole non-web core. `open Fennec_pulse_app` brings the data verbs and the `[@workflow]`
-machinery. The server wires it in `server.ml`'s `setup_realtime` (seed by *calling* the workflow,
-`Pulse.publish` the collections). Full design: `docs/internal/CORE-LAYER.md`. Runtime reference:
-`fennec/pulse/workflow/README.md`.
+The collection methods (`create` / `save` / `delete` / `find_one` / `where` / `all` / `count`) come from
+`[@@deriving collection]` — the same generation that gives the client its reactive `find`. They run
+server-side over an isomorphic seam the framework installs at boot; a *client* still changes data
+through a method, never the collection. Full design: `docs/internal/CORE-LAYER.md`.

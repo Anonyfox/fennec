@@ -9,7 +9,7 @@ both the design rationale and the as-built reference. What's where:
 | Workflows runtime | `Workflow.exec` (what `[@workflow]` lowers to) | `fennec.pulse.workflow` |
 | Schedules + the claim | `Schedule` (every/cron + `_fennec_cron`) | `fennec.pulse.workflow` |
 | `[@workflow]` + `@after`/`@before`/`@cron`/`@every` + circuit-breaker | the ppx | `fennec.pulse.workflow.ppx` |
-| Data verbs (create / save / delete / get / find / all) | `Fennec_pulse_app` (flat, ambient) | `fennec.pulse.app` |
+| Collection methods (create / save / delete / find_one / where / all / count) | generated on the model by `[@@deriving collection]` over the isomorphic `Coll_writer` seam (server backend installed by `Fennec_pulse_app`) | `fennec.pulse.live.client` + `fennec.pulse.app` |
 | Userland homes | `collections/` + `workflows/` (peers of `web/`) | the app |
 
 Honest scope of the v1 build: **atomic rollback is implemented for the in-memory (`:memory:`) backend**

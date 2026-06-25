@@ -119,6 +119,21 @@ let save (def : 'a Def.t) (v : 'a) : 'a =
 (** [delete def v] — remove the aggregate by its [_id]. *)
 let delete (def : 'a Def.t) (v : 'a) : unit = ignore (remove def ~where:(_by_id (_string_id def v)))
 
+(* Install these verbs as the live backend behind every model's generated [Ticket.create]/[save]/[where]/…
+   (the [Coll_writer] seam). Module-init, so any server that links this facade wires it for free, before
+   the first request/workflow runs. *)
+let () =
+  Coll_writer.install
+    {
+      Coll_writer.create = (fun def v -> create def v);
+      save = (fun def v -> save def v);
+      delete = (fun def v -> delete def v);
+      find_one = (fun def sel -> match T.find (collection def) ~where:sel ~limit:1 () with x :: _ -> Some x | [] -> None);
+      where = (fun def sel -> find def ~where:sel);
+      all = (fun def -> all def);
+      count = (fun def sel -> T.count (collection def) ~where:sel ());
+    }
+
 (* ---- the always-on current-user publication -------------------------------------------------
 
    [__currentUser] keeps the client's [Accounts.user]/[user_id] signals live over the user DOCUMENT
