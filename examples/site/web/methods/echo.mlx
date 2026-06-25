@@ -1,0 +1,7 @@
+(* echo — demonstrates the [let%authorize] slot: a guard that runs before the handler, SERVER-SIDE
+   (authorization is the server's call, never the client's). It raises to deny. A real method guards on
+   the signed-in user/role here (Accounts/Auth); we guard a precondition so the deny path is testable
+   without a session. No optimistic slot — a pure server method. *)
+let echo (message : string) : string = message
+
+let%authorize echo message = if message = "" then failwith "echo: message must not be empty"

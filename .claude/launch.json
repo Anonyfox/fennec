@@ -6,6 +6,12 @@
       "runtimeExecutable": "dune",
       "runtimeArgs": ["exec", "examples/helloworld/server.exe"],
       "port": 8200
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "fennec",
+      "runtimeArgs": ["dev", "--agent", "--port", "9133", "--target", "@examples/site/dev", "_build/default/examples/site/server.bc"],
+      "port": 9134
     }
   ]
 }

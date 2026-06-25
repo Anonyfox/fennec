@@ -635,17 +635,24 @@ let method_args_ctor ~loc (codecs : expression list) : expression =
 let desugar_method str =
   let open Ast_builder.Default in
   let name = handler_name str in
-  (* pass 1: pull out the optional [let%optimistic … = …] slot — the client's latency-compensation guess.
-     It is a SEPARATE function from the (server-only, stripped) handler, so it can differ intelligently
-     AND no server code can ever leak into it: the handler is removed from the client build wholesale,
-     while the slot is the only thing that runs there. We drop the item and splice it into ?stub below. *)
-  let optimistic = ref None in
+  (* pass 1: pull out the optional slots, dropping their items.
+     - [let%optimistic … = …] — the client's latency-compensation guess. A SEPARATE function from the
+       (server-only, stripped) handler, so it can differ intelligently AND no server code can leak into
+       it (the handler is removed from the client build wholesale; the slot is the only thing that runs
+       there). Spliced into ?stub below.
+     - [let%authorize … = …] — a guard run before the handler, SERVER-SIDE (authoritative; auth is never
+       the client's call). It raises to deny. The optimistic guess stays ungated and simply rolls back if
+       the server denies — so an unauthorized action's optimistic row reverts, like any rejected method. *)
+  let optimistic = ref None and authorize = ref None in
   let str =
     List.filter
       (fun item ->
         match item.pstr_desc with
         | Pstr_extension (({ txt = "optimistic"; _ }, PStr [ { pstr_desc = Pstr_value (_, [ vb ]); _ } ]), _) ->
             optimistic := Some vb.pvb_expr;
+            false
+        | Pstr_extension (({ txt = "authorize"; _ }, PStr [ { pstr_desc = Pstr_value (_, [ vb ]); _ } ]), _) ->
+            authorize := Some vb.pvb_expr;
             false
         | _ -> true)
       str
@@ -679,7 +686,28 @@ let desugar_method str =
             let result_e = method_codec_of_type ~loc ret_ty in
             (* the handler receives the args by the SAME patterns the author wrote (a tuple if >1) *)
             let argpat = match List.map snd parts with [ p ] -> p | ps -> ppat_tuple ~loc ps in
-            let server_fn = [%expr fun _inv [%p argpat] -> [%e body]] in
+            (* a [let%authorize] guard runs first, server-side, applied to the same args (deny = raise) *)
+            let server_body =
+              match !authorize with
+              | None -> body
+              | Some guard ->
+                  let arg_vars =
+                    List.map
+                      (fun (_ty, pat) ->
+                        match pat.ppat_desc with
+                        | Ppat_var { txt; loc } -> evar ~loc txt
+                        | _ ->
+                            Location.raise_errorf ~loc:pat.ppat_loc
+                              "fennec: a method using let%%authorize needs plain-name parameters (the guard \
+                               is applied to them)")
+                      parts
+                  in
+                  let guard_app = pexp_apply ~loc guard (List.map (fun e -> (Nolabel, e)) arg_vars) in
+                  [%expr
+                    [%e guard_app];
+                    [%e body]]
+            in
+            let server_fn = [%expr fun _inv [%p argpat] -> [%e server_body]] in
             (* the optimistic stub: run the slot's body under [Coll_writer.with_sim] so its model verbs
                predict the local cache. The slot fn is applied to fresh arg vars matching the contract's
                arity, and its result is [ignore]d HERE — so the slot body stays a straight expression,
