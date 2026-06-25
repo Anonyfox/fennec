@@ -100,14 +100,14 @@ let setup_realtime () =
      renamed field/method is a compile error in every file; a malformed call is a 400 before this
      handler runs, and an invalid document raises before it writes *)
   Pulse.method_ Site_methods.add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title; body = "" });
-  (* --- the non-web core in action (collections/ + workflows/): open_ticket is a WORKFLOW that writes
-     the ticket AND its first audit event in ONE transaction; close is a guarded TRANSITION with an
-     @after effect; auto_close_stale is a @cron job. Referencing Tickets here links the workflow module
-     so its reaction + schedule register at boot. Seed a couple via the workflow (only when empty), and
-     publish both collections live. --- *)
-  if Pulse.Collection.all Ticket.collection = [] then begin
-    ignore (Pulse.Workflow.call Tickets.open_ticket "Printer on fire");
-    ignore (Pulse.Workflow.call Tickets.open_ticket "Coffee machine down")
+  (* --- the non-web core in action (collections/ + workflows/): [Tickets.open_ticket] is a [@workflow]
+     that writes the ticket AND its first audit event in ONE transaction; [close] is a guarded
+     transition with an @after effect; [auto_close_stale] is a @cron job. Referencing Tickets here links
+     the workflow module so its reaction + schedule register at boot. Seed a couple by just CALLING the
+     workflow (only when empty — it reads like a normal function), and publish both collections live. --- *)
+  if Pulse.all Ticket.collection = [] then begin
+    ignore (Tickets.open_ticket "Printer on fire");
+    ignore (Tickets.open_ticket "Coffee machine down")
   end;
   Pulse.publish Ticket.collection;
   Pulse.publish Ticket_event.collection;

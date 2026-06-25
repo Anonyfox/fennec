@@ -8,25 +8,50 @@ one module.
 
 ## The model in one breath
 
-- **Collections** are the data ground truth — a Sift `[@@deriving model]` record + a `Def.v`. Their
-  writes are **create / delete / named transitions**, never raw field mutation.
-- **Workflows** are ordinary functions that run inside **one transparent transaction** (commit on
-  return, roll back on `raise`, read-your-writes throughout). No `db` is threaded anywhere — data and
-  mail just exist (ambient).
+- **Collections** are the data ground truth — a Sift `[@@deriving collection]` record. Their writes are
+  the data verbs (`create` / `save` / `delete`), never raw field mutation; a "transition" is just a
+  `[@workflow]` that reads, changes, and `save`s.
+- **Workflows** are ordinary functions tagged `[@workflow]` that run inside **one transparent
+  transaction** (commit on return, roll back on `raise`, read-your-writes). No `db` is threaded
+  anywhere — data and mail just exist (ambient).
 - **Reactions** are annotations on functions: `[@after f]` / `[@before f]` and `[@cron …]` / `[@every …]`.
 
-## API
+## Userland — what you write
 
 ```ocaml
-(* one block, one transaction — commit on return, roll back on raise (re-entrant: a nested call joins) *)
-val transaction : (unit -> 'a) -> 'a               (* = Fennec_mongo_dynamic.Tx.run *)
+open Fennec_pulse_app   (* the data verbs + the [@workflow] machinery *)
+
+let[@workflow] open_ticket subject =                 (* a normal function; the tx is invisible *)
+  let t = create Ticket.collection { Ticket.id = ""; subject; status = "open" } in
+  ignore (create Audit.collection { Audit.id = ""; ref_ = t.Ticket.id });
+  t                                                  (* both writes commit together, or neither does *)
+
+let[@workflow] close (t : Ticket.t) =                (* a transition: read, change, save *)
+  if t.Ticket.status <> "open" then failwith "not open";   (* raise = veto *)
+  save Ticket.collection { t with Ticket.status = "closed" }
+
+let[@after close] notify (t : Ticket.t) = Mail.send …       (* post-commit effect, isolated *)
+let[@cron "0 * * * *"] sweep () = …                         (* at-most-once across replicas *)
+```
+
+You call them like any function: `open_ticket "…"`, `close ticket`.
+
+## API — what the ppx targets (you rarely call these directly)
+
+```ocaml
+val transaction : (unit -> 'a) -> 'a               (* one block, one transaction; re-entrant (nested joins) *)
+
+(* the data verbs (fennec.pulse.app), ambient + validating, in the enclosing [@workflow]'s transaction *)
+val create : 'a Def.t -> 'a -> 'a                  (* insert, mint id, return the stored value *)
+val save   : 'a Def.t -> 'a -> 'a                  (* persist a full aggregate by _id (the transition write) *)
+val delete : 'a Def.t -> 'a -> unit
+val get    : 'a Def.t -> string -> 'a option
+val all    : 'a Def.t -> 'a list
+val find   : 'a Def.t -> where:Filter.t list -> 'a list
 
 module Workflow : sig
-  type ('a, 'r) t
-  val make   : string -> ('a -> 'r) -> ('a, 'r) t  (* wrap a function as a workflow *)
-  val call   : ('a, 'r) t -> 'a -> 'r              (* run it: before-guards + body in a tx, after-hooks post-commit *)
-  val before : ('a, 'r) t -> ('a -> unit) -> unit  (* in-transaction guard; raise to veto (rolls back) *)
-  val after  : ('a, 'r) t -> ('r -> unit) -> unit  (* post-commit reaction, isolated; receives the RESULT *)
+  (* what `let[@workflow] f arg = body` lowers to: run befores + body in a tx, fire afters post-commit *)
+  val exec : name:string -> befores:('a -> unit) list -> afters:('r -> unit) list -> 'a -> (unit -> 'r) -> 'r
   exception Cyclic_reaction of string              (* the runtime half of the circuit-breaker *)
 end
 
@@ -34,30 +59,22 @@ module Schedule : sig
   val every : float  -> name:string -> (unit -> unit) -> unit
   val cron  : string -> name:string -> (unit -> unit) -> unit   (* 5-field UTC crontab *)
 end
-
-(* in fennec.pulse.app — the transitions-as-write-API over a Sift Def.t: *)
-module Collection : sig
-  val get : 'a Def.t -> string -> 'a option
-  val all : 'a Def.t -> 'a list
-  val find : 'a Def.t -> where:Filter.t list -> 'a list
-  val create     : 'a Def.t -> ('a, 'a) Workflow.t
-  val delete     : 'a Def.t -> ('a, unit) Workflow.t
-  val transition : 'a Def.t -> string -> ('a -> 'a) -> ('a, 'a) Workflow.t
-end
 ```
 
-The ppx desugars `let[@after w] h x = …` to `let () = Workflow.after w h` (and similarly for the
-others), so reactions are **real typed references** — go-to-references on a workflow lists everything
-that fires around it, rename is safe, and deleting a target makes its orphaned hooks a compile error.
+For each `[@workflow] f` the ppx emits two typed hook lists and a wrapped function that *uses* them, so
+OCaml **infers** the hook types from `f`'s argument and result — and `[@after f] h` becomes a normal,
+type-checked call `__after__f h`. No `Obj`, no stringly registry: reactions are **real typed
+references** (go-to-references lists everything that fires around a workflow, rename is safe, deleting a
+target makes its hooks a compile error).
 
 ## The transparent transaction
 
-`Workflow.call` (and `transaction`) wraps the work in `Fennec_mongo_dynamic.Tx`. Atomic rollback is
+`[@workflow]` (and `transaction`) wraps the work in `Fennec_mongo_dynamic.Tx`. Atomic rollback is
 implemented for the **in-memory (`:memory:`) backend** — what `fennec test` and the dev seed exercise —
 by snapshotting each touched collection on first write and restoring it (emitting compensating change
 events so live observers converge) on `raise`. Outermost transactions serialize under one Eio mutex;
-nested `call`s join the enclosing transaction, so a workflow calling a workflow is **one atomic unit**,
-and after-hooks fire once, after the *outermost* commit. On **burrow / mongo** the bracket is
+nested workflows join the enclosing transaction, so a workflow calling a workflow is **one atomic
+unit**, and after-hooks fire once, after the *outermost* commit. On **burrow / mongo** the bracket is
 transparent and writes commit-on-success; backend-native rollback (an LMDB parent-txn / a mongo
 session) is a scoped follow-on.
 

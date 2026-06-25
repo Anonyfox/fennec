@@ -7,6 +7,6 @@ type t = {
   action : string;
   at : string;
 }
-[@@deriving model]
+[@@deriving collection ~name:"ticket_events"]
 
-let collection = Def.v ~indexes:Index.[ asc Fields.ticket_id ] "ticket_events" codec
+let () = [%index ticket_id]

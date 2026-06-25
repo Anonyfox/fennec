@@ -6,10 +6,10 @@ both the design rationale and the as-built reference. What's where:
 | Concept | Module | Lib |
 | --- | --- | --- |
 | Transparent transaction | `Fennec_mongo_dynamic.Tx` (+ `Minimongo.tx_snapshot/restore`) | `fennec-mongo.dynamic` |
-| Workflows + reactions | `Workflow` (make/call/before/after) | `fennec.pulse.workflow` |
+| Workflows runtime | `Workflow.exec` (what `[@workflow]` lowers to) | `fennec.pulse.workflow` |
 | Schedules + the claim | `Schedule` (every/cron + `_fennec_cron`) | `fennec.pulse.workflow` |
-| `@after`/`@before`/`@cron`/`@every` + circuit-breaker | the ppx | `fennec.pulse.workflow.ppx` |
-| Collections write-API (create/delete/transition) | `Fennec_pulse_app.Collection` | `fennec.pulse.app` |
+| `[@workflow]` + `@after`/`@before`/`@cron`/`@every` + circuit-breaker | the ppx | `fennec.pulse.workflow.ppx` |
+| Data verbs (create / save / delete / get / find / all) | `Fennec_pulse_app` (flat, ambient) | `fennec.pulse.app` |
 | Userland homes | `collections/` + `workflows/` (peers of `web/`) | the app |
 
 Honest scope of the v1 build: **atomic rollback is implemented for the in-memory (`:memory:`) backend**

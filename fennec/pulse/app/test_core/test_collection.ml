@@ -1,14 +1,11 @@
-(* The Collections write-API end to end over the ambient in-memory backend (MONGO_URL=:memory: under a
-   real Eio switch — which also exercises Tx's Eio path, complementing the workflow unit tests that hit
-   its no-scheduler fallback). create mints an id and persists; a named transition changes + persists
-   state and fires its @after post-commit; a transition that raises vetoes (state intact, no @after);
-   delete removes by id. *)
+(* The data verbs (create / save / delete / get / all / find) + transaction end to end over the ambient
+   in-memory backend (MONGO_URL=:memory: under a real Eio switch, which also exercises Tx's Eio path).
+   create mints an id and persists; save persists a change (the transition mechanism); transaction rolls
+   back on raise; delete removes. The [@workflow]/@after sugar is tested in the workflow ppx test. *)
 
 let () = Unix.putenv "MONGO_URL" ":memory:"
 
 module Pulse = Fennec_pulse_app
-module C = Pulse.Collection
-module W = Pulse.Workflow
 
 type t = { id : string; name : string; status : string } [@@deriving model]
 
@@ -21,38 +18,28 @@ let () =
   Fennec_mongo_dynamic.Dynamic.set_switch sw;
 
   (* create returns the stored aggregate with a minted id *)
-  let w = W.call (C.create collection) { id = ""; name = "a"; status = "new" } in
+  let w = Pulse.create collection { id = ""; name = "a"; status = "new" } in
   check "create mints an id" (w.id <> "");
-  check "create persisted" (match C.get collection w.id with Some x -> x.name = "a" && x.status = "new" | None -> false);
+  check "create persisted" (match Pulse.get collection w.id with Some x -> x.name = "a" && x.status = "new" | None -> false);
 
-  (* a named transition changes + persists state, and its @after fires post-commit with the result *)
-  let activate =
-    C.transition collection "activate" (fun w ->
-        if w.status <> "new" then failwith "not new";
-        { w with status = "active" })
-  in
-  let fired = ref [] in
-  W.after activate (fun w -> fired := w.status :: !fired);
-  let w2 = W.call activate w in
-  check "transition returns new state" (w2.status = "active");
-  check "transition persisted" (match C.get collection w.id with Some x -> x.status = "active" | None -> false);
-  check "transition @after fired with the result" (!fired = [ "active" ]);
+  (* save persists a full aggregate by _id (the transition mechanism) and returns it *)
+  let w2 = Pulse.save collection { w with status = "active" } in
+  check "save returns the new value" (w2.status = "active");
+  check "save persisted by _id" (match Pulse.get collection w.id with Some x -> x.status = "active" | None -> false);
 
-  (* a transition that raises vetoes: state unchanged, no @after *)
-  let break = C.transition collection "break" (fun _ -> failwith "nope") in
-  W.after break (fun _ -> fired := "broke" :: !fired);
-  (try ignore (W.call break w2) with Failure _ -> ());
-  check "veto left the persisted state intact" (match C.get collection w.id with Some x -> x.status = "active" | None -> false);
-  check "veto fired no @after" (not (List.mem "broke" !fired));
+  (* transaction rolls back on raise — the create inside vanishes (atomicity at the facade level) *)
+  (try Pulse.transaction (fun () -> ignore (Pulse.create collection { id = ""; name = "ghost"; status = "x" }); failwith "boom")
+   with Failure _ -> ());
+  check "transaction rollback reverts the create" (List.length (Pulse.all collection) = 1);
 
   (* delete removes by id *)
-  ignore (W.call (C.delete collection) w2);
-  check "delete removed it" (C.get collection w.id = None);
+  Pulse.delete collection w2;
+  check "delete removed it" (Pulse.get collection w.id = None);
 
   (* all / find one-shot reads *)
-  ignore (W.call (C.create collection) { id = ""; name = "x"; status = "new" });
-  ignore (W.call (C.create collection) { id = ""; name = "y"; status = "active" });
-  check "all returns every aggregate" (List.length (C.all collection) = 2);
-  check "find ~where filters" (List.length (C.find collection ~where:[ Filter.raw (Bson.doc [ ("status", Bson.str "new") ]) ]) = 1);
+  ignore (Pulse.create collection { id = ""; name = "x"; status = "new" });
+  ignore (Pulse.create collection { id = ""; name = "y"; status = "active" });
+  check "all returns every aggregate" (List.length (Pulse.all collection) = 2);
+  check "find ~where filters" (List.length (Pulse.find collection ~where:[ Filter.raw (Bson.doc [ ("status", Bson.str "new") ]) ]) = 1);
 
-  Printf.printf "all collection tests passed\n%!"
+  Printf.printf "all facade data-verb tests passed\n%!"

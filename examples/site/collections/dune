@@ -1,12 +1,13 @@
-; collections/ — the app's data ground truth, one collection per file (peer of web/ and workflows/).
-; Server-only: the SSR binary links these; clients see the data through publications, never by linking
-; the models. (include_subdirs unqualified) folds any nested folders into this one flat-namespace lib,
-; so you never add a dune under a subfolder. [@@deriving model] + Def.v need only Sift.
+; collections/ — the app's data ground truth, one collection per file (a peer of web/ and workflows/).
+; Every collection is declared the SAME way ([@@deriving collection]); there is no server-only variant,
+; so any of them can become client-relevant at no extra cost (the client cursor it generates is dead
+; code until a jsoo bundle links the model). (include_subdirs unqualified) folds any nested folders into
+; this one flat-namespace lib.
 (include_subdirs unqualified)
 
 (library
  (name site_collections)
  (wrapped false)
- (libraries fennec.pulse.sift fennec.pulse.sift.mongo fennec-mongo.bson)
+ (libraries fennec.fur fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live.client fennec-mongo.bson)
  (preprocess
   (pps fennec.pulse.sift.ppx)))

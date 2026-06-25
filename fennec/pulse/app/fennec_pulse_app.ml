@@ -67,59 +67,57 @@ let transaction f = Fennec_mongo_dynamic.Tx.run f
 module Workflow = Fennec_pulse_workflow.Workflow
 module Schedule = Fennec_pulse_workflow.Schedule
 
-(* ---- Collections: the transitions-as-write-API --------------------------------------------------
-   A collection's writes are [create], [delete], and named [transition]s — never raw field mutation.
-   Each is a {!Workflow} (so it runs in the transparent transaction and carries its [@after] reactions);
-   a transition is a pure ['a -> 'a] state change the framework persists by [_id], validated against
-   the model's codec, so an illegal post-state raises {!Collection.Invalid} and rolls the whole call
-   back. Server-side reads are one-shot ([get]/[all]/[find]); live data is a {!publish}ed publication. *)
-module Collection = struct
-  let by_id id = [ Filter.raw (Bson.doc [ ("_id", Bson.str id) ]) ]
+(* ---- the data verbs — ambient, validating, plain functions ---------------------------------------
+   create / save / delete are the write API: ordinary functions you call inside a [@workflow] (so they
+   run in that workflow's transparent transaction — a raise anywhere rolls them all back). A "transition"
+   is just a [@workflow] function that reads a value, changes it, and [save]s it; there is no special
+   transition type. Reads (get/all/find) are one-shot; live data is a {!publish}ed publication. *)
+let _by_id id = [ Filter.raw (Bson.doc [ ("_id", Bson.str id) ]) ]
 
-  let id_of (def : 'a Def.t) (v : 'a) : string =
-    match Sift.encode_checked (Def.codec def) v with
-    | Ok bson -> (
-        match Bson.get bson "_id" with
-        | Some (Bson.String s) -> s
-        | _ -> invalid_arg (Def.name def ^ ": Collection by-id ops require a string id field"))
-    | Error _ -> invalid_arg (Def.name def ^ ": cannot address an invalid value by id")
+let _string_id (def : 'a Def.t) (v : 'a) : string =
+  match Sift.encode_checked (Def.codec def) v with
+  | Ok bson -> (
+      match Bson.get bson "_id" with
+      | Some (Bson.String s) -> s
+      | _ -> invalid_arg (Def.name def ^ ": by-id ops require a string id field"))
+  | Error _ -> invalid_arg (Def.name def ^ ": cannot address an invalid value by id")
 
-  (* server-side one-shot reads (live data is a publication, not a read primitive) *)
-  let get (def : 'a Def.t) (id : string) : 'a option =
-    match T.find (collection def) ~where:(by_id id) ~limit:1 () with x :: _ -> Some x | [] -> None
+(** [get def id] — the aggregate with [_id = id], or [None]. *)
+let get (def : 'a Def.t) (id : string) : 'a option =
+  match T.find (collection def) ~where:(_by_id id) ~limit:1 () with x :: _ -> Some x | [] -> None
 
-  let all (def : 'a Def.t) : 'a list = T.find (collection def) ()
-  let find (def : 'a Def.t) ~where : 'a list = T.find (collection def) ~where ()
+(** All aggregates (a one-shot server read; live data is a publication). *)
+let all (def : 'a Def.t) : 'a list = T.find (collection def) ()
 
-  (* persist a full aggregate by its _id, validating against the model (raises {!Invalid} on a bad
-     state, so the enclosing transaction rolls back and nothing is written) *)
-  let put (def : 'a Def.t) (v : 'a) : unit =
-    match Sift.encode_checked (Def.codec def) v with
-    | Error es -> raise (T.Invalid es)
-    | Ok bson ->
-        let id = match Bson.get bson "_id" with Some i -> i | None -> invalid_arg (Def.name def ^ ": no _id") in
-        let fields =
-          match bson with
-          | Bson.Document kvs -> Bson.Document (List.filter (fun (k, _) -> k <> "_id") kvs)
-          | x -> x
-        in
-        ignore
-          (update def ~multi:false
-             ~where:[ Filter.raw (Bson.doc [ ("_id", id) ]) ]
-             (Update.raw (Bson.doc [ ("$set", fields) ])))
+(** [find def ~where] — aggregates matching [where]. *)
+let find (def : 'a Def.t) ~where : 'a list = T.find (collection def) ~where ()
 
-  (* the write API, each a workflow (transparent transaction + [@after] reactions) *)
-  let create (def : 'a Def.t) : ('a, 'a) Workflow.t =
-    Workflow.make
-      (Def.name def ^ ".create")
-      (fun v -> let id = insert def v in match get def id with Some stored -> stored | None -> v)
+(** [create def v] — store a fresh aggregate (mints its [_id]) and return it. Validates; raises
+    {!T.Invalid} on a bad value (rolling back the enclosing transaction). *)
+let create (def : 'a Def.t) (v : 'a) : 'a =
+  let id = insert def v in
+  match get def id with Some stored -> stored | None -> v
 
-  let delete (def : 'a Def.t) : ('a, unit) Workflow.t =
-    Workflow.make (Def.name def ^ ".delete") (fun v -> ignore (remove def ~where:(by_id (id_of def v))))
+(** [save def v] — persist a full aggregate by its [_id] (the transition mechanism: read, change,
+    save) and return it. Validates; raises {!T.Invalid} on a bad value (rolling back the transaction). *)
+let save (def : 'a Def.t) (v : 'a) : 'a =
+  (match Sift.encode_checked (Def.codec def) v with
+  | Error es -> raise (T.Invalid es)
+  | Ok bson ->
+      let id = match Bson.get bson "_id" with Some i -> i | None -> invalid_arg (Def.name def ^ ": no _id") in
+      let fields =
+        match bson with
+        | Bson.Document kvs -> Bson.Document (List.filter (fun (k, _) -> k <> "_id") kvs)
+        | x -> x
+      in
+      ignore
+        (update def ~multi:false
+           ~where:[ Filter.raw (Bson.doc [ ("_id", id) ]) ]
+           (Update.raw (Bson.doc [ ("$set", fields) ]))));
+  v
 
-  let transition (def : 'a Def.t) (name : string) (f : 'a -> 'a) : ('a, 'a) Workflow.t =
-    Workflow.make (Def.name def ^ "." ^ name) (fun o -> let o' = f o in put def o'; o')
-end
+(** [delete def v] — remove the aggregate by its [_id]. *)
+let delete (def : 'a Def.t) (v : 'a) : unit = ignore (remove def ~where:(_by_id (_string_id def v)))
 
 (* ---- the always-on current-user publication -------------------------------------------------
 

@@ -80,8 +80,8 @@ val method_ : ('a, 'r) Method.t -> (R.invocation -> 'a -> 'r) -> unit
     read-your-writes throughout. Re-entrant — a nested call joins the enclosing transaction. *)
 val transaction : (unit -> 'a) -> 'a
 
-(** Workflows — ordinary functions wrapped in the transaction, carrying their [before]/[after]
-    reactions. See {!Fennec_pulse_workflow.Workflow}. *)
+(** The workflow runtime behind the [@workflow] ppx (you rarely touch it directly). See
+    {!Fennec_pulse_workflow.Workflow}. *)
 module Workflow : module type of Fennec_pulse_workflow.Workflow
 
 (** Recurring jobs that run at-most-once across replicas — the [@every] / [@cron] targets. *)
@@ -96,30 +96,26 @@ module Schedule : sig
   val cron_matches : string -> float -> bool
 end
 
-(** Collections' write API — [create] / [delete] / named [transition]s (never raw field mutation),
-    each a {!Workflow} that runs in the transparent transaction and carries its [@after] reactions.
-    Reads are one-shot ([get]/[all]/[find]); live data is a {!publish}ed publication. *)
-module Collection : sig
-  (** [get def id] — the aggregate with [_id = id], or [None]. *)
-  val get : 'a Def.t -> string -> 'a option
+(** {2 The data verbs} — ordinary functions you call inside a [@workflow]. They run in that workflow's
+    transparent transaction (a raise anywhere rolls them all back), validate against the model, and need
+    no [db] threaded. A "transition" is just a [@workflow] that reads, changes, and {!save}s. *)
 
-  (** All aggregates (a one-shot server read). *)
-  val all : 'a Def.t -> 'a list
+(** [get def id] — the aggregate with [_id = id], or [None] (a one-shot read). *)
+val get : 'a Def.t -> string -> 'a option
 
-  (** [find def ~where] — aggregates matching [where] (a one-shot server read). *)
-  val find : 'a Def.t -> where:Filter.t list -> 'a list
+(** All aggregates (a one-shot read; live data is a {!publish}ed publication). *)
+val all : 'a Def.t -> 'a list
 
-  (** [put def v] persists a full aggregate by its [_id], validating it (raises {!Invalid} on a bad
-      value, rolling back the enclosing transaction). The low-level write transitions build on. *)
-  val put : 'a Def.t -> 'a -> unit
+(** [find def ~where] — aggregates matching [where] (a one-shot read). *)
+val find : 'a Def.t -> where:Filter.t list -> 'a list
 
-  (** [create def] — the insert workflow: stores a fresh aggregate and returns it with its minted id. *)
-  val create : 'a Def.t -> ('a, 'a) Workflow.t
+(** [create def v] — store a fresh aggregate (mints its [_id]) and return it. Validates; raises
+    {!T.Invalid} on a bad value (rolling back the enclosing transaction). *)
+val create : 'a Def.t -> 'a -> 'a
 
-  (** [delete def] — the delete workflow: removes the aggregate by its [_id]. *)
-  val delete : 'a Def.t -> ('a, unit) Workflow.t
+(** [save def v] — persist a full aggregate by its [_id] (the transition mechanism: read, change, save)
+    and return it. Validates; raises {!T.Invalid} on a bad value (rolling back the transaction). *)
+val save : 'a Def.t -> 'a -> 'a
 
-  (** [transition def name f] — a named state change [f : 'a -> 'a], persisted by [_id], as a workflow.
-      [f] may [raise] to veto (the transaction rolls back). [@after] reactions attach to its result. *)
-  val transition : 'a Def.t -> string -> ('a -> 'a) -> ('a, 'a) Workflow.t
-end
+(** [delete def v] — remove the aggregate by its [_id]. *)
+val delete : 'a Def.t -> 'a -> unit

@@ -1,6 +1,8 @@
-(* Workflow reactions over the in-memory backend: after fires post-commit with the result; before
-   guards veto (roll back) and suppress after; a body raise rolls back; nested workflows flatten so a
-   nested after fires only at the OUTERMOST commit, and an outer rollback suppresses the inner one. *)
+(* The workflow runtime (Workflow.exec — what a [@workflow] function lowers to) over the in-memory
+   backend: a workflow body runs in ONE transaction (rollback on raise), after-hooks fire post-commit
+   with the result, before-guards veto, nested workflows flatten (the inner after fires at the OUTERMOST
+   commit), and the re-entrancy guard halts a body-level reaction cycle. The [@workflow]/@after sugar is
+   tested in ../ppx/test. *)
 
 module W = Fennec_pulse_workflow.Workflow
 module D = Fennec_mongo_dynamic.Dynamic
@@ -12,66 +14,72 @@ let person n = B.doc [ ("name", B.str n) ]
 
 exception Boom
 
+(* a tiny stand-in for what the ppx emits for `let[@workflow] f arg = body` *)
+let workflow ?(befores = []) ?(afters = []) name arg body = W.exec ~name ~befores ~afters arg body
+
 let () =
-  (* 1. after fires post-commit with the workflow's result *)
+  (* 1. after fires post-commit with the result; the body committed *)
   let c = D.mem (Minimongo.create ()) in
   let log = ref [] in
-  let place = W.make "place" (fun name -> ignore (D.insert c (person name)); String.uppercase_ascii name) in
-  W.after place (fun r -> log := r :: !log);
-  let r = W.call place "ada" in
-  check "workflow returns result" (r = "ADA");
-  check "workflow body committed" (count c = 1);
-  check "after fired with result" (!log = [ "ADA" ]);
+  let r =
+    workflow "place" ~afters:[ (fun r -> log := r :: !log) ] "ada"
+      (fun () -> ignore (D.insert c (person "ada")); String.uppercase_ascii "ada")
+  in
+  check "exec returns the body result" (r = "ADA");
+  check "body committed" (count c = 1);
+  check "after fired post-commit with the result" (!log = [ "ADA" ]);
 
-  (* 2. a before guard vetoes: it rolls back the body and suppresses after; a later good call works *)
+  (* 2. a raise in the body rolls it back and suppresses the after *)
   let c = D.mem (Minimongo.create ()) in
   let log = ref [] in
-  let w = W.make "w" (fun name -> ignore (D.insert c (person name)); name) in
-  W.after w (fun r -> log := r :: !log);
-  W.before w (fun name -> if name = "bad" then raise Boom);
-  (try ignore (W.call w "bad") with Boom -> ());
-  check "before veto rolls back the body" (count c = 0);
-  check "before veto suppresses after" (!log = []);
-  ignore (W.call w "ok");
-  check "a good call after a veto commits + fires after" (count c = 1 && !log = [ "ok" ]);
-
-  (* 3. a raise in the body rolls back and fires no after *)
-  let c = D.mem (Minimongo.create ()) in
-  let log = ref [] in
-  let w = W.make "w" (fun name -> ignore (D.insert c (person name)); raise Boom) in
-  W.after w (fun _ -> log := "after" :: !log);
-  (try ignore (W.call w "x") with Boom -> ());
+  (try
+     ignore
+       (workflow "w" ~afters:[ (fun () -> log := "after" :: !log) ] () (fun () ->
+            ignore (D.insert c (person "x"));
+            raise Boom))
+   with Boom -> ());
   check "body raise rolls back" (count c = 0);
   check "body raise suppresses after" (!log = []);
 
-  (* 4. nested rollback: the OUTER raise reverts the inner workflow's writes AND suppresses both afters *)
+  (* 3. a before-guard vetoes (rolls back the body) *)
+  let c = D.mem (Minimongo.create ()) in
+  (try ignore (workflow "w" ~befores:[ (fun () -> raise Boom) ] () (fun () -> ignore (D.insert c (person "x"))))
+   with Boom -> ());
+  check "before-guard veto rolls back the body" (count c = 0);
+
+  (* 4. nested flatten: an OUTER raise reverts the inner workflow's writes AND suppresses both afters *)
   let c = D.mem (Minimongo.create ()) in
   let log = ref [] in
-  let inner = W.make "inner" (fun () -> ignore (D.insert c (person "inner"))) in
-  W.after inner (fun () -> log := "inner-after" :: !log);
-  let outer = W.make "outer" (fun () -> W.call inner (); ignore (D.insert c (person "outer")); raise Boom) in
-  W.after outer (fun () -> log := "outer-after" :: !log);
-  (try ignore (W.call outer ()) with Boom -> ());
+  let inner () =
+    workflow "inner" ~afters:[ (fun () -> log := "inner" :: !log) ] () (fun () -> ignore (D.insert c (person "inner")))
+  in
+  (try
+     ignore
+       (workflow "outer" ~afters:[ (fun () -> log := "outer" :: !log) ] () (fun () ->
+            inner ();
+            ignore (D.insert c (person "outer"));
+            raise Boom))
+   with Boom -> ());
   check "nested outer rollback reverts inner writes" (count c = 0);
-  check "nested outer rollback suppresses BOTH afters" (!log = []);
+  check "nested outer rollback suppresses both afters" (!log = []);
 
-  (* 5. nested commit: both afters fire only at the outer commit, inner before outer *)
+  (* 5. nested commit: both afters fire post-commit, inner before outer *)
   let c = D.mem (Minimongo.create ()) in
   let order = ref [] in
-  let inner = W.make "inner" (fun () -> ignore (D.insert c (person "inner"))) in
-  W.after inner (fun () -> order := "inner-after" :: !order);
-  let outer = W.make "outer" (fun () -> W.call inner (); ignore (D.insert c (person "outer"))) in
-  W.after outer (fun () -> order := "outer-after" :: !order);
-  ignore (W.call outer ());
+  let inner () =
+    workflow "inner" ~afters:[ (fun () -> order := "inner" :: !order) ] () (fun () -> ignore (D.insert c (person "inner")))
+  in
+  ignore
+    (workflow "outer" ~afters:[ (fun () -> order := "outer" :: !order) ] () (fun () ->
+         ignore (inner ());
+         ignore (D.insert c (person "outer"))));
   check "nested commit runs both writes" (count c = 2);
-  check "nested afters fire post-commit, inner before outer" (List.rev !order = [ "inner-after"; "outer-after" ]);
+  check "nested afters fire post-commit, inner before outer" (List.rev !order = [ "inner"; "outer" ]);
 
-  (* 6. the re-entrancy guard: an after-hook that calls its own workflow is stopped (not infinite),
-     and the cascade halts at depth 1 (the guard raises Cyclic_reaction, contained by safe_after) *)
+  (* 6. the re-entrancy guard halts a body-level reaction cycle (an after that re-enters its workflow) *)
   let n = ref 0 in
-  let a = W.make "a" (fun () -> ()) in
-  W.after a (fun () -> incr n; ignore (W.call a ()));
-  W.call a ();
-  check "re-entrancy guard halts a body-level reaction cycle at depth 1" (!n = 1);
+  let rec a () = workflow "a" ~afters:[ (fun () -> incr n; ignore (a ())) ] () (fun () -> ()) in
+  ignore (a ());
+  check "re-entrancy guard halts a body-level cycle at depth 1" (!n = 1);
 
-  Printf.printf "all workflow tests passed\n%!"
+  Printf.printf "all workflow runtime tests passed\n%!"
