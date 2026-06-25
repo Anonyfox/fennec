@@ -1,0 +1,16 @@
+; web/methods/ — the app's DDP methods (the RPC transport), a peer of web/{components,store,handlers}.
+; One .mlx per method fuses its decl + optimistic stub + server handler. DUAL-COMPILED: this (server)
+; lib keeps the ~server handlers; the client mirror (../../_client/methods, -data-client) strips them, so
+; no server logic ships — yet the decl+stub link into the client bundles so a component can call the
+; method. (include_subdirs unqualified) folds nested folders into this one flat-namespace lib.
+(include_subdirs unqualified)
+
+(library
+ (name site_methods)
+ (wrapped false)
+ (libraries fennec.fur fennec.pulse.method fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live
+   fennec.pulse.live.client fennec-mongo.bson site_store)
+ (preprocess
+  (pps fennec.fur.ppx))
+ (flags
+  (:standard -w -a -open Fur)))

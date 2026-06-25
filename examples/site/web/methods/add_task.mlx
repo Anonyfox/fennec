@@ -1,0 +1,15 @@
+(* addTask — a DDP method (the RPC transport), decl + optimistic stub + server handler in ONE file. The
+   decl + stub are isomorphic (the client links them to call + predict); the ~server handler is
+   server-only (registered for free at boot, stripped from the client bundle by the fur ppx). A client
+   calls it with `Pulse.call Add_task.add_task title`. *)
+
+let add_task =
+  Rpc.method_ "addTask"
+    ~args:(Sift.a1 Sift.string)
+    ~result:Sift.string
+    (* optimistic: predict the handler's one insert against the client cache so the row appears instantly;
+       the same call-seed mints the same _id both sides, so the optimistic row and the real one converge *)
+    ~stub:(fun sim title -> ignore (Fennec_pulse_live.Sim.insert_t sim Task.collection { Task.id = ""; title; body = "" }))
+    (* server: the real write (validated). Returns the new task's _id. *)
+    ~server:(fun _inv title -> (Task.create { Task.id = ""; title; body = "" }).Task.id)
+    ()

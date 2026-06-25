@@ -194,7 +194,13 @@ let strip_server_only = object
            let f' = { f with pexp_desc = Pexp_ident { id with txt = client_txt } } in
            { e with pexp_desc = Pexp_apply (f', List.rev rest_rev @ [ (Nolabel, [%expr ()]) ]) }
          | _ -> e (* not a co-located fetcher call — leave it *))
-      | None -> e)
+      | None ->
+        (* a [method_ … ~server:(…)] RPC declaration (web/methods/): the ~server handler is server-only,
+           so drop that labelled arg on the client build — the decl + ?stub survive isomorphically. *)
+        (match txt with
+         | Lident "method_" | Ldot (_, "method_") ->
+           { e with pexp_desc = Pexp_apply (f, List.filter (fun (l, _) -> l <> Labelled "server") args) }
+         | _ -> e))
     | _ -> e
 end
 (* ---- THE component shape: ONE function body, no manual render thunk ----

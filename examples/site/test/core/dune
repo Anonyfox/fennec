@@ -1,13 +1,20 @@
-; The non-web core end to end in the example — the ticket domain (collections/ + workflows/) over the
-; ambient in-memory backend under a real Eio switch. A standalone Eio exe run via a runtest rule (the
-; full flows need the ambient backend, which an inline let%test cannot boot).
-(executable
- (name test_tickets)
+; The non-web core end to end in the example — the ticket domain (collections/ + workflows/) and the
+; dual-compiled web/methods/ — over the ambient in-memory backend under a real Eio switch. Standalone
+; Eio exes run via runtest rules (the full flows need the ambient backend, which an inline let%test
+; cannot boot).
+(executables
+ (names test_tickets test_method)
  (libraries fennec.pulse.app fennec-mongo.dynamic fennec-mongo.bson site_collections site_workflows
-   eio eio_main eio.unix unix))
+   site_methods site_store eio eio_main eio.unix unix))
 
 (rule
  (alias runtest)
  (deps test_tickets.exe)
  (action
   (run ./test_tickets.exe)))
+
+(rule
+ (alias runtest)
+ (deps test_method.exe)
+ (action
+  (run ./test_method.exe)))

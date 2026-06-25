@@ -58,6 +58,7 @@ let str_contains hay needle =
 let example_chain =
   [ bp "examples/site/web/store/site_store.cma";
     bp "examples/site/_client/styles/site_styles.cma";
+    bp "examples/site/web/methods/site_methods.cma";
     bp "examples/site/web/components/site_components.cma";
     bp "examples/site/web/components/.site_components.inline-tests/.t.eobjs/byte/dune__exe__Main.cmo" ]
 
@@ -139,12 +140,13 @@ let () =
         bumping the runner exe's mtime. Asserts a WARM, scoped summary of the component tests. *)
      (* source_dirs use the real _build/default-relative form describe emits (Test_chain strips that
         prefix to workspace-relative, then run_via_worker re-roots under <src_root>/_build/default).
-        site_components requires site_store + site_styles + fennec.fur.server (its real deps). *)
+        site_components requires site_store + site_styles + site_methods + fennec.fur.server (its real deps). *)
      let describe =
        {|((root /r) (build_context _build/default)
  (library ((name site_styles) (uid u_sty) (local true) (requires ()) (source_dir _build/default/examples/site/_client/styles)))
  (library ((name site_store) (uid u_sto) (local true) (requires (u_fur)) (source_dir _build/default/examples/site/web/store)))
- (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_sty u_srv u_fur)) (source_dir _build/default/examples/site/web/components)))
+ (library ((name site_methods) (uid u_mth) (local true) (requires (u_sto u_fur)) (source_dir _build/default/examples/site/web/methods)))
+ (library ((name site_components) (uid u_cmp) (local true) (requires (u_sto u_sty u_mth u_srv u_fur)) (source_dir _build/default/examples/site/web/components)))
  (library ((name fennec.fur) (uid u_fur) (local true) (requires ()) (source_dir _build/default/fennec/fur)))
  (library ((name fennec.fur.server) (uid u_srv) (local true) (requires (u_fur)) (source_dir _build/default/fennec/fur/server)))
  (library ((name fennec.pulse.sift) (uid u_sft) (local true) (requires ()) (source_dir _build/default/fennec/pulse/sift))))|}

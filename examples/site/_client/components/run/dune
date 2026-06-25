@@ -11,6 +11,7 @@
   fennec.fur.html
   fennec.fur.form
   site_store
+  site_methods_client
   fennec.pulse.live.client
   fennec.accounts.client
   fennec-mongo.bson

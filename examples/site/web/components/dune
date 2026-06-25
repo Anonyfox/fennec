@@ -14,6 +14,7 @@
   fennec.fur.form
   fennec.fur.server
   site_store
+  site_methods
   site_styles
   fennec.pulse.live.client
   fennec.accounts.client

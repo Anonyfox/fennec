@@ -1,0 +1,16 @@
+; GENERATED client mirror of site_methods — the SAME .mlx tree (flattened in from ../gen/dune.inc's
+; copy_files#) compiled with -data-client, so each method's ~server handler is STRIPPED from the jsoo
+; bundle (no server logic ships) while its decl + optimistic stub survive so a component can call it. The
+; bundles link THIS lib (site_methods_client); the server links the un-stripped site_methods. Do not edit
+; — adding a method under web/methods regenerates this automatically.
+(library
+ (name site_methods_client)
+ (wrapped false)
+ (libraries fennec.fur fennec.pulse.method fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live
+   fennec.pulse.live.client fennec-mongo.bson site_store)
+ (preprocess
+  (pps fennec.fur.ppx -data-client))
+ (flags
+  (:standard -w -a -open Fur)))
+
+(dynamic_include ../gen/dune.inc)

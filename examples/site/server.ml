@@ -96,10 +96,8 @@ let setup_realtime () =
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
   Pulse.publish Task.collection;
   seed_demo_user ();
-  (* the TYPED method over the TYPED collection: handler and stub share the declarations, so a
-     renamed field/method is a compile error in every file; a malformed call is a 400 before this
-     handler runs, and an invalid document raises before it writes *)
-  Pulse.method_ Site_methods.add_task (fun _inv title -> Pulse.insert Task.collection { Task.id = ""; title; body = "" });
+  (* the addTask method is now declared in web/methods/add_task.mlx — decl + stub + handler in ONE
+     dual-compiled file, registered for free at boot (no Pulse.method_ wiring here anymore). *)
   (* --- the non-web core in action (collections/ + workflows/): [Tickets.open_ticket] is a [@workflow]
      that writes the ticket AND its first audit event in ONE transaction; [close] is a guarded
      transition with an @after effect; [auto_close_stale] is a @cron job. Referencing Tickets here links

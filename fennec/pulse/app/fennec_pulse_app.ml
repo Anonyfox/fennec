@@ -134,6 +134,25 @@ let () =
       count = (fun def sel -> T.count (collection def) ~where:sel ());
     }
 
+(* Install the server registrar behind a method's [~server] handler (the [Rpc] seam): bridge the
+   server's [R.invocation] to the isomorphic [Rpc.invocation] and register through [R.handle]. So a
+   method declared in web/methods/ registers its handler for free, module-init, on every server. *)
+let () =
+  Rpc.install
+    {
+      Rpc.reg =
+        (fun m h ->
+          R.handle m (fun (inv : R.invocation) a ->
+              h
+                {
+                  Rpc.user_id = inv.user_id;
+                  remote_ip = inv.remote_ip;
+                  is_simulation = inv.is_simulation;
+                  set_user_id = inv.set_user_id;
+                }
+                a));
+    }
+
 (* ---- the always-on current-user publication -------------------------------------------------
 
    [__currentUser] keeps the client's [Accounts.user]/[user_id] signals live over the user DOCUMENT
