@@ -1,7 +1,11 @@
 (* add_task — the slot form: a method IS a typed function. The fur ppx reads the signature
    (string -> Task.t) to DERIVE the wire contract, registers the body as the server handler, and strips
    that body from the client bundle — the client keeps only the typed decl and calls it with
-   `Pulse.call Add_task.add_task title`. No optimistic slot yet, so the new task appears when the server
-   write propagates over the reactive subscription (a round-trip); an optimistic slot will make it
-   instant. *)
+   `Pulse.call Add_task.add_task title`. *)
 let add_task (title : string) : Task.t = Task.create { Task.id = ""; title; body = "" }
+
+(* + the optimistic slot (additive): the client's instant guess. Pure OCaml — the SAME Task.create the
+   handler uses, which the ppx runs under the call's sim so it predicts the local cache (the row appears
+   immediately; its id mints from the seed and converges when the server's write arrives). Omit this
+   slot and the row simply appears a round-trip later, over the reactive subscription. *)
+let%optimistic add_task title = ignore (Task.create { Task.id = ""; title; body = "" })

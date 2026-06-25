@@ -35,3 +35,16 @@ let find_one def sel = (backend ()).find_one def sel
 let where def sel = (backend ()).where def sel
 let all def = (backend ()).all def
 let count def sel = (backend ()).count def sel
+
+(* The ambient sim for a method's OPTIMISTIC SLOT. While a stub runs on the client, [with_sim] binds the
+   call's [sim_writes] here; the browser-installed backend reads it (via [current_sim]) so the very same
+   model verbs the handler uses — [Task.create …] — predict against the local cache instead of the
+   (absent) server backend. No new surface for the author. Server-side this stays [None] and is never
+   consulted (the real backend ignores it); the client never runs these verbs outside a stub. *)
+let _sim : Method.sim_writes option ref = ref None
+let current_sim () = !_sim
+
+let with_sim (w : Method.sim_writes) (f : unit -> 'a) : 'a =
+  let prev = !_sim in
+  _sim := Some w;
+  Fun.protect ~finally:(fun () -> _sim := prev) f

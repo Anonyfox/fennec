@@ -638,3 +638,27 @@ end) = struct
   let find ?where ?sort ?skip ?limit () = find_c (default ()) M.collection ?where ?sort ?skip ?limit ()
   let project p ?where ?sort ?skip ?limit () = find_p (default ()) M.collection p ?where ?sort ?skip ?limit ()
 end
+
+(* CLIENT collection-write backend for METHOD OPTIMISTIC SLOTS. A method's [let%optimistic] slot calls
+   the same model verbs the handler does (Task.create …); on the client those resolve to [Coll_writer],
+   which while a stub runs has the call's sim bound (via [Coll_writer.with_sim] — the ppx wraps the slot
+   in it). So [create] predicts via [Sim.insert_t] (instant UI; the id mints from the seed and converges
+   on the server's reveal). save/delete/read prediction in a slot isn't supported yet. Installed at
+   module init, before any [call] runs a stub. *)
+let () =
+  Coll_writer.install
+    {
+      Coll_writer.create =
+        (fun def v ->
+          match Coll_writer.current_sim () with
+          | Some w ->
+              ignore (Fennec_pulse_live.Sim.insert_t w def v);
+              v
+          | None -> failwith "Fennec: a collection write ran on the client outside a method's optimistic slot");
+      save = (fun _ _ -> failwith "Fennec: optimistic `save` in a method slot isn't supported yet (only `create`)");
+      delete = (fun _ _ -> failwith "Fennec: optimistic `delete` in a method slot isn't supported yet (only `create`)");
+      find_one = (fun _ _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");
+      where = (fun _ _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");
+      all = (fun _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");
+      count = (fun _ _ -> failwith "Fennec: an optimistic slot predicts writes, not reads");
+    }

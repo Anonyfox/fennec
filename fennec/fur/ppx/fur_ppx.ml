@@ -635,6 +635,20 @@ let method_args_ctor ~loc (codecs : expression list) : expression =
 let desugar_method str =
   let open Ast_builder.Default in
   let name = handler_name str in
+  (* pass 1: pull out the optional [let%optimistic … = …] slot (the client's latency-compensation guess),
+     dropping the item; we splice its function into the method's ?stub below. *)
+  let optimistic = ref None in
+  let str =
+    List.filter
+      (fun item ->
+        match item.pstr_desc with
+        | Pstr_extension (({ txt = "optimistic"; _ }, PStr [ { pstr_desc = Pstr_value (_, [ vb ]); _ } ]), _) ->
+            optimistic := Some vb.pvb_expr;
+            false
+        | _ -> true)
+      str
+  in
+  (* pass 2: lower the filename-named function into the Rpc.method_ seam, deriving the contract. *)
   List.map
     (fun item ->
       match item.pstr_desc with
@@ -663,10 +677,30 @@ let desugar_method str =
             (* the handler receives the args by the SAME patterns the author wrote (a tuple if >1) *)
             let argpat = match List.map snd parts with [ p ] -> p | ps -> ppat_tuple ~loc ps in
             let server_fn = [%expr fun _inv [%p argpat] -> [%e body]] in
+            (* the optimistic stub (if a [let%optimistic] slot was given): run the slot's function under
+               [Coll_writer.with_sim] so its model verbs predict against the local cache. The slot is
+               applied to fresh argument vars matching the contract's arity. *)
+            let stub_opt =
+              Option.map
+                (fun slot_fn ->
+                  let argvars = List.mapi (fun i _ -> Printf.sprintf "__a%d" i) parts in
+                  let stub_argpat =
+                    match argvars with [ v ] -> pvar ~loc v | vs -> ppat_tuple ~loc (List.map (pvar ~loc) vs)
+                  in
+                  let applied = pexp_apply ~loc slot_fn (List.map (fun v -> (Nolabel, evar ~loc v)) argvars) in
+                  [%expr fun __w [%p stub_argpat] -> Coll_writer.with_sim __w (fun () -> ignore [%e applied])])
+                !optimistic
+            in
             let call =
-              [%expr
-                Rpc.method_ [%e estring ~loc name] ~args:[%e args_e] ~result:[%e result_e]
-                  ~server:[%e server_fn] ()]
+              match stub_opt with
+              | None ->
+                  [%expr
+                    Rpc.method_ [%e estring ~loc name] ~args:[%e args_e] ~result:[%e result_e]
+                      ~server:[%e server_fn] ()]
+              | Some stub ->
+                  [%expr
+                    Rpc.method_ [%e estring ~loc name] ~args:[%e args_e] ~result:[%e result_e]
+                      ~stub:[%e stub] ~server:[%e server_fn] ()]
             in
             { item with pstr_desc = Pstr_value (rf, [ { vb with pvb_expr = call } ]) }
         | _ -> item (* already a value (e.g. a hand-written Rpc.method_ combinator) — leave it *))

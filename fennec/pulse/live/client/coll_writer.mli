@@ -26,3 +26,9 @@ val find_one : 'a Def.t -> Filter.t list -> 'a option
 val where : 'a Def.t -> Filter.t list -> 'a list
 val all : 'a Def.t -> 'a list
 val count : 'a Def.t -> Filter.t list -> int
+
+(** The ambient sim for a method's optimistic slot. [with_sim w f] runs [f] (the slot body) with [w]
+    bound as the current sim, so the model write verbs called inside predict against the local cache;
+    the browser backend reads it via [current_sim]. Restored on exit. *)
+val with_sim : Method.sim_writes -> (unit -> 'a) -> 'a
+val current_sim : unit -> Method.sim_writes option
