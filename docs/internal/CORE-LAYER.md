@@ -12,10 +12,10 @@ both the design rationale and the as-built reference. What's where:
 | Collection methods (create / save / delete / find_one / where / all / count) | generated on the model by `[@@deriving collection]` over the isomorphic `Coll_writer` seam (server backend installed by `Fennec_pulse_app`) | `fennec.pulse.live.client` + `fennec.pulse.app` |
 | Userland homes | `collections/` + `workflows/` (peers of `web/`) | the app |
 
-Honest scope of the v1 build: **atomic rollback is implemented for the in-memory (`:memory:`) backend**
-(what `fennec test` and the dev seed exercise) via snapshot-and-restore; on burrow/mongo the transaction
-bracket is transparent and writes commit-on-success, with backend-native rollback (an LMDB parent-txn / a
-mongo session) a scoped follow-on. The circuit-breaker is compile-time for the `@after`/`@before` graph
+Honest scope: **atomic rollback works on the in-memory (`:memory:`) backend** (snapshot-and-restore) **and
+on burrow** (the durable dev/embedded default — one held LMDB parent txn via `begin_txn`/`commit_txn`/
+`abort_txn`, reads + writes routing through it for read-your-writes); on **real Mongo** the bracket is
+transparent and writes commit-on-success, with a client-session transaction the one remaining follow-on. The circuit-breaker is compile-time for the `@after`/`@before` graph
 (intra-module via the ppx, cross-module via module dependency cycles) plus a runtime re-entrancy guard for
 body-level cascades. See `fennec/pulse/workflow/README.md` for the API and the example's
 `collections/` + `workflows/` READMEs for the 2-minute teach.
@@ -410,18 +410,23 @@ change-events** (in-process single-server; a pub/sub bus multi-replica) — no o
 calling the function against ambient in-memory data.
 
 **Built (was open, now shipped):**
-- **The transparent transaction context** — built on the fiber-local + `Dynamic.collection` seam, with
-  full atomic snapshot-rollback on the in-memory backend (commit-on-return, rollback-on-raise,
-  read-your-writes, nested-flatten, serialized). Proven by 12 + 8 assertions.
+- **The transparent transaction context** — the fiber-local + `Dynamic.collection` seam, with full
+  atomic rollback on the in-memory backend (snapshot/restore) **and on burrow** (one held LMDB parent txn
+  via `begin_txn`/`commit_txn`/`abort_txn`; reads + writes route through it for read-your-writes;
+  observers revealed at commit, never the pending intermediate states). Commit-on-return,
+  rollback-on-raise, read-your-writes, nested-flatten, serialized — the no-transaction path stays
+  byte-identical. Proven by the in-memory assertions + the engine `test_txn` + the burrow
+  `test_tx_burrow` end-to-end (commit/abort of insert/update/remove, read-your-writes, nested-flatten).
 - **Folder layout** — settled: top-level `collections/` and `workflows/`, flat peers of `web/`. Built in
   the example; server-only, `(include_subdirs unqualified)`, no client mirror.
 - **`@before` reach** — built as an in-transaction guard that may `raise` to veto; use it for
   cross-cutting domain pre-conditions, a visible call at the top of the body for the rest.
 
 **Open — deferred follow-ons:**
-- **Backend-native transaction rollback** for burrow (an LMDB parent-txn) and mongo (a client session) —
-  today those backends commit-on-success; the in-memory backend has full rollback. The seam is uniform,
-  so this is additive.
+- **Backend-native transaction rollback for real Mongo** (a client session) — the in-memory and burrow
+  backends now have full rollback; real Mongo still commits-on-success. The seam is uniform (the Tx holds
+  an optional per-backend native handle, finalized on commit/rollback), so this is additive — it needs
+  the libmongoc session FFI plus a replica set to exercise.
 - **The external-write escape hatch** (an opt-in oplog tap, for a non-Fennec writer on a shared DB) — the one
   feature that reintroduces change-stream cost; keep it quarantined and rare.
 - **The multi-replica pub/sub bus** for live publications (Redis/NATS) — only when a second replica serves

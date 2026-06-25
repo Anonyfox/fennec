@@ -40,6 +40,31 @@ val count : t -> collection -> selector:Bson.t -> int
 val distinct : t -> collection -> key:string -> selector:Bson.t -> Bson.t list
 val aggregate : t -> collection -> ?lookup:(string -> Bson.t list) -> Bson.t list -> Bson.t list
 
+(** Workflow transactions — the native-rollback backend for {!Fennec_mongo_dynamic.Tx}. [begin_txn]
+    opens one parent LMDB write txn (holding the single write lock) for a whole workflow; the workflow's
+    reads and writes route through it via the [*_in] ops (read-your-writes is free — an LMDB write txn
+    reads its own pending writes); [commit_txn] commits once and reveals the deltas to observers,
+    [abort_txn] discards them. The Tx layer opens lazily on the first burrow write and commits/aborts at
+    the workflow boundary. The non-transactional ops above are unaffected. *)
+type session
+
+val begin_txn : t -> session
+val commit_txn : t -> session -> unit
+val abort_txn : t -> session -> unit
+val insert_in : session -> collection -> Bson.t -> string
+val update_in : session -> collection -> multi:bool -> upsert:bool -> Bson.t -> Bson.t -> int
+val remove_in : session -> collection -> Bson.t -> int
+
+val find_in :
+  session -> collection -> selector:Bson.t -> sort:Bson.t -> skip:int -> limit:int -> fields:Bson.t -> Bson.t list
+
+val find_one_in :
+  session -> collection -> selector:Bson.t -> sort:Bson.t -> skip:int -> fields:Bson.t -> Bson.t option
+
+val count_in : session -> collection -> selector:Bson.t -> int
+val distinct_in : session -> collection -> key:string -> selector:Bson.t -> Bson.t list
+val aggregate_in : session -> collection -> ?lookup:(string -> Bson.t list) -> Bson.t list -> Bson.t list
+
 val observe_changes :
   t ->
   collection ->

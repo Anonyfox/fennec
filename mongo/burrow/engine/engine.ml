@@ -186,6 +186,80 @@ let aggregate t (c : collection) ?(lookup = fun _ -> []) pipeline =
   in
   Query.Aggregate.run ~lookup pipeline docs
 
+(* ---- workflow transactions (the native-rollback backend for [Fennec_mongo_dynamic.Tx]) -----------
+   A workflow must commit or roll back ATOMICALLY. [begin_txn] takes the single write lock and opens ONE
+   parent LMDB txn for the whole workflow; the workflow's reads and writes route through it (the [*_in]
+   ops — and because an LMDB write txn reads its own pending writes, read-your-writes is free, matching
+   the in-memory backend). [commit_txn] commits the parent ONCE (one fsync) then reveals the deltas to
+   observers; [abort_txn] discards them (observers never saw the pending intermediate states, so there is
+   nothing to un-notify). The group-committing writer fiber and DDL block on the SAME write lock for the
+   workflow's duration — exactly the single-writer serialization LMDB requires and the in-memory
+   transaction already imposes. The non-transactional path (submit / the writer) is completely untouched.
+   (Holding the lock across an in-workflow external call serializes other writes for that span; shortening
+   the held txn around the cliff is the §7 follow-on, not needed for correctness.) *)
+type session = { sparent : [ `W ] Store.txn; mutable stouched : string list }
+
+let begin_txn t : session =
+  Eio.Mutex.lock t.write_lock;
+  { sparent = Store.begin_write t.store; stouched = [] }
+
+let commit_txn t (s : session) : unit =
+  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock t.write_lock) (fun () ->
+      Store.commit_durable t.store s.sparent);
+  (* committed + durable: reveal each touched collection's new state to observers, once *)
+  List.sort_uniq String.compare s.stouched |> List.iter (fun coll -> Observe.notify t.observers ~coll)
+
+let abort_txn t (s : session) : unit =
+  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock t.write_lock) (fun () -> Store.abort s.sparent)
+
+let touched_in (s : session) (c : collection) = s.stouched <- c.name :: s.stouched
+
+let insert_in (s : session) (c : collection) doc =
+  let id, doc = ensure_id doc in
+  Write.insert s.sparent c doc;
+  touched_in s c;
+  id_to_string id
+
+let update_in (s : session) (c : collection) ~multi ~upsert selector modifier =
+  let n = Write.update s.sparent c ~multi ~upsert selector modifier in
+  touched_in s c;
+  n
+
+let remove_in (s : session) (c : collection) selector =
+  let n = Write.remove s.sparent c selector in
+  touched_in s c;
+  n
+
+let find_in (s : session) (c : collection) ~selector ~sort ~skip ~limit ~fields =
+  let plan = plan_for c ~selector ~sort in
+  Executor.find s.sparent c plan ~selector ~sort ~skip ~limit ~fields
+
+let find_one_in (s : session) (c : collection) ~selector ~sort ~skip ~fields =
+  let plan = plan_for c ~selector ~sort in
+  Executor.find_one s.sparent c plan ~selector ~sort ~skip ~fields
+
+let count_in (s : session) (c : collection) ~selector =
+  let plan = plan_for c ~selector ~sort:(B.Document []) in
+  Executor.count s.sparent c plan ~selector
+
+let distinct_in (s : session) (c : collection) ~key ~selector =
+  let docs =
+    let plan = plan_for c ~selector ~sort:(B.Document []) in
+    Executor.matched s.sparent c plan ~selector
+  in
+  List.sort_uniq B.compare
+    (List.concat_map
+       (fun d -> match Query.Matcher.get_path d key with None -> [] | Some (B.Array els) -> els | Some v -> [ v ])
+       docs)
+
+let aggregate_in (s : session) (c : collection) ?(lookup = fun _ -> []) pipeline =
+  let docs =
+    let acc = ref [] in
+    Record.iter s.sparent c.records (fun ~id_key:_ ~doc -> acc := doc :: !acc; true);
+    List.rev !acc
+  in
+  Query.Aggregate.run ~lookup pipeline docs
+
 (* ---- live observation (observeChanges) ---------------------------------------------------- *)
 
 let strip_id = function

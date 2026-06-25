@@ -79,9 +79,12 @@ implemented for the **in-memory (`:memory:`) backend** — what `fennec test` an
 by snapshotting each touched collection on first write and restoring it (emitting compensating change
 events so live observers converge) on `raise`. Outermost transactions serialize under one Eio mutex;
 nested workflows join the enclosing transaction, so a workflow calling a workflow is **one atomic
-unit**, and after-hooks fire once, after the *outermost* commit. On **burrow / mongo** the bracket is
-transparent and writes commit-on-success; backend-native rollback (an LMDB parent-txn / a mongo
-session) is a scoped follow-on.
+unit**, and after-hooks fire once, after the *outermost* commit. On **burrow** (the durable dev /
+embedded default) rollback is just as real: the transaction holds ONE LMDB parent txn for the whole
+workflow — reads and writes route through it (read-your-writes, since an LMDB write txn reads its own
+pending writes), `commit` makes it durable in one fsync, `raise` aborts it. On **real Mongo** the
+bracket is still transparent and writes commit-on-success; a client-session transaction is the one
+remaining follow-on. None of this is visible in userland — you write `raise`.
 
 ## The circuit-breaker (reaction cycles can't infinite-loop)
 

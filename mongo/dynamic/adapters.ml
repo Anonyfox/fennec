@@ -152,6 +152,15 @@ let bw_find_one e (q : Backend.query) =
   Burrow_engine.find_one e.eng e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort
     ~skip:q.Backend.skip ~fields:q.Backend.fields
 
+(* the same two reads routed through an open workflow txn (read-your-writes within the transaction) *)
+let bw_find_in sess e (q : Backend.query) =
+  Burrow_engine.find_in sess e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort ~skip:q.Backend.skip
+    ~limit:q.Backend.limit ~fields:q.Backend.fields
+
+let bw_find_one_in sess e (q : Backend.query) =
+  Burrow_engine.find_one_in sess e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort
+    ~skip:q.Backend.skip ~fields:q.Backend.fields
+
 let bw_observe e (q : Backend.query) ~added ~changed ~removed =
   { Backend.stop =
       Burrow_engine.observe_changes e.eng e.ecoll ~selector:q.Backend.selector ~sort:q.Backend.sort
@@ -183,8 +192,11 @@ module Tx = struct
   type entry = { coll : Minimongo.t; snap : Minimongo.snapshot }
 
   type t = {
-    mutable touched : entry list; (* collections snapshotted for rollback *)
+    mutable touched : entry list; (* in-memory collections snapshotted for rollback *)
     mutable on_commit : (unit -> unit) list; (* post-commit reactions/effects, fired after the OUTERMOST commit *)
+    mutable burrow : (Burrow_engine.t * Burrow_engine.session) option;
+        (* a burrow backend's native parent txn, opened lazily on the first burrow write and
+           committed/aborted with the transaction (the durable analogue of [touched]) *)
   }
 
   let _key : t Eio.Fiber.key = Eio.Fiber.create_key ()
@@ -201,9 +213,18 @@ module Tx = struct
     if not (List.exists (fun e -> e.coll == m) tx.touched) then
       tx.touched <- { coll = m; snap = Minimongo.tx_snapshot m } :: tx.touched
 
-  let commit (tx : t) : unit = tx.touched <- [] (* writes already applied + delivered; drop snapshots *)
+  let commit (tx : t) : unit =
+    (* commit the burrow parent txn (makes its writes durable + reveals them to observers) before
+       dropping the in-memory snapshots; both backends are now committed *)
+    (match tx.burrow with Some (eng, s) -> Burrow_engine.commit_txn eng s | None -> ());
+    tx.burrow <- None;
+    tx.touched <- [] (* in-memory writes already applied + delivered; drop snapshots *)
 
   let rollback (tx : t) : unit =
+    (* discard the burrow parent txn (its pending writes were never made visible) and restore the
+       in-memory snapshots (emitting compensating change events so live observers converge) *)
+    (match tx.burrow with Some (eng, s) -> Burrow_engine.abort_txn eng s | None -> ());
+    tx.burrow <- None;
     List.iter (fun e -> Minimongo.tx_restore e.coll e.snap) tx.touched;
     tx.touched <- [];
     tx.on_commit <- [] (* a rolled-back transaction fires no post-commit reactions *)
@@ -228,7 +249,7 @@ module Tx = struct
     match current () with
     | Some _ -> f () (* already inside a transaction — join it (flatten to one atomic unit) *)
     | None ->
-        let tx = { touched = []; on_commit = [] } in
+        let tx = { touched = []; on_commit = []; burrow = None } in
         let go () = match f () with v -> commit tx; v | exception e -> rollback tx; raise e in
         (* serialize + bind ambient under Eio; outside a scheduler (unit tests) a global ref stands in *)
         let result =
@@ -310,45 +331,60 @@ module Dynamic = struct
      non-transactional path stays byte-identical to before. *)
   let in_tx_touch (m : Minimongo.t) = match Tx.current () with Some tx -> Tx.touch tx m | None -> ()
 
+  (* the burrow analogue: if a transaction is in flight, lazily open the engine's parent txn (held for
+     the whole workflow, stored on the Tx so commit/rollback can finalize it) and return it, so the
+     embedded read/write routes through it. A no-op outside a transaction — the non-tx path is unchanged.
+     One session per Tx (an app has one burrow engine); the first burrow write opens it. *)
+  let in_tx_burrow (e : embedded) : Burrow_engine.session option =
+    match Tx.current () with
+    | None -> None
+    | Some tx -> (
+      match tx.Tx.burrow with
+      | Some (_, s) -> Some s
+      | None ->
+        let s = Burrow_engine.begin_txn e.eng in
+        tx.Tx.burrow <- Some (e.eng, s);
+        Some s)
+
   let insert c d =
     match c with
     | Mem m -> in_tx_touch m; Mini.insert m d
     | Native r -> insert r d
-    | Embedded e -> Burrow_engine.insert e.eng e.ecoll d
+    | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.insert_in sess e.ecoll d | None -> Burrow_engine.insert e.eng e.ecoll d)
     | Missing message -> unavailable message
   let update c ~multi ~upsert s m =
     match c with
     | Mem mm -> in_tx_touch mm; Mini.update mm ~multi ~upsert s m
     | Native r -> update r ~multi ~upsert s m
-    | Embedded e -> Burrow_engine.update e.eng e.ecoll ~multi ~upsert s m
+    | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.update_in sess e.ecoll ~multi ~upsert s m | None -> Burrow_engine.update e.eng e.ecoll ~multi ~upsert s m)
     | Missing message -> unavailable message
   let remove c s =
     match c with
     | Mem m -> in_tx_touch m; Mini.remove m s
     | Native r -> remove r s
-    | Embedded e -> Burrow_engine.remove e.eng e.ecoll s
+    | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.remove_in sess e.ecoll s | None -> Burrow_engine.remove e.eng e.ecoll s)
     | Missing message -> unavailable message
   let find c q =
-    match c with Mem m -> Mini.find m q | Native r -> find r q | Embedded e -> bw_find e q | Missing message -> unavailable message
+    match c with Mem m -> Mini.find m q | Native r -> find r q | Embedded e -> (match in_tx_burrow e with Some sess -> bw_find_in sess e q | None -> bw_find e q) | Missing message -> unavailable message
   let find_one c q =
-    match c with Mem m -> Mini.find_one m q | Native r -> find_one r q | Embedded e -> bw_find_one e q | Missing message -> unavailable message
+    match c with Mem m -> Mini.find_one m q | Native r -> find_one r q | Embedded e -> (match in_tx_burrow e with Some sess -> bw_find_one_in sess e q | None -> bw_find_one e q) | Missing message -> unavailable message
   let count c s =
     match c with
     | Mem m -> Mini.count m s
     | Native r -> count r s
-    | Embedded e -> Burrow_engine.count e.eng e.ecoll ~selector:s
+    | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.count_in sess e.ecoll ~selector:s | None -> Burrow_engine.count e.eng e.ecoll ~selector:s)
     | Missing message -> unavailable message
   let aggregate c ?(lookup = fun _ -> []) p =
     match c with
     | Mem m -> Mini.aggregate m ~lookup p
     | Native r -> aggregate r ~lookup p
-    | Embedded e -> Burrow_engine.aggregate e.eng e.ecoll ~lookup p
+    | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.aggregate_in sess e.ecoll ~lookup p | None -> Burrow_engine.aggregate e.eng e.ecoll ~lookup p)
     | Missing message -> unavailable message
   let distinct c k s =
     match c with
     | Mem m -> Mini.distinct m k s
     | Native r -> distinct r k s
-    | Embedded e -> Burrow_engine.distinct e.eng e.ecoll ~key:k ~selector:s
+    | Embedded e -> (match in_tx_burrow e with Some sess -> Burrow_engine.distinct_in sess e.ecoll ~key:k ~selector:s | None -> Burrow_engine.distinct e.eng e.ecoll ~key:k ~selector:s)
     | Missing message -> unavailable message
 
   let observe_changes c q ~added ~changed ~removed =
