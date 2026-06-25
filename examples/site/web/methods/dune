@@ -11,6 +11,6 @@
  (libraries fennec.fur fennec.pulse.method fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live
    fennec.pulse.live.client fennec-mongo.bson site_store)
  (preprocess
-  (pps fennec.fur.ppx))
+  (pps fennec.fur.ppx -method))
  (flags
   (:standard -w -a -open Fur)))

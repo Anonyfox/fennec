@@ -1,15 +1,7 @@
-(* addTask — a DDP method (the RPC transport), decl + optimistic stub + server handler in ONE file. The
-   decl + stub are isomorphic (the client links them to call + predict); the ~server handler is
-   server-only (registered for free at boot, stripped from the client bundle by the fur ppx). A client
-   calls it with `Pulse.call Add_task.add_task title`. *)
-
-let add_task =
-  Rpc.method_ "addTask"
-    ~args:(Sift.a1 Sift.string)
-    ~result:Sift.string
-    (* optimistic: predict the handler's one insert against the client cache so the row appears instantly;
-       the same call-seed mints the same _id both sides, so the optimistic row and the real one converge *)
-    ~stub:(fun sim title -> ignore (Fennec_pulse_live.Sim.insert_t sim Task.collection { Task.id = ""; title; body = "" }))
-    (* server: the real write (validated). Returns the new task's _id. *)
-    ~server:(fun _inv title -> (Task.create { Task.id = ""; title; body = "" }).Task.id)
-    ()
+(* add_task — the slot form: a method IS a typed function. The fur ppx reads the signature
+   (string -> Task.t) to DERIVE the wire contract, registers the body as the server handler, and strips
+   that body from the client bundle — the client keeps only the typed decl and calls it with
+   `Pulse.call Add_task.add_task title`. No optimistic slot yet, so the new task appears when the server
+   write propagates over the reactive subscription (a round-trip); an optimistic slot will make it
+   instant. *)
+let add_task (title : string) : Task.t = Task.create { Task.id = ""; title; body = "" }

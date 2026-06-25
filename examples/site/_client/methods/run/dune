@@ -9,7 +9,7 @@
  (libraries fennec.fur fennec.pulse.method fennec.pulse.sift fennec.pulse.sift.mongo fennec.pulse.live
    fennec.pulse.live.client fennec-mongo.bson site_store)
  (preprocess
-  (pps fennec.fur.ppx -data-client))
+  (pps fennec.fur.ppx -method -data-client))
  (flags
   (:standard -w -a -open Fur)))
 

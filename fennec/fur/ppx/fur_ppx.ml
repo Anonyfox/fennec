@@ -588,6 +588,91 @@ let desugar_form_handler str =
        Dropped in the client build (the strip above keeps only `type t`). *)
     [%stri module Form = Fennec.Fur.Form] :: (body @ extra)
 
+(* ---- method files (web/methods/<name>.mlx) — the RPC transport, "slots in a module" ----
+   A METHOD is ONE .mlx whose filename-named function IS the server authority. The fur ppx (-method)
+   reads its annotated signature, DERIVES the wire contract (arg/result Sift codecs), and lowers the
+   whole thing to an [Rpc.method_] call:
+     - server (-method):              register the body as the handler (contract from the types);
+     - client (-method -data-client): [strip_server_only] then drops the generated ~server arg, so the
+                                       body (its workflows / C deps / secrets) never reaches the bundle —
+                                       only the decl (+ later, the optimistic slot) survive so a
+                                       component can call it.
+   The pure-server method is just a typed function; nothing else is required. A binding that is already a
+   value (e.g. a hand-written [Rpc.method_] call) is left untouched — the combinator stays available as an
+   escape hatch alongside the sugar. *)
+let method_mode = ref false
+let () = Driver.add_arg "-method" (Stdlib.Arg.Set method_mode)
+    ~doc:"compile a web/methods/*.mlx file (a typed fn -> Rpc.method_ with a derived contract)"
+
+(* core_type -> the Sift codec for the wire contract. Unlike Sift's [base_codec] (which strips list/option
+   for field-key purposes) this PRESERVES them, since here the type IS the wire shape. *)
+let rec method_codec_of_type ~loc (ct : core_type) : expression =
+  let open Ast_builder.Default in
+  match ct.ptyp_desc with
+  | Ptyp_constr ({ txt = Lident "string"; _ }, []) -> [%expr Sift.string]
+  | Ptyp_constr ({ txt = Lident "int"; _ }, []) -> [%expr Sift.int]
+  | Ptyp_constr ({ txt = Lident "float"; _ }, []) -> [%expr Sift.float]
+  | Ptyp_constr ({ txt = Lident "bool"; _ }, []) -> [%expr Sift.bool]
+  | Ptyp_constr ({ txt = Lident "list"; _ }, [ el ]) -> [%expr Sift.list [%e method_codec_of_type ~loc el]]
+  | Ptyp_constr ({ txt = Lident "option"; _ }, [ el ]) -> [%expr Sift.option [%e method_codec_of_type ~loc el]]
+  | Ptyp_constr ({ txt = Lident "t"; _ }, []) -> [%expr codec]
+  | Ptyp_constr ({ txt = Ldot (m, "t"); _ }, []) -> pexp_ident ~loc { txt = Ldot (m, "codec"); loc }
+  | _ ->
+      Location.raise_errorf ~loc
+        "fennec: a method argument/result must be serializable — a primitive (string/int/float/bool), a \
+         list/option of one, or a [@@deriving model] type written M.t; this type isn't"
+
+let method_args_ctor ~loc (codecs : expression list) : expression =
+  match codecs with
+  | [] -> [%expr Sift.a0]
+  | [ c ] -> [%expr Sift.a1 [%e c]]
+  | [ c1; c2 ] -> [%expr Sift.a2 [%e c1] [%e c2]]
+  | [ c1; c2; c3 ] -> [%expr Sift.a3 [%e c1] [%e c2] [%e c3]]
+  | _ ->
+      Location.raise_errorf ~loc
+        "fennec: a method takes at most 3 arguments; group extra ones into a [@@deriving model] record"
+
+let desugar_method str =
+  let open Ast_builder.Default in
+  let name = handler_name str in
+  List.map
+    (fun item ->
+      match item.pstr_desc with
+      | Pstr_value (rf, [ vb ]) when pat_name vb.pvb_pat = Some name -> (
+        match vb.pvb_expr.pexp_desc with
+        | Pexp_function (params, Some (Pconstraint ret_ty), Pfunction_body body) ->
+            let loc = vb.pvb_loc in
+            (* each parameter must be type-annotated — the wire contract is read off the signature *)
+            let parts =
+              List.map
+                (fun p ->
+                  match p.pparam_desc with
+                  | Pparam_val (_lbl, _def, pat) -> (
+                    match pat.ppat_desc with
+                    | Ppat_constraint (inner, ty) -> (ty, inner)
+                    | _ ->
+                        Location.raise_errorf ~loc:pat.ppat_loc
+                          "fennec: annotate this method parameter's type — the wire contract is derived \
+                           from the signature")
+                  | Pparam_newtype _ ->
+                      Location.raise_errorf ~loc:p.pparam_loc "fennec: a method parameter must be a value")
+                params
+            in
+            let args_e = method_args_ctor ~loc (List.map (fun (ty, _) -> method_codec_of_type ~loc ty) parts) in
+            let result_e = method_codec_of_type ~loc ret_ty in
+            (* the handler receives the args by the SAME patterns the author wrote (a tuple if >1) *)
+            let argpat = match List.map snd parts with [ p ] -> p | ps -> ppat_tuple ~loc ps in
+            let server_fn = [%expr fun _inv [%p argpat] -> [%e body]] in
+            let call =
+              [%expr
+                Rpc.method_ [%e estring ~loc name] ~args:[%e args_e] ~result:[%e result_e]
+                  ~server:[%e server_fn] ()]
+            in
+            { item with pstr_desc = Pstr_value (rf, [ { vb with pvb_expr = call } ]) }
+        | _ -> item (* already a value (e.g. a hand-written Rpc.method_ combinator) — leave it *))
+      | _ -> item)
+    str
+
 let scan_scope str = List.iter (fun item -> match item.pstr_desc with
   | Pstr_extension (({ txt = "style"; _ },
       PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (css,_,_)); _ }, _); _ } ]), _) ->
@@ -598,7 +683,9 @@ let impl str =
   (* per-file gate for the [!s] read sugar (see [in_mlx]): the original source path is preserved in
      locations even after mlx-pp, so a [.mlx] extension reliably distinguishes a Fur component file
      (signals; [!s] = read) from a plain [.ml] in the same lib (refs; [!] = deref). *)
-  in_mlx := (let f = input_fname str in Filename.check_suffix f ".mlx");
+  (* a method file is server OCaml (+ later an optimistic slot using the explicit signal API), never JSX
+     with signals, so [!] stays OCaml deref there even though the file is .mlx *)
+  in_mlx := (let f = input_fname str in Filename.check_suffix f ".mlx") && not !method_mode;
   scan_scope str;
   let str = List.filter (fun item -> match item.pstr_desc with
     | Pstr_extension (({ txt = "style"; _ }, _), _) -> false | _ -> true) str in
@@ -607,7 +694,13 @@ let impl str =
      function, not a component). We dispatch by SHAPE: a `load` is an SPA handler (fuse load/view ->
      serve+boot); a `submit` is a server-rendered FORM handler (view/submit -> get/post/serve). Sibling
      modules in the same lib (e.g. the route_gen-generated routes.ml) define neither -> the normal path. *)
-  if !handler_mode && List.exists (item_defines "load") str then
+  if !method_mode then
+    (* methods: derive the contract + lower the filename-named fn to Rpc.method_, then (client build only)
+       strip the generated ~server arg so the handler body never ships. SKIPS componentize. *)
+    let str = desugar_method str in
+    let str = if !data_client then strip_server_only#structure str else str in
+    Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks str))
+  else if !handler_mode && List.exists (item_defines "load") str then
     Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks (desugar_handler str)))
   else if !handler_mode && List.exists (item_defines "submit") str then
     Fennec_hunt_ppx_rules.expand_doctests (mapper#structure (desugar_blocks (desugar_form_handler str)))

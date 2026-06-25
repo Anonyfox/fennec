@@ -1,6 +1,7 @@
-(* The dual-compiled web/methods/ end to end: the addTask method declared in web/methods/add_task.mlx
-   registers its ~server handler for free (via the Rpc seam the facade installs), and invoking it runs
-   the handler + writes. Over MONGO_URL=:memory: under an Eio switch. *)
+(* The dual-compiled web/methods/ SLOT FORM end to end: add_task is declared in web/methods/add_task.mlx
+   as a plain typed function `string -> Task.t`. The fur ppx (-method) DERIVES the wire contract from the
+   signature and registers the body as the server handler (via the Rpc seam the facade installs);
+   invoking it runs the handler + writes. Over MONGO_URL=:memory: under an Eio switch. *)
 
 let () = Unix.putenv "MONGO_URL" ":memory:"
 
@@ -18,11 +19,10 @@ let () =
   Eio.Switch.run @@ fun sw ->
   Fennec_mongo_dynamic.Dynamic.set_switch sw;
 
-  check "addTask is registered server-side" (List.mem "addTask" (R.method_names ()));
-
-  (* invoke it the way the DDP session does *)
-  let result = R.apply ~user_id:None ~remote_ip:None ~set_user_id:(fun _ -> ()) "addTask" [ B.String "Buy milk" ] in
-  check "the handler ran and returned an id" (match result with B.String s -> s <> "" | _ -> false);
+  check "add_task is registered (slot form, contract derived from the signature)"
+    (List.mem "add_task" (R.method_names ()));
+  let t = R.apply ~user_id:None ~remote_ip:None ~set_user_id:(fun _ -> ()) "add_task" [ B.String "Buy milk" ] in
+  check "the handler ran and returned the created Task" (match t with B.Document _ -> true | _ -> false);
   check "the handler wrote the task" (List.length (Pulse.all Task.collection) = 1);
 
   Printf.printf "all method tests passed\n%!"
