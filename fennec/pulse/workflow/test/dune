@@ -1,5 +1,5 @@
 ; Workflow reactions + Schedule (cron/every + the at-most-once claim) over the in-memory backend.
 (tests
- (names test_workflow test_schedule)
+ (names test_workflow test_schedule test_outbox)
  (libraries fennec.pulse.workflow fennec-mongo.dynamic fennec-mongo.minimongo fennec-mongo.bson
-   fennec-mongo.backend))
+   fennec-mongo.backend eio_main eio unix))

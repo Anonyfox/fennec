@@ -339,6 +339,9 @@ let serve ?(timeout = 30.0) ?(max_conns = 10_000) ?tls ?acme ?accounts ?on_error
   (* start the at-most-once scheduler for any [@cron]/[@every] jobs (a no-op when there are none, and
      only in the HTTP-serving server — never the console). After [on_start] so seeding runs first. *)
   Fennec_pulse_workflow.Schedule.start ~sw ~clock:(Eio.Stdenv.clock env);
+  (* start the effects-outbox delivery worker (a no-op when no effect handler is registered — an app
+     with no fire-and-forget effects pays nothing — and only in the HTTP-serving server) *)
+  Fennec_pulse_workflow.Outbox.start ~sw ~clock:(Eio.Stdenv.clock env);
   (* announce only AFTER the server actually binds (Server.run calls [on_listen] post-listen) with
      the (endpoint name, url) pairs it allocated — a failed bind never prints a misleading "ready"
      line first. The dev supervisor owns the terminal: report named URLs for its banner, else stay quiet. *)
