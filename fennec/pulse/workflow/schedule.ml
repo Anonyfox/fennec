@@ -29,6 +29,10 @@ let jobs : job list ref = ref []
 (* clear the registry (tests; a future hot-reload) *)
 let reset () = jobs := []
 
+(* the names of all registered jobs (the function names the [@cron]/[@every] ppx used) — for diagnostics
+   and for proving the wiring manifest force-linked a workflow that nothing else references *)
+let job_names () = List.map (fun (j : job) -> j.jname) !jobs
+
 (* ---- cron parsing (5 fields: minute hour day-of-month month day-of-week, UTC) ----------------- *)
 
 (* one comma-separated field → a membership predicate over its value range. Supports [*], [a], [a-b],

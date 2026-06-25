@@ -5,6 +5,17 @@
 ; test/ (they need the ambient backend, which a let%test cannot boot).
 (include_subdirs unqualified)
 
+; Generate the WIRING MANIFEST: wiring_gen scans this folder and emits wiring.ml, which references every
+; workflow module so a pure [@cron]/[@every] (one nothing else calls — e.g. maintenance.ml) still links
+; and registers at boot. The server references [Wiring.link] once; adding a workflow regenerates this.
+(rule
+ (deps
+  (source_tree .)
+  %{project_root}/fennec/pulse/workflow/tools/wiring_gen.exe)
+ (target wiring.ml)
+ (action
+  (run %{project_root}/fennec/pulse/workflow/tools/wiring_gen.exe . wiring.ml)))
+
 (library
  (name site_workflows)
  (wrapped false)

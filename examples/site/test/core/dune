@@ -3,10 +3,10 @@
 ; Eio exes run via runtest rules (the full flows need the ambient backend, which an inline let%test
 ; cannot boot).
 (executables
- (names test_tickets test_method)
- (modules test_tickets test_method)
- (libraries fennec.pulse.app fennec-mongo.dynamic fennec-mongo.bson site_collections site_workflows
-   site_methods site_store eio eio_main eio.unix unix))
+ (names test_tickets test_method test_wiring)
+ (modules test_tickets test_method test_wiring)
+ (libraries fennec.pulse.app fennec.pulse.workflow fennec-mongo.dynamic fennec-mongo.bson
+   site_collections site_workflows site_methods site_store eio eio_main eio.unix unix))
 
 ; The optimistic-slot bridge is a CLIENT concern, tested without the server facade (no Fennec_pulse_app
 ; here) so only the recording Coll_writer backend is installed — see test_optimistic.ml.
@@ -33,3 +33,9 @@
  (deps test_optimistic.exe)
  (action
   (run ./test_optimistic.exe)))
+
+(rule
+ (alias runtest)
+ (deps test_wiring.exe)
+ (action
+  (run ./test_wiring.exe)))

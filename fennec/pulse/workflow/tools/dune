@@ -1,0 +1,4 @@
+; The workflow wiring-manifest generator (route_gen-style): scans a workflows dir and emits wiring.ml,
+; which references every workflow module so a pure [@cron]/[@every]/[@after] registers at boot.
+(executable
+ (name wiring_gen))

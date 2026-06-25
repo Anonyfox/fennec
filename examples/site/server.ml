@@ -96,13 +96,16 @@ let setup_realtime () =
     [ { Task.id = ""; title = "Buy milk"; body = "" }; { Task.id = ""; title = "Walk the dog"; body = "" } ];
   Pulse.publish Task.collection;
   seed_demo_user ();
+  (* Force-link every workflow module through the generated wiring manifest, so a pure [@cron]/[@every]
+     that nothing else references (e.g. maintenance.ml's hourly sweep) still registers at boot. ONE call,
+     materialized from the workflows/ folder — no naming each workflow by hand. *)
+  Wiring.link ();
   (* the addTask method is now declared in web/methods/add_task.mlx — decl + stub + handler in ONE
      dual-compiled file, registered for free at boot (no Pulse.method_ wiring here anymore). *)
   (* --- the non-web core in action (collections/ + workflows/): [Tickets.open_ticket] is a [@workflow]
      that writes the ticket AND its first audit event in ONE transaction; [close] is a guarded
-     transition with an @after effect; [auto_close_stale] is a @cron job. Referencing Tickets here links
-     the workflow module so its reaction + schedule register at boot. Seed a couple by just CALLING the
-     workflow (only when empty — it reads like a normal function), and publish both collections live. --- *)
+     transition with an @after effect; [auto_close_stale] is a @cron job. Seed a couple by just CALLING
+     the workflow (only when empty — it reads like a normal function), and publish both collections. --- *)
   if Pulse.all Ticket.collection = [] then begin
     ignore (Tickets.open_ticket "Printer on fire");
     ignore (Tickets.open_ticket "Coffee machine down")

@@ -216,8 +216,10 @@ Callbacks rot when behavior fires *invisibly* (the Rails lesson). We avoid that 
   the "what fires around this" view, through the find-references your editor already has.
 - **Rename** the target → its hooks update; **delete** it → its orphaned hooks are **compile errors** (no
   silent orphans, unlike Rails). There are **no stringly event names** to typo.
-- The ppx **materializes the wiring as a readable generated file** (route_gen-style, in the tree — not a
-  hidden runtime registry), so the whole leaf-first graph is *one openable file* when you want the overview.
+- The workflow wiring is **materialized as a generated manifest** (route_gen-style: `wiring_gen` scans
+  `workflows/` → `wiring.ml`, in the tree — not a hidden runtime registry), force-linking every module so a
+  pure `@cron`/`@every` can't silently fail to register — *one openable file*. Find-references (above) gives
+  the per-target graph today; a fuller rendered edge-graph overview can build on the same file.
 - **Bounded blast radius:** after-hooks are post-commit, isolated, idempotent, async; `@before` can only
   veto in-transaction (no other reach). So an unnoticed hook cannot cause Rails-style damage even before you
   go looking.
@@ -417,8 +419,9 @@ calling the function against ambient in-memory data.
   seam holds an optional per-backend native transaction handle, opened lazily on the first write and
   finalized on commit/rollback: **in-memory** (snapshot/restore), **burrow** (one held LMDB parent txn via
   `begin_txn`/`commit_txn`/`abort_txn`; observers revealed at commit), and **real replica-set Mongo** (a
-  libmongoc client-session transaction — `session_start`, session-appended `*_s` writes/reads + a
-  `command_s` for multi-doc update/delete/count/distinct, `session_commit`/`abort`). Commit-on-return,
+  libmongoc client-session transaction — `session_start`, session-appended `*_s` writes + find/aggregate
+  reads + a `command_s` for multi-doc update/delete/count/distinct, `session_commit`/`abort`). Read-your-writes
+  is complete — every read (find/count/distinct/aggregate) sees the workflow's pending writes. Commit-on-return,
   rollback-on-raise, read-your-writes, nested-flatten, serialized — the no-transaction path stays
   byte-identical on every backend. Proven end-to-end: the engine `test_txn` + dynamic `test_tx_burrow`
   (burrow) and `cli/test/test_mongo_txn` against a managed single-node replica set (Mongo) — each covers
@@ -427,6 +430,11 @@ calling the function against ambient in-memory data.
   the example; server-only, `(include_subdirs unqualified)`, no client mirror.
 - **`@before` reach** — built as an in-transaction guard that may `raise` to veto; use it for
   cross-cutting domain pre-conditions, a visible call at the top of the body for the rest.
+- **The wiring manifest (force-link).** A generated `wiring.ml` (route_gen-style: `wiring_gen` scans
+  `workflows/` and references every module) so a pure `@cron`/`@every` that nothing else calls still links
+  and registers at boot. The server force-links them all with ONE `Wiring.link ()` — no naming each by
+  hand, no discipline to forget. Proven by the example's `maintenance.ml` (an unreferenced hourly sweep
+  that registers anyway) + `test_wiring`.
 
 **Open — deferred follow-ons:**
 - **The external-write escape hatch** (an opt-in oplog tap, for a non-Fennec writer on a shared DB) — the one
@@ -435,8 +443,9 @@ calling the function against ambient in-memory data.
   live subscriptions; single-server needs none.
 - **`fennec new` scaffolding** of `collections/`/`workflows/` — the convention is taught by the example +
   READMEs; the minimal scaffold stays a hello-world for now.
-- **A materialized wiring manifest** (route_gen-style) — would force-link pure-`@cron` workflows and give an
-  openable reaction-graph overview; today referencing a workflow from `server.ml` links its module.
+- **The manifest's rendered reaction-graph** — the force-link manifest ships (above); rendering the full
+  `@after`/`@cron` edge graph INTO that openable file (beyond the module list) is the remaining nicety.
+  Find-references already gives it per-target.
 - **At-least-once schedules** (the lease variant) — deferred until a job genuinely needs it.
 - **Annotation names** (`@after`/`@before`/`@cron`/`@every`) — bikeshed.
 
