@@ -36,6 +36,11 @@ val usage : t -> Store.usage
 (** Current on-disk map usage: bytes in use, the configured ceiling, and their ratio. Poll it to alarm
     before the map fills — sizing the map generously at {!open_} is the first defense, this the warning. *)
 
+val transaction_held_for : t -> float option
+(** Seconds the current workflow transaction has held the single write lock (wall-clock), or [None] when
+    idle. A long hold stalls ALL writes (the lock is global), so observability / a watchdog polls this to
+    alarm; the sanctioned fix for in-transaction work is to defer I/O to the effects outbox. *)
+
 val collection : t -> string -> collection
 (** Get-or-create a collection by name. *)
 

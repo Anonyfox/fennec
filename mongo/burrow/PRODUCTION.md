@@ -98,13 +98,13 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 - [ ] **Backup operations** — a CLI / scheduled trigger, retention, off-host shipping, and **periodic
       restore verification** (an untested backup is not a backup) layer on the primitive. *Covenant:
       out-of-band on a read snapshot; the writer never sees it.*
-- [ ] **Bound transaction duration / protect the global write lock.** `begin_txn` holds the single write
-      lock until commit/abort (self-flagged in `engine.ml`); a slow workflow — or *any* external I/O done
-      while holding it — stalls **all** writes engine-wide. This is an availability footgun. Fixes: (a) the
-      **effects outbox is the sanctioned pattern** — defer mail/HTTP/all I/O to *after* commit, never inside
-      the txn; (b) a max-transaction-duration guard that aborts a runaway holder; (c) document the rule
-      loudly. *The price of the single-writer model is that a held write txn is globally exclusive — keep it
-      microseconds, not milliseconds.*
+- [x] **Write-lock-hold observable.** `begin_txn` holds the single write lock until commit/abort; a slow
+      workflow — or *any* external I/O done while holding it — stalls **all** writes engine-wide.
+      `Engine.transaction_held_for` now exposes how long the current txn has held the lock (`None` when
+      idle), so observability / a watchdog can alarm. The sanctioned FIX stays the **effects outbox** (defer
+      mail/HTTP/all I/O to after commit, never inside the txn); auto-aborting a runaway holder is unsafe (you
+      can't abort another fiber's txn mid-op), so this is detection, not enforcement. *The price of the
+      single-writer model: a held write txn is globally exclusive — keep it microseconds, not milliseconds.*
 - [ ] **Map sizing & disk-full — two distinct failures.** (1) *Map limit:* the LMDB map is sparse —
       virtually allocated, the file grows only to bytes actually written — so the lean fix is to **size it
       generously at open** and alarm at a high-water mark. **`Engine.usage` ships** (bytes-in-use vs the

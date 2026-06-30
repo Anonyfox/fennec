@@ -2,8 +2,9 @@
 ; Oplog, Observe, Engine), each with its .mli. Sits on the storage facade + the pure codecs, and reuses
 ; the existing pure MongoDB query/update semantics (fennec-mongo.query) rather than re-implementing
 ; them: the engine's job is durable storage, indexing, and access-path selection. eio for the single
-; group-committing writer fiber + reader snapshots.
+; group-committing writer fiber + reader snapshots. unix: wall-clock for the write-lock-hold observable.
 (library
  (name burrow)
  (public_name fennec-mongo.burrow)
- (libraries burrow_store burrow_codec burrow_binary fennec-mongo.bson fennec-mongo.query eio eio.unix))
+ (libraries burrow_store burrow_codec burrow_binary fennec-mongo.bson fennec-mongo.query eio eio.unix
+   unix))

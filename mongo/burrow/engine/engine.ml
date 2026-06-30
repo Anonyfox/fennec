@@ -18,6 +18,7 @@ type t = {
   store : Store.t;
   cat : Catalog.t;
   query_limit : int option; (* governance: max documents a read may materialize before Result_too_large *)
+  mutable txn_held_since : float option; (* wall-clock when a workflow txn took the write lock — held-too-long observable *)
   observers : Observe.t;
   write_lock : Eio.Mutex.t; (* held during any write txn (the writer's batch OR a DDL Store.write) *)
   queue : qitem Eio.Stream.t;
@@ -94,7 +95,7 @@ let open_ ~sw ?(durability = Store.Full) ?(map_size_gb = 128) ?query_limit path 
   let store = Store.open_ ~map_size_gb ~max_dbs:1024 ~durability path in
   let writer_done, writer_done_u = Eio.Promise.create () in
   let t =
-    { store; cat = Catalog.open_ store; query_limit; observers = Observe.create ();
+    { store; cat = Catalog.open_ store; query_limit; txn_held_since = None; observers = Observe.create ();
       write_lock = Eio.Mutex.create (); queue = Eio.Stream.create 4096; writer_done; writer_done_u }
   in
   Eio.Fiber.fork_daemon ~sw (fun () -> writer_loop t; `Stop_daemon);
@@ -117,6 +118,11 @@ let store t = t.store
    so writers keep running. Restore = open the resulting directory as a database. *)
 let backup t ~dir ?compact () = Store.backup t.store ~dir ?compact ()
 let usage t = Store.usage t.store
+
+(* how long the current workflow transaction has held the global write lock (None when idle) — see the
+   .mli; a long hold stalls all writes, so observability/a watchdog polls this to alarm. *)
+let transaction_held_for t =
+  match t.txn_held_since with None -> None | Some since -> Some (Unix.gettimeofday () -. since)
 
 let collection t name = with_write t (fun () -> Catalog.collection t.cat name)
 let collection_opt t name = Catalog.collection_opt t.cat name
@@ -211,16 +217,17 @@ type session = { sparent : [ `W ] Store.txn; mutable stouched : string list }
 
 let begin_txn t : session =
   Eio.Mutex.lock t.write_lock;
+  t.txn_held_since <- Some (Unix.gettimeofday ());
   { sparent = Store.begin_write t.store; stouched = [] }
 
 let commit_txn t (s : session) : unit =
-  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock t.write_lock) (fun () ->
+  Fun.protect ~finally:(fun () -> t.txn_held_since <- None; Eio.Mutex.unlock t.write_lock) (fun () ->
       Store.commit_durable t.store s.sparent);
   (* committed + durable: reveal each touched collection's new state to observers, once *)
   List.sort_uniq String.compare s.stouched |> List.iter (fun coll -> Observe.notify t.observers ~coll)
 
 let abort_txn t (s : session) : unit =
-  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock t.write_lock) (fun () -> Store.abort s.sparent)
+  Fun.protect ~finally:(fun () -> t.txn_held_since <- None; Eio.Mutex.unlock t.write_lock) (fun () -> Store.abort s.sparent)
 
 let touched_in (s : session) (c : collection) = s.stouched <- c.name :: s.stouched
 
