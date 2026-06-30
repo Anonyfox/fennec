@@ -5,10 +5,16 @@
 
 module Store = Burrow_store.Store
 
-val matched : _ Store.txn -> Catalog.collection -> Plan.t -> selector:Bson.t -> Bson.t list
-(** Candidate documents from the access path, filtered by the residual selector. No sort/window. *)
+exception Result_too_large of int
+(** Raised by [find] / [find_one] / [matched] when the documents a query would materialize exceed the
+    [?cap] (the engine's [~query_limit]) — governance against an unbounded scan exhausting memory. *)
+
+val matched : ?cap:int -> _ Store.txn -> Catalog.collection -> Plan.t -> selector:Bson.t -> Bson.t list
+(** Candidate documents from the access path, filtered by the residual selector. No sort/window. With
+    [?cap], raises {!Result_too_large} if the matched set exceeds it. *)
 
 val find :
+  ?cap:int ->
   _ Store.txn ->
   Catalog.collection ->
   Plan.t ->
@@ -20,6 +26,7 @@ val find :
   Bson.t list
 
 val find_one :
+  ?cap:int ->
   _ Store.txn ->
   Catalog.collection ->
   Plan.t ->

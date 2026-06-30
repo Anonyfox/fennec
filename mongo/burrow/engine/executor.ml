@@ -4,6 +4,9 @@ module M = Query.Matcher
 
 let empty = B.Document []
 
+(* the per-query materialization cap (Engine.open_ ~query_limit) was exceeded — see matched / find *)
+exception Result_too_large of int
+
 let full_scan txn (c : Catalog.collection) : B.t list =
   let acc = ref [] in
   Record.iter txn c.records (fun ~id_key:_ ~doc -> acc := doc :: !acc; true);
@@ -82,9 +85,13 @@ let candidates txn (c : Catalog.collection) (plan : Plan.t) : B.t list =
           rest;
         List.filter_map (fun k -> if Hashtbl.mem set k then Record.get_by_key txn c.records k else None) keys0)
 
-let matched txn c plan ~selector =
+let matched ?cap txn c plan ~selector =
   let cs = candidates txn c plan in
-  if selector = empty then cs else List.filter (M.doc_matches selector) cs
+  let cs = if selector = empty then cs else List.filter (M.doc_matches selector) cs in
+  (* one check per query on the result list — the per-record scan loops above stay untouched.
+     [compare_length_with] stops at [n], so it costs O(min(len, cap)), not a full traversal. *)
+  (match cap with Some n when List.compare_length_with cs n > 0 -> raise (Result_too_large n) | _ -> ());
+  cs
 
 (* the plan already delivers candidates in the requested sort order *)
 let plan_sorted = function Plan.Index_scan { sorted; _ } -> sorted | _ -> false
@@ -123,21 +130,22 @@ let find_sorted_limited ?(rev = false) txn (c : Catalog.collection) idx (r : Pla
       end);
   List.rev !kept
 
-let rec find txn (c : Catalog.collection) plan ~selector ~sort ~skip ~limit ~fields =
+let rec find ?cap txn (c : Catalog.collection) plan ~selector ~sort ~skip ~limit ~fields =
   match plan with
   | Plan.Index_scan { index; ranges = [ r ]; sorted = true; reverse } when limit > 0 -> (
     match find_index c index with
+    (* the streaming path is already bounded by [skip + limit] — it never materializes the whole set *)
     | Some idx -> find_sorted_limited ~rev:reverse txn c idx r ~selector ~skip ~limit ~fields
-    | None -> (* index vanished: fall back to the general path *) find_general txn c plan ~selector ~sort ~skip ~limit ~fields)
-  | _ -> find_general txn c plan ~selector ~sort ~skip ~limit ~fields
+    | None -> (* index vanished: fall back to the general path *) find_general ?cap txn c plan ~selector ~sort ~skip ~limit ~fields)
+  | _ -> find_general ?cap txn c plan ~selector ~sort ~skip ~limit ~fields
 
-and find_general txn c plan ~selector ~sort ~skip ~limit ~fields =
-  let ms = matched txn c plan ~selector in
+and find_general ?cap txn c plan ~selector ~sort ~skip ~limit ~fields =
+  let ms = matched ?cap txn c plan ~selector in
   let ordered = if sort = empty || plan_sorted plan then ms else Query.Sorter.sort sort ms in
   List.map (project fields) (window ~skip ~limit ordered)
 
-let find_one txn c plan ~selector ~sort ~skip ~fields =
-  match find txn c plan ~selector ~sort ~skip ~limit:1 ~fields with [] -> None | d :: _ -> Some d
+let find_one ?cap txn c plan ~selector ~sort ~skip ~fields =
+  match find ?cap txn c plan ~selector ~sort ~skip ~limit:1 ~fields with [] -> None | d :: _ -> Some d
 
 (* a single-field constraint that an index bound captures EXACTLY (no residual): a scalar equality, or
    an operator doc using only the operators build_index encodes — so counting index entries equals

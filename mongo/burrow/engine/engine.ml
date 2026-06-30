@@ -17,6 +17,7 @@ type qitem = Do of job | Quit
 type t = {
   store : Store.t;
   cat : Catalog.t;
+  query_limit : int option; (* governance: max documents a read may materialize before Result_too_large *)
   observers : Observe.t;
   write_lock : Eio.Mutex.t; (* held during any write txn (the writer's batch OR a DDL Store.write) *)
   queue : qitem Eio.Stream.t;
@@ -89,12 +90,12 @@ let rec writer_loop t =
   if jobs <> [] then process_batch t jobs;
   if quit then Eio.Promise.resolve t.writer_done_u () else writer_loop t
 
-let open_ ~sw ?(durability = Store.Full) ?(map_size_gb = 128) path =
+let open_ ~sw ?(durability = Store.Full) ?(map_size_gb = 128) ?query_limit path =
   let store = Store.open_ ~map_size_gb ~max_dbs:1024 ~durability path in
   let writer_done, writer_done_u = Eio.Promise.create () in
   let t =
-    { store; cat = Catalog.open_ store; observers = Observe.create (); write_lock = Eio.Mutex.create ();
-      queue = Eio.Stream.create 4096; writer_done; writer_done_u }
+    { store; cat = Catalog.open_ store; query_limit; observers = Observe.create ();
+      write_lock = Eio.Mutex.create (); queue = Eio.Stream.create 4096; writer_done; writer_done_u }
   in
   Eio.Fiber.fork_daemon ~sw (fun () -> writer_loop t; `Stop_daemon);
   t
@@ -156,12 +157,12 @@ let plan_for (c : collection) ~selector ~sort = Planner.plan c.indexes ~selector
 let find t (c : collection) ~selector ~sort ~skip ~limit ~fields =
   Store.read t.store (fun txn ->
       let plan = plan_for c ~selector ~sort in
-      Executor.find txn c plan ~selector ~sort ~skip ~limit ~fields)
+      Executor.find ?cap:t.query_limit txn c plan ~selector ~sort ~skip ~limit ~fields)
 
 let find_one t (c : collection) ~selector ~sort ~skip ~fields =
   Store.read t.store (fun txn ->
       let plan = plan_for c ~selector ~sort in
-      Executor.find_one txn c plan ~selector ~sort ~skip ~fields)
+      Executor.find_one ?cap:t.query_limit txn c plan ~selector ~sort ~skip ~fields)
 
 let count t (c : collection) ~selector =
   Store.read t.store (fun txn ->
@@ -174,7 +175,7 @@ let distinct t (c : collection) ~key ~selector =
   let docs =
     Store.read t.store (fun txn ->
         let plan = plan_for c ~selector ~sort:(B.Document []) in
-        Executor.matched txn c plan ~selector)
+        Executor.matched ?cap:t.query_limit txn c plan ~selector)
   in
   List.sort_uniq B.compare
     (List.concat_map
@@ -190,6 +191,9 @@ let aggregate t (c : collection) ?(lookup = fun _ -> []) pipeline =
         Record.iter txn c.records (fun ~id_key:_ ~doc -> acc := doc :: !acc; true);
         List.rev !acc)
   in
+  (match t.query_limit with
+   | Some n when List.compare_length_with docs n > 0 -> raise (Executor.Result_too_large n)
+   | _ -> ());
   Query.Aggregate.run ~lookup pipeline docs
 
 (* ---- workflow transactions (the native-rollback backend for [Fennec_mongo_dynamic.Tx]) -----------

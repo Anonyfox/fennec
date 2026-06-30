@@ -113,10 +113,13 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       rare fallback. (2) *Physical disk-full (ENOSPC):* LMDB's CoW guarantees the last committed state
       survives a failed commit — surface it as "reject writes with a clean error, stay readable, alert,"
       and test that path.
-- [ ] **Query resource governance.** An in-process engine shares the host heap — a big unsorted scan,
-      `$sort`, `$group`, or `$lookup` can OOM *everything*. Phase 1 (covenant-cheap): a per-query memory +
-      wall-time budget with a clean error (mirror Mongo's 100 MB sort cap). Phase 2: spill-to-disk external
-      sort/group behind an `allowDiskUse`-style flag. Cap accumulated cursor results, not just sort.
+- [x] **Query resource governance — Phase 1 (materialization cap).** `Engine.open_ ~query_limit:n` caps the
+      documents a single read may materialize; `find`/`find_one`/`distinct`/`aggregate` raise a clean
+      `Executor.Result_too_large` past it instead of OOM-ing the host. One check per query at the `matched`
+      chokepoint (`compare_length_with`, O(min(len,cap))) — the per-record scan loops stay byte-identical
+      (covenant). Default unlimited. Proven by `test_governance`.
+- [ ] **Query governance — Phase 2.** A wall-time budget, and spill-to-disk external sort/group behind an
+      `allowDiskUse`-style flag, so a limited query streams instead of materializing the whole matched set.
 - [ ] **Online index builds.** `backfill_index` walks every record under the write path → a long write-lock
       on a big collection is a write outage. The single-writer model makes the clean version easy: mark the
       index *building*; the writer maintains it for all *new* writes immediately; a background fiber backfills
