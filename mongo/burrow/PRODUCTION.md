@@ -107,10 +107,12 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       microseconds, not milliseconds.*
 - [ ] **Map sizing & disk-full — two distinct failures.** (1) *Map limit:* the LMDB map is sparse —
       virtually allocated, the file grows only to bytes actually written — so the lean fix is to **size it
-      generously at open** and alarm at a high-water mark. Runtime grow (`mdb_env_set_mapsize`) requires
-      *all* txns (readers included) briefly quiesced, so it's the rare fallback, not the plan. (2) *Physical
-      disk-full (ENOSPC):* LMDB's CoW guarantees the last committed state survives a failed commit — surface
-      it as "reject writes with a clean error, stay readable, alert," and test that path.
+      generously at open** and alarm at a high-water mark. **`Engine.usage` ships** (bytes-in-use vs the
+      ceiling + ratio, a cheap metadata read) — the alarm primitive; generous-default sizing and the alarm
+      policy layer on it. Runtime grow (`mdb_env_set_mapsize`) needs *all* txns quiesced, so it stays the
+      rare fallback. (2) *Physical disk-full (ENOSPC):* LMDB's CoW guarantees the last committed state
+      survives a failed commit — surface it as "reject writes with a clean error, stay readable, alert,"
+      and test that path.
 - [ ] **Query resource governance.** An in-process engine shares the host heap — a big unsorted scan,
       `$sort`, `$group`, or `$lookup` can OOM *everything*. Phase 1 (covenant-cheap): a per-query memory +
       wall-time budget with a clean error (mirror Mongo's 100 MB sort cap). Phase 2: spill-to-disk external

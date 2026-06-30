@@ -41,6 +41,14 @@ let backup t ~dir ?(compact = true) () =
   (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   Eio_unix.run_in_systhread (fun () -> L.env_copy2 t.env dir compact)
 
+type usage = { used_bytes : int64; map_bytes : int64; fraction : float }
+
+(* Map occupancy from LMDB's in-memory metadata (no I/O): real bytes in use vs the virtual ceiling. *)
+let usage t =
+  let used, map = L.env_usage t.env in
+  let fraction = if map = 0L then 0. else Int64.to_float used /. Int64.to_float map in
+  { used_bytes = used; map_bytes = map; fraction }
+
 (* Open-or-fetch a named sub-DB handle. The common (cached) path takes no transaction. A first open
    runs a short standalone write txn (LMDB requires a txn to open a dbi, and MDB_CREATE a write one);
    the handle is cached only after that txn commits, when LMDB makes it valid env-wide. MUST be called

@@ -24,6 +24,10 @@ val backup : t -> dir:string -> ?compact:bool -> unit -> unit
     point {!open_} at [dir] (or, offline, swap it into the data directory and reopen). The copy runs on a
     systhread, so the calling fiber suspends without stalling the domain. *)
 
+val usage : t -> Store.usage
+(** Current on-disk map usage: bytes in use, the configured ceiling, and their ratio. Poll it to alarm
+    before the map fills — sizing the map generously at {!open_} is the first defense, this the warning. *)
+
 val collection : t -> string -> collection
 (** Get-or-create a collection by name. *)
 

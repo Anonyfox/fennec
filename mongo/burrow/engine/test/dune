@@ -3,5 +3,5 @@
 ; online hot backup (test_backup) — all through the real storage stack under an Eio scheduler.
 (tests
  (names test_engine test_writes test_index test_diff test_multikey test_observe test_concurrent test_blob
-   test_txn test_backup)
+   test_txn test_backup test_usage)
  (libraries burrow burrow_store eio_main unix fennec-mongo.bson fennec-mongo.minimongo))

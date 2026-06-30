@@ -160,7 +160,8 @@ layer on this primitive (see `PRODUCTION.md`); point-in-time recovery beyond the
   cheap point-get away), so it isn't worth it for this design.
 - A multi-field / operator-residual `count` still fetches matching records; a single-field count fully
   captured by a non-multikey index is served from index entries (no fetch). (See `engine/bench`.)
-- **Map growth** — fixed 128 GB virtual map (sparse; grows on disk as used); online `MDB_MAP_FULL`
-  grow-and-retry is deferred (blocked by LMDB's no-active-txns constraint).
+- **Map growth** — fixed (default 128 GB) virtual map (sparse; grows on disk as used). `Engine.usage`
+  reports bytes-in-use vs the ceiling so an operator can alarm and resize at `open_`; online
+  `MDB_MAP_FULL` grow-and-retry is deferred (blocked by LMDB's no-active-txns constraint).
 - **`Decimal128`** stored as its canonical string (round-trips losslessly; not the 16-byte wire form);
   composite (`Document`/`Array`) `_id` raises a clear error (scalar `_id`s fully supported).

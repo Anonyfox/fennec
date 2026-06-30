@@ -34,6 +34,13 @@ val backup : t -> dir:string -> ?compact:bool -> unit -> unit
     only live pages, defragmenting. The (long) copy runs off the Eio scheduler. [dir] must not already
     contain a [data.mdb]. *)
 
+type usage = { used_bytes : int64; map_bytes : int64; fraction : float }
+(** LMDB map occupancy: real bytes [used_bytes] (the file is sparse), the configured virtual ceiling
+    [map_bytes], and [fraction = used/map]. *)
+
+val usage : t -> usage
+(** Current map occupancy — poll to alarm before [MDB_MAP_FULL]. A cheap in-memory metadata read. *)
+
 val db : t -> string -> db
 (** [db t name] — the named sub-database, opened (and created) under a short write txn on first
     request and cached. Call outside any open transaction. *)

@@ -70,6 +70,25 @@ CAMLprim value ml_env_copy2(value env, value path, value compact) {
   CAMLreturn(Val_unit);
 }
 
+/* Map usage: bytes in use ((last used page + 1) * page size) and the configured map ceiling — for
+   alarming before MDB_MAP_FULL. Both reads are in-memory env metadata (no I/O), so no blocking section. */
+CAMLprim value ml_env_usage(value env) {
+  CAMLparam1(env);
+  CAMLlocal3(res, used_v, map_v);
+  MDB_env *e = Env_val(env);
+  MDB_envinfo info;
+  MDB_stat st;
+  if (mdb_env_info(e, &info) != MDB_SUCCESS || mdb_env_stat(e, &st) != MDB_SUCCESS)
+    caml_failwith("burrow: env usage query failed");
+  size_t used = ((size_t)info.me_last_pgno + 1) * (size_t)st.ms_psize;
+  used_v = caml_copy_int64((int64_t)used);
+  map_v = caml_copy_int64((int64_t)info.me_mapsize);
+  res = caml_alloc_tuple(2);
+  Store_field(res, 0, used_v);
+  Store_field(res, 1, map_v);
+  CAMLreturn(res);
+}
+
 /* --- transactions --------------------------------------------------------------------------- */
 
 CAMLprim value ml_txn_begin(value env, value rdonly) {

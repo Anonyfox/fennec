@@ -20,6 +20,9 @@ external env_sync : env -> bool -> unit = "ml_env_sync" (* force? — releases t
    space. Writers are NOT paused (the copy reads its own MVCC snapshot). *)
 external env_copy2 : env -> string -> bool -> unit = "ml_env_copy2"
 
+(* map occupancy: (bytes in use, configured map ceiling) — both are cheap in-memory metadata reads. *)
+external env_usage : env -> int64 * int64 = "ml_env_usage"
+
 external txn_begin : env -> bool -> txn = "ml_txn_begin" (* rdonly? *)
 external txn_begin_child : txn -> txn = "ml_txn_begin_child" (* nested write txn under a parent *)
 external txn_commit : txn -> unit = "ml_txn_commit"
