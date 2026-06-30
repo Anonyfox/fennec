@@ -11,6 +11,7 @@ type index = {
   unique : bool;
   sparse : bool;  (** skip a document that omits ALL key fields (MongoDB sparse) *)
   mutable multikey : bool;  (** set once any document indexes an array field — gates sort-via-index *)
+  mutable ready : bool;  (** false while an online build backfills it — the planner skips a non-ready index *)
   db : Store.db;  (** the index sub-DB: encoded-key ++ _id -> record key *)
 }
 
@@ -40,9 +41,14 @@ val collection_opt : t -> string -> collection option
 val collections : t -> collection list
 val index_names : collection -> string list
 
-val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> index option
+val ensure_index :
+  t -> collection -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> ready:bool -> index option
 (** Idempotent by [name]. Returns [Some idx] when newly created (the caller backfills existing records
-    into it), or [None] if an index of that name already existed. *)
+    into it), or [None] if an index of that name already existed. [~ready:false] registers it
+    query-invisible for an online build; flip it with {!set_index_ready} once backfilled. *)
+
+val set_index_ready : t -> collection -> index -> unit
+(** Flip a backfilled online index to ready (the planner will use it) and persist the flag. *)
 
 val drop_index : t -> collection -> name:string -> unit
 (** Idempotent: unregister the index, remove its metadata, and empty its sub-DB. *)

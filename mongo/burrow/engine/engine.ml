@@ -307,11 +307,34 @@ let fence _t (_c : collection) k = k ()
 
 (* ---- index / validator DDL ---------------------------------------------------------------- *)
 
+(* an online backfill submits this many records per chunk through the writer, so live writes interleave *)
+let online_index_chunk = 1000
+
 let ensure_index t (c : collection) ~name ~keys ~unique ~sparse =
-  with_write t (fun () ->
-      match Catalog.ensure_index t.cat c ~name ~keys ~unique ~sparse with
-      | None -> ()
-      | Some idx -> Store.write t.store (fun txn -> Write.backfill_index txn c idx))
+  if unique then
+    (* unique: build SYNCHRONOUSLY under the write lock. A partial unique index can't validate concurrent
+       writes (a not-yet-backfilled row's conflict would be missed), so it isn't exposed until fully
+       built — the whole backfill runs in one held transaction. *)
+    with_write t (fun () ->
+        match Catalog.ensure_index t.cat c ~name ~keys ~unique ~sparse ~ready:true with
+        | None -> ()
+        | Some idx -> Store.write t.store (fun txn -> Write.backfill_index txn c idx))
+  else begin
+    (* non-unique: build ONLINE. Phase 1 — register [ready=false]: the planner skips it (a query never
+       sees partial results) while new writes still maintain it (it's in [c.indexes]). Phase 2 — backfill
+       existing records in chunks SUBMITTED THROUGH THE WRITER, so other writes interleave between chunks
+       (no long lock). Phase 3 — flip it ready. A crash mid-build leaves [ready=false] on disk, which
+       {!Catalog.open_} drops on reopen. *)
+    match with_write t (fun () -> Catalog.ensure_index t.cat c ~name ~keys ~unique ~sparse ~ready:false) with
+    | None -> ()
+    | Some idx ->
+      let rec backfill from =
+        let n, last = submit t ~coll:c.name (fun txn -> Write.backfill_chunk txn c idx ~from ~limit:online_index_chunk) in
+        if n >= online_index_chunk then backfill last
+      in
+      backfill None;
+      with_write t (fun () -> Catalog.set_index_ready t.cat c idx)
+  end
 
 let drop_index t (c : collection) ~name = with_write t (fun () -> Catalog.drop_index t.cat c ~name)
 let index_names (c : collection) = Catalog.index_names c

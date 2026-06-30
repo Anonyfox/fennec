@@ -8,6 +8,7 @@ type index = {
   unique : bool;
   sparse : bool; (* a sparse index skips a document that omits ALL its key fields (MongoDB sparse) *)
   mutable multikey : bool; (* set once any document indexes an array field — gates sort-via-index *)
+  mutable ready : bool; (* false while an online build backfills it — the planner skips a non-ready index *)
   db : Store.db;
 }
 
@@ -50,13 +51,14 @@ let parse_keys : B.t -> (string * int) list = function
 
 let keys_doc (keys : (string * int) list) : B.t = B.Document (List.map (fun (f, d) -> (f, B.Int d)) keys)
 
-let index_spec_doc keys unique sparse multikey =
+let index_spec_doc keys unique sparse multikey ready =
   B.Document
-    [ ("keys", keys_doc keys); ("unique", B.Bool unique); ("sparse", B.Bool sparse); ("multikey", B.Bool multikey) ]
+    [ ("keys", keys_doc keys); ("unique", B.Bool unique); ("sparse", B.Bool sparse);
+      ("multikey", B.Bool multikey); ("ready", B.Bool ready) ]
 
 let persist_index txn (c : collection) (idx : index) =
   Store.put txn c.meta (ikey c.name idx.iname)
-    (Bin.encode (index_spec_doc idx.keys idx.unique idx.sparse idx.multikey))
+    (Bin.encode (index_spec_doc idx.keys idx.unique idx.sparse idx.multikey idx.ready))
 
 let open_ store =
   let meta = Store.db store "meta" in
@@ -87,7 +89,9 @@ let open_ store =
       let records = Record.make (Store.db store (rec_db_name name)) in
       Hashtbl.replace t.colls name { name; records; meta; indexes = []; validator = None })
     !coll_names;
-  (* phase 3: attach indexes *)
+  (* phase 3: attach indexes. An index persisted [ready=false] was caught mid online-build by a crash —
+     it's incomplete, so DROP it (clear its entries + forget it) rather than serve partial results; the
+     caller re-creates it. A missing [ready] field (pre-online-build data) defaults to [true]. *)
   List.iter
     (fun (coll, iname, data) ->
       match Hashtbl.find_opt t.colls coll with
@@ -98,8 +102,13 @@ let open_ store =
         let unique = match B.get spec "unique" with Some (B.Bool b) -> b | _ -> false in
         let sparse = match B.get spec "sparse" with Some (B.Bool b) -> b | _ -> false in
         let multikey = match B.get spec "multikey" with Some (B.Bool b) -> b | _ -> false in
+        let ready = match B.get spec "ready" with Some (B.Bool b) -> b | _ -> true in
         let db = Store.db store (idx_db_name coll iname) in
-        c.indexes <- { iname; keys = parse_keys kd; unique; sparse; multikey; db } :: c.indexes)
+        if ready then c.indexes <- { iname; keys = parse_keys kd; unique; sparse; multikey; ready; db } :: c.indexes
+        else
+          Store.write store (fun txn ->
+              ignore (Store.del txn c.meta (ikey coll iname));
+              Store.clear txn db))
     !idx_entries;
   (* phase 4: validators *)
   List.iter
@@ -123,14 +132,14 @@ let collection t name =
 
 let index_names c = List.map (fun i -> i.iname) c.indexes
 
-let ensure_index t c ~name ~keys ~unique ~sparse =
+let ensure_index t c ~name ~keys ~unique ~sparse ~ready =
   if List.exists (fun i -> i.iname = name) c.indexes then None
   else begin
     let parsed = parse_keys keys in
     let db = Store.db t.store (idx_db_name c.name name) in
     Store.write t.store (fun txn ->
-        Store.put txn t.meta (ikey c.name name) (Bin.encode (index_spec_doc parsed unique sparse false)));
-    let idx = { iname = name; keys = parsed; unique; sparse; multikey = false; db } in
+        Store.put txn t.meta (ikey c.name name) (Bin.encode (index_spec_doc parsed unique sparse false ready)));
+    let idx = { iname = name; keys = parsed; unique; sparse; multikey = false; ready; db } in
     c.indexes <- idx :: c.indexes;
     Some idx
   end
@@ -143,6 +152,11 @@ let drop_index t c ~name =
     Store.write t.store (fun txn ->
         ignore (Store.del txn t.meta (ikey c.name name));
         Store.clear txn idx.db)
+
+(* flip a freshly-backfilled online index to ready (query-visible) and persist the flag *)
+let set_index_ready t c (idx : index) =
+  idx.ready <- true;
+  Store.write t.store (fun txn -> persist_index txn c idx)
 
 let validator c = c.validator
 

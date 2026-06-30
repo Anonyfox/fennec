@@ -16,7 +16,7 @@ let mem txn (t : t) ~id = Store.get txn t (key_of_id id) <> None
 let put txn (t : t) ~id doc = Store.put txn t (key_of_id id) (Bin.encode doc)
 let delete txn (t : t) ~id = Store.del txn t (key_of_id id)
 
-let iter txn (t : t) f = Store.iter txn t (fun ~key ~data -> f ~id_key:key ~doc:(Bin.decode data))
+let iter ?from txn (t : t) f = Store.iter txn t ?from (fun ~key ~data -> f ~id_key:key ~doc:(Bin.decode data))
 
 let count txn (t : t) =
   let n = ref 0 in

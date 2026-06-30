@@ -26,3 +26,8 @@ val remove : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> int
 
 val backfill_index : [ `W ] Store.txn -> Catalog.collection -> Catalog.index -> unit
 (** Populate a freshly-created index from the existing records, setting its multikey flag as needed. *)
+
+val backfill_chunk :
+  [ `W ] Store.txn -> Catalog.collection -> Catalog.index -> from:string option -> limit:int -> int * string option
+(** One chunk of an online backfill: index up to [limit] records from [from] (resuming a chunked walk),
+    returning [(count, last_key)]. A [count < limit] means the scan reached the end. *)

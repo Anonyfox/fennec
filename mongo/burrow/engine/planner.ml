@@ -158,6 +158,9 @@ let try_or_union (indexes : Catalog.index list) selector : Plan.t option =
   | _ -> None
 
 let plan (indexes : Catalog.index list) ~selector ~sort : Plan.t =
+  (* an online build registers its index before backfilling it; until ready it's incomplete, so the
+     planner must not use it (new writes still maintain it, but a query would miss un-backfilled rows) *)
+  let indexes = List.filter (fun (i : Catalog.index) -> i.Catalog.ready) indexes in
   match B.get selector "_id" with
   | Some v when is_pointable v -> Plan.Id_point v
   | _ ->

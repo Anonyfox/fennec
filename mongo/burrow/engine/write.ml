@@ -68,6 +68,23 @@ let backfill_index txn (c : Catalog.collection) (idx : Catalog.index) =
       Index.add txn idx ~doc ~record_key:id_key;
       true)
 
+(* ONE chunk of an online backfill: index up to [limit] records from [from] (the boundary record, if
+   any, was already indexed by the previous chunk, so skip it — [Index.add] is idempotent regardless).
+   Returns how many records this chunk indexed and the last key reached, so the engine submits the next
+   chunk through the writer (letting live writes interleave). Fewer than [limit] => the scan is done. *)
+let backfill_chunk txn (c : Catalog.collection) (idx : Catalog.index) ~from ~limit =
+  let n = ref 0 and last = ref None in
+  Record.iter ?from txn c.records (fun ~id_key ~doc ->
+      if Some id_key = from then true
+      else begin
+        note_multikey txn c idx doc;
+        Index.add txn idx ~doc ~record_key:id_key;
+        last := Some id_key;
+        incr n;
+        !n < limit
+      end);
+  (!n, !last)
+
 (* ---- insert -------------------------------------------------------------------------------- *)
 
 let insert txn (c : Catalog.collection) (doc : B.t) =

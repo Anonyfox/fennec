@@ -120,16 +120,15 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       (covenant). Default unlimited. Proven by `test_governance`.
 - [ ] **Query governance — Phase 2.** A wall-time budget, and spill-to-disk external sort/group behind an
       `allowDiskUse`-style flag, so a limited query streams instead of materializing the whole matched set.
-- [ ] **Online index builds** *(the one careful unit left in Tier 0 — its own focused pass).* `ensure_index`
-      backfills every record under the DDL write lock → a long lock on a big collection is a write outage.
-      Implementation-ready design (from the catalog internals): add the index to the catalog with a new
-      **persisted `ready=false`** field on the index spec (`index_spec_doc` in `catalog.ml`; missing ⇒ `true`
-      for back-compat). The **planner skips non-ready indexes** (query-invisible), but new writes still
-      maintain it (it's in `c.indexes`, and `Write.*` iterates all). Backfill existing records in **chunks
-      submitted through the writer queue** (interleaving with live writes; index puts are idempotent by
-      `encoded-key ++ _id`). Flip `ready=true` + persist. **Restart-safety:** on reopen, *drop* any
-      `ready=false` index (incomplete from a crash) so a partial index is never trusted. Needs a
-      restart-mid-build test + a concurrent-writes-during-build test — hence the dedicated pass.
+- [x] **Online index builds.** A NON-unique index builds WITHOUT holding the write lock for the walk:
+      registered with a persisted `ready=false` (the planner skips it — query-invisible — while new writes
+      still maintain it, since it's in `c.indexes`), backfilled in chunks submitted through the writer (live
+      writes interleave between chunks; index puts idempotent by `encoded-key ++ _id`), then flipped
+      `ready=true`. **Restart-safe:** a crash mid-build leaves `ready=false` on disk, which `Catalog.open_`
+      drops on reopen — a partial index is never served. UNIQUE indexes stay synchronous (a partial unique
+      index can't validate concurrent writes). `ready` persisted additively (missing ⇒ true). Proven by
+      `test_online_index` (multi-chunk build is used + complete, post-build writes maintained, survives
+      reopen, planner-skip, reopen-drops-incomplete).
 
 ### Tier 1 — Security & access control (regulated workloads gate on this)
 

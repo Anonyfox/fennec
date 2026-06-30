@@ -109,6 +109,11 @@ val fence : t -> collection -> (unit -> unit) -> unit
 (** Run [k] once all changes committed so far are delivered — immediate, since delivery is synchronous. *)
 
 val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool -> sparse:bool -> unit
+(** Create a secondary index (idempotent by name). A NON-unique index builds ONLINE: it's registered
+    query-invisible, backfilled in chunks through the writer so live writes are never blocked, then made
+    visible — and a crash mid-build is dropped on reopen, never served partial. A UNIQUE index builds
+    synchronously under the write lock (a partial unique index can't validate concurrent writes). *)
+
 val drop_index : t -> collection -> name:string -> unit
 val index_names : collection -> string list
 
