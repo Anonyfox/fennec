@@ -120,11 +120,16 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       (covenant). Default unlimited. Proven by `test_governance`.
 - [ ] **Query governance — Phase 2.** A wall-time budget, and spill-to-disk external sort/group behind an
       `allowDiskUse`-style flag, so a limited query streams instead of materializing the whole matched set.
-- [ ] **Online index builds.** `backfill_index` walks every record under the write path → a long write-lock
-      on a big collection is a write outage. The single-writer model makes the clean version easy: mark the
-      index *building*; the writer maintains it for all *new* writes immediately; a background fiber backfills
-      *existing* records from an MVCC snapshot; flip to *ready* when caught up. No concurrent-writer race, no
-      oplog needed.
+- [ ] **Online index builds** *(the one careful unit left in Tier 0 — its own focused pass).* `ensure_index`
+      backfills every record under the DDL write lock → a long lock on a big collection is a write outage.
+      Implementation-ready design (from the catalog internals): add the index to the catalog with a new
+      **persisted `ready=false`** field on the index spec (`index_spec_doc` in `catalog.ml`; missing ⇒ `true`
+      for back-compat). The **planner skips non-ready indexes** (query-invisible), but new writes still
+      maintain it (it's in `c.indexes`, and `Write.*` iterates all). Backfill existing records in **chunks
+      submitted through the writer queue** (interleaving with live writes; index puts are idempotent by
+      `encoded-key ++ _id`). Flip `ready=true` + persist. **Restart-safety:** on reopen, *drop* any
+      `ready=false` index (incomplete from a crash) so a partial index is never trusted. Needs a
+      restart-mid-build test + a concurrent-writes-during-build test — hence the dedicated pass.
 
 ### Tier 1 — Security & access control (regulated workloads gate on this)
 
