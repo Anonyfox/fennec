@@ -2,7 +2,8 @@
 ; make illegal access a compile error; named sub-DBs are cached typed handles. This and burrow_lmdb
 ; are the only places that touch unsafe code / IO; everything above is pure values + typed handles.
 ; eio.unix: the durable (~8 ms F_FULLFSYNC) commit runs off the scheduler via run_in_systhread.
+; unix: mkdir the backup target directory before the hot-copy.
 (library
  (name burrow_store)
  (public_name fennec-mongo.burrow.store)
- (libraries burrow_lmdb eio eio.unix))
+ (libraries burrow_lmdb eio eio.unix unix))

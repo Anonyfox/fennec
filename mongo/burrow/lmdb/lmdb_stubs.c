@@ -49,6 +49,27 @@ CAMLprim value ml_env_sync(value env, value force) {
   CAMLreturn(Val_unit);
 }
 
+/* Online hot-backup: copy the whole environment to [path] (an existing directory) as a standalone,
+   openable database. mdb_env_copy2 reads a consistent MVCC snapshot via its own read txn, so WRITERS
+   ARE NOT PAUSED — a zero-downtime backup; [compact] (MDB_CP_COMPACT) copies only live pages. The path
+   is read into a C buffer BEFORE the blocking section (no OCaml value is touched inside it, as the GC
+   may move the heap), then the lock is released around the (long) copy — drive via run_in_systhread. */
+CAMLprim value ml_env_copy2(value env, value path, value compact) {
+  CAMLparam3(env, path, compact);
+  MDB_env *e = Env_val(env);
+  unsigned flags = Bool_val(compact) ? MDB_CP_COMPACT : 0;
+  char buf[4096];
+  size_t n = caml_string_length(path);
+  if (n >= sizeof(buf)) caml_failwith("burrow: backup path too long");
+  memcpy(buf, String_val(path), n);
+  buf[n] = '\0';
+  caml_enter_blocking_section();
+  int rc = mdb_env_copy2(e, buf, flags);
+  caml_leave_blocking_section();
+  if (rc != MDB_SUCCESS) caml_failwith(mdb_strerror(rc));
+  CAMLreturn(Val_unit);
+}
+
 /* --- transactions --------------------------------------------------------------------------- */
 
 CAMLprim value ml_txn_begin(value env, value rdonly) {

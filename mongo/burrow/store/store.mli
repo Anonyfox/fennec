@@ -28,6 +28,12 @@ val open_ : ?map_size_gb:int -> ?max_dbs:int -> ?durability:durability -> string
 val close : t -> unit
 val durability : t -> durability
 
+val backup : t -> dir:string -> ?compact:bool -> unit -> unit
+(** Online hot backup: copy the whole environment to [dir] (created if absent) as a standalone, openable
+    database — a consistent MVCC snapshot taken WITHOUT pausing writers. [~compact:true] (default) copies
+    only live pages, defragmenting. The (long) copy runs off the Eio scheduler. [dir] must not already
+    contain a [data.mdb]. *)
+
 val db : t -> string -> db
 (** [db t name] — the named sub-database, opened (and created) under a short write txn on first
     request and cached. Call outside any open transaction. *)

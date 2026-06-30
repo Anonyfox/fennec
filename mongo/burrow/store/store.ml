@@ -34,6 +34,13 @@ let open_ ?(map_size_gb = 64) ?(max_dbs = 128) ?(durability = Full) path =
 let close t = L.env_close t.env
 let durability t = t.durability
 
+(* Online hot backup: copy the whole env to [dir] as a standalone database. The copy reads a consistent
+   MVCC snapshot, so writers are never paused; [compact] copies only live pages. The dir is created if
+   absent (the copy needs it to exist); the (long) copy runs off the scheduler, like a durable commit. *)
+let backup t ~dir ?(compact = true) () =
+  (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  Eio_unix.run_in_systhread (fun () -> L.env_copy2 t.env dir compact)
+
 (* Open-or-fetch a named sub-DB handle. The common (cached) path takes no transaction. A first open
    runs a short standalone write txn (LMDB requires a txn to open a dbi, and MDB_CREATE a write one);
    the handle is cached only after that txn commits, when LMDB makes it valid env-wide. MUST be called

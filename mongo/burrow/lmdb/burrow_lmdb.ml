@@ -15,6 +15,11 @@ external env_open : string -> int -> int64 -> int -> env = "ml_env_open"
 external env_close : env -> unit = "ml_env_close"
 external env_sync : env -> bool -> unit = "ml_env_sync" (* force? — releases the lock around fsync *)
 
+(* online consistent hot-copy of the whole env to a directory (a standalone, openable database);
+   releases the lock around the (long) copy — drive via Eio_unix.run_in_systhread. [compact] omits free
+   space. Writers are NOT paused (the copy reads its own MVCC snapshot). *)
+external env_copy2 : env -> string -> bool -> unit = "ml_env_copy2"
+
 external txn_begin : env -> bool -> txn = "ml_txn_begin" (* rdonly? *)
 external txn_begin_child : txn -> txn = "ml_txn_begin_child" (* nested write txn under a parent *)
 external txn_commit : txn -> unit = "ml_txn_commit"

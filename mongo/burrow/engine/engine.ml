@@ -111,6 +111,11 @@ let close t =
   Store.close t.store
 
 let store t = t.store
+
+(* Online hot backup (see the .mli): the storage facade copies a consistent snapshot off the write path,
+   so writers keep running. Restore = open the resulting directory as a database. *)
+let backup t ~dir ?compact () = Store.backup t.store ~dir ?compact ()
+
 let collection t name = with_write t (fun () -> Catalog.collection t.cat name)
 let collection_opt t name = Catalog.collection_opt t.cat name
 let collection_names t = List.map (fun (c : Catalog.collection) -> c.Catalog.name) (Catalog.collections t.cat)

@@ -16,6 +16,14 @@ val open_ : sw:Eio.Switch.t -> ?durability:Store.durability -> ?map_size_gb:int 
 val close : t -> unit
 val store : t -> Store.t
 
+val backup : t -> dir:string -> ?compact:bool -> unit -> unit
+(** Online consistent hot-copy of the whole database to [dir] (created if absent; must not already
+    contain a [data.mdb]). The copy reflects a single MVCC snapshot at call time and runs OFF the write
+    path — writers are never paused, so it is a zero-downtime backup. [~compact:true] (default) copies
+    only live pages, defragmenting. The result is itself a complete, openable Burrow database: to RESTORE,
+    point {!open_} at [dir] (or, offline, swap it into the data directory and reopen). The copy runs on a
+    systhread, so the calling fiber suspends without stalling the domain. *)
+
 val collection : t -> string -> collection
 (** Get-or-create a collection by name. *)
 

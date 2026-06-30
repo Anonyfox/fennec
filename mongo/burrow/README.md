@@ -119,6 +119,26 @@ engine for free, isolated per scenario: it pins `MONGO_URL` to a storage-only `b
 authority + credentials when it wants a remote mongosh endpoint. The full grammar is in the
 [wire README](../wire/README.md).
 
+## Backup & restore
+
+`Engine.backup db ~dir ()` takes a **consistent, online hot copy** of the whole database into a fresh
+directory — LMDB's `mdb_env_copy2`, compacting by default. The copy reads its own MVCC snapshot, so
+**writers are never paused**: it is a zero-downtime backup, and the snapshot is exactly the state at call
+time (writes that land mid-copy don't appear). The long copy runs off the Eio scheduler on a systhread, so
+the calling fiber suspends without stalling the domain — the same discipline as the durable commit's fsync.
+
+The result is **a complete, openable Burrow database**, not an opaque dump — so *restore* needs no special
+path: point `Engine.open_` at the backup directory to read it directly, or (offline) swap it into the data
+directory and reopen. Because compaction copies only live pages, a backup is also a defrag.
+
+```ocaml
+Engine.backup db ~dir:"/backups/2026-06-30" () ;      (* compacting hot copy — writers keep running *)
+let restored = Engine.open_ ~sw "/backups/2026-06-30"  (* the copy is just a database *)
+```
+
+Scheduling, retention, off-host shipping, and periodic restore verification are operational policy that
+layer on this primitive (see `PRODUCTION.md`); point-in-time recovery beyond the snapshot awaits the oplog.
+
 ## Known limitations (future work)
 
 - **GridFS** — done, as `fennec-mongo.gridfs`: a pure functor (standard `fs.files`/`fs.chunks`, 255 KiB
