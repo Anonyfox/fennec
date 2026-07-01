@@ -2,7 +2,7 @@
 
 > **Burrow is SQLite for MongoDB.** An embedded, zero-ops, single-node database that speaks the MongoDB
 > wire protocol byte-for-byte — but runs *in your process*, on LMDB, with no daemon, no IPC, and a
-> fraction of the overhead. The day you genuinely need sharding or consensus failover, the answer is
+> fraction of the overhead. The day you genuinely need sharding or a failover control plane, the answer is
 > "point your `mongodb://` URL at real Mongo" — Burrow is wire-compatible **precisely so that migration is
 > a config change, not a rewrite.**
 
@@ -19,13 +19,20 @@ query planner, byte-exact wire compatibility (validated against libmongoc *and* 
 **latency** (the query runs in your address space — no network or IPC hop), **footprint** (one mmap'd file,
 no second process), and **simplicity** (no cluster to operate).
 
-**Is not, and will never be:** a distributed database. Sharding, consensus-based automatic failover
-(Raft/Paxos), multi-primary writes, cross-shard transactions, geo-distribution — **explicitly out of
-scope** (§7). That is mongod's job, and Burrow's byte-compatibility is the off-ramp to it.
+**Is not, and will never be:** a distributed database — nor the control plane over one. Sharding,
+multi-primary writes, cross-shard transactions, geo-distribution, and any fleet coordinator (failover
+orchestration, read-preference routing, election — consensus-based or not) are **explicitly out of scope**
+(§7). Burrow ships the single-node engine and the replication *primitives*; standing a cluster up around them
+is mongod's job, and Burrow's byte-compatibility is the off-ramp to it.
 
-**The target deployment:** one primary, optional warm read-replicas, orchestrated failover, real backups,
-real observability, real access control. This covers the overwhelming majority of apps that never needed a
-cluster — they only reached for one because the embedded option wasn't credible. Burrow makes it credible.
+**The target deployment:** one node in your process — real backups, real observability, real access control —
+plus the *primitives* to stand up warm read-replicas, change streams, and PITR when you want them: the oplog,
+an idempotent follower, staleness detection, an authenticated pull. What Burrow does **not** ship is the
+**control plane** that turns those primitives into a managed cluster: health-checked failover, a routing
+layer, an election/fencing coordinator. That is a fleet-operator concern one level up — the SQLite → LiteFS
+split — and the moment you are running it you have left "embedded" behind; the off-ramp is a `mongodb://` URL
+change (§7). This covers the overwhelming majority of apps that never needed a cluster — they only reached
+for one because the embedded option wasn't credible. Burrow makes it credible.
 
 ---
 
@@ -75,11 +82,13 @@ assurance than most engines ever get:
       validated vs libmongoc + mongosh (wire version 17 / Mongo 6.0).
 - [x] **Schema validation** — `$jsonSchema` structural subset, persisted per collection.
 
-**Honest starting-line caveats** (each addressed below): no backup binding yet (the C lib supports
-compacting hot-copy; we expose only `env_sync` — Tier 0); **authentication but no authorization** — any
-authenticated user can do anything (Tier 1); a workflow transaction holds the global write lock for its
-whole span (Tier 0); the env opens with `max_dbs:1024` and each collection costs one sub-DB plus one per
-index (Tier 2); fixed 128 GB virtual map (Tier 0); no observability (Tier 2); single-node only (Tier 3).
+**The starting-line caveats — now closed by Tiers 0–3:** backup (compacting hot-copy — Tier 0 ✓);
+authorization (RBAC + audit — Tier 1 ✓); observability (explain / serverStatus / slow-command log — Tier 2 ✓);
+the oplog and its consumers (change streams, PITR, an authenticated async-replica follower with staleness
+detection, DDL parity — Tier 3 ✓). Structural trade-offs remain by design: a workflow transaction holds the
+global write lock for its span; the env opens with `max_dbs:1024` (one sub-DB per collection + one per index —
+Tier 4 visibility); a fixed 128 GB virtual map. And the boundary holds: a single-node engine plus replication
+*primitives* — the control plane over a fleet is out of scope (§7).
 
 The gaps are not in the core. They are the operational envelope that turns an engine into a system you
 trust unattended.
@@ -173,15 +182,15 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       a shared meta DB, under `max_dbs:1024` (e.g. ~150 collections × 5 indexes ≈ 900). Make it configurable,
       monitor headroom, and fail creation with a clear error well before LMDB's cryptic one.
 
-### Tier 3 — The oplog keystone, then async HA (the one scoped step toward distribution)
+### Tier 3 — The oplog keystone + replication primitives (the engine's ceiling; the control plane is above it)
 
 - [x] **The oplog** — a capped, LSN-ordered `_oplog` sub-DB (the `Oplog` module) the single writer fills for
       free: every committed write (insert/update/delete, non-txn AND workflow-txn) appends one idempotent
       entry per affected doc — the RESULTING document (insert/update) or the `_id` (delete) — INSIDE the same
       write txn (atomic, no extra fsync). Crash-resumes the LSN from the log's max on open; trims to
       `~oplog_keep`. Consumers read it via `Engine.oplog_tail ~from_lsn`. Proven by `test_oplog` (append +
-      tail, idempotent shape, crash-resume, cap, workflow commit-vs-abort). DDL logging (index create/drop) is
-      DONE too — see the consumers below.
+      tail, idempotent shape, crash-resume, cap, workflow commit-vs-abort). DDL logging (index create/drop,
+      collection drop, validator) is DONE too — see the consumers below.
 - [x] **Resumable change streams** — the wire `$changeStream` (`db.coll.watch()`): `aggregate` with a
       `$changeStream` first stage opens a tailing cursor; `getMore` tails the oplog via `oplog_since`,
       formatting each entry as a Mongo change event (operationType / ns / documentKey / fullDocument) with
@@ -204,13 +213,14 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       (a follower converging over the MongoDB wire on a Unix socket, BOTH unauthenticated and over
       SCRAM-SHA-256) + `test_scram` (the client reproduces the RFC 7677 vector). Too-stale DETECTION is done
       (`Replica.too_stale ~source_floor` / `Engine.oplog_floor`, surfaced in the `oplogFetch` reply — a
-      lagged follower knows tailing would skip trimmed entries and it must re-sync). Remaining:
-      read-preference routing + the automatic re-sync ACTION (app-driven: catch `too_stale`, re-initial-sync
-      from a fresh backup).
-- [ ] **Orchestrated failover** — promote/demote mechanism, old-primary tail rollback, honest RPO; fencing
-      is the orchestrator's job (no consensus). See §5.
-- [ ] **Consistency testing** — jepsen-style: inject partitions/crashes during failover; assert no
-      acknowledged-write loss beyond the stated RPO and no split-brain.
+      lagged follower knows tailing would skip trimmed entries and it must re-sync). The follower PRIMITIVE is
+      complete; the automatic re-sync action and read-preference routing are a control plane above the engine
+      (§7), not engine work.
+
+Orchestrated failover, read-preference routing, and failover consistency testing are **above the engine** — a
+control plane over these primitives, not part of the embedded engine (§7). Building it means operating a
+fleet, at which point the honest answer is a `mongodb://` URL to real Mongo. Burrow's Tier-3 job — the
+data-plane primitives — is **done**.
 
 ### Tier 4 — Compatibility & longevity polish
 
@@ -227,8 +237,11 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       (full-text, 2dsphere) is deferred — a heavy subsystem, SQLite-FTS-style optional rather than core.
 - [ ] **Aggregation completeness** — the remaining stages (`$graphLookup`, `$out`, `$merge`, `$geoNear`,
       `$setWindowFields`, …) currently fall through; add as demand warrants, byte-exact per the covenant.
-- [ ] **Decimal128 fidelity** — stored as string today (round-trips losslessly, not the 16-byte wire form).
-      Only matters for fintech; low priority.
+- [ ] **Decimal128 wire fidelity — deliberately deferred.** Stored as its canonical decimal string, which
+      round-trips losslessly for storage; the 16-byte IEEE-754 BID *wire* form is unimplemented, so sending a
+      `NumberDecimal` over the wire returns a clean error, never a wrong value. A store does no decimal
+      arithmetic, so the BID codec is disproportionate to the need — a known, bounded limitation, not a
+      lurking bug. Revisit only if a workload actually requires wire-level Decimal128.
 
 ---
 
@@ -252,7 +265,7 @@ a total order.**
 - **Idempotent by construction.** Apply must be safe to replay (crash/resume, re-sync). Non-idempotent
   modifiers are *transformed at append time* to their resulting state — `$inc` → `$set:<result>`, `$push` →
   the resulting array — exactly as MongoDB's oplog does; insert/replace/delete are already idempotent by `_id`.
-- **DDL is logged too. (Index create/drop DONE.)** A Command entry (op "c") carries a DDL descriptor;
+- **DDL is logged too. (Index create/drop, collection drop, validator DONE.)** A Command entry (op "c") carries a DDL descriptor;
   `oplog_apply` replays it via the non-logging index cores, so a replica reconstructs *schema* (its indexes)
   not just data — otherwise it silently drifts to different query plans. Change streams skip Command entries
   (replication-internal). Collection drop + validator changes are the remaining DDL.
@@ -283,19 +296,18 @@ safe to retry.
   exactly (`last_applied + 1 < floor`, where `floor = Engine.oplog_floor` the oldest retained LSN, carried in
   the `oplogFetch` reply) — exact even with abort holes in the LSN sequence, since it compares the floor not
   batch gaps. Size retention ≥ the longest tolerable follower outage; the app acts on the "stale" state.
-- **Read-consistency contract.** Replicas serve **eventually consistent** reads, bounded by lag. Expose it
-  honestly via read-preference routing so clients pick primary (read-your-writes) or replica (scale, stale).
+- **Read-consistency contract.** Replicas serve **eventually consistent** reads, bounded by lag. Surfacing
+  that to clients — read-preference routing that picks primary (read-your-writes) or replica (scale, stale) —
+  is a **client/topology** concern, not an engine feature: the engine's own local reads are always consistent.
 
-**Failover — orchestrated, not consensus.**
-- Async replication means the primary may have committed writes not yet shipped — **the RPO is the lag**,
-  not zero. State it. On promotion those un-shipped writes leave the new timeline.
-- When the old primary rejoins, its un-replicated tail must be **rolled back** (archived for forensics) to
-  match the new primary's history — exactly MongoDB's rollback.
-- **Fencing is the orchestrator's job.** With no consensus, an external coordinator must guarantee the old
-  primary is demoted/stopped before the new one accepts writes, or you get split-brain. Burrow provides the
-  *mechanism* (promote/demote, LSN comparison, rollback); the operator owns the *policy*.
-
-That boundary is the honest line: Burrow does HA *mechanism*; *consensus* is out of scope (§7).
+**Failover lives above the engine.** The primitives here — an idempotent follower, `oplog_floor` / `too_stale`,
+LSN comparison, a backup that pins its LSN — are everything a failover controller *needs*. But the controller
+itself is a **fleet-operator** concern, not the embedded engine. Async replication means the primary may have
+committed writes not yet shipped (**the RPO is the lag**, not zero); on promotion those un-shipped writes must
+leave the timeline, the rejoining old primary's tail must be rolled back, and something must fence it before
+the new primary accepts writes — with no consensus, that "something" is an external coordinator. The moment
+you are wiring that up you are operating a cluster, and the honest line is §7: point `mongodb://` at real
+Mongo. **Burrow stops at the primitives — and they are done.**
 
 ---
 
@@ -303,10 +315,13 @@ That boundary is the honest line: Burrow does HA *mechanism*; *consensus* is out
 
 Burrow is production grade when an operator can, **unattended**, trust it with real data:
 
-> **Everything through Tier 3** (data safety → security → operability → the oplog → async replica →
-> orchestrated failover). Durable, backed up, point-in-time recoverable, access-controlled, observable,
-> governed against OOM, with a warm standby and orchestrated failover — all while preserving today's
-> embedded speed and tiny overhead (§2).
+> **Everything through Tier 3** (data safety → security → operability → the oplog → its consumers: change
+> streams, PITR, an authenticated async-replica follower with staleness detection, DDL parity). Durable,
+> backed up, point-in-time recoverable, access-controlled, observable, governed against OOM, with the
+> *primitives* to run a warm standby — all while preserving today's embedded speed and tiny overhead (§2).
+
+The control plane that *orchestrates* a standby (failover, read-preference routing, fencing) is above the
+engine (§7), not part of this line. **By this definition the engine is there:** Tiers 0–3 are complete.
 
 Tier 4 is compatibility & longevity polish that raises the surface area but doesn't gate the "bet your data
 on it" line.
@@ -317,8 +332,12 @@ on it" line.
 
 Saying this clearly is a feature, not an admission — and byte-compatibility makes the handoff a URL change:
 
+- **Any control plane over a fleet.** Orchestrated failover (health checks, promote/demote coordination,
+  fencing), read-preference routing, election. The engine ships the *primitives* — an idempotent follower,
+  LSN comparison, staleness detection, LSN-pinned backups; wiring a coordinator around them is operating a
+  cluster (the SQLite → LiteFS layer), not the embedded engine. If you need it, you have outgrown embedded.
 - **Sharding / horizontal data partitioning.**
-- **Consensus-based automatic failover** (Raft/Paxos election). Burrow does *orchestrated* failover only.
+- **Consensus-based automatic failover** (Raft/Paxos election).
 - **Multi-primary / active-active writes** and **cross-shard distributed transactions.**
 - **Geo-distribution.**
 - Anything that violates §2 — server-side JavaScript (`$where`), arbitrary scripting, or any feature that
