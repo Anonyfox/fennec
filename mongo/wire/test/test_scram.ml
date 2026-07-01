@@ -38,4 +38,18 @@ let () =
   let tampered = "c=biws,r=NOTtheNONCE,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=" in
   (match S.server_final st tampered with _ -> assert false | exception S.Auth_failed _ -> ());
 
-  print_string "scram (SCRAM-SHA-256, RFC 7677 vector): OK\n"
+  (* ---- client side: reproduce the RFC vector byte-for-byte, then a full round-trip ---- *)
+  let bare = S.client_first_bare ~user:"user" ~nonce:"rOprNGfwEbeRWgbNEkqO" in
+  assert (bare = "n=user,r=rOprNGfwEbeRWgbNEkqO");
+  let cf, expected_sig = S.client_final ~password:"pencil" ~client_first_bare:bare ~server_first:expect_server_first in
+  assert (cf = client_final) (* our client's proof == the RFC's client-final *);
+  assert (S.verify_server_final ~expected_server_sig:expected_sig expect_server_final);
+
+  (* drive our own server with our own client, end to end; a wrong-password client is rejected *)
+  let _, sf2, st2 = S.server_first ~lookup ~server_nonce client_first in
+  let cf2, exp2 = S.client_final ~password:"pencil" ~client_first_bare:bare ~server_first:sf2 in
+  assert (S.verify_server_final ~expected_server_sig:exp2 (S.server_final st2 cf2));
+  let cf_bad, _ = S.client_final ~password:"wrong" ~client_first_bare:bare ~server_first:sf2 in
+  (match S.server_final st2 cf_bad with _ -> assert false | exception S.Auth_failed _ -> ());
+
+  print_string "scram (SCRAM-SHA-256, RFC 7677 vector, client+server): OK\n"

@@ -199,10 +199,11 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       restored backup seeds `last_applied` at the backup's pinned LSN; `step ~pull` applies the source's
       oplog idempotently + advances; `lag` reports the gap) AND the wire transport: an `oplogFetch` command
       (source) + a minimal `Wire_client` + `Replication.pull` (a wire-backed `pull` over it), so a follower
-      converges to a REMOTE source. Proven by `test_replica` (in-process convergence) + `test_replication`
-      (a follower converging to a source over the MongoDB wire, on a Unix socket). Remaining: SCRAM client
-      auth (the transport is unauthenticated — loopback / trusted-network for now), read-preference routing,
-      "too stale → re-sync".
+      converges to a REMOTE source. `Wire_client` authenticates with SCRAM-SHA-256 (mutual auth) or runs
+      plaintext on a trusted network. Proven by `test_replica` (in-process convergence) + `test_replication`
+      (a follower converging over the MongoDB wire on a Unix socket, BOTH unauthenticated and over
+      SCRAM-SHA-256) + `test_scram` (the client reproduces the RFC 7677 vector). Remaining: read-preference
+      routing + "too stale → re-sync".
 - [ ] **Orchestrated failover** — promote/demote mechanism, old-primary tail rollback, honest RPO; fencing
       is the orchestrator's job (no consensus). See §5.
 - [ ] **Consistency testing** — jepsen-style: inject partitions/crashes during failover; assert no
@@ -263,9 +264,9 @@ backup + `oplog_tail` into restore-and-roll-forward; `test_pitr`.)** A hot-copy 
 it contains `_oplog` up to some LSN *X*. To recover past *X* you need **continuous oplog archiving** to cold
 storage; PITR = restore the backup, replay archived oplog `(X, target]`. Recovery granularity = archive cadence.
 
-**Consumer 3 — async replication. (DONE for the local + loopback case — the `Replica` follower + a wire
-transport via the `oplogFetch` command / `Wire_client` / `Replication.pull`; `test_replica` +
-`test_replication`. Remaining: SCRAM client auth for untrusted networks + read-preference routing.)** A
+**Consumer 3 — async replication. (DONE — the `Replica` follower + a wire transport via the `oplogFetch`
+command / `Wire_client` (with SCRAM-SHA-256 client auth, mutual) / `Replication.pull`; `test_replica` +
+`test_replication` + `test_scram`. Remaining: read-preference routing + too-stale re-sync.)** A
 new follower's **initial sync** needs a snapshot *and* the exact LSN
 it reflects, atomically — and the MVCC gift delivers it: open **one read txn**; it sees a consistent data
 snapshot *and* `max(_oplog)` coherently (same snapshot). Copy the snapshot, then tail `_oplog` from that

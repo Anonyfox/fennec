@@ -68,5 +68,21 @@ let () =
   assert (v_of follower fc "b" = None);
 
   Eng.close follower;
-  (* the socket path is unlinked by Eio when the switch closes the listening socket — don't remove it here *)
-  print_string "replication (wire): OK\n"
+
+  (* ---- the same, but the source REQUIRES SCRAM-SHA-256 and the follower authenticates ---- *)
+  let path2 = Filename.concat (Filename.get_temp_dir_name ()) (Printf.sprintf "bwr_%d_a.sock" (Unix.getpid ())) in
+  (try Sys.remove path2 with _ -> ());
+  let user = Fennec_mongo_dynamic.wire_user ~user:"repl" ~password:"s3cret" () in
+  Fennec_mongo_dynamic.expose ~sw ~net ~addr:(`Unix path2) ~base_dir:(temp "src2") ~users:[ user ] ~require_auth:true ();
+  let aclient = WC.connect ~auth:("repl", "s3cret") ~sw ~net (`Unix path2) in
+  run_cmd aclient
+    [ ("insert", s "t"); ("$db", s "shop"); ("documents", B.Array [ doc [ ("_id", s "x"); ("v", i 7) ] ]) ];
+  let follower2 = Eng.open_ ~sw ~durability:S.No_sync (temp "flw2") in
+  let fc2 = Eng.collection follower2 "t" in
+  let rep2 = Rep.create follower2 in
+  assert (Rep.step rep2 ~pull:(Repl.pull aclient ~db:"shop" ~limit:1000) = 1);
+  assert (v_of follower2 fc2 "x" = Some 7);
+  Eng.close follower2;
+
+  (* the socket paths are unlinked by Eio when the switch closes the listening sockets — don't remove here *)
+  print_string "replication (wire, unauth + SCRAM): OK\n"

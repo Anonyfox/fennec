@@ -28,3 +28,18 @@ val server_first :
 val server_final : t -> string -> string
 (** [server_final state client_final] verifies the client's proof and returns the server-final message
     ([v=...]) proving the server also knows the password (mutual auth). Raises {!Auth_failed}. *)
+
+(** {2 Client side} — for a follower / tool authenticating TO a SCRAM server. Pure: the caller supplies the
+    random client nonce and drives the saslStart / saslContinue envelope. *)
+
+val client_first_bare : user:string -> nonce:string -> string
+(** ["n=<user>,r=<nonce>"] — the client-first-bare; send ["n,," ^ result] as the saslStart payload. *)
+
+val client_final : password:string -> client_first_bare:string -> server_first:string -> string * string
+(** From the password, our [client_first_bare], and the server's [server_first] reply, returns
+    [(client_final_message, expected_server_signature)] — send the message as the saslContinue payload, then
+    pass the signature to {!verify_server_final}. Raises {!Auth_failed} on a malformed server-first. *)
+
+val verify_server_final : expected_server_sig:string -> string -> bool
+(** Check the server-final [v=...] against the expected signature — the server proving it too knows the
+    password (mutual auth). *)

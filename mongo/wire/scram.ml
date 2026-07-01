@@ -112,3 +112,42 @@ let server_final t client_final =
   if not (String.equal (sha256 client_key) t.cred.stored_key) then raise (Auth_failed "authentication failed");
   let server_signature = hmac ~key:t.cred.server_key auth_message in
   Printf.sprintf "v=%s" (Base64.encode_string server_signature)
+
+(* ---- client side (a follower / tool authenticating TO a SCRAM server) ---------------------- *)
+
+(* escape a username for a SCRAM attribute list: ',' -> =2C, '=' -> =3D (inverse of unescape_username) *)
+let escape_username u =
+  let b = Buffer.create (String.length u) in
+  String.iter (function ',' -> Buffer.add_string b "=2C" | '=' -> Buffer.add_string b "=3D" | c -> Buffer.add_char b c) u;
+  Buffer.contents b
+
+let client_first_bare ~user ~nonce = Printf.sprintf "n=%s,r=%s" (escape_username user) nonce
+
+(* from the password, our client-first-bare, and the server-first reply, compute (client-final message, the
+   expected server-signature for mutual-auth verification). Raises {!Auth_failed} on a malformed
+   server-first. Mirrors {!server_final}: same SaltedPassword -> ClientKey -> proof derivation. *)
+let client_final ~password ~client_first_bare ~server_first =
+  let attrs = String.split_on_char ',' server_first in
+  let combined = match attr_value attrs 'r' with Some r -> r | None -> raise (Auth_failed "no server nonce") in
+  let salt =
+    match attr_value attrs 's' with
+    | Some s -> ( try Base64.decode_exn s with _ -> raise (Auth_failed "malformed salt"))
+    | None -> raise (Auth_failed "no salt")
+  in
+  let iterations =
+    match attr_value attrs 'i' with
+    | Some i -> ( try int_of_string i with _ -> raise (Auth_failed "malformed iteration count"))
+    | None -> raise (Auth_failed "no iteration count")
+  in
+  let salted = pbkdf2 ~password ~salt ~iterations in
+  let client_key = hmac ~key:salted "Client Key" in
+  let stored_key = sha256 client_key in
+  let cfwp = Printf.sprintf "c=biws,r=%s" combined (* client-final-without-proof *) in
+  let auth_message = String.concat "," [ client_first_bare; server_first; cfwp ] in
+  let proof = xor client_key (hmac ~key:stored_key auth_message) in
+  let server_signature = hmac ~key:(hmac ~key:salted "Server Key") auth_message in
+  (Printf.sprintf "%s,p=%s" cfwp (Base64.encode_string proof), Base64.encode_string server_signature)
+
+(* verify the server-final "v=..." proves the server also knows the password (mutual auth) *)
+let verify_server_final ~expected_server_sig server_final =
+  match attr_value (String.split_on_char ',' server_final) 'v' with Some v -> String.equal v expected_server_sig | None -> false
