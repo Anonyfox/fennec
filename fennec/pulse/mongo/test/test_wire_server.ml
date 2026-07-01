@@ -108,28 +108,37 @@ let%test "expose_from_env opens an unauthenticated endpoint from a burrow:// aut
     match Mongo.find c (Backend.query ()) with [ d ] -> B.get_int d "n" = Some 7 | _ -> false
   end
 
-(* End-to-end proof that RBAC is ENFORCED at the wire (the pure decision + classification matrix — Root /
-   read / readWrite / wildcard / cross-db — is exhausted in mongo/dynamic/test/test_authz.ml). A single
-   read-only user, single client (the proven shape): it authenticates and may read its database, but a
-   write comes back not-authorized. *)
-let%test "RBAC over the wire: a read-only role can read but a write is denied" =
+(* End-to-end proof that RBAC is ENFORCED at the wire AND that the security events are audited (the pure
+   decision + classification matrix — Root / read / readWrite / wildcard / cross-db — is exhausted in
+   mongo/dynamic/test/test_authz.ml). A single read-only user, single client (the proven shape): it
+   authenticates and may read its database, but a write comes back not-authorized — and the audit sink
+   records both the authentication and the denial (with the command + database). *)
+let%test "RBAC + audit over the wire: a read-only role reads, a write is denied, both are audited" =
   if not (Mongo.available ()) then true
   else begin
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     let net = Eio.Stdenv.net env in
     let port = 35000 + (Unix.getpid () mod 5000) in
+    let audits = ref [] in
     Mongo.expose ~sw ~net
       ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
       ~base_dir:(tmpdir ())
       ~users:[ Mongo.wire_user ~user:"reader" ~password:"pw" ~roles:[ Mongo.Role.Read "secure" ] () ]
+      ~audit:(fun ev -> audits := ev :: !audits)
       ();
     let conn = Mongo.connect (Printf.sprintf "mongodb://reader:pw@127.0.0.1:%d/?authSource=admin&serverSelectionTimeoutMS=5000" port) in
     let c = Mongo.collection ~sw conn ~db:"secure" ~name:"t" in
     (* the read-only role authenticates and MAY read its database (empty here) ... *)
     assert (Mongo.find c (Backend.query ()) = []);
     (* ... but a write is DENIED — the driver surfaces the not-authorized error *)
-    match Mongo.insert c (B.doc [ ("_id", B.str "x") ]) with (_ : string) -> false | exception _ -> true
+    let denied = match Mongo.insert c (B.doc [ ("_id", B.str "x") ]) with (_ : string) -> false | exception _ -> true in
+    (* ... and the audit trail recorded the authentication + the denial (with its command + database) *)
+    let outcomes = List.map (fun (e : Mongo.Audit.event) -> e.outcome) !audits in
+    let saw p = List.exists p outcomes in
+    denied
+    && saw (function Mongo.Audit.Authenticated -> true | _ -> false)
+    && saw (function Mongo.Audit.Denied ("insert", "secure") -> true | _ -> false)
   end
 
 let () = exit (Fennec_hunt_unit.run ())

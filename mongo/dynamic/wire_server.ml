@@ -41,10 +41,22 @@ module type DB = sig
   val drop_collection : db:string -> name:string -> unit
 end
 
+(* the security audit trail: the wire server emits one event per authentication, failed authentication, and
+   authorization denial to the configured sink (default no-op) — the operator ships it to a log / SIEM. *)
+module Audit = struct
+  type outcome =
+    | Authenticated  (** SCRAM authentication succeeded *)
+    | Auth_failed  (** authentication failed (unknown user or bad password) *)
+    | Denied of string * string  (** an authenticated user was denied — [(command, database)] *)
+
+  type event = { at : float; peer : string; user : string option; outcome : outcome }
+end
+
 type config = {
   require_auth : bool;
   lookup : string -> Scram.credential option;  (* username -> stored verifier (for SCRAM) *)
   authorize : string -> write:bool -> db:string -> bool;  (* per-user, per-database authorization (post-auth) *)
+  audit : Audit.event -> unit;  (* security audit sink: auth ok / failed + authz denials *)
   read_only : bool;
   max_message_bytes : int;
   max_connections : int;
@@ -193,13 +205,14 @@ module Make (Db : DB) = struct
       reply_sasl ~conv:conn.conv_id ~done_:false server_first
     | _ -> err ~code:2 "unsupported authentication mechanism (only SCRAM-SHA-256)"
 
-  let sasl_continue conn cmd =
+  let sasl_continue config conn cmd =
     match conn.scram with
     | None -> err ~code:2 "no SCRAM conversation in progress"
     | Some (st, user) ->
       let server_final = Scram.server_final st (sasl_payload cmd) in
       conn.user <- Some user;
       conn.scram <- None;
+      config.audit { Audit.at = Unix.gettimeofday (); peer = conn.peer; user = Some user; outcome = Authenticated };
       reply_sasl ~conv:conn.conv_id ~done_:true server_final
 
   (* ---- data commands ---- *)
@@ -385,14 +398,16 @@ module Make (Db : DB) = struct
     let guard_write f = if config.read_only then err ~code:13 "not authorized: server is read-only" else f () in
     if config.require_auth && conn.user = None && not (List.mem name pre_auth) then
       err ~code:13 (Printf.sprintf "command %s requires authentication" name)
-    else if config.require_auth && not (authz_ok config conn db name) then
+    else if config.require_auth && not (authz_ok config conn db name) then begin
+      config.audit { Audit.at = Unix.gettimeofday (); peer = conn.peer; user = conn.user; outcome = Denied (name, db) };
       err ~code:13 (Printf.sprintf "not authorized on %s to execute command '%s'" db name)
+    end
     else
       match name with
       | "hello" | "isMaster" | "ismaster" -> hello config conn cmd
       | "ping" -> B.Document [ ok ]
       | "saslStart" -> sasl_start config conn cmd
-      | "saslContinue" -> sasl_continue conn cmd
+      | "saslContinue" -> sasl_continue config conn cmd
       | "logout" -> conn.user <- None; B.Document [ ok ]
       | "buildInfo" | "buildinfo" -> build_info ()
       | "find" -> do_find conn cmd db (coll ())
@@ -438,7 +453,11 @@ module Make (Db : DB) = struct
         (Option.value ~default:"" (Frame.db inc.command)) inc.more_to_come;
       let reply_doc =
         try handle conn config inc.command with
-        | Scram.Auth_failed _ -> err ~code:18 "Authentication failed."
+        | Scram.Auth_failed _ ->
+          config.audit
+            { Audit.at = Unix.gettimeofday (); peer = conn.peer;
+              user = (match conn.scram with Some (_, u) -> Some u | None -> None); outcome = Auth_failed };
+          err ~code:18 "Authentication failed."
         | Bw.Unsupported m -> err ~code:2 m
         | e -> err ~code:1 ("internal error: " ^ Printexc.to_string e)
       in

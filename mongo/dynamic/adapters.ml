@@ -535,7 +535,8 @@ let ipaddr_of_host h =
     | _ -> Eio.Net.Ipaddr.V4.loopback)
 
 let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_wire_port)) ?(base_dir = "./.fennec/burrow")
-    ?(users = []) ?require_auth ?(read_only = false) ?tls ?(max_message_bytes = 48_000_000) ?(max_connections = 1000) () =
+    ?(users = []) ?require_auth ?(read_only = false) ?tls ?(max_message_bytes = 48_000_000) ?(max_connections = 1000)
+    ?(audit = fun _ -> ()) () =
   ensure_wire_rng ();
   let require_auth = match require_auth with Some b -> b | None -> users <> [] in
   if require_auth && users = [] then
@@ -603,6 +604,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
     { require_auth;
       lookup = (fun name -> Hashtbl.find_opt table name);
       authorize;
+      audit;
       read_only;
       max_message_bytes;
       max_connections;

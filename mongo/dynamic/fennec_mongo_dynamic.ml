@@ -9,3 +9,7 @@ include Adapters
 (* classify a wire command's per-database authorization requirement ([`Read]/[`Write]/[`Exempt]) — the
    gate the endpoint enforces; exposed for tooling + tests. *)
 let command_access = Wire_server.access_of
+
+(* the security audit event types (auth ok/failed + authz denials) — the shape the [expose ~audit] sink
+   receives *)
+module Audit = Wire_server.Audit

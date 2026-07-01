@@ -107,10 +107,16 @@ Fennec_mongo_dynamic.expose ~sw ~net:(Eio.Stdenv.net env)
 ```
 
 Secure by default (loopback bind, SCRAM-SHA-256 required when any user is set, no `$where`/JS, capped
-message size, optional read-only + TLS, and per-database role-based authorization enforced at dispatch). It shares this engine's per-directory cache, so writes from
+message size, optional read-only + TLS, per-database role-based authorization enforced at dispatch, and a
+security-audit sink (`expose ~audit`) for authentication + denial events). It shares this engine's per-directory cache, so writes from
 mongosh funnel through the same group-committing writer (no concurrent-writer hazard). Validated against
 the **real libmongoc driver**, **real mongosh**, and **over TLS** (full CRUD + SCRAM). See the wire
 README for details.
+
+**Encryption at rest:** the data directory is a plain LMDB file, so the recommended zero-overhead approach
+is **volume / filesystem-level encryption** (LUKS / FileVault / cloud-volume EBS/PD) — the file is opaque on
+disk with no engine cost. Engine-level page encryption (the database custodying its own keys) is a deferred
+opt-in for compliance regimes that specifically require app-level key custody.
 
 In **dev**, this is automatic: `fennec dev` defaults `MONGO_URL` to a `burrow://localhost:27017/…` URL
 (no mongod), and the loopback authority makes the framework auto-open an unauthenticated mongosh endpoint

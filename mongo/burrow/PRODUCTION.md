@@ -139,13 +139,16 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       `require_auth`. Proven by `test_authz` (the pure decision + classification matrix) + a libmongoc-driver
       integration test (a read-only user's write is denied over the wire). Per-collection privileges +
       populating `authenticatedUserRoles` in `connectionStatus` are the remaining polish.
-- [ ] **Encryption at rest.** Lean default: **volume/filesystem-level encryption** (LUKS / FileVault /
-      cloud-volume) — zero engine overhead, the file is opaque on disk. Engine-level page encryption (the DB
-      owns the keys) is an opt-in for compliance regimes that demand it, accepting the per-page crypto cost.
-      Document the recommended posture rather than baking a tax into everyone.
-- [ ] **Audit logging.** Auth events (login/failure) are low-volume — log directly. *Data-change* auditing
-      rides the oplog almost for free (it already records every write; stamp it with the actor). Expose an
-      audit sink + filter.
+- [x] **Encryption at rest — posture.** The burrow data file is a plain LMDB file, so the recommended,
+      zero-overhead EAR is **volume/filesystem-level encryption** (LUKS / FileVault / cloud-volume EBS/PD),
+      documented in the README. Engine-level page encryption (the DB custodying its own keys) stays a
+      deferred opt-in for compliance regimes that require app-custodied keys, accepting the per-page crypto
+      cost — no tax on everyone else. No engine code: the lean answer is the storage layer, not the engine.
+- [x] **Audit logging (security events).** `expose ~audit:(fun ev -> …)` — a sink receiving an
+      `Audit.event` per authentication, failed authentication, and authorization denial (with the command +
+      database), default no-op, so the operator ships it to a log / SIEM at zero cost when unused. Proven by
+      the wire integration test (auth + a denial captured with their command/db). *Data-change* auditing
+      (every write, stamped with the actor) rides the oplog (Tier 3) — deferred until it exists.
 
 ### Tier 2 — Operability (you cannot run unattended what you cannot see)
 
