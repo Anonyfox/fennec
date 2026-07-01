@@ -160,6 +160,7 @@ let observe_changes c (q : Backend.query) ~added ~changed ~removed : Backend.han
    engine per on-disk database directory, shared across that database's collections; selected by a
    burrow:// MONGO_URL (the path's trailing segment is the db). Durable by default (group-committed F_FULLFSYNC). *)
 module Burrow_engine = Burrow.Engine
+module Burrow_oplog = Burrow.Oplog
 
 let embedded_engines : (string, Burrow_engine.t) Hashtbl.t = Hashtbl.create 8
 
@@ -599,6 +600,18 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
     let drop_collection ~db ~name =
       let e = embedded_collection ~sw ~dir:(dir_of db) ~name in
       ignore (Burrow_engine.remove e.eng e.ecoll (Bson.Document []))
+
+    (* the change log for a database (the wire tails it for $changeStream); one raw entry per Bson doc *)
+    let oplog_lsn ~db = Burrow_engine.oplog_lsn (embedded_engine ~sw (dir_of db))
+
+    let oplog_since ~db ~from_lsn ~limit =
+      Burrow_engine.oplog_tail (embedded_engine ~sw (dir_of db)) ~from_lsn ~limit
+      |> List.map (fun ({ lsn; op; ns; id; doc; _ } : Burrow_oplog.entry) ->
+             let base =
+               [ ("lsn", Bson.Int64 lsn); ("op", Bson.String (Burrow_oplog.op_str op)); ("ns", Bson.String ns);
+                 ("id", id) ]
+             in
+             Bson.Document (match doc with Some d -> base @ [ ("o", d) ] | None -> base))
   end in
   let module Server = Wire_server.Make (Db) in
   let config : Wire_server.config =

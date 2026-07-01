@@ -43,7 +43,12 @@ let%test "real mongosh authenticates (SCRAM-SHA-256) and runs CRUD against the e
           "print('CNT=' + db.nums.countDocuments({v:{$gte:3}}));";
           "print('FIRST=' + db.nums.find().sort({v:-1}).limit(1).toArray()[0].v);";
           "print('INS=' + (db.serverStatus().opcounters.insert >= 1));";
-          "print('CONN=' + (db.serverStatus().connections.current >= 1));" ]
+          "print('CONN=' + (db.serverStatus().connections.current >= 1));";
+          (* a resumable change stream: open it, insert, then a non-blocking tryNext sees the insert event *)
+          "cs = db.nums.watch();";
+          "db.nums.insertOne({v:99});";
+          "e = cs.tryNext();";
+          "print('CS=' + (e ? e.operationType : 'none'));" ]
     in
     let script_file = Filename.temp_file "mongosh_script" ".js" in
     Out_channel.with_open_text script_file (fun oc -> Out_channel.output_string oc script);
@@ -55,7 +60,7 @@ let%test "real mongosh authenticates (SCRAM-SHA-256) and runs CRUD against the e
     let out = In_channel.with_open_text out_file In_channel.input_all in
     let ok =
       contains out "SUM=10" && contains out "CNT=2" && contains out "FIRST=4" && contains out "INS=true"
-      && contains out "CONN=true"
+      && contains out "CONN=true" && contains out "CS=insert"
     in
     if not ok then Printf.eprintf "mongosh output was:\n%s\n%!" out;
     ok

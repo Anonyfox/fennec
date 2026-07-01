@@ -11,6 +11,9 @@ type entry = { lsn : int64; ts : float; op : op; ns : string; id : Bson.t; doc :
 
 type t
 
+val op_str : op -> string
+(** the wire code for an operation: ["i"] / ["u"] / ["d"]. *)
+
 val make : ?keep:int -> Store.t -> t
 (** Open/create the [_oplog] sub-DB and resume the LSN from its highest key. [keep] caps the retained
     entries (default 1_000_000); older ones are trimmed on append. *)

@@ -13,3 +13,7 @@ let command_access = Wire_server.access_of
 (* the security audit event types (auth ok/failed + authz denials) — the shape the [expose ~audit] sink
    receives *)
 module Audit = Wire_server.Audit
+
+(* format a raw oplog entry as a MongoDB change-stream event (see {!Wire_server}) — exposed for tooling +
+   tests *)
+let change_event = Wire_server.change_event

@@ -32,6 +32,8 @@ module type DB = sig
   val find : coll -> selector:B.t -> sort:B.t -> skip:int -> limit:int -> fields:B.t -> B.t list
   val count : coll -> B.t -> int
   val explain : coll -> selector:B.t -> sort:B.t -> B.t
+  val oplog_lsn : db:string -> int64
+  val oplog_since : db:string -> from_lsn:int64 -> limit:int -> B.t list
   val update : coll -> multi:bool -> upsert:bool -> B.t -> B.t -> int
   val remove : coll -> B.t -> int
   val aggregate : coll -> B.t list -> B.t list
@@ -119,10 +121,35 @@ let access_of = function
     `Read
   | _ -> `Exempt
 
+(* format one raw oplog entry ({lsn, op, ns, id, o?}, from the backend's oplog_since) as a MongoDB
+   change-stream event. The resume token is the LSN, so a client resumes by passing the event's [_id] back
+   in [$changeStream.resumeAfter]. *)
+let change_event ~db entry =
+  let lsn = match dget entry "lsn" with Some (B.Int64 n) -> n | Some (B.Int n) -> Int64.of_int n | _ -> 0L in
+  let coll = Option.value ~default:"" (dstr entry "ns") in
+  let op_type =
+    match dstr entry "op" with Some "i" -> "insert" | Some "u" -> "update" | Some "d" -> "delete" | _ -> "unknown"
+  in
+  let id = Option.value ~default:B.Null (dget entry "id") in
+  let base =
+    [ ("_id", B.Document [ ("_data", B.String (Printf.sprintf "%Ld" lsn)) ]);
+      ("operationType", B.String op_type);
+      ("ns", B.Document [ ("db", B.String db); ("coll", B.String coll) ]);
+      ("documentKey", B.Document [ ("_id", id) ]) ]
+  in
+  match dget entry "o" with Some d -> B.Document (base @ [ ("fullDocument", d) ]) | None -> B.Document base
+
+(* the LSN a change stream resumes from: the [$changeStream.resumeAfter] token's [_data] (else 0) *)
+let resume_lsn cs =
+  match dget cs "resumeAfter" with
+  | Some tok -> ( match dstr tok "_data" with Some s -> ( try Int64.of_string s with _ -> 0L) | None -> 0L)
+  | None -> 0L
+
 (* ---- the server ---------------------------------------------------------------------------- *)
 
 module Make (Db : DB) = struct
   type cursor = { ns : string; mutable remaining : B.t list }
+  type stream = { sdb : string; scoll : string option; mutable slast_lsn : int64 }  (* a tailing change stream *)
 
   type conn = {
     id : int;
@@ -131,11 +158,13 @@ module Make (Db : DB) = struct
     mutable scram : (Scram.t * string) option;  (* in-flight conversation + its username *)
     mutable conv_id : int;
     cursors : (int64, cursor) Hashtbl.t;
+    stream_cursors : (int64, stream) Hashtbl.t;  (* tailing change-stream cursors, keyed by cursor id *)
     mutable next_cursor : int64;
   }
 
   let fresh_conn ~peer =
-    { id = next_conn_id (); peer; user = None; scram = None; conv_id = 0; cursors = Hashtbl.create 8; next_cursor = 1L }
+    { id = next_conn_id (); peer; user = None; scram = None; conv_id = 0; cursors = Hashtbl.create 8;
+      stream_cursors = Hashtbl.create 4; next_cursor = 1L }
 
   (* server-level observability (this server instance): uptime, live connections, and per-type op tallies —
      read by [serverStatus]. A plain atomic incr per command/connection, never per record. *)
@@ -272,15 +301,30 @@ module Make (Db : DB) = struct
     in
     let size = Option.value ~default:101 (dint cmd "batchSize") in
     match Hashtbl.find_opt conn.cursors id with
-    | None -> err ~code:43 "cursor not found"
     | Some cur ->
       let first, rest = split_at size cur.remaining in
       let id' = if rest = [] then (Hashtbl.remove conn.cursors id; 0L) else (cur.remaining <- rest; id) in
       B.Document [ ("cursor", B.Document [ ("id", B.Int64 id'); ("ns", B.String cur.ns); ("nextBatch", B.Array first) ]); ok ]
+    | None -> (
+      (* a change-stream cursor tails the oplog: return new events since the last seen LSN, and STAY open *)
+      match Hashtbl.find_opt conn.stream_cursors id with
+      | None -> err ~code:43 "cursor not found"
+      | Some st ->
+        let raw = Db.oplog_since ~db:st.sdb ~from_lsn:st.slast_lsn ~limit:size in
+        let keep e = match st.scoll with None -> true | Some c -> dstr e "ns" = Some c in
+        let events = List.filter_map (fun e -> if keep e then Some (change_event ~db:st.sdb e) else None) raw in
+        (match List.rev raw with
+         | last :: _ -> ( match dget last "lsn" with Some (B.Int64 n) -> st.slast_lsn <- n | _ -> ())
+         | [] -> ());
+        B.Document
+          [ ( "cursor",
+              B.Document [ ("id", B.Int64 id); ("ns", B.String (st.sdb ^ ".$cmd.aggregate")); ("nextBatch", B.Array events) ]
+            );
+            ok ])
 
   let do_kill_cursors conn cmd =
     let ids = List.filter_map (function B.Int64 n -> Some n | B.Int n -> Some (Int64.of_int n) | _ -> None) (darr cmd "cursors") in
-    List.iter (Hashtbl.remove conn.cursors) ids;
+    List.iter (fun id -> Hashtbl.remove conn.cursors id; Hashtbl.remove conn.stream_cursors id) ids;
     B.Document
       [ ("cursorsKilled", B.Array (List.map (fun n -> B.Int64 n) ids));
         ("cursorsNotFound", B.Array []);
@@ -331,10 +375,23 @@ module Make (Db : DB) = struct
     B.Document [ ("n", B.Int !n); ok ]
 
   let do_aggregate conn cmd db coll =
-    let c = Db.collection ~db ~name:coll in
-    let results = Db.aggregate c (darr cmd "pipeline") in
-    let size = match dget cmd "cursor" with Some cur -> Option.value ~default:101 (dint cur "batchSize") | None -> 101 in
-    batch_reply conn ~ns:(db ^ "." ^ coll) ~field:"firstBatch" ~size results
+    let pipeline = darr cmd "pipeline" in
+    match pipeline with
+    | first :: _ when dget first "$changeStream" <> None ->
+      (* open a tailing change-stream cursor over this collection (resume from the token, else from now) *)
+      let cs = ddoc first "$changeStream" in
+      let start = match dget cs "resumeAfter" with Some _ -> resume_lsn cs | None -> Db.oplog_lsn ~db in
+      let id = conn.next_cursor in
+      conn.next_cursor <- Int64.add id 1L;
+      Hashtbl.replace conn.stream_cursors id { sdb = db; scoll = Some coll; slast_lsn = start };
+      B.Document
+        [ ("cursor", B.Document [ ("id", B.Int64 id); ("ns", B.String (db ^ "." ^ coll)); ("firstBatch", B.Array []) ]);
+          ok ]
+    | _ ->
+      let c = Db.collection ~db ~name:coll in
+      let results = Db.aggregate c pipeline in
+      let size = match dget cmd "cursor" with Some cur -> Option.value ~default:101 (dint cur "batchSize") | None -> 101 in
+      batch_reply conn ~ns:(db ^ "." ^ coll) ~field:"firstBatch" ~size results
 
   let do_distinct cmd db coll =
     let c = Db.collection ~db ~name:coll in

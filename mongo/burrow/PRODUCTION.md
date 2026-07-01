@@ -182,7 +182,13 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       `~oplog_keep`. Consumers read it via `Engine.oplog_tail ~from_lsn`. Proven by `test_oplog` (append +
       tail, idempotent shape, crash-resume, cap, workflow commit-vs-abort). DDL logging (createIndex/drop) is
       the one deferred piece before it's replication-complete.
-- [ ] **Resumable change streams** — tail the oplog from a resume token, durable across reconnect/restart.
+- [x] **Resumable change streams** — the wire `$changeStream` (`db.coll.watch()`): `aggregate` with a
+      `$changeStream` first stage opens a tailing cursor; `getMore` tails the oplog via `oplog_since`,
+      formatting each entry as a Mongo change event (operationType / ns / documentKey / fullDocument) with
+      the LSN as the resume token — so a client resumes across reconnect/restart via
+      `$changeStream.resumeAfter`. Per-collection or per-db. Proven by a pure `change_event` test + a real
+      mongosh `db.coll.watch()` smoke (insert → the insert event). Replaces in-process-only `observe_changes`
+      for external consumers.
 - [ ] **Point-in-time recovery** — restore a (self-stamping) backup + replay archived oplog forward.
 - [ ] **Async read-replicas** — initial-sync from a snapshot+LSN, then tail; serve eventually-consistent
       reads behind read-preference routing; surface "too stale → re-sync."
@@ -237,8 +243,9 @@ a total order.**
 - **Crash-safe resume.** Entry and data share a txn, so LMDB recovery leaves them coherent; on restart the
   next LSN is `max(_oplog) + 1`.
 
-**Consumer 1 — change streams.** Tail `_oplog` from a resume-token LSN; durable across reconnect/restart
-because the LSN is on disk. Replaces today's in-process-only `observe_changes` for external consumers.
+**Consumer 1 — change streams. (DONE — the wire `$changeStream` / `db.coll.watch()`.)** Tail `_oplog` from a
+resume-token LSN (the LSN is the token, on disk, so it's durable across reconnect/restart). Replaces the
+in-process-only `observe_changes` for external consumers.
 
 **Consumer 2 — point-in-time recovery.** A hot-copy backup is **self-stamping** — it contains `_oplog` up
 to some LSN *X*. To recover past *X* you need **continuous oplog archiving** to cold storage; PITR = restore
