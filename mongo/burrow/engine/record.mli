@@ -19,6 +19,9 @@ val mem : _ Store.txn -> t -> id:Bson.t -> bool
 val put : [ `W ] Store.txn -> t -> id:Bson.t -> Bson.t -> unit
 val delete : [ `W ] Store.txn -> t -> id:Bson.t -> bool
 
+val clear : [ `W ] Store.txn -> t -> unit
+(** Empty the record sub-DB (drop every document) — for a collection drop. *)
+
 val iter : ?from:string -> _ Store.txn -> t -> (id_key:string -> doc:Bson.t -> bool) -> unit
 (** Scan in [_id] (key) order, from the first key >= [from] (or the start); [f] returns [true] to
     continue, [false] to stop. *)

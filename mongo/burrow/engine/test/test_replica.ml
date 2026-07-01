@@ -101,6 +101,19 @@ let () =
   Eng.drop_index dsrc dc ~name:"age_1";
   List.iter (Eng.oplog_apply dflw) (Eng.oplog_tail dsrc ~from_lsn:before_drop ~limit:100);
   assert (not (List.mem "age_1" (Eng.index_names dfc)));
+
+  (* a validator change is logged + replayed onto the follower *)
+  let before_val = Eng.oplog_lsn dsrc in
+  Eng.set_validator dsrc dc (Some (doc [ ("$jsonSchema", doc [ ("required", B.Array [ s "age" ]) ]) ]));
+  List.iter (Eng.oplog_apply dflw) (Eng.oplog_tail dsrc ~from_lsn:before_val ~limit:100);
+  assert (Eng.validator dfc <> None);
+
+  (* dropping the whole collection is logged + replayed — it actually disappears, not just empties *)
+  let before_dropcoll = Eng.oplog_lsn dsrc in
+  Eng.drop_collection dsrc "t";
+  assert (Eng.collection_opt dsrc "t" = None);
+  List.iter (Eng.oplog_apply dflw) (Eng.oplog_tail dsrc ~from_lsn:before_dropcoll ~limit:100);
+  assert (Eng.collection_opt dflw "t" = None);
   Eng.close dsrc;
   Eng.close dflw;
 

@@ -53,5 +53,9 @@ val set_index_ready : t -> collection -> index -> unit
 val drop_index : t -> collection -> name:string -> unit
 (** Idempotent: unregister the index, remove its metadata, and empty its sub-DB. *)
 
+val drop_collection : t -> string -> bool
+(** Drop a collection entirely: clear its record + index sub-DBs, remove its metadata (indexes, validator,
+    the collection entry), and forget the handle. Returns whether it existed. Idempotent. *)
+
 val validator : collection -> Bson.t option
 val set_validator : t -> collection -> Bson.t option -> unit

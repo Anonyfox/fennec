@@ -153,6 +153,22 @@ let drop_index t c ~name =
         ignore (Store.del txn t.meta (ikey c.name name));
         Store.clear txn idx.db)
 
+(* drop a collection entirely: clear its record + index sub-DBs, remove ALL its metadata (each index, the
+   validator, the collection entry), and forget the handle. Returns whether it existed. Idempotent. *)
+let drop_collection t name =
+  match Hashtbl.find_opt t.colls name with
+  | None -> false
+  | Some c ->
+    Store.write t.store (fun txn ->
+        List.iter
+          (fun (idx : index) -> ignore (Store.del txn t.meta (ikey name idx.iname)); Store.clear txn idx.db)
+          c.indexes;
+        Record.clear txn c.records;
+        ignore (Store.del txn t.meta (vkey name));
+        ignore (Store.del txn t.meta (ckey name)));
+    Hashtbl.remove t.colls name;
+    true
+
 (* flip a freshly-backfilled online index to ready (query-visible) and persist the flag *)
 let set_index_ready t c (idx : index) =
   idx.ready <- true;

@@ -358,6 +358,10 @@ let ddl_create_index ~name ~keys ~unique ~sparse =
       ("sparse", B.Bool sparse) ]
 
 let ddl_drop_index ~name = B.Document [ ("ddl", B.String "dropIndex"); ("name", B.String name) ]
+let ddl_drop_collection () = B.Document [ ("ddl", B.String "dropCollection") ]
+
+let ddl_set_validator v =
+  B.Document (("ddl", B.String "setValidator") :: (match v with Some s -> [ ("validator", s) ] | None -> []))
 
 (* the index build WITHOUT logging — shared by the public [ensure_index] and oplog replay. Returns whether
    it actually created the index (idempotent: an existing name is a no-op returning [false]). *)
@@ -405,24 +409,41 @@ let drop_index t (c : collection) ~name =
   if drop_index_core t c ~name then
     submit t ~coll:c.name (fun txn ->
         Oplog.append t.oplog txn ~op:Oplog.Command ~ns:c.name ~id:B.Null ~doc:(Some (ddl_drop_index ~name)))
+
+(* drop a whole collection (not just empty it): removes its records, indexes, validator, and catalog entry.
+   Logs a Command only when the collection existed, so a repeated drop isn't re-logged. *)
+let drop_collection t name =
+  if with_write t (fun () -> Catalog.drop_collection t.cat name) then
+    submit t ~coll:name (fun txn ->
+        Oplog.append t.oplog txn ~op:Oplog.Command ~ns:name ~id:B.Null ~doc:(Some (ddl_drop_collection ())))
 let index_names (c : collection) = Catalog.index_names c
 
 let index_specs (c : collection) =
   List.map (fun (i : Catalog.index) -> (i.Catalog.iname, i.Catalog.keys, i.Catalog.unique)) c.Catalog.indexes
-let set_validator t (c : collection) v = with_write t (fun () -> Catalog.set_validator t.cat c v)
+let validator (c : collection) = Catalog.validator c
+
+let set_validator t (c : collection) v =
+  with_write t (fun () -> Catalog.set_validator t.cat c v);
+  submit t ~coll:c.name (fun txn ->
+      Oplog.append t.oplog txn ~op:Oplog.Command ~ns:c.name ~id:B.Null ~doc:(Some (ddl_set_validator v)))
 
 (* replay a DDL command entry on a replica: re-run the schema change via the NON-logging cores *)
 let apply_ddl t ~ns d =
-  let c = collection t ns in
   match B.get_string d "ddl" with
   | Some "createIndex" ->
     ignore
-      (ensure_index_core t c
+      (ensure_index_core t (collection t ns)
          ~name:(Option.value ~default:"" (B.get_string d "name"))
          ~keys:(Option.value ~default:(B.Document []) (B.get d "keys"))
          ~unique:(Option.value ~default:false (B.get_bool d "unique"))
          ~sparse:(Option.value ~default:false (B.get_bool d "sparse")))
-  | Some "dropIndex" -> ignore (drop_index_core t c ~name:(Option.value ~default:"" (B.get_string d "name")))
+  | Some "dropIndex" -> ignore (drop_index_core t (collection t ns) ~name:(Option.value ~default:"" (B.get_string d "name")))
+  | Some "dropCollection" -> ignore (with_write t (fun () -> Catalog.drop_collection t.cat ns))
+  | Some "setValidator" ->
+    (* resolve the collection OUTSIDE the write lock — [collection] itself takes it, and the mutex is not
+       reentrant (nesting it deadlocks) *)
+    let c = collection t ns in
+    with_write t (fun () -> Catalog.set_validator t.cat c (B.get d "validator"))
   | _ -> ()
 
 (* apply one change-log entry idempotently to THIS engine — a data OR schema change, NOT re-appended to the

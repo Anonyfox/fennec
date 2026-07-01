@@ -138,6 +138,11 @@ val ensure_index : t -> collection -> name:string -> keys:Bson.t -> unique:bool 
     synchronously under the write lock (a partial unique index can't validate concurrent writes). *)
 
 val drop_index : t -> collection -> name:string -> unit
+
+val drop_collection : t -> string -> unit
+(** Drop a collection entirely (records, indexes, validator, catalog entry) — not just empty it. Idempotent;
+    logs a DDL oplog entry so a replica drops it too. *)
+
 val index_names : collection -> string list
 
 val index_specs : collection -> (string * (string * int) list * bool) list
@@ -145,4 +150,8 @@ val index_specs : collection -> (string * (string * int) list * bool) list
     [listIndexes] / [createIndexes] bookkeeping over the wire (the clustered [_id_] index is implicit
     and added by the caller). *)
 
+val validator : collection -> Bson.t option
+(** The collection's installed [$jsonSchema] validator, if any. *)
+
 val set_validator : t -> collection -> Bson.t option -> unit
+(** Install (or clear with [None]) the collection's validator; logs a DDL oplog entry so a replica mirrors it. *)

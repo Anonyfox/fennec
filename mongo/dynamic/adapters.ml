@@ -597,9 +597,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
     let index_specs e = Burrow_engine.index_specs e.ecoll
 
     (* v1 drop empties the collection (its catalog entry/sub-DBs remain); a true drop awaits engine support *)
-    let drop_collection ~db ~name =
-      let e = embedded_collection ~sw ~dir:(dir_of db) ~name in
-      ignore (Burrow_engine.remove e.eng e.ecoll (Bson.Document []))
+    let drop_collection ~db ~name = Burrow_engine.drop_collection (embedded_engine ~sw (dir_of db)) name
 
     (* the change log for a database (the wire tails it for $changeStream); one raw entry per Bson doc *)
     let oplog_lsn ~db = Burrow_engine.oplog_lsn (embedded_engine ~sw (dir_of db))
