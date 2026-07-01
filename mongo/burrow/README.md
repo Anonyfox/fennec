@@ -155,8 +155,9 @@ layer on this primitive (see `PRODUCTION.md`); point-in-time recovery beyond the
 - **Oplog + change streams + PITR** — DONE: a capped, LSN-ordered change log (`Engine.oplog_tail` /
   `oplog_lsn`), every committed write logged idempotently in its own txn, crash-resumed; the wire
   `$changeStream` (`db.coll.watch()`) tailing it with LSN resume tokens; and point-in-time recovery (restore
-  a backup + replay the oplog forward via `Engine.oplog_apply`, within the retention window). Async
-  replication over the log, and DDL logging, are the remaining follow-on consumers (see `PRODUCTION.md` §5).
+  a backup + replay the oplog forward via `Engine.oplog_apply`, within the retention window). The
+  async-replication follower (`Burrow.Replica`, transport-agnostic over the idempotent apply) is DONE at the
+  logic level; its network transport, and DDL logging, are the remaining pieces (see `PRODUCTION.md` §5).
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
 - **Planner** — equality / range / compound / `$in` / `$or` (index-union) / intersection selection,
   selectivity scoring, forward+reverse sort-via-index (streaming early-termination for sorted+limit),
