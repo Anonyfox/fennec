@@ -152,8 +152,9 @@ layer on this primitive (see `PRODUCTION.md`); point-in-time recovery beyond the
   chunks, wire-compatible with mongod) over the same minimal store seam, so it runs over minimongo /
   Burrow / mongod and cross-compiles to JS. Client pattern: file metadata syncs reactively to the
   browser; bytes are served from the server's store over HTTP (not pumped through browser minimongo).
-- **Oplog / resumable change streams** — in-process `observe_changes` works; resume-token-based change
-  streams across reconnects/restarts are deferred.
+- **Oplog** — DONE: a capped, LSN-ordered change log (`Engine.oplog_tail` / `oplog_lsn`), every committed
+  write logged idempotently in its own txn, crash-resumed. Resumable change streams / PITR / async
+  replication over it, and DDL logging, are the follow-on consumers (see `PRODUCTION.md` §5).
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
 - **Planner** — equality / range / compound / `$in` / `$or` (index-union) / intersection selection,
   selectivity scoring, forward+reverse sort-via-index (streaming early-termination for sorted+limit),

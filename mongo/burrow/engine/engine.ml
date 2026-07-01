@@ -17,6 +17,7 @@ type qitem = Do of job | Quit
 type t = {
   store : Store.t;
   cat : Catalog.t;
+  oplog : Oplog.t; (* the engine-wide change log — every committed write appends to it, in the same txn *)
   query_limit : int option; (* governance: max documents a read may materialize before Result_too_large *)
   mutable txn_held_since : float option; (* wall-clock when a workflow txn took the write lock — held-too-long observable *)
   observers : Observe.t;
@@ -91,12 +92,13 @@ let rec writer_loop t =
   if jobs <> [] then process_batch t jobs;
   if quit then Eio.Promise.resolve t.writer_done_u () else writer_loop t
 
-let open_ ~sw ?(durability = Store.Full) ?(map_size_gb = 128) ?query_limit path =
+let open_ ~sw ?(durability = Store.Full) ?(map_size_gb = 128) ?query_limit ?oplog_keep path =
   let store = Store.open_ ~map_size_gb ~max_dbs:1024 ~durability path in
   let writer_done, writer_done_u = Eio.Promise.create () in
   let t =
-    { store; cat = Catalog.open_ store; query_limit; txn_held_since = None; observers = Observe.create ();
-      write_lock = Eio.Mutex.create (); queue = Eio.Stream.create 4096; writer_done; writer_done_u }
+    { store; cat = Catalog.open_ store; oplog = Oplog.make ?keep:oplog_keep store; query_limit;
+      txn_held_since = None; observers = Observe.create (); write_lock = Eio.Mutex.create ();
+      queue = Eio.Stream.create 4096; writer_done; writer_done_u }
   in
   Eio.Fiber.fork_daemon ~sw (fun () -> writer_loop t; `Stop_daemon);
   t
@@ -124,6 +126,10 @@ let usage t = Store.usage t.store
 let transaction_held_for t =
   match t.txn_held_since with None -> None | Some since -> Some (Unix.gettimeofday () -. since)
 
+(* the change log (see the .mli): consumers — change streams / PITR / replication — tail it from an LSN *)
+let oplog_lsn t = Oplog.current_lsn t.oplog
+let oplog_tail t ~from_lsn ~limit = Store.read t.store (fun txn -> Oplog.tail t.oplog txn ~from_lsn ~limit)
+
 let collection t name = with_write t (fun () -> Catalog.collection t.cat name)
 let collection_opt t name = Catalog.collection_opt t.cat name
 let collection_names t = List.map (fun (c : Catalog.collection) -> c.Catalog.name) (Catalog.collections t.cat)
@@ -148,13 +154,24 @@ let ensure_id (doc : B.t) : B.t * B.t =
 
 let insert t (c : collection) doc =
   let id, doc = ensure_id doc in
-  submit t ~coll:c.name (fun txn -> Write.insert txn c doc);
+  submit t ~coll:c.name (fun txn ->
+      Write.insert txn c doc;
+      Oplog.append t.oplog txn ~op:Oplog.Insert ~ns:c.name ~id ~doc:(Some doc));
   id_to_string id
 
 let update t (c : collection) ~multi ~upsert selector modifier =
-  submit t ~coll:c.name (fun txn -> Write.update txn c ~multi ~upsert selector modifier)
+  submit t ~coll:c.name (fun txn ->
+      let affected = Write.update txn c ~multi ~upsert selector modifier in
+      List.iter
+        (fun (id, new_doc) -> Oplog.append t.oplog txn ~op:Oplog.Update ~ns:c.name ~id ~doc:(Some new_doc))
+        affected;
+      List.length affected)
 
-let remove t (c : collection) selector = submit t ~coll:c.name (fun txn -> Write.remove txn c selector)
+let remove t (c : collection) selector =
+  submit t ~coll:c.name (fun txn ->
+      let ids = Write.remove txn c selector in
+      List.iter (fun id -> Oplog.append t.oplog txn ~op:Oplog.Delete ~ns:c.name ~id ~doc:None) ids;
+      List.length ids)
 
 (* ---- reads -------------------------------------------------------------------------------- *)
 
@@ -230,12 +247,12 @@ let aggregate t (c : collection) ?(lookup = fun _ -> []) pipeline =
    transaction already imposes. The non-transactional path (submit / the writer) is completely untouched.
    (Holding the lock across an in-workflow external call serializes other writes for that span; shortening
    the held txn around the cliff is the §7 follow-on, not needed for correctness.) *)
-type session = { sparent : [ `W ] Store.txn; mutable stouched : string list }
+type session = { sparent : [ `W ] Store.txn; mutable stouched : string list; soplog : Oplog.t }
 
 let begin_txn t : session =
   Eio.Mutex.lock t.write_lock;
   t.txn_held_since <- Some (Unix.gettimeofday ());
-  { sparent = Store.begin_write t.store; stouched = [] }
+  { sparent = Store.begin_write t.store; stouched = []; soplog = t.oplog }
 
 let commit_txn t (s : session) : unit =
   Fun.protect ~finally:(fun () -> t.txn_held_since <- None; Eio.Mutex.unlock t.write_lock) (fun () ->
@@ -251,18 +268,23 @@ let touched_in (s : session) (c : collection) = s.stouched <- c.name :: s.stouch
 let insert_in (s : session) (c : collection) doc =
   let id, doc = ensure_id doc in
   Write.insert s.sparent c doc;
+  Oplog.append s.soplog s.sparent ~op:Oplog.Insert ~ns:c.name ~id ~doc:(Some doc);
   touched_in s c;
   id_to_string id
 
 let update_in (s : session) (c : collection) ~multi ~upsert selector modifier =
-  let n = Write.update s.sparent c ~multi ~upsert selector modifier in
+  let affected = Write.update s.sparent c ~multi ~upsert selector modifier in
+  List.iter
+    (fun (id, new_doc) -> Oplog.append s.soplog s.sparent ~op:Oplog.Update ~ns:c.name ~id ~doc:(Some new_doc))
+    affected;
   touched_in s c;
-  n
+  List.length affected
 
 let remove_in (s : session) (c : collection) selector =
-  let n = Write.remove s.sparent c selector in
+  let ids = Write.remove s.sparent c selector in
+  List.iter (fun id -> Oplog.append s.soplog s.sparent ~op:Oplog.Delete ~ns:c.name ~id ~doc:None) ids;
   touched_in s c;
-  n
+  List.length ids
 
 let find_in (s : session) (c : collection) ~selector ~sort ~skip ~limit ~fields =
   let plan = plan_for c ~selector ~sort in

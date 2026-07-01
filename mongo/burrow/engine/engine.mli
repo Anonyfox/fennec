@@ -13,6 +13,7 @@ val open_ :
   ?durability:Store.durability ->
   ?map_size_gb:int ->
   ?query_limit:int ->
+  ?oplog_keep:int ->
   string ->
   t
 (** Open (creating if absent) the engine over an on-disk directory; the catalog is rebuilt from it. The
@@ -40,6 +41,14 @@ val transaction_held_for : t -> float option
 (** Seconds the current workflow transaction has held the single write lock (wall-clock), or [None] when
     idle. A long hold stalls ALL writes (the lock is global), so observability / a watchdog polls this to
     alarm; the sanctioned fix for in-transaction work is to defer I/O to the effects outbox. *)
+
+val oplog_lsn : t -> int64
+(** The highest LSN in the change log (0 when empty). *)
+
+val oplog_tail : t -> from_lsn:int64 -> limit:int -> Oplog.entry list
+(** Change-log entries with [lsn > from_lsn], up to [limit], in LSN order — for change streams / PITR /
+    replication. Each carries the resulting document (insert / update) or an [_id] (delete), so replay is
+    idempotent; entries past the retention cap ([~oplog_keep]) are trimmed. *)
 
 val collection : t -> string -> collection
 (** Get-or-create a collection by name. *)

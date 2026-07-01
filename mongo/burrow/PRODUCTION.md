@@ -175,7 +175,13 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 
 ### Tier 3 — The oplog keystone, then async HA (the one scoped step toward distribution)
 
-- [ ] **The oplog** — see §5; the highest-leverage item in this document.
+- [x] **The oplog** — a capped, LSN-ordered `_oplog` sub-DB (the `Oplog` module) the single writer fills for
+      free: every committed write (insert/update/delete, non-txn AND workflow-txn) appends one idempotent
+      entry per affected doc — the RESULTING document (insert/update) or the `_id` (delete) — INSIDE the same
+      write txn (atomic, no extra fsync). Crash-resumes the LSN from the log's max on open; trims to
+      `~oplog_keep`. Consumers read it via `Engine.oplog_tail ~from_lsn`. Proven by `test_oplog` (append +
+      tail, idempotent shape, crash-resume, cap, workflow commit-vs-abort). DDL logging (createIndex/drop) is
+      the one deferred piece before it's replication-complete.
 - [ ] **Resumable change streams** — tail the oplog from a resume token, durable across reconnect/restart.
 - [ ] **Point-in-time recovery** — restore a (self-stamping) backup + replay archived oplog forward.
 - [ ] **Async read-replicas** — initial-sync from a snapshot+LSN, then tail; serve eventually-consistent
@@ -206,6 +212,10 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 ---
 
 ## 5. The oplog: one keystone, three features
+
+**Status: the log itself is BUILT** — the `Oplog` module + `Engine.oplog_tail` / `oplog_lsn`; CRUD entries,
+idempotent (resulting doc / `_id`), appended in the write txn, crash-resumed, capped (`test_oplog`). The
+three consumers below (change streams, PITR, replication) and DDL logging are the follow-on units.
 
 The single highest-leverage missing piece. The write path already reserves the hook (`engine/write.mli`:
 *"Oplog append for change streams layers on here later"*). Build it once and change streams, PITR, and

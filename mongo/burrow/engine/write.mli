@@ -1,7 +1,7 @@
 (* Write — the mutation path: insert / update / remove / upsert, each maintaining every secondary index
    inside the caller's single write transaction, so a document and its index entries commit atomically.
    Matching reuses the {!Executor} within that same transaction, so a write sees a consistent snapshot.
-   (Oplog append for change streams layers on here later.) *)
+   ([update] / [remove] return the affected documents so the engine appends the oplog in the same txn.) *)
 
 module Store = Burrow_store.Store
 
@@ -16,13 +16,14 @@ exception Validation_failed of string
 val insert : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> unit
 (** Insert a document that already carries an [_id]; adds its index entries. *)
 
-val update : [ `W ] Store.txn -> Catalog.collection -> multi:bool -> upsert:bool -> Bson.t -> Bson.t -> int
-(** Apply the modifier to documents matching the selector (one unless [multi]); on no match with
-    [upsert], seed a document from the selector's equality fields + the modifier. Returns the number of
-    documents matched (1 for an upsert insert), maintaining indexes for every change. *)
+val update :
+  [ `W ] Store.txn -> Catalog.collection -> multi:bool -> upsert:bool -> Bson.t -> Bson.t -> (Bson.t * Bson.t) list
+(** Apply the modifier to documents matching the selector (one unless [multi]); on no match with [upsert],
+    seed a document from the selector's equality fields + the modifier. Returns [(_id, resulting-doc)] for
+    each affected document (so the engine logs an idempotent oplog entry per doc), maintaining indexes. *)
 
-val remove : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> int
-(** Remove all documents matching the selector (and their index entries); returns the count. *)
+val remove : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> Bson.t list
+(** Remove all documents matching the selector (and their index entries); returns their [_id]s. *)
 
 val backfill_index : [ `W ] Store.txn -> Catalog.collection -> Catalog.index -> unit
 (** Populate a freshly-created index from the existing records, setting its multikey flag as needed. *)

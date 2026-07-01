@@ -118,17 +118,19 @@ let upsert_seed selector modifier : B.t =
 
 (* ---- update -------------------------------------------------------------------------------- *)
 
-let update txn (c : Catalog.collection) ~multi ~upsert selector modifier : int =
+let update txn (c : Catalog.collection) ~multi ~upsert selector modifier : (B.t * B.t) list =
   let plan = Planner.plan c.indexes ~selector ~sort:(B.Document []) in
   let all = Executor.matched txn c plan ~selector in
   let targets = if multi then all else match all with [] -> [] | d :: _ -> [ d ] in
   match targets with
   | [] when upsert ->
-    insert txn c (upsert_seed selector modifier);
-    1
-  | [] -> 0
+    let seed = upsert_seed selector modifier in
+    insert txn c seed;
+    [ (id_of seed, seed) ]
+  | [] -> []
   | ds ->
-    List.iter
+    (* returns (_id, resulting-doc) per affected document, so the engine logs idempotent oplog entries *)
+    List.map
       (fun old_doc ->
         let id = id_of old_doc in
         let rk = Record.key_of_id id in
@@ -136,20 +138,21 @@ let update txn (c : Catalog.collection) ~multi ~upsert selector modifier : int =
         check_validator c new_doc;
         check_unique txn c ~record_key:rk ~doc:new_doc;
         Record.put txn c.records ~id new_doc;
-        reindex txn c ~record_key:rk ~old_doc ~new_doc)
-      ds;
-    List.length ds
+        reindex txn c ~record_key:rk ~old_doc ~new_doc;
+        (id, new_doc))
+      ds
 
 (* ---- remove -------------------------------------------------------------------------------- *)
 
-let remove txn (c : Catalog.collection) selector : int =
+let remove txn (c : Catalog.collection) selector : B.t list =
   let plan = Planner.plan c.indexes ~selector ~sort:(B.Document []) in
   let targets = Executor.matched txn c plan ~selector in
-  List.iter
+  (* returns the _id of each removed document, so the engine logs idempotent delete oplog entries *)
+  List.map
     (fun old_doc ->
       let id = id_of old_doc in
       let rk = Record.key_of_id id in
       ignore (Record.delete txn c.records ~id);
-      unindex_all txn c ~record_key:rk ~doc:old_doc)
-    targets;
-  List.length targets
+      unindex_all txn c ~record_key:rk ~doc:old_doc;
+      id)
+    targets
