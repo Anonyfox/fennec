@@ -44,6 +44,7 @@ end
 type config = {
   require_auth : bool;
   lookup : string -> Scram.credential option;  (* username -> stored verifier (for SCRAM) *)
+  authorize : string -> write:bool -> db:string -> bool;  (* per-user, per-database authorization (post-auth) *)
   read_only : bool;
   max_message_bytes : int;
   max_connections : int;
@@ -92,6 +93,17 @@ let next_conn_id () = Atomic.fetch_and_add conn_counter 1
 
 let debug = try Sys.getenv "FENNEC_WIRE_DEBUG" = "1" with Not_found -> false
 let trace fmt = if debug then Printf.eprintf ("[wire] " ^^ fmt ^^ "\n%!") else Printf.ifprintf stderr fmt
+
+(* a command's per-database authorization requirement: [`Write] mutates, [`Read] observes, [`Exempt] is
+   handshake / auth / server-admin (no per-database check). This classification IS the authz boundary, so
+   it lives next to the dispatch and is unit-tested — a mutating command MUST appear here or it would slip
+   past authorization. *)
+let access_of = function
+  | "insert" | "update" | "delete" | "findAndModify" | "createIndexes" | "dropIndexes" | "drop" | "create"
+  | "dropDatabase" ->
+    `Write
+  | "find" | "getMore" | "count" | "distinct" | "aggregate" | "listCollections" | "listIndexes" -> `Read
+  | _ -> `Exempt
 
 (* ---- the server ---------------------------------------------------------------------------- *)
 
@@ -356,6 +368,14 @@ module Make (Db : DB) = struct
   (* commands runnable before authentication completes *)
   let pre_auth = [ "hello"; "isMaster"; "ismaster"; "ping"; "saslStart"; "saslContinue"; "logout"; "endSessions" ]
 
+  (* per-user authorization: a [`Write]/[`Read] command needs the matching access on its db; the rest is
+     exempt. Reached only when [require_auth] and the user is authenticated (the presence check ran). *)
+  let authz_ok config conn db name =
+    match access_of name with
+    | `Exempt -> true
+    | `Read -> config.authorize (Option.value ~default:"" conn.user) ~write:false ~db
+    | `Write -> config.authorize (Option.value ~default:"" conn.user) ~write:true ~db
+
   let coll_of cmd name = match dget cmd name with Some (B.String c) -> c | _ -> ""
 
   let handle conn config cmd : B.t =
@@ -365,6 +385,8 @@ module Make (Db : DB) = struct
     let guard_write f = if config.read_only then err ~code:13 "not authorized: server is read-only" else f () in
     if config.require_auth && conn.user = None && not (List.mem name pre_auth) then
       err ~code:13 (Printf.sprintf "command %s requires authentication" name)
+    else if config.require_auth && not (authz_ok config conn db name) then
+      err ~code:13 (Printf.sprintf "not authorized on %s to execute command '%s'" db name)
     else
       match name with
       | "hello" | "isMaster" | "ismaster" -> hello config conn cmd

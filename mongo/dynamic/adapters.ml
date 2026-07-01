@@ -501,9 +501,26 @@ end
 let wire_rng_ready = ref false
 let ensure_wire_rng () = if not !wire_rng_ready then (Mirage_crypto_rng_unix.use_default (); wire_rng_ready := true)
 
-type wire_user = { wu_name : string; wu_password : string }
+(* a database-scoped authorization grant for a wire user. [db = "*"] matches every database. *)
+module Role = struct
+  type t =
+    | Read of string  (** read commands on database [db] *)
+    | Read_write of string  (** read + write commands on database [db] *)
+    | Root  (** every command on every database *)
 
-let wire_user ~user ~password = { wu_name = user; wu_password = password }
+  (* does this grant permit a [write]-or-read command on database [db]? *)
+  let allows ~write ~db = function
+    | Root -> true
+    | Read_write d -> d = "*" || d = db
+    | Read d -> (not write) && (d = "*" || d = db)
+end
+
+type wire_user = { wu_name : string; wu_password : string; wu_roles : Role.t list }
+
+(* [roles] defaults to [Root] (unrestricted), so existing single-user setups are unchanged; pass explicit
+   roles to scope a user to specific databases. *)
+let wire_user ~user ~password ?(roles = [ Role.Root ]) () =
+  { wu_name = user; wu_password = password; wu_roles = roles }
 
 (* a burrow:// authority host -> an Eio bind address (0.0.0.0/empty => all interfaces; else loopback or
    a dotted-quad) *)
@@ -533,6 +550,16 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
       let salt = Mirage_crypto_rng.generate 28 in
       Hashtbl.replace table u.wu_name (Mongo_wire.Scram.make_credential ~salt ~iterations:15000 ~password:u.wu_password))
     users;
+  (* per-user, per-database authorization: a command's required access (read/write) on its target db must
+     be granted by one of the user's roles; an unknown user is denied. The closure is what the wire server
+     consults — it never sees the role model. *)
+  let roles_table = Hashtbl.create 8 in
+  List.iter (fun u -> Hashtbl.replace roles_table u.wu_name u.wu_roles) users;
+  let authorize user ~write ~db =
+    match Hashtbl.find_opt roles_table user with
+    | Some rs -> List.exists (Role.allows ~write ~db) rs
+    | None -> false
+  in
   let dir_of db = Filename.concat base_dir db in
   let module Db = struct
     type coll = embedded
@@ -575,6 +602,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
   let config : Wire_server.config =
     { require_auth;
       lookup = (fun name -> Hashtbl.find_opt table name);
+      authorize;
       read_only;
       max_message_bytes;
       max_connections;
@@ -602,7 +630,7 @@ let expose_from_env ~sw ~net () =
   | Runtime.Burrow { base; expose = Some s; _ } ->
     if s.tls then
       Printf.eprintf "fennec: mongo-wire ?tls=true is not yet wired for the auto endpoint — serving plaintext on %s:%d\n%!" s.host s.port;
-    let users = match (s.user, s.pass) with Some u, Some p -> [ wire_user ~user:u ~password:p ] | _ -> [] in
+    let users = match (s.user, s.pass) with Some u, Some p -> [ wire_user ~user:u ~password:p () ] | _ -> [] in
     expose ~sw ~net ~addr:(`Tcp (ipaddr_of_host s.host, s.port)) ~base_dir:base ~users ~require_auth:(s.user <> None)
       ~read_only:s.read_only ()
   | _ -> ()

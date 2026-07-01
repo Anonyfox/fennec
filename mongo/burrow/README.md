@@ -101,12 +101,13 @@ in `fennec.pulse.mongo`:
 
 ```ocaml
 Fennec_mongo_dynamic.expose ~sw ~net:(Eio.Stdenv.net env)
-  ~users:[ Fennec_mongo_dynamic.wire_user ~user:"admin" ~password:secret ] ()
+  ~users:[ Fennec_mongo_dynamic.wire_user ~user:"admin" ~password:secret () ] ()
+  (* scope a user with roles: ~roles:[ Role.Read "reports"; Role.Read_write "app" ] () — default is Root *)
 (* then: mongosh "mongodb://admin:secret@127.0.0.1:27017" *)
 ```
 
 Secure by default (loopback bind, SCRAM-SHA-256 required when any user is set, no `$where`/JS, capped
-message size, optional read-only + TLS). It shares this engine's per-directory cache, so writes from
+message size, optional read-only + TLS, and per-database role-based authorization enforced at dispatch). It shares this engine's per-directory cache, so writes from
 mongosh funnel through the same group-committing writer (no concurrent-writer hazard). Validated against
 the **real libmongoc driver**, **real mongosh**, and **over TLS** (full CRUD + SCRAM). See the wire
 README for details.

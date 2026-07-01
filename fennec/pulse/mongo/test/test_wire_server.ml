@@ -24,7 +24,7 @@ let%test "real libmongoc driver authenticates (SCRAM-SHA-256) + runs CRUD agains
     Mongo.expose ~sw ~net
       ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
       ~base_dir:(tmpdir ())
-      ~users:[ Mongo.wire_user ~user:"admin" ~password:"s3cret" ]
+      ~users:[ Mongo.wire_user ~user:"admin" ~password:"s3cret" () ]
       ();
     (* a REAL driver client, authenticating over SCRAM exactly as against a hosted mongod *)
     let conn = Mongo.connect (Printf.sprintf "mongodb://admin:s3cret@127.0.0.1:%d/?authSource=admin" port) in
@@ -78,7 +78,7 @@ let%test "wrong password is rejected by the SCRAM handshake (no anonymous access
     Mongo.expose ~sw ~net
       ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
       ~base_dir:(tmpdir ())
-      ~users:[ Mongo.wire_user ~user:"admin" ~password:"right" ]
+      ~users:[ Mongo.wire_user ~user:"admin" ~password:"right" () ]
       ();
     (* short server-selection timeout so a rejected handshake surfaces in seconds, not the 30s default *)
     let conn = Mongo.connect (Printf.sprintf "mongodb://admin:WRONG@127.0.0.1:%d/?authSource=admin&serverSelectionTimeoutMS=3000" port) in
@@ -106,6 +106,30 @@ let%test "expose_from_env opens an unauthenticated endpoint from a burrow:// aut
     let c = Mongo.collection ~sw conn ~db:"devdb" ~name:"k" in
     ignore (Mongo.insert c (B.doc [ ("_id", B.str "x"); ("n", B.int 7) ]));
     match Mongo.find c (Backend.query ()) with [ d ] -> B.get_int d "n" = Some 7 | _ -> false
+  end
+
+(* End-to-end proof that RBAC is ENFORCED at the wire (the pure decision + classification matrix — Root /
+   read / readWrite / wildcard / cross-db — is exhausted in mongo/dynamic/test/test_authz.ml). A single
+   read-only user, single client (the proven shape): it authenticates and may read its database, but a
+   write comes back not-authorized. *)
+let%test "RBAC over the wire: a read-only role can read but a write is denied" =
+  if not (Mongo.available ()) then true
+  else begin
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let net = Eio.Stdenv.net env in
+    let port = 35000 + (Unix.getpid () mod 5000) in
+    Mongo.expose ~sw ~net
+      ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
+      ~base_dir:(tmpdir ())
+      ~users:[ Mongo.wire_user ~user:"reader" ~password:"pw" ~roles:[ Mongo.Role.Read "secure" ] () ]
+      ();
+    let conn = Mongo.connect (Printf.sprintf "mongodb://reader:pw@127.0.0.1:%d/?authSource=admin&serverSelectionTimeoutMS=5000" port) in
+    let c = Mongo.collection ~sw conn ~db:"secure" ~name:"t" in
+    (* the read-only role authenticates and MAY read its database (empty here) ... *)
+    assert (Mongo.find c (Backend.query ()) = []);
+    (* ... but a write is DENIED — the driver surfaces the not-authorized error *)
+    match Mongo.insert c (B.doc [ ("_id", B.str "x") ]) with (_ : string) -> false | exception _ -> true
   end
 
 let () = exit (Fennec_hunt_unit.run ())

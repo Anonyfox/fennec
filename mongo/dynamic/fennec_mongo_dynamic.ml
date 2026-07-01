@@ -5,3 +5,7 @@
    pure seam it implements lives in fennec-mongo.backend. *)
 
 include Adapters
+
+(* classify a wire command's per-database authorization requirement ([`Read]/[`Write]/[`Exempt]) — the
+   gate the endpoint enforces; exposed for tooling + tests. *)
+let command_access = Wire_server.access_of

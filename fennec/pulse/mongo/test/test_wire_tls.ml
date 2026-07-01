@@ -35,7 +35,7 @@ let%test "libmongoc driver authenticates + runs CRUD over TLS (self-signed cert)
     Mongo.expose ~sw ~net
       ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
       ~base_dir:(tmpdir ())
-      ~users:[ Mongo.wire_user ~user:"ada" ~password:"lovelace" ]
+      ~users:[ Mongo.wire_user ~user:"ada" ~password:"lovelace" () ]
       ~tls:(self_signed_tls ())
       ();
     let uri =

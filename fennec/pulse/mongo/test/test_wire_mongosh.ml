@@ -31,7 +31,7 @@ let%test "real mongosh authenticates (SCRAM-SHA-256) and runs CRUD against the e
     Mongo.expose ~sw ~net
       ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, port))
       ~base_dir:(tmpdir ())
-      ~users:[ Mongo.wire_user ~user:"ada" ~password:"lovelace" ]
+      ~users:[ Mongo.wire_user ~user:"ada" ~password:"lovelace" () ]
       ();
     let uri = Printf.sprintf "mongodb://ada:lovelace@127.0.0.1:%d/?authSource=admin&serverSelectionTimeoutMS=5000" port in
     (* a small mongosh script: insert, aggregate-sum, filtered count, sorted find — printing markers *)

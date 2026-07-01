@@ -132,10 +132,13 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 
 ### Tier 1 — Security & access control (regulated workloads gate on this)
 
-- [ ] **Role-based authorization.** Today there is SCRAM *authentication* but **no authorization** — the
-      wire returns an empty `authenticatedUserRoles` and the only write gate is a global `read_only`. Add
-      users → roles → per-database/-collection read/write privileges, enforced at command dispatch.
-      *Covenant: one role lookup per command, gated off when auth is off.*
+- [x] **Role-based authorization.** `wire_user ~roles:[ Role.Read "db" | Role.Read_write "db" | Role.Root ]`
+      (`"*"` db = all databases; default `Root` for back-compat). Enforced at command dispatch: every
+      command is classified (`Wire_server.access_of` → read / write / exempt) and checked against the
+      user's roles on the target database before it runs — one role lookup per command, only under
+      `require_auth`. Proven by `test_authz` (the pure decision + classification matrix) + a libmongoc-driver
+      integration test (a read-only user's write is denied over the wire). Per-collection privileges +
+      populating `authenticatedUserRoles` in `connectionStatus` are the remaining polish.
 - [ ] **Encryption at rest.** Lean default: **volume/filesystem-level encryption** (LUKS / FileVault /
       cloud-volume) — zero engine overhead, the file is opaque on disk. Engine-level page encryption (the DB
       owns the keys) is an opt-in for compliance regimes that demand it, accepting the per-page crypto cost.
