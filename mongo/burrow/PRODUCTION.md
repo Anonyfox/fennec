@@ -189,7 +189,12 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       `$changeStream.resumeAfter`. Per-collection or per-db. Proven by a pure `change_event` test + a real
       mongosh `db.coll.watch()` smoke (insert → the insert event). Replaces in-process-only `observe_changes`
       for external consumers.
-- [ ] **Point-in-time recovery** — restore a (self-stamping) backup + replay archived oplog forward.
+- [x] **Point-in-time recovery** — the replay primitive `Engine.oplog_apply` (idempotent replace-or-insert
+      / delete by `_id`, index-maintaining, NOT re-logged) composes backup + `oplog_tail` into PITR: restore
+      a hot backup (frozen at its LSN), then replay the source's oplog `(backup_lsn, target]` onto it to roll
+      forward. Proven by `test_pitr` (an update + delete + insert replayed onto a restored backup reconstruct
+      the source; re-replay is a no-op). Recovers within the oplog retention window; continuous oplog
+      ARCHIVING (to roll forward past the cap) is the deferred extension.
 - [ ] **Async read-replicas** — initial-sync from a snapshot+LSN, then tail; serve eventually-consistent
       reads behind read-preference routing; surface "too stale → re-sync."
 - [ ] **Orchestrated failover** — promote/demote mechanism, old-primary tail rollback, honest RPO; fencing
@@ -247,9 +252,10 @@ a total order.**
 resume-token LSN (the LSN is the token, on disk, so it's durable across reconnect/restart). Replaces the
 in-process-only `observe_changes` for external consumers.
 
-**Consumer 2 — point-in-time recovery.** A hot-copy backup is **self-stamping** — it contains `_oplog` up
-to some LSN *X*. To recover past *X* you need **continuous oplog archiving** to cold storage; PITR = restore
-the backup, replay archived oplog `(X, target]`. Recovery granularity = archive cadence.
+**Consumer 2 — point-in-time recovery. (DONE within the retention window — `Engine.oplog_apply` composes
+backup + `oplog_tail` into restore-and-roll-forward; `test_pitr`.)** A hot-copy backup is **self-stamping** —
+it contains `_oplog` up to some LSN *X*. To recover past *X* you need **continuous oplog archiving** to cold
+storage; PITR = restore the backup, replay archived oplog `(X, target]`. Recovery granularity = archive cadence.
 
 **Consumer 3 — async replication.** A new follower's **initial sync** needs a snapshot *and* the exact LSN
 it reflects, atomically — and the MVCC gift delivers it: open **one read txn**; it sees a consistent data

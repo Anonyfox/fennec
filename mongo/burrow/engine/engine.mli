@@ -50,6 +50,10 @@ val oplog_tail : t -> from_lsn:int64 -> limit:int -> Oplog.entry list
     replication. Each carries the resulting document (insert / update) or an [_id] (delete), so replay is
     idempotent; entries past the retention cap ([~oplog_keep]) are trimmed. *)
 
+val oplog_apply : t -> Oplog.entry -> unit
+(** Apply one change-log entry idempotently (replace-or-insert / delete by [_id], maintaining indexes) —
+    the PITR-replay / replica-follower path. Does NOT re-append to this engine's oplog. *)
+
 val collection : t -> string -> collection
 (** Get-or-create a collection by name. *)
 

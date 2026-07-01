@@ -173,6 +173,17 @@ let remove t (c : collection) selector =
       List.iter (fun id -> Oplog.append t.oplog txn ~op:Oplog.Delete ~ns:c.name ~id ~doc:None) ids;
       List.length ids)
 
+(* apply one change-log entry idempotently to THIS engine — the data change only, NOT re-appended to the
+   oplog (replay must not re-log). Routes through the writer for the single-writer invariant. The
+   PITR-replay / replica-follower path. *)
+let oplog_apply t (e : Oplog.entry) =
+  let c = collection t e.Oplog.ns in
+  submit t ~coll:c.name (fun txn ->
+      match (e.Oplog.op, e.Oplog.doc) with
+      | (Oplog.Insert | Oplog.Update), Some d -> Write.replace_by_id txn c ~id:e.Oplog.id d
+      | Oplog.Delete, _ -> Write.remove_by_id txn c ~id:e.Oplog.id
+      | _ -> ())
+
 (* ---- reads -------------------------------------------------------------------------------- *)
 
 let plan_for (c : collection) ~selector ~sort = Planner.plan c.indexes ~selector ~sort

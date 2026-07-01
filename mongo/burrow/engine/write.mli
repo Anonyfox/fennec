@@ -25,6 +25,13 @@ val update :
 val remove : [ `W ] Store.txn -> Catalog.collection -> Bson.t -> Bson.t list
 (** Remove all documents matching the selector (and their index entries); returns their [_id]s. *)
 
+val replace_by_id : [ `W ] Store.txn -> Catalog.collection -> id:Bson.t -> Bson.t -> unit
+(** Idempotently replace-or-insert the document for [id] (maintaining indexes; no validation/uniqueness) —
+    the oplog-replay path for PITR / a replica follower. *)
+
+val remove_by_id : [ `W ] Store.txn -> Catalog.collection -> id:Bson.t -> unit
+(** Idempotently remove the document for [id] (maintaining indexes) — the oplog-replay path. *)
+
 val backfill_index : [ `W ] Store.txn -> Catalog.collection -> Catalog.index -> unit
 (** Populate a freshly-created index from the existing records, setting its multikey flag as needed. *)
 

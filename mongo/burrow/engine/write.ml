@@ -156,3 +156,26 @@ let remove txn (c : Catalog.collection) selector : B.t list =
       unindex_all txn c ~record_key:rk ~doc:old_doc;
       id)
     targets
+
+(* ---- oplog replay (PITR / a replica follower) ---------------------------------------------- *)
+
+(* apply an oplog entry idempotently BY _id, maintaining indexes but NOT re-logging. Validation and
+   uniqueness are skipped — the source already enforced them on the original write, and replay must
+   reproduce that outcome exactly. *)
+let replace_by_id txn (c : Catalog.collection) ~id doc =
+  let rk = Record.key_of_id id in
+  match Record.get txn c.records ~id with
+  | Some old_doc ->
+    Record.put txn c.records ~id doc;
+    reindex txn c ~record_key:rk ~old_doc ~new_doc:doc
+  | None ->
+    Record.put txn c.records ~id doc;
+    index_all txn c ~record_key:rk ~doc
+
+let remove_by_id txn (c : Catalog.collection) ~id =
+  match Record.get txn c.records ~id with
+  | Some old_doc ->
+    let rk = Record.key_of_id id in
+    ignore (Record.delete txn c.records ~id);
+    unindex_all txn c ~record_key:rk ~doc:old_doc
+  | None -> () (* already absent — idempotent *)
