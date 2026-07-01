@@ -154,8 +154,12 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 
 - [ ] **`serverStatus` + metrics.** ops/sec by type, write-queue depth, active read txns, db + index sizes,
       fsync latency, page-cache stats, replication lag. Over the wire and as a programmatic struct.
-- [ ] **Slow-query log** (one gated compare; off by default) and **`explain`** (the planner already computes
-      the plan — surface index choice, scan-vs-index, estimated selectivity).
+- [x] **`explain`.** `Engine.explain` + the wire `explain` command surface the planner's winningPlan
+      (COLLSCAN / IXSCAN+indexName / IDHACK / OR / AND_SORTED + direction), Mongo queryPlanner-shaped — so
+      `db.coll.find().explain()` works and a Fennec app can see its access paths. No hot-path change (it runs
+      the pure planner without executing). Proven by `test_explain`.
+- [ ] **Slow-query log** — one gated compare on a per-query duration, off by default, logging the selector +
+      chosen plan + timing past a threshold.
 - [ ] **Structured logging.** Beyond `FENNEC_WIRE_DEBUG` stderr tracing — a real leveled/structured log
       (reuse Paw's logger style) for prod ingestion.
 - [ ] **Resource & DoS hardening.** Max connections, idle-cursor + idle-session reaping, per-connection

@@ -28,7 +28,7 @@ let () =
     [ "insert"; "update"; "delete"; "findAndModify"; "createIndexes"; "dropIndexes"; "drop"; "create"; "dropDatabase" ];
   List.iter
     (fun c -> assert (acc c = `Read))
-    [ "find"; "getMore"; "count"; "distinct"; "aggregate"; "listCollections"; "listIndexes" ];
+    [ "find"; "getMore"; "count"; "distinct"; "aggregate"; "explain"; "listCollections"; "listIndexes" ];
   List.iter (fun c -> assert (acc c = `Exempt)) [ "hello"; "ping"; "saslStart"; "saslContinue"; "logout"; "buildInfo"; "listDatabases" ];
 
   print_string "authz: OK\n"

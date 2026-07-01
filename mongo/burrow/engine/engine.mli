@@ -62,6 +62,12 @@ val find_one :
   t -> collection -> selector:Bson.t -> sort:Bson.t -> skip:int -> fields:Bson.t -> Bson.t option
 
 val count : t -> collection -> selector:Bson.t -> int
+
+val explain : t -> collection -> selector:Bson.t -> sort:Bson.t -> Bson.t
+(** The access path the planner would choose for the query, WITHOUT executing it — the winningPlan doc
+    (Mongo queryPlanner shape): [stage] (COLLSCAN / IXSCAN / IDHACK / OR / AND_SORTED), [indexName],
+    [direction]. For diagnostics and the wire [explain] command. *)
+
 val distinct : t -> collection -> key:string -> selector:Bson.t -> Bson.t list
 val aggregate : t -> collection -> ?lookup:(string -> Bson.t list) -> Bson.t list -> Bson.t list
 

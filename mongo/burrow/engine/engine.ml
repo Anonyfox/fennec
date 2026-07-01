@@ -175,6 +175,23 @@ let count t (c : collection) ~selector =
       let plan = plan_for c ~selector ~sort:(B.Document []) in
       Executor.count txn c plan ~selector)
 
+(* Describe the access path the planner would choose for the query WITHOUT executing it — the winningPlan
+   doc (Mongo queryPlanner shape): stage + indexName + direction. For diagnostics / the [explain] command. *)
+let explain _t (c : collection) ~selector ~sort : B.t =
+  let ixscan index reverse =
+    B.Document
+      [ ("stage", B.String "IXSCAN"); ("indexName", B.String index);
+        ("direction", B.String (if reverse then "backward" else "forward")) ]
+  in
+  match plan_for c ~selector ~sort with
+  | Plan.Id_point _ -> B.Document [ ("stage", B.String "IDHACK") ]
+  | Plan.Collection_scan -> B.Document [ ("stage", B.String "COLLSCAN"); ("direction", B.String "forward") ]
+  | Plan.Index_scan { index; reverse; _ } -> ixscan index reverse
+  | Plan.Index_union pairs ->
+    B.Document [ ("stage", B.String "OR"); ("inputStages", B.Array (List.map (fun (i, _) -> ixscan i false) pairs)) ]
+  | Plan.Index_intersect pairs ->
+    B.Document [ ("stage", B.String "AND_SORTED"); ("inputStages", B.Array (List.map (fun (i, _) -> ixscan i false) pairs)) ]
+
 (* distinct values of [key] (dotted path) across documents matching [selector]; array values are
    unwrapped and the result deduped by the total Bson order *)
 let distinct t (c : collection) ~key ~selector =

@@ -31,6 +31,7 @@ module type DB = sig
   val insert : coll -> B.t -> string
   val find : coll -> selector:B.t -> sort:B.t -> skip:int -> limit:int -> fields:B.t -> B.t list
   val count : coll -> B.t -> int
+  val explain : coll -> selector:B.t -> sort:B.t -> B.t
   val update : coll -> multi:bool -> upsert:bool -> B.t -> B.t -> int
   val remove : coll -> B.t -> int
   val aggregate : coll -> B.t list -> B.t list
@@ -114,7 +115,8 @@ let access_of = function
   | "insert" | "update" | "delete" | "findAndModify" | "createIndexes" | "dropIndexes" | "drop" | "create"
   | "dropDatabase" ->
     `Write
-  | "find" | "getMore" | "count" | "distinct" | "aggregate" | "listCollections" | "listIndexes" -> `Read
+  | "find" | "getMore" | "count" | "distinct" | "aggregate" | "explain" | "listCollections" | "listIndexes" ->
+    `Read
   | _ -> `Exempt
 
 (* ---- the server ---------------------------------------------------------------------------- *)
@@ -379,6 +381,15 @@ module Make (Db : DB) = struct
     B.Document [ ("authInfo", B.Document [ ("authenticatedUsers", B.Array users); ("authenticatedUserRoles", B.Array []) ]); ok ]
 
   (* commands runnable before authentication completes *)
+  (* explain: return the winningPlan the planner would choose for the wrapped find, WITHOUT executing it *)
+  let do_explain cmd db =
+    let inner = ddoc cmd "explain" in
+    let coll = Option.value ~default:"" (dstr inner "find") in
+    let winning = Db.explain (Db.collection ~db ~name:coll) ~selector:(ddoc inner "filter") ~sort:(ddoc inner "sort") in
+    B.Document
+      [ ("queryPlanner", B.Document [ ("namespace", B.String (db ^ "." ^ coll)); ("winningPlan", winning) ]);
+        ("ok", B.Float 1.0) ]
+
   let pre_auth = [ "hello"; "isMaster"; "ismaster"; "ping"; "saslStart"; "saslContinue"; "logout"; "endSessions" ]
 
   (* per-user authorization: a [`Write]/[`Read] command needs the matching access on its db; the rest is
@@ -419,6 +430,7 @@ module Make (Db : DB) = struct
       | "delete" -> guard_write (fun () -> do_delete cmd db (coll ()))
       | "aggregate" -> do_aggregate conn cmd db (coll ())
       | "distinct" -> do_distinct cmd db (coll ())
+      | "explain" -> do_explain cmd db
       | "listCollections" -> do_list_collections config db
       | "listIndexes" -> do_list_indexes db (coll ())
       | "createIndexes" -> guard_write (fun () -> do_create_indexes cmd db (coll ()))

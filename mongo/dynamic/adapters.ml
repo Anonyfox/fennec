@@ -577,6 +577,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
     let insert e d = Burrow_engine.insert e.eng e.ecoll d
     let find e ~selector ~sort ~skip ~limit ~fields = Burrow_engine.find e.eng e.ecoll ~selector ~sort ~skip ~limit ~fields
     let count e sel = Burrow_engine.count e.eng e.ecoll ~selector:sel
+    let explain e ~selector ~sort = Burrow_engine.explain e.eng e.ecoll ~selector ~sort
     let update e ~multi ~upsert q m = Burrow_engine.update e.eng e.ecoll ~multi ~upsert q m
     let remove e sel = Burrow_engine.remove e.eng e.ecoll sel
 
