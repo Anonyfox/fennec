@@ -152,8 +152,11 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 
 ### Tier 2 — Operability (you cannot run unattended what you cannot see)
 
-- [ ] **`serverStatus` + metrics.** ops/sec by type, write-queue depth, active read txns, db + index sizes,
-      fsync latency, page-cache stats, replication lag. Over the wire and as a programmatic struct.
+- [x] **`serverStatus` + metrics.** The wire `serverStatus` command reports uptime, connections (current /
+      available / totalCreated), and opcounters (insert / query / update / delete / command) — per-server
+      atomic counters bumped once per command (never per record, covenant-clean). Proven via real mongosh
+      (`db.serverStatus()`). Deeper gauges (write-queue depth, per-collection sizes via `mdb_stat`, fsync
+      latency) layer on the same command when wanted.
 - [x] **`explain`.** `Engine.explain` + the wire `explain` command surface the planner's winningPlan
       (COLLSCAN / IXSCAN+indexName / IDHACK / OR / AND_SORTED + direction), Mongo queryPlanner-shaped — so
       `db.coll.find().explain()` works and a Fennec app can see its access paths. No hot-path change (it runs

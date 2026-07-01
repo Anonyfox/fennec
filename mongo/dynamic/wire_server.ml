@@ -137,6 +137,40 @@ module Make (Db : DB) = struct
   let fresh_conn ~peer =
     { id = next_conn_id (); peer; user = None; scram = None; conv_id = 0; cursors = Hashtbl.create 8; next_cursor = 1L }
 
+  (* server-level observability (this server instance): uptime, live connections, and per-type op tallies —
+     read by [serverStatus]. A plain atomic incr per command/connection, never per record. *)
+  let start_time = Unix.gettimeofday ()
+  let active_conns = Atomic.make 0
+  let op_insert = Atomic.make 0
+  let op_query = Atomic.make 0
+  let op_update = Atomic.make 0
+  let op_delete = Atomic.make 0
+  let op_command = Atomic.make 0
+
+  let bump = function
+    | "insert" -> Atomic.incr op_insert
+    | "find" | "getMore" -> Atomic.incr op_query
+    | "update" -> Atomic.incr op_update
+    | "delete" -> Atomic.incr op_delete
+    | _ -> Atomic.incr op_command
+
+  let server_status config =
+    let up = Unix.gettimeofday () -. start_time in
+    let cur = Atomic.get active_conns in
+    B.Document
+      [ ("host", B.String "burrow"); ("version", B.String "6.0.0"); ("process", B.String "burrow");
+        ("uptime", B.Float up); ("uptimeMillis", B.Int64 (Int64.of_float (up *. 1000.)));
+        ( "connections",
+          B.Document
+            [ ("current", B.Int cur); ("available", B.Int (max 0 (config.max_connections - cur)));
+              ("totalCreated", B.Int (Atomic.get conn_counter)) ] );
+        ( "opcounters",
+          B.Document
+            [ ("insert", B.Int (Atomic.get op_insert)); ("query", B.Int (Atomic.get op_query));
+              ("update", B.Int (Atomic.get op_update)); ("delete", B.Int (Atomic.get op_delete));
+              ("command", B.Int (Atomic.get op_command)) ] );
+        ok ]
+
   (* split a result set into the first/next batch, registering a cursor for the remainder *)
   let batch_reply conn ~ns ~field ~size docs =
     let first, rest = split_at size docs in
@@ -404,6 +438,7 @@ module Make (Db : DB) = struct
 
   let handle conn config cmd : B.t =
     let name = Option.value ~default:"" (Frame.command_name cmd) in
+    bump name;
     let db = Option.value ~default:"" (Frame.db cmd) in
     let coll () = coll_of cmd name in
     let guard_write f = if config.read_only then err ~code:13 "not authorized: server is read-only" else f () in
@@ -440,6 +475,7 @@ module Make (Db : DB) = struct
       | "dropDatabase" -> guard_write (fun () -> B.Document [ ("dropped", B.String db); ok ])
       | "listDatabases" -> do_list_databases ()
       | "getParameter" -> get_parameter cmd
+      | "serverStatus" -> server_status config
       | "getLog" -> B.Document [ ("totalLinesWritten", B.Int 0); ("log", B.Array []); ok ]
       | "connectionStatus" -> connection_status conn
       | "whatsmyuri" -> B.Document [ ("you", B.String conn.peer); ok ]
@@ -459,6 +495,7 @@ module Make (Db : DB) = struct
     let r = Eio.Buf_read.of_flow flow ~max_size:(config.max_message_bytes + 1024) in
     let conn = fresh_conn ~peer:(Format.asprintf "%a" Eio.Net.Sockaddr.pp addr) in
     trace "conn %d from %s" conn.id conn.peer;
+    Atomic.incr active_conns;
     let rec loop () =
       let inc = Frame.parse (read_message r ~max:config.max_message_bytes) in
       trace "conn %d <- %s (db=%s, more_to_come=%b)" conn.id (Option.value ~default:"?" (Frame.command_name inc.command))
@@ -477,7 +514,9 @@ module Make (Db : DB) = struct
       if not inc.more_to_come then Eio.Flow.copy_string (Frame.reply ~response_to:inc.request_id inc.reply_kind reply_doc) flow;
       loop ()
     in
-    (try loop () with e -> trace "conn %d closed: %s" conn.id (Printexc.to_string e))  (* EOF / bad frame / reset *)
+    Fun.protect
+      ~finally:(fun () -> Atomic.decr active_conns)
+      (fun () -> try loop () with e -> trace "conn %d closed: %s" conn.id (Printexc.to_string e))  (* EOF / bad frame / reset *)
 
   let run ~sw ~net ~addr config =
     let socket = Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true net addr in

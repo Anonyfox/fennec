@@ -41,7 +41,9 @@ let%test "real mongosh authenticates (SCRAM-SHA-256) and runs CRUD against the e
           "db.nums.insertMany([{v:1},{v:2},{v:3},{v:4}]);";
           "print('SUM=' + db.nums.aggregate([{$group:{_id:null,s:{$sum:'$v'}}}]).toArray()[0].s);";
           "print('CNT=' + db.nums.countDocuments({v:{$gte:3}}));";
-          "print('FIRST=' + db.nums.find().sort({v:-1}).limit(1).toArray()[0].v);" ]
+          "print('FIRST=' + db.nums.find().sort({v:-1}).limit(1).toArray()[0].v);";
+          "print('INS=' + (db.serverStatus().opcounters.insert >= 1));";
+          "print('CONN=' + (db.serverStatus().connections.current >= 1));" ]
     in
     let script_file = Filename.temp_file "mongosh_script" ".js" in
     Out_channel.with_open_text script_file (fun oc -> Out_channel.output_string oc script);
@@ -51,7 +53,10 @@ let%test "real mongosh authenticates (SCRAM-SHA-256) and runs CRUD against the e
     let mgr = Eio.Stdenv.process_mgr env in
     ignore (Eio.Process.await (Eio.Process.spawn mgr ~sw [ "sh"; "-c"; cmd ]));
     let out = In_channel.with_open_text out_file In_channel.input_all in
-    let ok = contains out "SUM=10" && contains out "CNT=2" && contains out "FIRST=4" in
+    let ok =
+      contains out "SUM=10" && contains out "CNT=2" && contains out "FIRST=4" && contains out "INS=true"
+      && contains out "CONN=true"
+    in
     if not ok then Printf.eprintf "mongosh output was:\n%s\n%!" out;
     ok
 
