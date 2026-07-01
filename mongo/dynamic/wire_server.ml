@@ -61,6 +61,7 @@ type config = {
   authorize : string -> write:bool -> db:string -> bool;  (* per-user, per-database authorization (post-auth) *)
   audit : Audit.event -> unit;  (* security audit sink: auth ok / failed + authz denials *)
   read_only : bool;
+  slow_ms : int option;  (* log any command whose handling meets/exceeds this many ms (operability); None = off *)
   max_message_bytes : int;
   max_connections : int;
   server_nonce : unit -> string;  (* a fresh, unpredictable nonce per SCRAM start (caller's CSPRNG) *)
@@ -557,6 +558,7 @@ module Make (Db : DB) = struct
       let inc = Frame.parse (read_message r ~max:config.max_message_bytes) in
       trace "conn %d <- %s (db=%s, more_to_come=%b)" conn.id (Option.value ~default:"?" (Frame.command_name inc.command))
         (Option.value ~default:"" (Frame.db inc.command)) inc.more_to_come;
+      let t0 = Unix.gettimeofday () in
       let reply_doc =
         try handle conn config inc.command with
         | Scram.Auth_failed _ ->
@@ -567,6 +569,15 @@ module Make (Db : DB) = struct
         | Bw.Unsupported m -> err ~code:2 m
         | e -> err ~code:1 ("internal error: " ^ Printexc.to_string e)
       in
+      (* slow-command log (operability): unconditional stderr line, independent of the debug trace *)
+      (match config.slow_ms with
+       | Some ms ->
+         let dt = (Unix.gettimeofday () -. t0) *. 1000. in
+         if dt >= float_of_int ms then
+           Printf.eprintf "fennec mongo-wire: slow %s db=%s %.0fms\n%!"
+             (Option.value ~default:"?" (Frame.command_name inc.command))
+             (Option.value ~default:"" (Frame.db inc.command)) dt
+       | None -> ());
       trace "conn %d -> ok=%s" conn.id (match dget reply_doc "ok" with Some (B.Float f) -> string_of_float f | _ -> "?");
       if not inc.more_to_come then Eio.Flow.copy_string (Frame.reply ~response_to:inc.request_id inc.reply_kind reply_doc) flow;
       loop ()

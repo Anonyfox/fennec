@@ -98,4 +98,27 @@ let () =
   (match F.parse "abc" with _ -> assert false | exception F.Protocol_error _ -> ());
   (match F.parse (frame ~request_id:1 ~opcode:9999 "") with _ -> assert false | exception F.Protocol_error _ -> ());
 
+  (* 7. fuzz — a malicious client must not crash or hang the parser (DoS posture: a bad frame drops only
+     that connection). This parser is deliberately lenient (a short/garbage body yields a nonsense command
+     that dispatch then rejects — case 6 covers the frames that DO raise), so the property here is
+     TERMINATION: crafted-malformed bodies and pseudo-random garbage — raw messages and 2013 bodies alike —
+     always return or raise-and-drop, never loop or crash the process. [raises] runs parse to completion. *)
+  let raises f = match f () with _ -> false | exception _ -> true in
+  let body_of s = frame ~request_id:1 ~opcode:2013 s in
+  List.iter
+    (fun body -> ignore (raises (fun () -> F.parse (body_of body))))
+    [ "";                                (* empty body *)
+      i32_le 0;                          (* flags but no section byte *)
+      i32_le 0 ^ "\000";                 (* kind-0 marker, no BSON doc *)
+      i32_le 0 ^ "\000" ^ i32_le 999999; (* kind-0 BSON claims 999999 bytes, only 4 present *)
+      i32_le 0 ^ "\099" ^ "junk";        (* unsupported section kind *)
+      i32_le 0 ^ "\001" ^ i32_le 4;      (* kind-1 section, empty payload *)
+      String.make 3 '\000' ];            (* body shorter than the flags int32 *)
+  Random.init 20260701;
+  for _ = 1 to 1000 do
+    let s = String.init (Random.int 96) (fun _ -> Char.chr (Random.int 256)) in
+    ignore (raises (fun () -> F.parse s)) (* raw: short/garbage header *);
+    ignore (raises (fun () -> F.parse (body_of s))) (* as a 2013 body *)
+  done;
+
   print_string "frame (OP_MSG / OP_QUERY): OK\n"

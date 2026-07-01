@@ -537,7 +537,7 @@ let ipaddr_of_host h =
 
 let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_wire_port)) ?(base_dir = "./.fennec/burrow")
     ?(users = []) ?require_auth ?(read_only = false) ?tls ?(max_message_bytes = 48_000_000) ?(max_connections = 1000)
-    ?(audit = fun _ -> ()) () =
+    ?(audit = fun _ -> ()) ?slow_ms () =
   ensure_wire_rng ();
   let require_auth = match require_auth with Some b -> b | None -> users <> [] in
   if require_auth && users = [] then
@@ -620,6 +620,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
       authorize;
       audit;
       read_only;
+      slow_ms;
       max_message_bytes;
       max_connections;
       server_nonce = (fun () -> Base64.encode_string (Mirage_crypto_rng.generate 18));
