@@ -12,6 +12,11 @@ val create : Engine.t -> t
 val last_applied : t -> int64
 (** The highest source LSN this follower has applied. *)
 
+val apply : t -> Oplog.entry list -> int
+(** Apply a batch of entries idempotently, advancing [last_applied]; returns how many. The apply half of
+    {!step} — use it directly when the transport also yields the source's retention floor for a
+    {!too_stale} check before applying. *)
+
 val step : t -> pull:(from_lsn:int64 -> Oplog.entry list) -> int
 (** Pull the source's entries after [last_applied] and apply them idempotently, advancing [last_applied];
     returns how many were applied. [pull] is the transport — [Engine.oplog_tail source] for a local mirror,
@@ -19,3 +24,9 @@ val step : t -> pull:(from_lsn:int64 -> Oplog.entry list) -> int
 
 val lag : t -> source_lsn:int64 -> int64
 (** How far behind the source this follower is: [source_lsn - last_applied] (0 = caught up). *)
+
+val too_stale : t -> source_floor:int64 -> bool
+(** True when the follower can no longer catch up by tailing: the next entry it needs ([last_applied + 1])
+    fell below the source's oldest retained LSN [source_floor] and was trimmed, so it must re-initial-sync
+    from a fresh snapshot. Poll [Engine.oplog_floor] on the source (or read it from the fetch) for the
+    argument. Exact even when aborted transactions leave holes in the LSN sequence. *)

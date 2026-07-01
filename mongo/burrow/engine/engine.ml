@@ -128,6 +128,7 @@ let transaction_held_for t =
 
 (* the change log (see the .mli): consumers — change streams / PITR / replication — tail it from an LSN *)
 let oplog_lsn t = Oplog.current_lsn t.oplog
+let oplog_floor t = Store.read t.store (fun txn -> Oplog.oldest_lsn t.oplog txn)
 let oplog_tail t ~from_lsn ~limit = Store.read t.store (fun txn -> Oplog.tail t.oplog txn ~from_lsn ~limit)
 
 let collection t name = with_write t (fun () -> Catalog.collection t.cat name)

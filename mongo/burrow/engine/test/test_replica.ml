@@ -59,6 +59,28 @@ let () =
   (* a step with nothing new applies nothing *)
   assert (Rep.step rep ~pull = 0);
 
+  (* ---- too-stale detection: a follower below the source's retention floor must re-sync ---- *)
+  let capped = Eng.open_ ~sw ~durability:S.No_sync ~oplog_keep:3 (temp "cap") in
+  let cc = Eng.collection capped "t" in
+  for k = 1 to 6 do ignore (Eng.insert capped cc (doc [ ("_id", s (Printf.sprintf "k%d" k)) ])) done;
+  let floor = Eng.oplog_floor capped in
+  assert (floor = 4L) (* LSNs 1..3 trimmed, oldest retained is 4 *);
+
+  let flw2 = Eng.open_ ~sw ~durability:S.No_sync (temp "flw2") in
+  let r2 = Rep.create flw2 in
+  let entry lsn id =
+    Burrow.Oplog.entry_of_bson
+      (doc [ ("lsn", B.Int64 lsn); ("op", B.String "i"); ("ns", B.String "t"); ("id", s id); ("o", doc [ ("_id", s id) ]) ])
+  in
+  assert (Rep.too_stale r2 ~source_floor:floor) (* fresh (0): needs 1, trimmed -> stale *);
+  ignore (Rep.apply r2 [ entry 2L "k2" ]);
+  assert (Rep.too_stale r2 ~source_floor:floor) (* at 2: needs 3, trimmed -> still stale *);
+  ignore (Rep.apply r2 [ entry 3L "k3" ]);
+  assert (not (Rep.too_stale r2 ~source_floor:floor)) (* at 3 (== floor-1): needs 4, retained -> OK *);
+  assert (Rep.last_applied r2 = 3L);
+  Eng.close capped;
+  Eng.close flw2;
+
   Eng.close eng;
   Eng.close follower;
   print_string "replica: OK\n"

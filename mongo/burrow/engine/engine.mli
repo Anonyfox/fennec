@@ -45,6 +45,10 @@ val transaction_held_for : t -> float option
 val oplog_lsn : t -> int64
 (** The highest LSN in the change log (0 when empty). *)
 
+val oplog_floor : t -> int64
+(** The oldest retained LSN in the change log (0 when empty). A follower whose [last_applied + 1] is below
+    this can no longer catch up by tailing (the entries between were trimmed) and must re-initial-sync. *)
+
 val oplog_tail : t -> from_lsn:int64 -> limit:int -> Oplog.entry list
 (** Change-log entries with [lsn > from_lsn], up to [limit], in LSN order — for change streams / PITR /
     replication. Each carries the resulting document (insert / update) or an [_id] (delete), so replay is

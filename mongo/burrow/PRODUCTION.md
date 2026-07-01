@@ -202,8 +202,11 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       converges to a REMOTE source. `Wire_client` authenticates with SCRAM-SHA-256 (mutual auth) or runs
       plaintext on a trusted network. Proven by `test_replica` (in-process convergence) + `test_replication`
       (a follower converging over the MongoDB wire on a Unix socket, BOTH unauthenticated and over
-      SCRAM-SHA-256) + `test_scram` (the client reproduces the RFC 7677 vector). Remaining: read-preference
-      routing + "too stale → re-sync".
+      SCRAM-SHA-256) + `test_scram` (the client reproduces the RFC 7677 vector). Too-stale DETECTION is done
+      (`Replica.too_stale ~source_floor` / `Engine.oplog_floor`, surfaced in the `oplogFetch` reply — a
+      lagged follower knows tailing would skip trimmed entries and it must re-sync). Remaining:
+      read-preference routing + the automatic re-sync ACTION (app-driven: catch `too_stale`, re-initial-sync
+      from a fresh backup).
 - [ ] **Orchestrated failover** — promote/demote mechanism, old-primary tail rollback, honest RPO; fencing
       is the orchestrator's job (no consensus). See §5.
 - [ ] **Consistency testing** — jepsen-style: inject partitions/crashes during failover; assert no
@@ -266,15 +269,18 @@ storage; PITR = restore the backup, replay archived oplog `(X, target]`. Recover
 
 **Consumer 3 — async replication. (DONE — the `Replica` follower + a wire transport via the `oplogFetch`
 command / `Wire_client` (with SCRAM-SHA-256 client auth, mutual) / `Replication.pull`; `test_replica` +
-`test_replication` + `test_scram`. Remaining: read-preference routing + too-stale re-sync.)** A
+`test_replication` + `test_scram`; too-stale DETECTION via `Replica.too_stale` / `Engine.oplog_floor`.
+Remaining: read-preference routing + the automatic re-sync action.)** A
 new follower's **initial sync** needs a snapshot *and* the exact LSN
 it reflects, atomically — and the MVCC gift delivers it: open **one read txn**; it sees a consistent data
 snapshot *and* `max(_oplog)` coherently (same snapshot). Copy the snapshot, then tail `_oplog` from that
 LSN. Steady state: pull `(last_applied, …]`, apply in order; apply is idempotent, so a crash mid-batch is
 safe to retry.
-- **Too-stale handling.** A follower that lags past the capped retention window can't catch up by tailing
-  and must re-initial-sync from a fresh snapshot. Size retention ≥ the longest tolerable follower outage;
-  surface a "stale" state.
+- **Too-stale handling. (Detection DONE.)** A follower that lags past the capped retention window can't catch
+  up by tailing and must re-initial-sync from a fresh snapshot. `Replica.too_stale ~source_floor` detects it
+  exactly (`last_applied + 1 < floor`, where `floor = Engine.oplog_floor` the oldest retained LSN, carried in
+  the `oplogFetch` reply) — exact even with abort holes in the LSN sequence, since it compares the floor not
+  batch gaps. Size retention ≥ the longest tolerable follower outage; the app acts on the "stale" state.
 - **Read-consistency contract.** Replicas serve **eventually consistent** reads, bounded by lag. Expose it
   honestly via read-preference routing so clients pick primary (read-your-writes) or replica (scale, stale).
 

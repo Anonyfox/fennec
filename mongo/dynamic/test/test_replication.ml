@@ -67,6 +67,9 @@ let () =
   assert (v_of follower fc "a" = Some 9);
   assert (v_of follower fc "b" = None);
 
+  (* the fetch also surfaces the source's retention floor (for too-stale detection) over the wire *)
+  let floor, _ = Repl.fetch client ~db:"shop" ~limit:1000 ~from_lsn:0L in
+  assert (floor = 1L) (* untrimmed source: oldest retained LSN is 1 *);
   Eng.close follower;
 
   (* ---- the same, but the source REQUIRES SCRAM-SHA-256 and the follower authenticates ---- *)

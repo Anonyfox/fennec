@@ -12,10 +12,15 @@ let create engine = { engine; last_applied = Engine.oplog_lsn engine }
 
 let last_applied t = t.last_applied
 
-let step t ~pull =
-  let batch = pull ~from_lsn:t.last_applied in
+let apply t batch =
   List.iter (Engine.oplog_apply t.engine) batch;
   List.iter (fun (e : Oplog.entry) -> if e.Oplog.lsn > t.last_applied then t.last_applied <- e.Oplog.lsn) batch;
   List.length batch
 
+let step t ~pull = apply t (pull ~from_lsn:t.last_applied)
 let lag t ~source_lsn = Int64.sub source_lsn t.last_applied
+
+(* the follower can't catch up by tailing: the next entry it needs ([last_applied + 1]) fell below the
+   source's oldest retained LSN and was trimmed — it must re-initial-sync from a fresh snapshot. Exact even
+   with abort holes in the LSN sequence: it compares against the floor (smallest live key), not batch gaps. *)
+let too_stale t ~source_floor = Int64.compare (Int64.add t.last_applied 1L) source_floor < 0

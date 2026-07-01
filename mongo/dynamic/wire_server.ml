@@ -33,6 +33,7 @@ module type DB = sig
   val count : coll -> B.t -> int
   val explain : coll -> selector:B.t -> sort:B.t -> B.t
   val oplog_lsn : db:string -> int64
+  val oplog_floor : db:string -> int64
   val oplog_since : db:string -> from_lsn:int64 -> limit:int -> B.t list
   val update : coll -> multi:bool -> upsert:bool -> B.t -> B.t -> int
   val remove : coll -> B.t -> int
@@ -404,7 +405,8 @@ module Make (Db : DB) = struct
   let do_oplog_fetch cmd db =
     let from_lsn = match dget cmd "fromLsn" with Some (B.Int64 n) -> n | Some (B.Int n) -> Int64.of_int n | _ -> 0L in
     let limit = Option.value ~default:1000 (dint cmd "limit") in
-    B.Document [ ("entries", B.Array (Db.oplog_since ~db ~from_lsn ~limit)); ok ]
+    (* [floor] = the oldest retained LSN, so the follower can detect it is too stale to tail (must re-sync) *)
+    B.Document [ ("entries", B.Array (Db.oplog_since ~db ~from_lsn ~limit)); ("floor", B.Int64 (Db.oplog_floor ~db)); ok ]
 
   let id_index = B.Document [ ("v", B.Int 2); ("key", B.Document [ ("_id", B.Int 1) ]); ("name", B.String "_id_") ]
 

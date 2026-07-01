@@ -603,6 +603,7 @@ let expose ~sw ~net ?(addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, Runtime.default_w
 
     (* the change log for a database (the wire tails it for $changeStream); one raw entry per Bson doc *)
     let oplog_lsn ~db = Burrow_engine.oplog_lsn (embedded_engine ~sw (dir_of db))
+    let oplog_floor ~db = Burrow_engine.oplog_floor (embedded_engine ~sw (dir_of db))
 
     let oplog_since ~db ~from_lsn ~limit =
       Burrow_engine.oplog_tail (embedded_engine ~sw (dir_of db)) ~from_lsn ~limit

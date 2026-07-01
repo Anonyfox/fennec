@@ -158,8 +158,9 @@ layer on this primitive (see `PRODUCTION.md`); point-in-time recovery beyond the
   a backup + replay the oplog forward via `Engine.oplog_apply`, within the retention window); and async
   replication — the `Burrow.Replica` follower plus a wire transport (the `oplogFetch` command + `Wire_client`
   + `Replication.pull`), so a follower converges to a remote source over the MongoDB wire — authenticating
-  with SCRAM-SHA-256 (mutual auth) or plaintext on a trusted network. Remaining: read-preference routing,
-  and DDL logging (see
+  with SCRAM-SHA-256 (mutual auth) or plaintext on a trusted network. A lagged follower detects it is too
+  stale to tail (`Replica.too_stale` against the `oplogFetch` retention floor) and must re-sync. Remaining:
+  read-preference routing, and DDL logging (see
   `PRODUCTION.md` §5).
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
 - **Planner** — equality / range / compound / `$in` / `$or` (index-union) / intersection selection,

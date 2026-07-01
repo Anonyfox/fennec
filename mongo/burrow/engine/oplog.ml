@@ -77,3 +77,10 @@ let tail t txn ~from_lsn ~limit =
       incr n;
       !n < limit);
   List.rev !acc
+
+(* the oldest retained LSN (the smallest key), or 0 when empty — the floor below which a follower can no
+   longer catch up by tailing (the entries it still needs were trimmed) and must re-initial-sync *)
+let oldest_lsn t txn =
+  let m = ref 0L in
+  Store.iter txn t.db (fun ~key ~data:_ -> m := lsn_of_key key; false);
+  !m

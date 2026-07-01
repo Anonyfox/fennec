@@ -31,3 +31,7 @@ val append : t -> [ `W ] Store.txn -> op:op -> ns:string -> id:Bson.t -> doc:Bso
 
 val tail : t -> _ Store.txn -> from_lsn:int64 -> limit:int -> entry list
 (** Entries with [lsn > from_lsn], up to [limit], in LSN order — the consumer's tail. *)
+
+val oldest_lsn : t -> _ Store.txn -> int64
+(** The oldest retained LSN (the smallest key), or 0 when empty — the floor below which a follower can no
+    longer catch up by tailing (its needed entries were trimmed) and must re-initial-sync. *)
