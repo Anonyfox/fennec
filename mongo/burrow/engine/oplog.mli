@@ -14,6 +14,10 @@ type t
 val op_str : op -> string
 (** the wire code for an operation: ["i"] / ["u"] / ["d"]. *)
 
+val entry_of_bson : Bson.t -> entry
+(** Parse an entry from its Bson form — the internal record, or the wire's raw [{lsn,op,ns,id,o?}] (where
+    [ts] is absent and defaults to 0). For a replica rebuilding entries pulled over the wire. *)
+
 val make : ?keep:int -> Store.t -> t
 (** Open/create the [_oplog] sub-DB and resume the LSN from its highest key. [keep] caps the retained
     entries (default 1_000_000); older ones are trimmed on append. *)

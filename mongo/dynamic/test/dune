@@ -2,6 +2,6 @@
 ; outside an Eio scheduler — the global-fallback arm) and over the REAL burrow LMDB backend
 ; (test_tx_burrow, under an Eio scheduler — the native-rollback path).
 (tests
- (names test_tx test_tx_burrow test_authz test_change_event)
- (libraries fennec-mongo.dynamic fennec-mongo.bson fennec-mongo.minimongo fennec-mongo.backend eio_main eio
-   unix))
+ (names test_tx test_tx_burrow test_authz test_change_event test_replication)
+ (libraries fennec-mongo.dynamic fennec-mongo.bson fennec-mongo.minimongo fennec-mongo.backend
+   fennec-mongo.burrow fennec-mongo.burrow.store eio_main eio unix))

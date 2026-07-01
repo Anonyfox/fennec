@@ -118,7 +118,8 @@ let access_of = function
   | "insert" | "update" | "delete" | "findAndModify" | "createIndexes" | "dropIndexes" | "drop" | "create"
   | "dropDatabase" ->
     `Write
-  | "find" | "getMore" | "count" | "distinct" | "aggregate" | "explain" | "listCollections" | "listIndexes" ->
+  | "find" | "getMore" | "count" | "distinct" | "aggregate" | "explain" | "listCollections" | "listIndexes"
+  | "oplogFetch" ->
     `Read
   | _ -> `Exempt
 
@@ -398,6 +399,13 @@ module Make (Db : DB) = struct
     let c = Db.collection ~db ~name:coll in
     B.Document [ ("values", B.Array (Db.distinct c (Option.value ~default:"" (dstr cmd "key")) (ddoc cmd "query"))); ok ]
 
+  (* replication source: the db's oplog entries after [fromLsn] (raw {lsn,op,ns,id,o?}) so a follower can
+     pull + apply them. Read-classified — tailing the log exposes every change in the db. *)
+  let do_oplog_fetch cmd db =
+    let from_lsn = match dget cmd "fromLsn" with Some (B.Int64 n) -> n | Some (B.Int n) -> Int64.of_int n | _ -> 0L in
+    let limit = Option.value ~default:1000 (dint cmd "limit") in
+    B.Document [ ("entries", B.Array (Db.oplog_since ~db ~from_lsn ~limit)); ok ]
+
   let id_index = B.Document [ ("v", B.Int 2); ("key", B.Document [ ("_id", B.Int 1) ]); ("name", B.String "_id_") ]
 
   let do_list_collections config db =
@@ -523,6 +531,7 @@ module Make (Db : DB) = struct
       | "delete" -> guard_write (fun () -> do_delete cmd db (coll ()))
       | "aggregate" -> do_aggregate conn cmd db (coll ())
       | "distinct" -> do_distinct cmd db (coll ())
+      | "oplogFetch" -> do_oplog_fetch cmd db
       | "explain" -> do_explain cmd db
       | "listCollections" -> do_list_collections config db
       | "listIndexes" -> do_list_indexes db (coll ())

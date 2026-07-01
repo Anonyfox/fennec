@@ -17,3 +17,8 @@ module Audit = Wire_server.Audit
 (* format a raw oplog entry as a MongoDB change-stream event (see {!Wire_server}) — exposed for tooling +
    tests *)
 let change_event = Wire_server.change_event
+
+(* a minimal MongoDB wire client + the wire-backed replication pull (a Burrow.Replica follower's transport,
+   fetching a remote source's oplog via the [oplogFetch] command) *)
+module Wire_client = Wire_client
+module Replication = Replication

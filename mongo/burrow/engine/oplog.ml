@@ -32,8 +32,9 @@ let entry_doc ~lsn ~ts ~op ~ns ~id ~doc =
   in
   B.Document (match doc with Some d -> base @ [ ("o", d) ] | None -> base)
 
-let decode_entry data =
-  let d = Bin.decode data in
+(* parse an entry from its Bson form — the internal record, OR the wire's raw {lsn,op,ns,id,o?} where [ts]
+   is absent (defaults to 0). Exposed so a replica can rebuild entries pulled over the wire. *)
+let entry_of_bson d =
   let get k = match B.get d k with Some v -> v | None -> B.Null in
   { lsn = (match get "lsn" with B.Int64 n -> n | B.Int n -> Int64.of_int n | _ -> 0L);
     ts = (match get "ts" with B.Float f -> f | _ -> 0.);
@@ -41,6 +42,8 @@ let decode_entry data =
     ns = (match get "ns" with B.String s -> s | _ -> "");
     id = get "id";
     doc = B.get d "o" }
+
+let decode_entry data = entry_of_bson (Bin.decode data)
 
 (* open/create the oplog sub-DB and resume the LSN from its highest key (empty -> the first LSN is 1) *)
 let make ?(keep = 1_000_000) store =
