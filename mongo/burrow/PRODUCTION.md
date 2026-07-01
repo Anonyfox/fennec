@@ -180,8 +180,8 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
       entry per affected doc — the RESULTING document (insert/update) or the `_id` (delete) — INSIDE the same
       write txn (atomic, no extra fsync). Crash-resumes the LSN from the log's max on open; trims to
       `~oplog_keep`. Consumers read it via `Engine.oplog_tail ~from_lsn`. Proven by `test_oplog` (append +
-      tail, idempotent shape, crash-resume, cap, workflow commit-vs-abort). DDL logging (createIndex/drop) is
-      the one deferred piece before it's replication-complete.
+      tail, idempotent shape, crash-resume, cap, workflow commit-vs-abort). DDL logging (index create/drop) is
+      DONE too — see the consumers below.
 - [x] **Resumable change streams** — the wire `$changeStream` (`db.coll.watch()`): `aggregate` with a
       `$changeStream` first stage opens a tailing cursor; `getMore` tails the oplog via `oplog_since`,
       formatting each entry as a Mongo change event (operationType / ns / documentKey / fullDocument) with
@@ -236,7 +236,7 @@ Tiered by what production actually requires; ship top-down. Tier 0 is disqualify
 
 **Status: the log itself is BUILT** — the `Oplog` module + `Engine.oplog_tail` / `oplog_lsn`; CRUD entries,
 idempotent (resulting doc / `_id`), appended in the write txn, crash-resumed, capped (`test_oplog`). The
-three consumers below (change streams, PITR, replication) and DDL logging are the follow-on units.
+three consumers below (change streams, PITR, replication) and DDL logging are all DONE (follow-on units).
 
 The single highest-leverage missing piece. The write path already reserves the hook (`engine/write.mli`:
 *"Oplog append for change streams layers on here later"*). Build it once and change streams, PITR, and
@@ -252,8 +252,10 @@ a total order.**
 - **Idempotent by construction.** Apply must be safe to replay (crash/resume, re-sync). Non-idempotent
   modifiers are *transformed at append time* to their resulting state — `$inc` → `$set:<result>`, `$push` →
   the resulting array — exactly as MongoDB's oplog does; insert/replace/delete are already idempotent by `_id`.
-- **DDL is logged too.** Index and collection create/drop and validator changes go in the oplog alongside
-  CRUD, so replicas and PITR reconstruct *schema*, not just data — otherwise a replica silently drifts.
+- **DDL is logged too. (Index create/drop DONE.)** A Command entry (op "c") carries a DDL descriptor;
+  `oplog_apply` replays it via the non-logging index cores, so a replica reconstructs *schema* (its indexes)
+  not just data — otherwise it silently drifts to different query plans. Change streams skip Command entries
+  (replication-internal). Collection drop + validator changes are the remaining DDL.
 - **Capped.** The single writer trims entries past the retention window/size during commit (amortized, cheap).
 - **Crash-safe resume.** Entry and data share a txn, so LMDB recovery leaves them coherent; on restart the
   next LSN is `max(_oplog) + 1`.

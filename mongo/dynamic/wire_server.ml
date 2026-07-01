@@ -314,7 +314,8 @@ module Make (Db : DB) = struct
       | None -> err ~code:43 "cursor not found"
       | Some st ->
         let raw = Db.oplog_since ~db:st.sdb ~from_lsn:st.slast_lsn ~limit:size in
-        let keep e = match st.scoll with None -> true | Some c -> dstr e "ns" = Some c in
+        (* DDL (op "c") entries are replication-internal — a document change stream skips them *)
+        let keep e = dstr e "op" <> Some "c" && (match st.scoll with None -> true | Some c -> dstr e "ns" = Some c) in
         let events = List.filter_map (fun e -> if keep e then Some (change_event ~db:st.sdb e) else None) raw in
         (match List.rev raw with
          | last :: _ -> ( match dget last "lsn" with Some (B.Int64 n) -> st.slast_lsn <- n | _ -> ())

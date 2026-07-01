@@ -9,10 +9,10 @@ module Store = Burrow_store.Store
 module Bin = Burrow_binary
 module B = Bson
 
-type op = Insert | Update | Delete
+type op = Insert | Update | Delete | Command
 
-let op_str = function Insert -> "i" | Update -> "u" | Delete -> "d"
-let op_of_str = function "i" -> Insert | "u" -> Update | _ -> Delete
+let op_str = function Insert -> "i" | Update -> "u" | Delete -> "d" | Command -> "c"
+let op_of_str = function "i" -> Insert | "u" -> Update | "c" -> Command | _ -> Delete
 
 type entry = { lsn : int64; ts : float; op : op; ns : string; id : B.t; doc : B.t option }
 

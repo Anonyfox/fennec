@@ -3,6 +3,7 @@
    reports the gap; a step with nothing new applies nothing. In-process transport (Engine.oplog_tail). *)
 module Eng = Burrow.Engine
 module Rep = Burrow.Replica
+module Op = Burrow.Oplog
 module S = Burrow_store.Store
 module B = Bson
 
@@ -80,6 +81,28 @@ let () =
   assert (Rep.last_applied r2 = 3L);
   Eng.close capped;
   Eng.close flw2;
+
+  (* ---- DDL logging: an index create/drop is logged, then replayed onto a follower ---- *)
+  let dsrc = Eng.open_ ~sw ~durability:S.No_sync (temp "ddl_src") in
+  let dc = Eng.collection dsrc "t" in
+  ignore (Eng.insert dsrc dc (doc [ ("_id", s "a"); ("age", i 30) ]));
+  Eng.ensure_index dsrc dc ~name:"age_1" ~keys:(doc [ ("age", i 1) ]) ~unique:false ~sparse:false;
+  let entries = Eng.oplog_tail dsrc ~from_lsn:0L ~limit:100 in
+  assert (List.exists (fun (e : Op.entry) -> e.Op.op = Op.Command) entries) (* the index build was logged *);
+
+  (* a fresh follower replays the whole log — the insert AND the DDL — and ends up with the index *)
+  let dflw = Eng.open_ ~sw ~durability:S.No_sync (temp "ddl_flw") in
+  List.iter (Eng.oplog_apply dflw) entries;
+  let dfc = Eng.collection dflw "t" in
+  assert (List.mem "age_1" (Eng.index_names dfc));
+
+  (* a drop is logged + replayed too *)
+  let before_drop = Eng.oplog_lsn dsrc in
+  Eng.drop_index dsrc dc ~name:"age_1";
+  List.iter (Eng.oplog_apply dflw) (Eng.oplog_tail dsrc ~from_lsn:before_drop ~limit:100);
+  assert (not (List.mem "age_1" (Eng.index_names dfc)));
+  Eng.close dsrc;
+  Eng.close dflw;
 
   Eng.close eng;
   Eng.close follower;

@@ -3,11 +3,11 @@
 
 module Store = Burrow_store.Store
 
-type op = Insert | Update | Delete
+type op = Insert | Update | Delete | Command  (** [Command] = a DDL change (index create/drop), Mongo's op "c" *)
 
 type entry = { lsn : int64; ts : float; op : op; ns : string; id : Bson.t; doc : Bson.t option }
-(** [doc] is the RESULTING document (insert / update) or [None] (delete), so replaying an entry is an
-    idempotent put-or-delete by [id]. *)
+(** [doc] is the RESULTING document (insert / update), a DDL descriptor ([Command]), or [None] (delete), so
+    replaying an entry is an idempotent put-or-delete by [id], or a schema replay. *)
 
 type t
 

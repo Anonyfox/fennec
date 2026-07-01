@@ -174,17 +174,6 @@ let remove t (c : collection) selector =
       List.iter (fun id -> Oplog.append t.oplog txn ~op:Oplog.Delete ~ns:c.name ~id ~doc:None) ids;
       List.length ids)
 
-(* apply one change-log entry idempotently to THIS engine — the data change only, NOT re-appended to the
-   oplog (replay must not re-log). Routes through the writer for the single-writer invariant. The
-   PITR-replay / replica-follower path. *)
-let oplog_apply t (e : Oplog.entry) =
-  let c = collection t e.Oplog.ns in
-  submit t ~coll:c.name (fun txn ->
-      match (e.Oplog.op, e.Oplog.doc) with
-      | (Oplog.Insert | Oplog.Update), Some d -> Write.replace_by_id txn c ~id:e.Oplog.id d
-      | Oplog.Delete, _ -> Write.remove_by_id txn c ~id:e.Oplog.id
-      | _ -> ())
-
 (* ---- reads -------------------------------------------------------------------------------- *)
 
 let plan_for (c : collection) ~selector ~sort = Planner.plan c.indexes ~selector ~sort
@@ -361,15 +350,26 @@ let fence _t (_c : collection) k = k ()
 (* an online backfill submits this many records per chunk through the writer, so live writes interleave *)
 let online_index_chunk = 1000
 
-let ensure_index t (c : collection) ~name ~keys ~unique ~sparse =
+(* DDL descriptors carried in a Command oplog entry, so a replica replays the schema change (index build /
+   drop), not just document writes — keeping its query plans in parity with the source. *)
+let ddl_create_index ~name ~keys ~unique ~sparse =
+  B.Document
+    [ ("ddl", B.String "createIndex"); ("name", B.String name); ("keys", keys); ("unique", B.Bool unique);
+      ("sparse", B.Bool sparse) ]
+
+let ddl_drop_index ~name = B.Document [ ("ddl", B.String "dropIndex"); ("name", B.String name) ]
+
+(* the index build WITHOUT logging — shared by the public [ensure_index] and oplog replay. Returns whether
+   it actually created the index (idempotent: an existing name is a no-op returning [false]). *)
+let ensure_index_core t (c : collection) ~name ~keys ~unique ~sparse =
   if unique then
     (* unique: build SYNCHRONOUSLY under the write lock. A partial unique index can't validate concurrent
        writes (a not-yet-backfilled row's conflict would be missed), so it isn't exposed until fully
        built — the whole backfill runs in one held transaction. *)
     with_write t (fun () ->
         match Catalog.ensure_index t.cat c ~name ~keys ~unique ~sparse ~ready:true with
-        | None -> ()
-        | Some idx -> Store.write t.store (fun txn -> Write.backfill_index txn c idx))
+        | None -> false
+        | Some idx -> Store.write t.store (fun txn -> Write.backfill_index txn c idx); true)
   else begin
     (* non-unique: build ONLINE. Phase 1 — register [ready=false]: the planner skips it (a query never
        sees partial results) while new writes still maintain it (it's in [c.indexes]). Phase 2 — backfill
@@ -377,19 +377,64 @@ let ensure_index t (c : collection) ~name ~keys ~unique ~sparse =
        (no long lock). Phase 3 — flip it ready. A crash mid-build leaves [ready=false] on disk, which
        {!Catalog.open_} drops on reopen. *)
     match with_write t (fun () -> Catalog.ensure_index t.cat c ~name ~keys ~unique ~sparse ~ready:false) with
-    | None -> ()
+    | None -> false
     | Some idx ->
       let rec backfill from =
         let n, last = submit t ~coll:c.name (fun txn -> Write.backfill_chunk txn c idx ~from ~limit:online_index_chunk) in
         if n >= online_index_chunk then backfill last
       in
       backfill None;
-      with_write t (fun () -> Catalog.set_index_ready t.cat c idx)
+      with_write t (fun () -> Catalog.set_index_ready t.cat c idx);
+      true
   end
 
-let drop_index t (c : collection) ~name = with_write t (fun () -> Catalog.drop_index t.cat c ~name)
+let ensure_index t (c : collection) ~name ~keys ~unique ~sparse =
+  (* log the DDL only when an index was actually created, so a repeated ensure at startup isn't re-logged *)
+  if ensure_index_core t c ~name ~keys ~unique ~sparse then
+    submit t ~coll:c.name (fun txn ->
+        Oplog.append t.oplog txn ~op:Oplog.Command ~ns:c.name ~id:B.Null
+          ~doc:(Some (ddl_create_index ~name ~keys ~unique ~sparse)))
+
+(* the index drop WITHOUT logging. Returns whether the index existed (so the public op logs only real drops). *)
+let drop_index_core t (c : collection) ~name =
+  let existed = List.mem name (Catalog.index_names c) in
+  with_write t (fun () -> Catalog.drop_index t.cat c ~name);
+  existed
+
+let drop_index t (c : collection) ~name =
+  if drop_index_core t c ~name then
+    submit t ~coll:c.name (fun txn ->
+        Oplog.append t.oplog txn ~op:Oplog.Command ~ns:c.name ~id:B.Null ~doc:(Some (ddl_drop_index ~name)))
 let index_names (c : collection) = Catalog.index_names c
 
 let index_specs (c : collection) =
   List.map (fun (i : Catalog.index) -> (i.Catalog.iname, i.Catalog.keys, i.Catalog.unique)) c.Catalog.indexes
 let set_validator t (c : collection) v = with_write t (fun () -> Catalog.set_validator t.cat c v)
+
+(* replay a DDL command entry on a replica: re-run the schema change via the NON-logging cores *)
+let apply_ddl t ~ns d =
+  let c = collection t ns in
+  match B.get_string d "ddl" with
+  | Some "createIndex" ->
+    ignore
+      (ensure_index_core t c
+         ~name:(Option.value ~default:"" (B.get_string d "name"))
+         ~keys:(Option.value ~default:(B.Document []) (B.get d "keys"))
+         ~unique:(Option.value ~default:false (B.get_bool d "unique"))
+         ~sparse:(Option.value ~default:false (B.get_bool d "sparse")))
+  | Some "dropIndex" -> ignore (drop_index_core t c ~name:(Option.value ~default:"" (B.get_string d "name")))
+  | _ -> ()
+
+(* apply one change-log entry idempotently to THIS engine — a data OR schema change, NOT re-appended to the
+   oplog (replay must not re-log). Routes CRUD through the writer for the single-writer invariant; a Command
+   replays the DDL via {!apply_ddl}. The PITR-replay / replica-follower path. *)
+let oplog_apply t (e : Oplog.entry) =
+  match e.Oplog.op with
+  | Oplog.Command -> ( match e.Oplog.doc with Some d -> apply_ddl t ~ns:e.Oplog.ns d | None -> ())
+  | _ ->
+    let c = collection t e.Oplog.ns in
+    submit t ~coll:c.name (fun txn ->
+        match (e.Oplog.op, e.Oplog.doc) with
+        | (Oplog.Insert | Oplog.Update), Some d -> Write.replace_by_id txn c ~id:e.Oplog.id d
+        | Oplog.Delete, _ -> Write.remove_by_id txn c ~id:e.Oplog.id
+        | _ -> ())

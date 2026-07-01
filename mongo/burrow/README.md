@@ -159,9 +159,9 @@ layer on this primitive (see `PRODUCTION.md`); point-in-time recovery beyond the
   replication — the `Burrow.Replica` follower plus a wire transport (the `oplogFetch` command + `Wire_client`
   + `Replication.pull`), so a follower converges to a remote source over the MongoDB wire — authenticating
   with SCRAM-SHA-256 (mutual auth) or plaintext on a trusted network. A lagged follower detects it is too
-  stale to tail (`Replica.too_stale` against the `oplogFetch` retention floor) and must re-sync. Remaining:
-  read-preference routing, and DDL logging (see
-  `PRODUCTION.md` §5).
+  stale to tail (`Replica.too_stale` against the `oplogFetch` retention floor) and must re-sync. Index DDL
+  (create/drop) is logged + replayed too, so a replica's indexes track the source. Remaining: read-preference
+  routing (see `PRODUCTION.md` §5).
 - **GridFS** — large-blob storage is a driver-level convention; the engine stores large values fine.
 - **Planner** — equality / range / compound / `$in` / `$or` (index-union) / intersection selection,
   selectivity scoring, forward+reverse sort-via-index (streaming early-termination for sorted+limit),
