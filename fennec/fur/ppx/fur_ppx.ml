@@ -403,7 +403,6 @@ let rec componentize str =
    BEFORE the JSX mapper runs — then componentize folds it into `make` as usual. *)
 let is_jsx e = List.exists (fun a -> a.attr_name.txt = "JSX") e.pexp_attributes
 let desugar_blocks str =
-  let open Ast_builder.Default in
   List.map (fun item -> match item.pstr_desc with
     | Pstr_eval (e, _) when is_jsx e ->
       (match e.pexp_desc with
@@ -535,7 +534,6 @@ let desugar_handler str =
    the per-field errors AND the submitted values preserved (Form.ctx carries the conn). The client build
    (-conn-client) strips it to `type t` (no Form/Handler/Conn client-side; route_gen never bundles it). *)
 let desugar_form_handler str =
-  let open Ast_builder.Default in
   let loc = Location.none in
   if !conn_client then
     (* a form handler has no client half — keep only the payload type (codec-only, dead), drop the rest *)

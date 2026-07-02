@@ -440,7 +440,11 @@ end
    The [source] hook is the only platform split (the SOURCE functor, as a ref): on
    the server it forks an Eio fiber; on the client it does a real fetch. *)
 module Data = struct
-  type 'a state = Loading | Ready of 'a | Failed of string
+  (* a resource is Loading until its json arrives, then Ready. There is deliberately no Failed
+     state YET: the platform source callback only delivers success, so a failed fetch keeps the
+     resource Loading and readers keep serving [fallback] — degrade, never crash. Surfacing fetch
+     errors means widening the public [set_source] contract; do that as a feature, not here. *)
+  type 'a state = Loading | Ready of 'a
   type 'a t = { st : 'a state signal; key : string; decode : string -> 'a; fallback : 'a }
 
   (* key -> raw payload string. Client: seeded from __FUR_DATA__, consumed once.
@@ -575,10 +579,8 @@ module Data = struct
   let model_local_client codec name ?path ~(fallback : 'a) () : 'a t = model codec (local_path ?path name) ~fallback ()
 
   (* reactive readers (each subscribes via get) *)
-  let status r = get r.st
   let value r = match get r.st with Ready v -> v | _ -> r.fallback  (* fallback until ready *)
   let loading r = match get r.st with Loading -> true | _ -> false
-  let error r = match get r.st with Failed e -> Some e | _ -> None
   (* an explicit, dynamic refetch always hits the network (bypasses the seed) *)
   let refetch r = set r.st Loading; (Platform.data_source ()) r.key (fun json -> set r.st (Ready (r.decode json)))
 
@@ -883,6 +885,10 @@ module Reconcile (B : BACKEND) = struct
     | Text s -> MText (B.create_text s)
     | Comp c -> mount_comp c
     | Fragment _ -> MText (B.create_text "")
+    (* [Raw] is the SERVER-only escape hatch (to_html emits it verbatim). The client backend has no
+       markup-injection op by design (XSS posture), so a Raw created client-side degrades to an INERT
+       text node showing the markup source — visible and debuggable, never executed. *)
+    | Raw s -> MText (B.create_text s)
     | Elem { tag; key; attrs; children } ->
       let node = B.create_element tag in
       let handlers = Hashtbl.create 4 in
@@ -890,26 +896,35 @@ module Reconcile (B : BACKEND) = struct
       let children = List.map (fun ch -> let m = create ch in B.append node (mnode m); m) (flatten children) in
       MElem { tag; key; node; attrs; children; handlers }
 
-  and mk_effect ~first sub =
-    mk_reaction (fun () -> match !sub with `R (render, m) ->
-        let v = render () in
-        (match m with
-         | None -> sub := `R (render, Some (first v))
-         | Some old -> (match B.parent (mnode old) with
-             | Some p -> sub := `R (render, Some (reconcile ~parent:p old v))
-             | None -> sub := `R (render, Some old))))
-
   and instantiate ~first (c : comp) =
     let cleanups = ref [] in
     let saved = !current_cleanups in
     current_cleanups := cleanups;
     let render = c.setup () in
     let sub = ref (`R (render, None)) in
-    let eff = mk_effect ~first sub in
+    (* the enclosing mcomp, once built — the re-render effect must write the fresh mounted BACK into
+       it (not only into [sub]): [mnode]/[unmount]/keyed moves all read [mcomp.msub], and a re-render
+       whose root changes shape REPLACES the node, so a stale [msub] would point at detached DOM *)
+    let mc_ref = ref None in
+    let eff =
+      mk_reaction (fun () -> match !sub with `R (render, m) ->
+          let v = render () in
+          let update nm =
+            sub := `R (render, Some nm);
+            match !mc_ref with Some mc -> mc.msub <- nm | None -> ()
+          in
+          (match m with
+           | None -> update (first v)
+           | Some old -> (match B.parent (mnode old) with
+               | Some p -> update (reconcile ~parent:p old v)
+               | None -> ())))
+    in
     run_effect eff;
     current_cleanups := saved;
     let m = (match !sub with `R (_, Some m) -> m | _ -> failwith "comp produced nothing") in
-    MComp { mcid = c.cid; mckey = c.ckey; msub = m; meff = eff; cleanups }
+    let mc = { mcid = c.cid; mckey = c.ckey; msub = m; meff = eff; cleanups } in
+    mc_ref := Some mc;
+    MComp mc
   and mount_comp c = instantiate ~first:create c
 
   (* the adopted SSR node [dom] doesn't match what this vnode expects (SSR/CSR drift): build the
@@ -926,6 +941,8 @@ module Reconcile (B : BACKEND) = struct
       if B.is_text dom then MText dom else hydrate_recover dom v
     | Comp c -> instantiate ~first:(fun v -> hydrate dom v) c
     | Fragment _ -> MText dom
+    (* Raw was SSR-emitted verbatim — adopt whatever node it produced as-is (opaque, never patched) *)
+    | Raw _ -> MText dom
     | (Elem { tag; key; attrs; children }) as v ->
       (* tag must match; otherwise adopt-in-place would corrupt the tree on the first patch *)
       if B.node_tag dom <> Some (String.lowercase_ascii tag) then hydrate_recover dom v
@@ -1024,7 +1041,7 @@ module Reconcile (B : BACKEND) = struct
       dispose eff;
       (match !mounted with Some m -> unmount m | None -> ());
       mounted := None
-  let mount_root container render = ignore (mount_root_disposable container render)
+  let mount_root container render = ignore (mount_root_disposable container render : unit -> unit)
 end
 
 (* ──── signals ──── *)
@@ -1036,27 +1053,27 @@ let%test "peek initial" =
 let%test_unit "effect runs once on create" =
   let s = signal 0 in
   let runs = ref 0 in
-  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  let (_ : unit -> unit) = watch (fun () -> incr runs; ignore (get s)) in
   Fennec_hunt_unit.check "effect runs once on create" (!runs = 1)
 
 let%test_unit "effect re-runs on change" =
   let s = signal 0 in
   let runs = ref 0 in
-  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  let (_ : unit -> unit) = watch (fun () -> incr runs; ignore (get s)) in
   set s 1;
   Fennec_hunt_unit.check "effect re-runs on change" (!runs = 2)
 
 let%test_unit "no re-run on equal set" =
   let s = signal 0 in
   let runs = ref 0 in
-  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  let (_ : unit -> unit) = watch (fun () -> incr runs; ignore (get s)) in
   set s 1; set s 1;
   Fennec_hunt_unit.check "no re-run on equal set" (!runs = 2)
 
 let%test_unit "update notifies" =
   let s = signal 0 in
   let runs = ref 0 in
-  let _ = watch (fun () -> incr runs; ignore (get s)) in
+  let (_ : unit -> unit) = watch (fun () -> incr runs; ignore (get s)) in
   set s 1; update s (fun n -> n + 1);
   Fennec_hunt_unit.check "update notifies" (!runs = 3 && peek s = 2)
 
@@ -1071,27 +1088,27 @@ let%test_unit "disposed effect never re-runs" =
 let%test_unit "dynamic deps: tracks a" =
   let a = signal 1 and b = signal 10 and pick = signal true in
   let last = ref 0 in
-  let _ = watch (fun () -> last := if get pick then get a else get b) in
+  let (_ : unit -> unit) = watch (fun () -> last := if get pick then get a else get b) in
   Fennec_hunt_unit.check "dynamic deps: tracks a" (!last = 1)
 
 let%test_unit "switches to b" =
   let a = signal 1 and b = signal 10 and pick = signal true in
   let last = ref 0 in
-  let _ = watch (fun () -> last := if get pick then get a else get b) in
+  let (_ : unit -> unit) = watch (fun () -> last := if get pick then get a else get b) in
   set pick false;
   Fennec_hunt_unit.check "switches to b" (!last = 10)
 
 let%test_unit "no longer tracks a after switch" =
   let a = signal 1 and b = signal 10 and pick = signal true in
   let last = ref 0 in
-  let _ = watch (fun () -> last := if get pick then get a else get b) in
+  let (_ : unit -> unit) = watch (fun () -> last := if get pick then get a else get b) in
   set pick false; set a 5;
   Fennec_hunt_unit.check "no longer tracks a after switch" (!last = 10)
 
 let%test_unit "custom eq (always-notify) re-runs on equal set" =
   let no = signal 0 ~eq:(fun _ _ -> false) in
   let c = ref 0 in
-  let _ = watch (fun () -> incr c; ignore (get no)) in
+  let (_ : unit -> unit) = watch (fun () -> incr c; ignore (get no)) in
   set no 0;
   Fennec_hunt_unit.check "custom eq (always-notify) re-runs on equal set" (!c = 2)
 
@@ -1463,6 +1480,22 @@ let%test "no orphans after diff" =
   set model [ 3; 1; 2 ]; set model [ 3; 2 ]; set model [ 3; 2; 4 ];
   List.length (List.hd root.Fake.kids).Fake.kids = 3
 
+(* the STALE-msub regression: a component's re-render can REPLACE its root node (a Text -> Elem
+   shape change goes through reconcile's swap arm); the enclosing mcomp.msub must track that, because
+   the PARENT later locates the comp by [mnode] (= msub). Pre-fix, msub kept the ORIGINAL node, so
+   replacing the comp after a shape-swap targeted detached DOM and corrupted the parent's children. *)
+let%test "a comp whose root changed shape is still replaceable by its parent (msub tracks re-renders)" =
+  let flip = signal false in
+  let show = signal true in
+  let inner = comp ~cid:"shape" (fun () -> fun () -> if get flip then h "span" [] [ text "b" ] else text "a") in
+  let render () = h "div" [] [ (if get show then inner else text "z") ] in
+  let root = Fake.create_element "" in
+  let _ = D.mount_root root render in
+  set flip true (* the comp's own effect swaps its root Text -> Elem (span) *);
+  set show false (* the parent replaces the comp — must target the CURRENT node, not the stale one *);
+  let div = List.hd root.Fake.kids in
+  match div.Fake.kids with [ only ] -> only.Fake.tag = None && only.Fake.text = "z" | _ -> false
+
 (* ──── keyed MINIMAL moves (the append-storm fix) ──── *)
 
 (* a keyed list renderer + a model signal, with a helper that re-renders and reports how many
@@ -1548,7 +1581,7 @@ let%test "on_mount watch is scoped to its component and disposes on unmount" =
   let s = signal 0 in
   let base = List.length s.subs in
   let comp_v = comp ~cid:"mounter" (fun () ->
-      on_mount (fun () -> ignore (watch (fun () -> ignore (get s))));
+      on_mount (fun () -> ignore (watch (fun () -> ignore (get s)) : unit -> unit));
       fun () -> text "x") in
   let root = Fake.create_element "" in
   let dispose_root = D.mount_root_disposable root (fun () -> comp_v) in
@@ -1568,7 +1601,7 @@ let%test "on_mount watch does not accumulate across N mount/unmount cycles" =
   let base = List.length s.subs in
   let cycle () =
     let comp_v = comp ~cid:"mounter" (fun () ->
-        on_mount (fun () -> ignore (watch (fun () -> ignore (get s))));
+        on_mount (fun () -> ignore (watch (fun () -> ignore (get s)) : unit -> unit));
         fun () -> text "x") in
     let root = Fake.create_element "" in
     let dispose_root = D.mount_root_disposable root (fun () -> comp_v) in
@@ -1620,7 +1653,7 @@ let%test "diamond: two signals into one component, both set in a batch, render o
 let%test "self-writing effect terminates (bounded, no overflow)" =
   let c = signal 0 in
   let runs = ref 0 in
-  let _ = watch (fun () -> incr runs; let v = get c in if v < 1_000_000 then set c (v + 1)) in
+  let (_ : unit -> unit) = watch (fun () -> incr runs; let v = get c in if v < 1_000_000 then set c (v + 1)) in
   (* it must have stopped on its own; the cap bounds both the run count and the value *)
   !runs <= reentry_cap + 1 && peek c <= reentry_cap + 1 && peek c > 0
 
@@ -1630,7 +1663,7 @@ let%test "self-writing effect terminates (bounded, no overflow)" =
 let%test "flush_sync forces a synchronous flush" =
   let s = signal 0 in
   let mirror = ref 0 in
-  let _ = watch (fun () -> mirror := get s) in
+  let (_ : unit -> unit) = watch (fun () -> mirror := get s) in
   flush_sync (fun () -> set s 42);
   !mirror = 42
 
@@ -1656,7 +1689,7 @@ let%test "memo is glitch-free: observer sees one consistent update per batch" =
   let a = signal 1 and b = signal 1 in
   let m = memo (fun () -> get a + get b) in
   let observed = ref [] in
-  let _ = watch (fun () -> observed := get m :: !observed) in   (* initial run records 2 *)
+  let (_ : unit -> unit) = watch (fun () -> observed := get m :: !observed) in   (* initial run records 2 *)
   flush_sync (fun () -> set a 5; set b 5);                       (* one update to 10 *)
   (* the observer ran once at creation (2) and once for the batched memo change (10) — never on a
      half-applied intermediate like 6 *)

@@ -5,4 +5,4 @@
  (libraries eio)
  (modes byte native)
  (flags
-  (:standard -w -a)))
+  (:standard)))

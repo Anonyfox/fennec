@@ -7,4 +7,4 @@
  (preprocess
   (pps js_of_ocaml-ppx))
  (flags
-  (:standard -w -a)))
+  (:standard)))

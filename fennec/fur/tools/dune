@@ -5,17 +5,17 @@
  (modules route_gen)
  (libraries unix)
  (flags
-  (:standard -w -a)))
+  (:standard)))
 
 (executable
  (name stage)
  (modules stage)
  (libraries unix)
  (flags
-  (:standard -w -a)))
+  (:standard)))
 
 (executable
  (name style_extract)
  (modules style_extract)
  (flags
-  (:standard -w -a)))
+  (:standard)))

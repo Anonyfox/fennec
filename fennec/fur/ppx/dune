@@ -13,4 +13,4 @@
  (preprocess
   (pps ppxlib.metaquot))
  (flags
-  (:standard -w -a)))
+  (:standard)))

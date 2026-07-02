@@ -39,7 +39,8 @@ let start () =
     | Head.Script (a, b) -> set_attrs el a; el##.textContent := Js.some (Js.string b)
     | Head.Json_ld j -> el##.textContent := Js.some (Js.string j)
   in
-  ignore (Fur.watch (fun () ->
+  (* the head-sync watch lives for the page's lifetime — its dispose thunk is deliberately dropped *)
+  let (_ : unit -> unit) = Fur.watch (fun () ->
       let desired = Head.resolve (get (Head.sources ())) in  (* subscribes to the registry *)
       let keyed = List.map (fun t -> (Head.tag_key t, t)) desired in
       let wanted = List.map fst keyed in
@@ -49,4 +50,6 @@ let start () =
           | None -> let el = mk k t in Dom.appendChild head el; Hashtbl.replace current k el)
         keyed;
       let stale = Hashtbl.fold (fun k el acc -> if List.mem k wanted then acc else (k, el) :: acc) current [] in
-      List.iter (fun (k, el) -> (try Dom.removeChild head el with _ -> ()); Hashtbl.remove current k) stale))
+      List.iter (fun (k, el) -> (try Dom.removeChild head el with _ -> ()); Hashtbl.remove current k) stale)
+  in
+  ()

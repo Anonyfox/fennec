@@ -93,7 +93,6 @@ let app_dirs apps_dir =
 let route_mod n = String.capitalize_ascii (mangle n ^ "_routes")
 
 (* the wrapped per-app library's module name: app "main" -> lib main_app -> module Main_app *)
-let lib_mod n = String.capitalize_ascii (mangle n) ^ "_app"
 
 (* GLUE mode (real-module apps): the app's page/layout/main .mlx are REAL dune modules
    in a per-app library with (include_subdirs qualified), so Merlin/LSP works and editing

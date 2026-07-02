@@ -17,4 +17,4 @@
   (pps fennec.fur.ppx))
  (modes byte native)
  (flags
-  (:standard -w -a)))
+  (:standard)))

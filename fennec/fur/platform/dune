@@ -8,4 +8,4 @@
  (default_implementation fennec_fur_platform_native)
  (modes byte native)
  (flags
-  (:standard -w -a)))
+  (:standard)))
