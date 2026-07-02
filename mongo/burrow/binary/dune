@@ -1,7 +1,14 @@
 ; Burrow — the record binary codec + zero-copy field reader. Pure OCaml (only depends on the in-memory
 ; Bson value type), so it is unit/property-testable with no disk. [Bson.t] <-> compact record bytes;
 ; [find_field] walks to one field while skipping the rest by size (the read-path win the spike showed).
+;
+; Tests are INLINE (let%test at the bottom of burrow_binary.ml — lossless round-trip over all 19 BSON
+; types + find_field agreement); native-only lib, so the registrations never reach a browser bundle.
 (library
  (name burrow_binary)
  (public_name fennec-mongo.burrow.binary)
- (libraries fennec-mongo.bson))
+ (libraries fennec-mongo.bson fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))

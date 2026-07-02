@@ -1,5 +1,7 @@
 (* Extended-JSON codec: round-trips (by numeric-aware Bson.equal), the canonical wire forms, relaxed
-   parsing, non-finite floats, find-style arrays, and malformed-input handling. *)
+   parsing, non-finite floats, find-style arrays, and malformed-input handling.
+   Foldered (not inline) because bson_json is in browser closures (pulse/live/client) — inline
+   registrations would compile into the bundle; see mongo/test/test_mongo.ml for the rule. *)
 
 module BJ = Fennec_mongo_bson_json.Bson_json
 module B = Bson

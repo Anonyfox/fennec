@@ -1,7 +1,0 @@
-; Property evidence for the memcomparable key codec: the byte order of encoded keys must match
-; Bson.compare over 200k random scalar pairs, plus cross-type number equality and type bracketing.
-(test
- (name test_key_codec)
- (libraries burrow_codec fennec-mongo.bson fennec-hunt.unit fennec-hunt.prop)
- (preprocess
-  (pps fennec-hunt.ppx)))

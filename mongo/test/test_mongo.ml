@@ -3,8 +3,13 @@
    for the laws (sort orders + permutes, $set-then-read, insert-then-find, diff/merge identities).
    Many cases here are regressions for bugs an audit surfaced (array-aware matching, numeric
    equality, $inc on Int64/non-numeric, $mod, $elemMatch operators, $pull by value, upsert seeds,
-   re-entrant-observer safety, insertion-order/clear). The libraries stay dependency-free; the
-   tooling lives here. *)
+   re-entrant-observer safety, insertion-order/clear).
+
+   WHY A FOLDER, NOT INLINE: the repo convention is [let%test] INLINE next to the code — but inline
+   registrations compile INTO the library, and the pure trio ships to the BROWSER via js_of_ocaml
+   (the client runs this same Minimongo). Inlining would carry every test closure into every app
+   bundle. So the js-shipping libs are the one deliberate exception: their tests live here, and the
+   libs stay dependency-free. Native-only libs (e.g. burrow codec/binary) inline as normal. *)
 
 module C = Minimongo
 open Query

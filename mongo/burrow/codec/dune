@@ -2,7 +2,14 @@
 ; LMDB/C), so it lives cleanly on the pure side and is property-testable with no disk. The byte order
 ; of an encoded key equals Bson.compare's value order; encodings are prefix-free so index entries
 ; (key ++ _id) and compound keys concatenate correctly.
+;
+; Tests are INLINE (let%test at the bottom of key_codec.ml — the order-preservation law over 200k
+; random pairs); native-only lib, so the registrations never reach a browser bundle.
 (library
  (name burrow_codec)
  (public_name fennec-mongo.burrow.codec)
- (libraries fennec-mongo.bson))
+ (libraries fennec-mongo.bson fennec-hunt.unit)
+ (inline_tests
+  (backend fennec-hunt.runner))
+ (preprocess
+  (pps fennec-hunt.ppx)))
