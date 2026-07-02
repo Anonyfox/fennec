@@ -40,6 +40,11 @@ module Accounts = Fennec_accounts.Accounts
     dev mailbox (a userland realtime SPA over that collection) is built on. *)
 module Mail = Fennec_mail
 
+(** Sift — the shape language: one codec per model drives validation, BSON/JSON, typed filters, and
+    the [$jsonSchema] the database enforces (see [fennec/pulse/sift/README.md]). Re-exported so
+    hand-written codecs and form/resource signatures need no second dep. *)
+module Sift = Sift
+
 (** {1 Fur — the presentation layer}
 
     One namespace ([open Fennec.Fur]) for everything that turns data into what a client sees:
@@ -48,8 +53,6 @@ module Mail = Fennec_mail
     server "handler" reads typed inputs, runs Pulse/Accounts logic, and answers with a component
     rendered to static HTML (no JS). JSON APIs are hand-built with {!Fur.Respond}. Includes the
     isomorphic Fur core, so [h]/[text]/[signal]/[to_html] are here too. *)
-module Sift = Sift
-
 module Fur : sig
   (* the [struct include] idiom keeps [vnode]/[attr]/[signal] EQUAL to the core Fur types (a bare
      [module type of Fur] would re-abstract them and break interop with Handler/Form) *)
@@ -116,29 +119,10 @@ module Tls : sig
   val of_pem : cert:string -> key:string -> t
 end
 
-(** Pluggable storage for ACME account keys + issued certificates. The default ({!Acme.auto} with no
-    [~store]) is a file store; an ephemeral or multi-replica deployment provides its own (a k8s
-    Secret / S3 / Redis / DB) by building a {!t}. See {!Paw.Cert_store}. *)
-module Cert_store : sig
-  (** A cert store — a record of operations (so an external backend is just a value, no functor). *)
-  type t = Paw.Cert_store.t = {
-    get : string -> string option;
-    put : string -> string -> unit;
-    delete : string -> unit;
-    with_lease : string -> (unit -> unit) -> bool;  (** multi-instance dedup: only the holder runs the thunk *)
-  }
-
-  (** [memory ()] — in-process; dev / test / ephemeral (lost on restart). *)
-  val memory : unit -> t
-
-  (** [file ~dir] — the default: atomic, [0600] files under [dir]; survives restarts. *)
-  val file : dir:string -> t
-end
-
 (** Automatic HTTPS via ACME (Let's Encrypt): HTTP-01 for the host router's concrete domains, a
-    {!Cert_store}-backed cert, and zero-downtime renewal. Pass {!Acme.auto} to {!serve} as [~acme].
-    Wildcards (DNS-01) and a dynamic catch-all (on-demand TLS) are out of scope. See
-    {!Paw.Acme}. *)
+    cert stored via {!Paw.Cert_store} (the default is a file store; an ephemeral or multi-replica
+    deployment passes its own — a k8s Secret / S3 / DB — as [~store]), and zero-downtime renewal.
+    Pass {!Acme.auto} to {!serve} as [~acme]. See {!Paw.Acme}. *)
 module Acme : sig
   (** ACME configuration. *)
   type config = Paw.Acme.config
@@ -157,7 +141,7 @@ module Acme : sig
       issued on first connect and cached — for runtime-added per-tenant / customer domains. *)
   val auto :
     ?email:string ->
-    ?store:Cert_store.t ->
+    ?store:Paw.Cert_store.t ->
     ?staging:bool ->
     ?domains:string list ->
     ?directory:string ->
@@ -198,7 +182,7 @@ end
     defaults} — hard-wired, every optional feature off, all methods on, anonymous identity [None].
 
     This is the single place that starts the server — a second call is a runtime error.
-    The CLI's discovery ({!Discover}) finds this call site automatically. *)
+    The CLI's discovery ([fennec discover]) finds this call site automatically. *)
 val serve :
   ?timeout:float ->
   ?max_conns:int ->

@@ -12,18 +12,16 @@
 open Paw
 
 module Tls = Paw.Tls_termination (* in-process HTTPS termination: load a cert+key, pass to serve ~tls *)
-module Cert_store = Paw.Cert_store (* pluggable ACME cert storage: file (default) / memory / custom *)
 module Acme = Paw.Acme (* automatic HTTPS (Let's Encrypt): serve ~acme:(Acme.auto ~email ()) *)
 module Accounts = Fennec_accounts.Accounts
 module Mail = Fennec_mail (* outbound email: one MAIL_URL knob (unset ⇒ logged to stdout in dev) *)
+module Sift = Sift (* the shape language — for hand-written codecs + the resource/form signatures *)
 
 (* The presentation layer — Fur. ONE namespace ([open Fennec.Fur]) for everything that turns data
    into what a client sees: components & signals (live SPA, isomorphic core), standalone [Page]s
    (an isomorphic view + a server conn block + the page's own jsoo bundle), and server-rendered HTML
    via [Handler]. Typed HTTP input is [Form]/[Action]; JSON APIs are hand-built with [Respond].
    Includes the isomorphic Fur core, so [h]/[text]/[signal]/[document] are all here too. *)
-module Sift = Sift (* the shape language — for hand-written codecs + the resource/form signatures *)
-
 module Fur = struct
   include Fur (* core: h, text, frag, node, attr, class_, on, document, to_html, signal, get, set, … *)
 
