@@ -12,4 +12,4 @@
   (pps fennec-hunt.ppx))
  (modes byte native)
  (flags
-  (:standard -w -a)))
+  (:standard)))

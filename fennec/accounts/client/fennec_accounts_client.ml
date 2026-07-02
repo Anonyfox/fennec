@@ -287,18 +287,23 @@ let current_user_publication = "__currentUser"
    clears via its own verb; the now-empty sub simply stops feeding. *)
 let live_back_user t =
   ignore (Ddp_client.subscribe t.ddp ~name:current_user_publication ());
-  let live = Ddp_client.find t.ddp current_user_collection () in
-  (* the watch lives for the client's lifetime (page-scoped, like the client itself) *)
-  ignore
-    (Fur.watch (fun () ->
-         match Fur.get live with
-         | [||] -> () (* loading / logged out / no DDP — do not clobber what the verbs set *)
-         | docs -> (
-           match decode_user docs.(0) with
-           | Ok user ->
-             Fur.set t.user_sig (Some user);
-             Fur.set t.user_id_sig (Some user.id)
-           | Error _ -> () (* a malformed/foreign doc never crashes the live signal *))))
+  (* the raw (deprecated-for-userland) find is sanctioned HERE: the internal __currentUser collection
+     has no client-side [Def.t] — [decode_user] validates each doc at the boundary and never crashes *)
+  let live = (Ddp_client.find [@alert "-deprecated"]) t.ddp current_user_collection () in
+  (* the watch lives for the client's lifetime (page-scoped, like the client itself) — its dispose
+     thunk is deliberately dropped *)
+  let (_ : unit -> unit) =
+    Fur.watch (fun () ->
+        match Fur.get live with
+        | [||] -> () (* loading / logged out / no DDP — do not clobber what the verbs set *)
+        | docs -> (
+          match decode_user docs.(0) with
+          | Ok user ->
+            Fur.set t.user_sig (Some user);
+            Fur.set t.user_id_sig (Some user.id)
+          | Error _ -> () (* a malformed/foreign doc never crashes the live signal *)))
+  in
+  ()
 
 let of_ddp ?(token_key = Some default_token_key) ddp =
   let t =
