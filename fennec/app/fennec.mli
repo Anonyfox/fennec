@@ -134,7 +134,16 @@ module Acme : sig
   (** [auto ?email ?store ?staging ?domains ?directory ?dns_provider ()] — automatic certificates.
       Never raises; a missing email leaves HTTPS off. Env overrides code: [FENNEC_ACME_EMAIL],
       [FENNEC_ACME_STAGING], [FENNEC_ACME_DIR] (store). ACME runs in production only unless
-      [FENNEC_ACME=1] forces it; in dev it no-ops to plain HTTP. [store] defaults to a file store;
+      [FENNEC_ACME=1] forces it; in dev it no-ops to plain HTTP.
+
+      [store] — where account keys + issued certs live. The whole story, in place:
+      - {b default}: atomic [0600] files (survives restarts); move it with [FENNEC_ACME_DIR]
+        or [~store:(Cert_store.file ~dir)].
+      - {b ephemeral} (tests, throwaway boxes): [~store:(Cert_store.memory ())].
+      - {b multi-replica / external} (k8s Secret, S3, DB): build the four-op
+        {!Paw.Cert_store.t} record yourself — [with_lease] is what dedups issuance across replicas.
+      ([Cert_store] is Paw's, reached by the usual [open Paw].)
+
       [domains] overrides the router-derived set; [staging] uses Let's Encrypt staging. [dns_provider]
       enables DNS-01 so wildcard hosts (e.g. ["*.app.com"]) are certified. [on_demand] enables
       on-demand issuance: an HTTPS connection for an SNI host the callback approves gets its cert
