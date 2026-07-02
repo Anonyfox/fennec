@@ -1,4 +1,9 @@
-; fennec-hunt — the testing package. The fennec hunts for bugs. Two layers:
+; fennec-hunt — the testing package. The fennec hunts for bugs. Four independent layers, one
+; ladder — from inline assertions next to the code up to a real browser:
+;
+;   Inline tests (Fennec_hunt.Unit + Prop, via fennec-hunt.ppx + .runner): let%test unit
+;     assertions and let%prop type-derived property tests IN the source file, run by dune's
+;     inline_tests. For localized logic — the default caliber.
 ;
 ;   Http tests (Fennec_hunt.Http): a typed HTTP/1.1 client + deterministic assertions over
 ;     any URL (http or https — TLS via tls-eio, accept-any-cert for self-signed/staging).
@@ -9,7 +14,11 @@
 ;     + DevTools Protocol, an auto-waiting page DSL, rich failure diagnostics.
 ;     For "does the counter hydrate?" and "does the page render correctly?"
 ;
-; One package, two independent layers — import what you need. Its OWN opam package
+;   System tests (Fennec_hunt.System): a typed vocabulary for what shell scripts do — spawn,
+;     watch output, poke files, probe ports — deadline-bounded waits, process-group teardown.
+;     For "does the dev server free its port when killed?"
+;
+; One package, four independent layers — import what you need. Its OWN opam package
 ; (fennec-hunt), so production servers depending on `fennec` never link it.
 ;
 ; The Browser DSL is written against an abstract page BACKEND, so the DSL/runner are

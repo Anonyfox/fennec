@@ -1,16 +1,41 @@
 {0 fennec-hunt}
 
-Testing for OCaml web apps, in pure OCaml — two independent layers, one package:
+Testing for OCaml web apps, in pure OCaml — four independent layers, one ladder, one package:
 
+- {b Inline tests} ({!Fennec_hunt.Unit}, {!Fennec_hunt.Prop}) — [let%test] unit assertions and
+  [let%prop] type-derived property tests {e in the source file}, run by dune's [inline_tests]
+  with one stanza ([(inline_tests (backend fennec-hunt.runner))] +
+  [(preprocess (pps fennec-hunt.ppx))]). The default caliber for localized logic: the test
+  lives next to the code it checks.
 - {b Http tests} ({!Fennec_hunt.Http}) — a typed HTTP/1.1 client and deterministic
   assertions against any URL. No browser. One request → one response → immediate pass/fail.
 - {b Browser tests} ({!Fennec_hunt.Live}, {!Fennec_hunt.Run}) — a real headless Chromium
   driven over a hand-written Chrome DevTools Protocol client. {b No Node, no chromedriver,
   no Selenium, no Lwt.}
+- {b System tests} ({!Fennec_hunt.System}) — a typed vocabulary for what shell scripts do
+  (spawn processes, watch output, poke the filesystem, probe ports): argv as a list (no shell,
+  no injection), deadline-bounded condition waits (never [sleep]), total process-group
+  teardown (no orphans). Replaces hand-rolled [.sh] integration tests.
 
 Import whichever layer a test needs. The package is intentionally separate from the
 [fennec] web framework, so a production server never links the test machinery; it has no
 dependency on [fennec] and works against any web server.
+
+{1 Inline tests}
+
+{[
+(* at the bottom of the source file it checks *)
+let%test "unescape round-trips escape" = unescape (escape "a,b=c") = "a,b=c"
+
+let%prop "sort is idempotent" = fun (xs : int list) -> sort (sort xs) = sort xs
+]}
+
+[let%test] is one boolean assertion with a name; [let%prop] derives generators and
+counterexample printers from the argument types (a lean [qcheck-core] under the hood) and
+shrinks failures. Both register into the library and run under [dune test] via the
+[fennec-hunt.runner] inline-tests backend — pass/fail with file:line, no runner file to
+write. In a production build the registrations are stripped with the rest of the
+inline-tests instrumentation.
 
 {1 Http tests}
 
@@ -64,6 +89,25 @@ failure. You never write an explicit wait. Waits are event-driven (one in-page
 MutationObserver/rAF round-trip, never a poll), navigation is matched by loader id, and
 evaluations are pinned to the live execution context.
 
+{1 System tests}
+
+{[
+module S = Fennec_hunt.System
+
+let%system "the dev server frees its port when killed" = fun sb ->
+  let dev = S.dev sb in                  (* spawns THIS app's dev server — typed, no env strings *)
+  S.wait_ready dev ~port:4000 ();        (* condition wait, never sleep *)
+  S.signal dev Sys.sigkill;
+  S.wait_until (fun () -> not (S.port_open 4000));
+  S.check "port freed" (not (S.port_open 4000))
+]}
+
+For testing a tool that itself spawns processes (a dev server, a CLI). Each scenario runs in
+a disposable sandbox; every process goes into its own session, so teardown kills the whole
+tree — on pass, fail, exception, or timeout. [spawn]/[run_cmd] take argv as a list; results
+are typed ([status], [output], [ms]); [wait_ready] / [wait_output] / [wait_until] /
+[wait_port] are deadline-bounded and raise [Timeout] rather than hang.
+
 {1 What you get}
 
 - {b Http: a full assertion vocabulary} — status, body, headers, JSON-by-path, cookies,
@@ -82,19 +126,23 @@ evaluations are pinned to the live execution context.
 {1 API}
 
 {!modules:
+  Fennec_hunt.Unit
+  Fennec_hunt.Prop
   Fennec_hunt.Http
   Fennec_hunt.Live
   Fennec_hunt.Run
+  Fennec_hunt.System
   Fennec_hunt.Backend
   Fennec_hunt.Driver
   Fennec_hunt.Reporter
   Fennec_hunt.Failure
 }
 
-Http test files need only {!Fennec_hunt.Http}. Browser test files need {!Fennec_hunt.Live}
-(the DSL) and {!Fennec_hunt.Run} (the harness). {!Fennec_hunt.Backend},
-{!Fennec_hunt.Driver} (the functor), {!Fennec_hunt.Reporter}, and {!Fennec_hunt.Failure}
-are for custom backends and custom reporting.
+Inline tests need only the dune stanza (the ppx brings {!Fennec_hunt.Unit} / {!Fennec_hunt.Prop}
+in). Http test files need {!Fennec_hunt.Http}; browser test files need {!Fennec_hunt.Live}
+(the DSL) and {!Fennec_hunt.Run} (the harness); system tests need {!Fennec_hunt.System}.
+{!Fennec_hunt.Backend}, {!Fennec_hunt.Driver} (the functor), {!Fennec_hunt.Reporter}, and
+{!Fennec_hunt.Failure} are for custom backends and custom reporting.
 
 {1 Operating the machinery}
 
@@ -121,5 +169,5 @@ Both layers share one server-lifecycle model:
   teardown under a single switch) — hence OCaml 5+.
 - {b Browser:} any Chromium-family browser on [PATH], or set [CHROME] / pass [~binary].
 - {b Dependencies:} [eio], [yojson] (JSON assertions), [base64] (basic-auth + the WebSocket
-  key), [re] (regex assertions). The HTTP client is hand-written on raw Eio sockets — no
-  cohttp.
+  key), [re] (regex assertions), [tls-eio] (https targets), and [qcheck-core] (under
+  [let%prop]). The HTTP client is hand-written on raw Eio sockets — no cohttp.
