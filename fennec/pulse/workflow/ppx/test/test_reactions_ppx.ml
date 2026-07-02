@@ -24,5 +24,5 @@ let () =
   check "@after desugared and fired with the RESULT (not the input)" (!log = [ "receipt:ADA" ]);
   (try ignore (place "") with Failure _ -> ());
   check "@before guard vetoed (suppressed the after)" (!log = [ "receipt:ADA" ]);
-  check "@cron + @every registered two scheduled jobs" (List.length !S.jobs = 2);
+  check "@cron + @every registered two scheduled jobs" (List.length (S.job_names ()) = 2);
   Printf.printf "all reactions-ppx tests passed\n%!"

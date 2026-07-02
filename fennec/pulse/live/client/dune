@@ -16,4 +16,4 @@
   fennec-mongo.bson_json
   fennec.pulse.method fennec.pulse.sift.mongo fennec.pulse.sift)
  (flags
-  (:standard -w -a)))
+  (:standard)))
