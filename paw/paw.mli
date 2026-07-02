@@ -275,6 +275,10 @@ module Http_date = Http_date
 (** Caching, conditional-request, and range semantics (ETag, [If-*], 304/206/416). *)
 module Http_semantics = Http_semantics
 
+(** The zero-copy request-HEAD parser — paw's one hand-crafted C hot path. {!Server.read_request} is
+    its consumer; exposed for the parser benchmark and head-parsing tooling. *)
+module Http_parse = Http_parse
+
 (** {1 The Eio runtime} *)
 
 (** The HTTP/1.1 + WebSocket acceptor. {!Server.run} serves a {!Host_router} over Eio with
@@ -457,12 +461,10 @@ module Acme_client = Acme_client
 
 (** {1 Dev} *)
 
-(** A live-reload script injector for HTML responses (dev only). *)
+(** The livereload relay + HTML script injector (dev only) — the framework wires it into every
+    endpoint and relays the CLI's change signals via [broadcast]. *)
 module Livereload = Livereload
 
-(** Dev-server niceties shared with tooling: stable feature flags. *)
-module Dev = Dev
-
 (** The CLI⇄server dev control wire — env-var names and the stderr line formats the dev runner
-    parses. *)
+    parses. (The dev-wire feature-flag plumbing is library-private.) *)
 module Dev_proto = Dev_proto

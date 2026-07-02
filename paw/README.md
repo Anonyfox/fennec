@@ -37,8 +37,8 @@ The whole public API is the single `Paw` module (`paw.mli` is its table of conte
 
 | Folder | What lives there |
 | --- | --- |
-| `http/` | the HTTP vocabulary — request/response, headers, cookies, multipart, MIME, dates, caching semantics (pure types, no I/O) |
-| `conn/` | `Conn` — the per-request carrier — and `Assigns`, its typed request-scoped state |
+| `http/` | the HTTP vocabulary — request/response, headers, cookies, multipart, MIME, dates, caching semantics (pure types, no I/O) — plus the zero-copy C request-head parser (`Http_parse`, the one hot spot hand-written in C) |
+| `conn/` | `Conn` — the per-request carrier — `Assigns`, its typed request-scoped state, and `Sse` (Server-Sent Events) |
 | `pipeline/` | the `Paw` algebra (`seq`/`run`) + the route verbs (`get`/`post`/… with `:name` / `*rest` captures) |
 | `routing/` | `Endpoint` (a named app) and Host-header routing (`Host_router`, `Host_pattern`) |
 | `middleware/` | the battery — see below |

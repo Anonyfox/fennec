@@ -194,11 +194,11 @@ module Mime = Mime
 module Multipart = Multipart
 module Http_date = Http_date
 module Http_semantics = Http_semantics
+module Http_parse = Http_parse
 
 (** {1 WebSockets & dev} *)
 module Ws_channel = Ws_channel
 
-module Dev = Dev
 module Dev_proto = Dev_proto
 
 (** {1 The Eio runtime} *)
