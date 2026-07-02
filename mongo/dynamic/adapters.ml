@@ -223,10 +223,10 @@ let bw_observe e (q : Backend.query) ~added ~changed ~removed =
    scheduler). The dispatcher's in-memory write ops consult [Tx.current]: the first write to a
    collection snapshots it; [commit] drops the snapshots, [rollback] restores them.
 
-   Atomicity + rollback are implemented for the in-memory ([:memory:]) backend — what `fennec test`
-   and the dev seed exercise. On burrow/mongo the bracket is transparent and writes commit-on-success
-   (durable as they happen); backend-native rollback (an LMDB parent-txn / a mongo session) is a
-   scoped follow-on, so a workflow that RAISES on those backends may leave the writes it already made.
+   Atomicity + rollback are NATIVE on every backend: in-memory via collection snapshots, burrow via one
+   LMDB parent write-txn (opened lazily on the first burrow write, committed/aborted with the
+   transaction), real Mongo via a client-session transaction (replica-set only — mongod's own rule) —
+   so a workflow that RAISES leaves nothing behind on any backend.
    Outermost transactions serialize under one Eio mutex (so two in-flight in-memory transactions
    cannot corrupt each other's snapshots); a nested [run] joins the enclosing transaction — the whole
    call tree is one atomic unit, matching "a workflow calling a workflow is still one transaction". *)
@@ -325,10 +325,10 @@ module Dynamic = struct
   let unavailable message = failwith ("Fennec.Mongo: " ^ message)
 
   (* The convention the fennec CLI speaks: MONGO_URL is the one database location. `fennec dev`
-     auto-starts/adopts a local mongod when possible; `fennec test` sets :memory: by default and
-     `fennec test --mongo` supplies a per-suite real URL. Missing MONGO_URL is not a hidden memory
-     fallback; operations fail clearly. Build it in [Fennec.serve ~on_start] so the [sw] it captures
-     drives Live's change-stream daemons. *)
+     generates a zero-config burrow:// URL (durable dev data + a live mongosh endpoint); `fennec test`
+     sets :memory: by default and `fennec test --mongo` supplies a per-suite real URL. Missing MONGO_URL
+     is not a hidden memory fallback; operations fail clearly. Build it in [Fennec.serve ~on_start] so
+     the [sw] it captures drives Live's change-stream daemons. *)
   let mongo_url_env = Runtime.mongo_url_env
 
   (* Shared in-memory collections, keyed by the SAME (db, name) identity the on-disk/native backends
