@@ -476,7 +476,7 @@ let%test_unit "sub-fibers cancelled at deadline" =
    connection, else "http"; it becomes [Conn.scheme] so Secure cookies / force-https work over
    in-process HTTPS with no proxy. A paw pipeline may answer with an HTTP response OR a websocket
    upgrade (the ws is itself a paw). *)
-let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?(on_access = fun (_ : Access.t) -> ()) ~scheme ?(allowed = fun ~host:(_ : string) ~path:(_ : string) -> []) ~(resolve : host:string -> Pipeline.t list) flow addr =
+let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?(on_access : (Access.t -> unit) option) ~scheme ?(allowed = fun ~host:(_ : string) ~path:(_ : string) -> []) ~(resolve : host:string -> Pipeline.t list) flow addr =
   Eio.Switch.run @@ fun sw ->
   (* the peer IP, computed once for the connection (all its requests share it) *)
   let remote_ip =
@@ -501,10 +501,14 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?(on_access 
       (* a malformed request never became a conn/req, but operators still want 400 spikes in the
          access log — emit a minimal event (no method/path, the parse error as [error]) *)
       respond_and_close (CH.text ~status:400 "Bad Request");
-      (try on_access (Access.make ~meth:"" ~path:"" ~status:400 ~dur_us:0 ~bytes:(String.length "Bad Request") ~ip:remote_ip ~error:(Some msg) ()) with _ -> ())
+      (match on_access with
+       | Some f -> ( try f (Access.make ~meth:"" ~path:"" ~status:400 ~dur_us:0 ~bytes:(String.length "Bad Request") ~ip:remote_ip ~error:(Some msg) ()) with _ -> ())
+       | None -> ())
     | Too_large msg ->
       respond_and_close (CH.text ~status:413 "Payload Too Large");
-      (try on_access (Access.make ~meth:"" ~path:"" ~status:413 ~dur_us:0 ~bytes:(String.length "Payload Too Large") ~ip:remote_ip ~error:(Some msg) ()) with _ -> ())
+      (match on_access with
+       | Some f -> ( try f (Access.make ~meth:"" ~path:"" ~status:413 ~dur_us:0 ~bytes:(String.length "Payload Too Large") ~ip:remote_ip ~error:(Some msg) ()) with _ -> ())
+       | None -> ())
     | Req p -> (
       (* [scheme] is the real transport: "https" when we terminated TLS in-process, else "http" — so
          Secure cookies / force-https Just Work over in-process HTTPS. Behind a TLS-terminating proxy
@@ -530,16 +534,21 @@ let handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?(on_access 
          status (e.g. a 304). [dur_us] is read here (after the work), from the conn's single start
          stamp. Effect-isolated: a throwing sink never breaks the connection. *)
       let emit_access ~status ~bytes =
-        let a =
-          Access.make ~meth:(CH.string_of_meth req.CH.meth) ~path:req.CH.path ~status
-            ~dur_us:(Conn.elapsed_us conn) ~bytes ~ip:(Conn.remote_ip conn) ~req_id:(Request_id.current conn)
-            ~error:(Conn.error conn) ~version:req.CH.version ~host:req.CH.host ()
-        in
-        (* the generic structured seam (a metrics shipper / custom sink) AND the per-request sink the
-           Logger paw installed (so a [Paw.use (Logger.make ())] line gets the accurate post-gzip
-           size with no server wiring). Both effect-isolated. *)
-        (try on_access a with _ -> ());
-        (match Conn.access_sink conn with Some f -> (try f a with _ -> ()) | None -> ())
+        (* zero-cost when unused: with no [~on_access] AND no Logger sink on the conn, the event is
+           never even built — a server that logs nothing pays nothing for the seam *)
+        match (on_access, Conn.access_sink conn) with
+        | None, None -> ()
+        | oa, sink ->
+          let a =
+            Access.make ~meth:(CH.string_of_meth req.CH.meth) ~path:req.CH.path ~status
+              ~dur_us:(Conn.elapsed_us conn) ~bytes ~ip:(Conn.remote_ip conn) ~req_id:(Request_id.current conn)
+              ~error:(Conn.error conn) ~version:req.CH.version ~host:req.CH.host ()
+          in
+          (* the generic structured seam (a metrics shipper / custom sink) AND the per-request sink the
+             Logger paw installed (so a [Paw.use (Logger.make ())] line gets the accurate post-gzip
+             size with no server wiring). Both effect-isolated. *)
+          (match oa with Some f -> (try f a with _ -> ()) | None -> ());
+          (match sink with Some f -> (try f a with _ -> ()) | None -> ())
       in
       match Conn.upgrade_handler conn with
       | Some setup when is_ws_upgrade p ->

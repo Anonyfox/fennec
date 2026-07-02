@@ -105,10 +105,13 @@ let () =
   Printf.printf "fennec-paw micro-benchmarks  (ns/op = latency, B/op = GC pressure)\n%!";
 
   section "request parsing";
+  (* the FULL call (timeout + scratch array) — a partial application would silently bench a closure *)
+  let out = Paw.Http_parse.make_out () in
+  let no_continue () = () in
   bench "parse: minimal GET (1 header)" ~iters:1_000_000 (fun () ->
-      keep (Paw.Server.read_request ~continue:(fun () -> ()) (Eio.Buf_read.of_string raw_small)));
+      keep (Paw.Server.read_request ~continue:no_continue ~timeout:Eio.Time.Timeout.none (Eio.Buf_read.of_string raw_small) out));
   bench "parse: realistic GET (9 headers + query)" ~iters:1_000_000 (fun () ->
-      keep (Paw.Server.read_request ~continue:(fun () -> ()) (Eio.Buf_read.of_string raw_real)));
+      keep (Paw.Server.read_request ~continue:no_continue ~timeout:Eio.Time.Timeout.none (Eio.Buf_read.of_string raw_real) out));
 
   section "routing";
   bench "host route_all (exact, 3 endpoints)" ~iters:2_000_000 (fun () -> keep (Paw.Host_router.route_all router ~host:"api.example.com"));
