@@ -78,3 +78,40 @@ let%test "normalizes camel and snake" =
 
 let%test "keeps acronyms as words" =
   words "HTTP SSR DDP" = [ "http"; "ssr"; "ddp" ]
+
+(* Flatten odoc markup to plain text for one-line summaries: [code] -> code, {!X} -> X,
+   {b bold} -> bold, a {1 Heading} marker's "{1 " is dropped (the digit must not leak into prose),
+   stray closing braces vanish. A scanner, not a parser — summaries are one line, worst case a
+   marker's word is kept as text. *)
+let odoc_plain s =
+  let n = String.length s in
+  let b = Buffer.create n in
+  let i = ref 0 in
+  while !i < n do
+    (match s.[!i] with
+     | '{' ->
+       let j = ref (!i + 1) in
+       (match if !j < n then Some s.[!j] else None with
+        | Some '!' -> incr j (* {!Cross.ref} -> keep the ref text *)
+        | Some ('0' .. '9') | Some ('a' .. 'z') ->
+          (* {1 …} / {1:anchor …} headings, {b …}/{e …}/{i …}/{ul …} styles: drop marker + one space *)
+          while !j < n && s.[!j] <> ' ' && s.[!j] <> '}' do incr j done;
+          if !j < n && s.[!j] = ' ' then incr j
+        | _ -> ());
+       i := !j
+     | '}' | '[' | ']' -> incr i
+     | c ->
+       Buffer.add_char b c;
+       incr i)
+  done;
+  String.trim (Buffer.contents b)
+
+let%test "heading marker dropped, digit does not leak" =
+  odoc_plain "{1 Route-as-paw primitives}  Build a single route" = "Route-as-paw primitives  Build a single route"
+
+let%test "cross-ref keeps the path, code brackets vanish" =
+  odoc_plain "see {!Fur.signal} and [get s]" = "see Fur.signal and get s"
+
+let%test "styles unwrap" = odoc_plain "{b bold} and {e emph}" = "bold and emph"
+let%test "anchored heading" = odoc_plain "{2:setup Setup} steps" = "Setup steps"
+let%test "plain text untouched" = odoc_plain "no markup here." = "no markup here."

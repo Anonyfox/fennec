@@ -37,8 +37,9 @@ Runs `dune build --watch` and supervises the server: a native fs-watcher reacts 
 restart the backend on a change, hot-swap CSS without a refresh. A felt loop around **~0.1 s**.
 Discovers the server (the one executable that calls `Fennec.serve`), binds the real port (dev ≈ prod,
 no proxy), and reaps the whole process group on teardown (no orphans, port reclaim).
-When `MONGO_URL` is unset, dev auto-starts/adopts a local MongoDB replica set if `mongod` is
-available; if not, the app still boots and database-backed features fail clearly when used.
+When `MONGO_URL` is unset, dev generates a zero-config `burrow://` URL — a durable embedded database
+(data survives restarts) with a live mongosh-compatible endpoint, no external process. An explicit
+`MONGO_URL` (`:memory:` / `burrow://` / `mongodb://`) always wins.
 
 For coding agents working on an app, `fennec dev --agent --attach` installs one guarded user-level
 post-tool hook for supported harnesses. After application edits, the devserver verdict is injected
@@ -62,8 +63,18 @@ deterministic. Authoring is a bare block — no `main`, no wiring:
 `fennec test all` runs them fast-to-slow. The testing *library* underneath is `fennec-hunt`
 ([`../hunt/README.md`](../hunt/README.md)) — usable standalone too.
 
+## The rest
+
+`fennec new NAME` scaffolds a minimal working app · `fennec console` opens a REPL with the whole app +
+framework loaded (no HTTP) · `fennec release` builds, verifies, and stages a production deployable ·
+`fennec image` converts/resizes images + builds favicons (no ImageMagick) · `fennec doctor` checks the
+`.mlx` toolchain · `fennec clean` removes build artifacts (`--db` also resets the dev database) ·
+`fennec skill` prints the same guide as bare `fennec`. Every command answers `--help` with a full man
+page.
+
 ---
 
-Internal commands (not run by hand): `__esbuild-worker` (the warm worker `dev` spawns) and
-`gen-doctests` (codegen for a dune rule). The dev-loop ↔ agent bridge is
+Internal commands (not run by hand): `__esbuild-worker` (the warm worker `dev` spawns),
+`gen-doctests` (codegen for a dune rule), and `mlx-pp` (the `.mlx` dialect preprocessor dune runs).
+The dev-loop ↔ agent bridge is
 [`../docs/internal/AGENT-FASTLANE.md`](../docs/internal/AGENT-FASTLANE.md).

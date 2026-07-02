@@ -3,7 +3,9 @@ open Discover_model
 let short_doc ?(limit = 140) = function
   | None -> ""
   | Some s ->
-    let one = String.split_on_char '\n' s |> List.map String.trim |> String.concat " " in
+    let one =
+      String.split_on_char '\n' s |> List.map String.trim |> String.concat " " |> Normalize.odoc_plain
+    in
     if String.length one <= limit then one else String.sub one 0 (limit - 1) ^ "..."
 
 let item_line (i : public_item) =

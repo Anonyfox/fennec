@@ -533,9 +533,9 @@ let dev_cmd =
   in
   let mongo_arg =
     let doc =
-      "Compatibility no-op. $(b,fennec dev) now automatically starts/adopts a managed local MongoDB \
-       when $(b,MONGO_URL) is unset and $(b,mongod) is available; an explicit $(b,MONGO_URL) always \
-       wins."
+      "Compatibility no-op. With $(b,MONGO_URL) unset, $(b,fennec dev) now generates a zero-config \
+       $(b,burrow://) URL — a durable embedded database with a live mongosh-compatible endpoint, no \
+       external process; an explicit $(b,MONGO_URL) always wins."
     in
     Arg.(value & flag & info [ "mongo" ] ~doc)
   in

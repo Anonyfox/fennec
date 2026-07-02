@@ -121,9 +121,7 @@ let doc_lead = function
   | None -> ""
   | Some doc ->
     let one = doc |> String.split_on_char '\n' |> List.map String.trim |> String.concat " " |> String.trim in
-    let buf = Buffer.create (String.length one) in
-    String.iter (function '[' | ']' | '{' | '}' -> () | c -> Buffer.add_char buf c) one;
-    let s = String.trim (Buffer.contents buf) in
+    let s = Normalize.odoc_plain one in
     (match String.index_opt s '.' with
      | Some i when i >= 12 -> String.sub s 0 (i + 1)
      | _ -> if String.length s <= 150 then s else String.sub s 0 150 ^ "…")

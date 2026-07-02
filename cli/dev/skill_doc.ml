@@ -53,7 +53,7 @@ let render () =
       "fennec dev --clean";
       "```";
       "";
-      "When `MONGO_URL` is unset, `fennec dev` auto-starts/adopts a local MongoDB if `mongod` is available. If not, the app still boots and database-backed features fail clearly when used.";
+      "When `MONGO_URL` is unset, `fennec dev` generates a zero-config `burrow://` URL — a durable embedded database (data survives restarts) with a live mongosh-compatible endpoint, no external process. An explicit `MONGO_URL` (`:memory:` / `burrow://` / `mongodb://`) always wins.";
       "";
       "## Console";
       "";
@@ -77,7 +77,7 @@ let render () =
       "fennec release --target linux/amd64   # cross-build via Docker -> ./dist/linux-amd64/<server>";
       "```";
       "";
-      "Plain `dune build --profile release` produces the same artifact; `fennec release` adds the incantation, the two silent-failure checks, and the run-time contract. The binary is production by default — Fennec keys dev/prod off bytecode-vs-native (the dev loop runs `server.bc`, a release is native `server.exe`), so there is NO mode flag to set. Just run it with a `MONGO_URL` (or none for in-memory); `FENNEC_ENV=development` is an optional override to run the native build in dev mode.";
+      "Plain `dune build --profile release` produces the same artifact; `fennec release` adds the incantation, the two silent-failure checks, and the run-time contract. The binary is production by default — Fennec keys dev/prod off bytecode-vs-native (the dev loop runs `server.bc`, a release is native `server.exe`), so there is NO mode flag to set. Run it with a `MONGO_URL` (`burrow:///abs/path/db` for embedded-durable, `mongodb://…` for hosted; a missing URL fails clearly rather than silently running in memory); `FENNEC_ENV=development` is an optional override to run the native build in dev mode.";
       "";
       "`--target <platform>` cross-builds via Docker (the binary is built INSIDE a target-platform container and extracted to `./dist/<os-arch>/`) — Docker reaches `linux/amd64` and `linux/arm64`; macOS/Windows build on a native host or CI. Add `--image TAG` for a deployable image, `--build-image` for a pre-baked toolchain image. First cross-build is slow (compiles the toolchain); buildx caches it.";
       "";
