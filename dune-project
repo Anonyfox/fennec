@@ -58,7 +58,7 @@
   ("web" "framework" "eio" "isomorphic" "ssr" "websocket"))
  (depends
   (ocaml
-   (>= 5.2))
+   (>= 5.4))
   (dune
    (>= 3.16))
   (eio
@@ -66,7 +66,8 @@
   eio_main
   tls
   tls-eio
-  x509
+  (x509
+   (< 1.2.0))
   ca-certs
   domain-name
   zarith
@@ -122,7 +123,9 @@
   (tls-eio
    (>= 2.0))
   (x509
-   (>= 1.0))
+   (and
+    (>= 1.0)
+    (< 1.2.0)))
   domain-name
   mirage-crypto-rng
   ; property testing (let%prop / Fennec_hunt.Prop) — lean, pure-OCaml, test-only weight
@@ -236,7 +239,8 @@
   eio_main
   tls
   tls-eio
-  x509
+  (x509
+   (< 1.2.0))
   ca-certs
   digestif
   base64

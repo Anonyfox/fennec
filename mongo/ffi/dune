@@ -12,7 +12,8 @@
   (language c)
   (names mongoc_stubs)
   (flags
-   (:include c_flags.sexp)))
+   (:standard
+    (:include c_flags.sexp))))
  (c_library_flags
   (:include c_library_flags.sexp)))
 

@@ -41,7 +41,7 @@ depends: [
   "re" {>= "1.10"}
   "tls"
   "tls-eio" {>= "2.0"}
-  "x509" {>= "1.0"}
+  "x509" {>= "1.0" & < "1.2.0"}
   "domain-name"
   "mirage-crypto-rng"
   "qcheck-core" {>= "0.20"}

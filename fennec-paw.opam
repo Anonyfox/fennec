@@ -21,7 +21,7 @@ depends: [
   "eio_main"
   "tls"
   "tls-eio"
-  "x509"
+  "x509" {< "1.2.0"}
   "ca-certs"
   "digestif"
   "base64"

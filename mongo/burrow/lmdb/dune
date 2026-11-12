@@ -9,4 +9,4 @@
   (language c)
   (names mdb midl lmdb_stubs)
   (flags
-   (-O2 -w))))
+   (:standard -O2 -w))))
