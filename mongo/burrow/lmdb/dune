@@ -1,4 +1,4 @@
-; Burrow's storage substrate: vendored LMDB 1.0 (mdb.c + midl.c compiled straight in — no external
+; Burrow's storage substrate: vendored LMDB 1.0 (mdb.c via mdb_unit.c, which picks the lock type, + midl.c compiled straight in — no external
 ; dependency, the production shape proven by the spike) plus our own thin FFI (burrow_lmdb.ml +
 ; lmdb_stubs.c). Native only. This is the ONLY unsafe code in the engine: every potentially-blocking
 ; call releases the runtime lock so the safe layer can run it off the Eio scheduler.
@@ -7,6 +7,7 @@
  (public_name fennec-mongo.burrow.lmdb)
  (foreign_stubs
   (language c)
-  (names mdb midl lmdb_stubs)
+  (names mdb_unit midl lmdb_stubs)
   (flags
-   (:standard -O2 -w))))
+   (:standard -O2 -w))
+  (extra_deps mdb.c lmdb.h midl.h)))
