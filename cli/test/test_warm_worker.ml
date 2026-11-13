@@ -41,9 +41,10 @@ let bp rel = Filename.concat bd rel
 let failures = ref 0
 let check name ok = Printf.printf "%s %s\n%!" (if ok then "ok  " else "FAIL") name; if not ok then incr failures
 
+(* the runner may color its lines and print "✓" instead of "ok" (UTF-8 locale, as on CI runners) *)
 let ok_lines output =
-  String.split_on_char '\n' output
-  |> List.filter (fun l -> let s = String.trim l in String.length s >= 2 && String.sub s 0 2 = "ok")
+  String.split_on_char '\n' (Fennec_dev.Dev_tests.strip_ansi output)
+  |> List.filter Fennec_dev.Dev_tests.is_pass_line
   |> List.length
 
 let str_contains hay needle =

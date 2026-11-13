@@ -267,8 +267,25 @@ type summary = { results : result list; total_passed : int; total_failed : int; 
 (* parse a runner's pass/fail tally out of its captured output + exit code. Shared by the cold and
    warm paths so both report identically. (The hunt runner prints "<n> tests passed" on success and a
    failing tally otherwise; we also fall back to counting "ok" lines.) *)
+(* the hunt runner colors its lines (ANSI) and uses a "✓" glyph instead of "ok" under a UTF-8 locale
+   (both on by default on CI runners), so strip escapes and accept either pass mark before parsing. *)
+let strip_ansi s =
+  let n = String.length s in
+  let b = Buffer.create n in
+  let rec go i =
+    if i >= n then ()
+    else if s.[i] = '\027' && i + 1 < n && s.[i + 1] = '[' then skip (i + 2)
+    else (Buffer.add_char b s.[i]; go (i + 1))
+  and skip i = if i >= n then () else if s.[i] >= '@' && s.[i] <= '~' then go (i + 1) else skip (i + 1) in
+  go 0;
+  Buffer.contents b
+
+let is_pass_line line =
+  let s = String.trim line in
+  String.starts_with ~prefix:"ok" s || String.starts_with ~prefix:"\xe2\x9c\x93" s
+
 let parse_tally ~code ~output =
-  let lines = String.split_on_char '\n' output |> List.filter (fun s -> String.trim s <> "") in
+  let lines = String.split_on_char '\n' (strip_ansi output) |> List.filter (fun s -> String.trim s <> "") in
   let last = match List.rev lines with l :: _ -> String.trim l | [] -> "" in
   if code = 0 then
     match int_of_string_opt (try String.sub last 0 (String.index last ' ') with _ -> "0") with
@@ -276,9 +293,7 @@ let parse_tally ~code ~output =
     | _ ->
       let ok_lines =
         List.fold_left
-          (fun n line ->
-            let s = String.trim line in
-            if String.length s >= 2 && String.sub s 0 2 = "ok" then n + 1 else n)
+          (fun n line -> if is_pass_line line then n + 1 else n)
           0 lines
       in
       (ok_lines, 0)
