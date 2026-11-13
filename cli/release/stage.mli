@@ -5,6 +5,7 @@
     workflow does by hand). The release is a single self-contained binary — for a web app the assets
     are embedded — so nothing else needs staging. *)
 
+(** The staged artifact, as reported to the user. *)
 type staged = {
   path : string;  (** the staged binary's path, e.g. [./dist/server] *)
   bytes : int;  (** its size on disk, for the report *)

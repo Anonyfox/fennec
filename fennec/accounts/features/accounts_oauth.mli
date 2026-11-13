@@ -17,7 +17,10 @@
       | Error e -> Conn.text ~status:400 conn (Accounts_oauth.string_of_error e)
     ]} *)
 
+(** The single-use token primitive that carries the OAuth [state] across the redirect. *)
 module Challenge = Accounts_challenge
+
+(** The identity-link store that maps provider subjects to canonical users. *)
 module Identity = Accounts_identity
 
 (** OAuth provider/client configuration. *)

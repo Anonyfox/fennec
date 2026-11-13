@@ -414,6 +414,66 @@ let run_browser (opts : options) : int =
 
 (* ──── system cut ──── *)
 
+(* Prime the dev loop's build ONCE, before any scenario. `fennec dev` builds in its own isolated
+   `_build/fastdev` profile (see {!Fennec_dev.Build_dir}) — the warm test worker, the app's test
+   runners, the server and its webroot — none of which the `dune build` of the system cut produces.
+   On a fresh checkout (CI) the first scenario's `fennec dev` would therefore spend minutes
+   cold-compiling before it could serve, far past any scenario's readiness wait, and each scenario's
+   teardown would kill that build half-way. The scenarios exercise the dev PROCESS lifecycle (ports,
+   reclaim, livereload, the error panel) from the warm state a developer has, so boot one
+   `fennec dev` here, wait (generously, [timeout]) for its "ready", and shut it down the way a user
+   does (SIGINT, the clean-shutdown path scenario D asserts). Nothing is asserted here: a prime that
+   fails is reported with its output tail and the scenarios then run (and fail) with their own
+   diagnostics. Returns whether dev reached ready. *)
+let prime_dev_loop ~fennec_bin ~timeout =
+  let contains hay needle =
+    let lh = String.length hay and ln = String.length needle in
+    let rec go i = i + ln <= lh && (String.sub hay i ln = needle || go (i + 1)) in
+    ln = 0 || go 0
+  in
+  let log = Filename.temp_file "fennec-system-prime" ".log" in
+  let out = Unix.openfile log [ Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_CREAT ] 0o600 in
+  let null = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+  let t0 = Unix.gettimeofday () in
+  Printf.printf "  \027[2mpriming the dev build (_build/fastdev) with one `fennec dev` boot …\027[0m\n%!";
+  (* the same backend shape a scenario's `fennec dev` gets (Fennec_hunt.System.dev): a throwaway,
+     storage-only burrow:// database (no authority, so no mongosh endpoint), never the app's own data *)
+  let db = Filename.temp_dir "fennec-system-prime" "" in
+  let env =
+    Array.append
+      [| "MONGO_URL=burrow://" ^ Filename.concat db "e2e-db" |]
+      (Array.of_list (List.filter (fun kv -> not (String.starts_with ~prefix:"MONGO_URL=" kv)) (Array.to_list (Unix.environment ()))))
+  in
+  let pid = Unix.create_process_env fennec_bin [| fennec_bin; "dev" |] env null out out in
+  Unix.close out;
+  Unix.close null;
+  let reaped = ref false in
+  let gone () =
+    !reaped
+    || (match Unix.waitpid [ Unix.WNOHANG ] pid with 0, _ -> false | _ -> reaped := true; true | exception _ -> reaped := true; true)
+  in
+  let output () = try In_channel.with_open_bin log In_channel.input_all with _ -> "" in
+  let rec wait_ready () =
+    if contains (output ()) "\u{00b7} watching" then true (* the ready block: "ready in Nms \u{00b7} watching <dir>" *)
+    else if gone () || Unix.gettimeofday () -. t0 > timeout then false
+    else (Unix.sleepf 0.25; wait_ready ())
+  in
+  let ready = wait_ready () in
+  (* clean shutdown; the supervisor reaps its server + dune watch on SIGINT *)
+  if not (gone ()) then (try Unix.kill pid Sys.sigint with _ -> ());
+  let deadline = Unix.gettimeofday () +. 30. in
+  while (not (gone ())) && Unix.gettimeofday () < deadline do Unix.sleepf 0.1 done;
+  if not (gone ()) then ((try Unix.kill pid Sys.sigkill with _ -> ()); (try ignore (Unix.waitpid [] pid) with _ -> ()));
+  if ready then Printf.printf "  \027[2mdev build primed in %.0fs\027[0m\n%!" (Unix.gettimeofday () -. t0)
+  else begin
+    let o = output () in
+    let tail = if String.length o > 4000 then String.sub o (String.length o - 4000) 4000 else o in
+    Printf.printf "  \027[33mpriming `fennec dev` did not reach ready within %.0fs — output tail:\027[0m\n%s\n%!" timeout tail
+  end;
+  (try Sys.remove log with _ -> ());
+  ignore (Sys.command ("rm -rf " ^ Filename.quote db));
+  ready
+
 (* The system cut. Unlike http/browser, the suites SPAWN the real `fennec dev` themselves (the
    System layer puts each process in its own session and reaps the whole group on teardown), so
    there is no per-suite server to boot and no per-suite isolation to arrange. The suites compile
@@ -465,6 +525,7 @@ let orchestrate_system ~(args : string list) : int =
              (D.env_test_root, d.Discover.root) ]
          in
          Printf.printf "\n\027[1m\u{25b6} system\027[0m\n%!";
+         ignore (prime_dev_loop ~fennec_bin ~timeout:900. : bool);
          let code = run_suite_exe ~exe:runner_exe ~args ~env ~out:None in
          if code = 124 then
            Printf.printf "  \027[31m\u{2717} system suites timed out after %.0fs — killed.\027[0m\n%!" suite_timeout;

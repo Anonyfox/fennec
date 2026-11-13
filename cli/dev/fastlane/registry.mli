@@ -1,5 +1,6 @@
 (** The known coding-harness adapters. Adding a harness = adding it to {!all}; nothing else changes. *)
 
+(** Every known harness adapter, in a stable order. *)
 val all : Harness.t list
 
 (** Resolve an adapter by its stable id ([claude] / [codex] / [vibe]). *)
@@ -14,4 +15,5 @@ val active : unit -> Harness.t list
     into, so it never writes hook configs for harnesses you don't use. *)
 val installed : unit -> Harness.t list
 
+(** The stable ids of {!all} ([claude] / [codex] / [vibe]), for CLI help and argument validation. *)
 val ids : unit -> string list

@@ -119,8 +119,14 @@ val event :
 
 (** Stable string names for event fields. *)
 val string_of_kind : kind -> string
+
+(** The stable string name of an actor (who performed the event). *)
 val string_of_actor : actor -> string
+
+(** The stable string name of a mechanism (how the event was performed). *)
 val string_of_mechanism : mechanism -> string
+
+(** The stable string name of an outcome (success or failure reason). *)
 val string_of_outcome : outcome -> string
 
 (** [true] when a metadata key should never store its raw value. *)

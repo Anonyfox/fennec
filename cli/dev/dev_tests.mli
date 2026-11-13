@@ -66,6 +66,13 @@ type result = {
 (** Aggregated result across all re-run libraries: per-lib {!result} list plus total tallies. *)
 type summary = { results : result list; total_passed : int; total_failed : int; ms : float }
 
+(** [strip_ansi s] removes ANSI CSI escape sequences (the runner's colors) from [s]. *)
+val strip_ansi : string -> string
+
+(** [is_pass_line l] is true for a runner pass line: ["ok ..."] (ASCII) or ["✓ ..."] (UTF-8 locale),
+    after trimming. Use on {!strip_ansi}ed text. *)
+val is_pass_line : string -> bool
+
 (** Re-run every runner whose exe mtime advanced since the last call (warm via the worker when
     attached + derivable, else cold). Returns [None] if nothing changed. Captures output so the dev UI
     can display it without interleaving stdout. *)
@@ -73,9 +80,9 @@ val run_changed : t -> summary option
 
 (**/**)
 
-(* test-only: inject a [dune describe workspace] string directly (exercises the warm chain→worker
-   path without spawning dune, which would deadlock under [dune runtest]). *)
+(** Test-only: inject a [dune describe workspace] string directly. This exercises the warm
+    chain-to-worker path without spawning dune, which would deadlock under [dune runtest]. *)
 val set_describe_for_test : t -> string -> unit
 
-(* test-only: set the discovered runners directly, bypassing the filesystem scan. *)
+(** Test-only: set the discovered runners directly, bypassing the filesystem scan. *)
 val set_runners_for_test : t -> runner list -> unit

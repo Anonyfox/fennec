@@ -46,6 +46,7 @@ type reply =
     to write to the transport in one go. *)
 val frame_request : request -> string
 
+(** Serialize a reply into a complete, length-prefixed frame, ready to write in one go. *)
 val frame_reply : reply -> string
 
 (** Incremental frame reader: feed it whatever bytes arrive — partial frames are fine — and pull whole

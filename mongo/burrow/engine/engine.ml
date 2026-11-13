@@ -131,7 +131,13 @@ let oplog_lsn t = Oplog.current_lsn t.oplog
 let oplog_floor t = Store.read t.store (fun txn -> Oplog.oldest_lsn t.oplog txn)
 let oplog_tail t ~from_lsn ~limit = Store.read t.store (fun txn -> Oplog.tail t.oplog txn ~from_lsn ~limit)
 
-let collection t name = with_write t (fun () -> Catalog.collection t.cat name)
+(* get-or-create. An existing collection is a plain catalog lookup that takes no lock — so re-opening a
+   known collection never waits on a held write lock (e.g. inside a workflow transaction); only the
+   create path is DDL and serializes under the write lock (re-checking under it). *)
+let collection t name =
+  match Catalog.collection_opt t.cat name with
+  | Some c -> c
+  | None -> with_write t (fun () -> Catalog.collection t.cat name)
 let collection_opt t name = Catalog.collection_opt t.cat name
 let collection_names t = List.map (fun (c : Catalog.collection) -> c.Catalog.name) (Catalog.collections t.cat)
 

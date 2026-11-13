@@ -16,7 +16,10 @@
       | Error e -> Error e
     ]} *)
 
+(** The single-use token primitive that carries the WebAuthn challenge. *)
 module Challenge = Accounts_challenge
+
+(** The identity-link store that maps credential ids to canonical users. *)
 module Identity = Accounts_identity
 
 (** Relying-party configuration. *)

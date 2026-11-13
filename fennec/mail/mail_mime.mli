@@ -6,12 +6,15 @@
     [Date] and [Message-ID] are generated. Bcc recipients are deliberately NOT written to any header — they
     travel only in the SMTP envelope. *)
 
+(** A file attached to a message. *)
 type attachment = {
   filename : string;
   content_type : string;  (** e.g. ["application/pdf"] *)
   content : string;  (** raw bytes — base64-encoded by this module *)
 }
 
+(** Render a complete RFC 5322 / MIME message (headers plus a text, an optional HTML and any
+    attachment parts) as the bytes to submit. Envelope-only recipients are not written to any header. *)
 val serialize :
   from:Mail_address.t ->
   to_:Mail_address.t list ->

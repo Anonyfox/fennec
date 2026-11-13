@@ -15,7 +15,10 @@
           | Error e -> prerr_endline (Accounts_email.string_of_error e))
     ]} *)
 
+(** The single-use token primitive behind verification and reset links. *)
 module Challenge = Accounts_challenge
+
+(** The identity-link store that maps verified addresses to canonical users. *)
 module Identity = Accounts_identity
 
 (** Normalized email address. *)

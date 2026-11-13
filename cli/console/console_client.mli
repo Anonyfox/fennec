@@ -3,6 +3,7 @@
     Deliberately [Unix]-fd based (not Eio) so the one client works in BOTH the standalone console's own
     [select] loop and the [dev --console] supervisor's synchronous poll loop. *)
 
+(** A connection to a running console engine over its unix socket. *)
 type t
 
 (** [connect path] opens the engine's unix socket. @raise Unix.Unix_error if it cannot connect. *)

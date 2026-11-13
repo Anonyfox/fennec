@@ -5,8 +5,10 @@
     Fur components (inline styles, no external CSS); an app overrides any field. This module deliberately
     works on primitives — not the Accounts [user] record — so it sits below accounts core. *)
 
+(** The mail library the rendered messages are sent through (re-exported). *)
 module Mail = Fennec_mail
 
+(** One rendered email: subject, the plain-text body and an optional HTML body. *)
 type rendered = {
   subject : string;
   text : string;  (** the text/plain body — always sent *)
@@ -16,6 +18,7 @@ type rendered = {
 (** Render the email for one flow, given the site name, the recipient, and the action URL. *)
 type template = site_name:string -> email:string -> url:string -> rendered
 
+(** The full mailer configuration: the site name, the sender and one {!template} per flow. *)
 type templates = {
   site_name : string;
   from : Mail.Address.t;

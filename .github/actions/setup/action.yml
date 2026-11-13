@@ -7,7 +7,7 @@ description: >
 inputs:
   ocaml-compiler:
     description: OCaml compiler version
-    default: "5.3"
+    default: "5.4"
   deps-args:
     description: Extra args for `opam install . --deps-only` (e.g. --with-test)
     default: ""

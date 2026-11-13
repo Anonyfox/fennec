@@ -9,6 +9,7 @@
        let entries = Outbox.decode (Option.value (Kv.get ~ns) ~default:"") in
        List.iter (fun (e : Outbox.entry) -> reissue e.name e.params e.seed) entries ]} *)
 
+(** One buffered method call: its name, its positional parameters and its optimistic-id seed. *)
 type entry = { name : string; params : Bson.t list; seed : string option }
 
 (** Wire string for storage. *)

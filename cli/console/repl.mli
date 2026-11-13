@@ -14,6 +14,7 @@ type sink = {
   notice : string -> unit;  (** a one-off line (completion list / info), above the prompt *)
 }
 
+(** One interactive console session: the editor, the engine connection and the render sink. *)
 type t
 
 (** A session over [client], rendering through [sink]. [prompt] defaults to ["fennec» "]. *)

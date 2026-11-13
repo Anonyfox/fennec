@@ -7,6 +7,7 @@
          | Ok post -> save post; Respond.model ~status:201 conn Post.codec post
          | Error errs -> Respond.errors conn errs ]} *)
 
+(** The connection type the readers take (Paw's, re-exported). *)
 module Conn = Paw.Conn
 
 (** The raw request body. *)
@@ -28,10 +29,14 @@ val path : Conn.t -> string -> string option
 (** A query-string parameter. *)
 val query : Conn.t -> string -> string option
 
+(** A path parameter parsed as an integer ([None] when absent or not an integer). *)
 val path_int : Conn.t -> string -> int option
+
+(** A query-string parameter parsed as an integer ([None] when absent or not an integer). *)
 val query_int : Conn.t -> string -> int option
 
 (** A query scalar with a fallback (e.g. pagination [?page=]). *)
 val query_default : default:string -> Conn.t -> string -> string
 
+(** An integer query parameter with a fallback for when it is absent or not an integer. *)
 val query_int_default : default:int -> Conn.t -> string -> int

@@ -39,7 +39,10 @@ val err : ?code:string -> ?params:(string * string) list -> string list -> strin
     i18n hook: map a list of errors through [translate tr] before rendering/serializing. *)
 val translate : (error -> string) -> error -> error
 
+(** Render one error as [dotted.path: message] (just the message for a path-less error). *)
 val error_to_string : error -> string
+
+(** Render a list of errors, joined with ["; "]. *)
 val errors_to_string : error list -> string
 
 (** {1 The codec value} *)
@@ -101,6 +104,7 @@ val default : 'a t -> 'a
     reactive-sync / minimal-update primitive. *)
 type delta = { set : (string * Bson.t) list; unset : string list }
 
+(** [diff c old new] is the minimal {!delta} that turns [old] into [new]. *)
 val diff : 'a t -> 'a -> 'a -> delta
 
 (** Apply a {!delta} to a value — the inverse of {!diff}: [set] replaces/adds fields, [unset] removes
@@ -123,6 +127,7 @@ val encode_checked : 'a t -> 'a -> (Bson.t, error list) result
 (** Derived pretty-printing — nested documents, lists, options, variants, all readable. *)
 val pp : 'a t -> Format.formatter -> 'a -> unit
 
+(** {!pp} to a string. *)
 val show : 'a t -> 'a -> string
 
 (** {1 JSON I/O}
@@ -156,7 +161,10 @@ val to_bson : 'a t -> 'a -> Bson.t
 
 (** {1 Primitives} *)
 
+(** A string. *)
 val string : string t
+
+(** An integer. Decode also accepts an integral float (the EJSON reality). *)
 val int : int t (* accepts an integral Float (EJSON reality) *)
 
 val float : float t
@@ -165,7 +173,10 @@ val float : float t
 val float_nonfinite : float t
 (** The opt-out: a float that may carry nan/inf. *)
 
+(** A boolean. *)
 val bool : bool t
+
+(** A date as milliseconds since the epoch, stored as a BSON date (decode also accepts integral numbers). *)
 val date : int64 t (* Bson.Date, ms since epoch (also accepts integral numbers) *)
 
 val id : string t
@@ -176,8 +187,13 @@ val id : string t
     the deriver emits it for a [Bson.t]-typed record field. Reflects as opaque [V_bson]. *)
 val bson : Bson.t t
 
+(** The unit value, stored as null. *)
 val unit : unit t
+
+(** A list of elements of the given shape. *)
 val list : 'a t -> 'a list t
+
+(** An optional value; [None] is encoded as null. *)
 val option : 'a t -> 'a option t
 
 val str_map : 'a t -> (string * 'a) list t
@@ -214,32 +230,72 @@ val fix : ('a t -> 'a t) -> 'a t
     schema renderer translates (so mongod enforces them against foreign writers too); {!check} is
     arbitrary and app-side-only. Normalizers run BEFORE checks, on decode and encode alike. *)
 
+(** Add an arbitrary predicate; [msg] is the error message when it fails. App-side only (not
+    rendered into a schema). *)
 val check : ?msg:string -> ('a -> bool) -> 'a t -> 'a t
 
+(** The string has at least this many characters. *)
 val min_len : int -> string t -> string t
+
+(** The string has at most this many characters. *)
 val max_len : int -> string t -> string t
+
+(** The string is not empty. *)
 val non_empty : string t -> string t
 
 val pattern : string -> string t -> string t
 (** A deliberately PORTABLE matcher — anchors, classes, [+ * ? .], literals — the common subset
     that means the same here, in the browser, and in mongod's $jsonSchema dialect. *)
 
+(** The string is one of the listed values (an enum). *)
 val one_of : string list -> string t -> string t
+
+(** The string is an email address. *)
 val email : string t -> string t
+
+(** The string is an http(s) URL. *)
 val url : string t -> string t
+
+(** The string is a URL slug (lowercase letters, digits and dashes). *)
 val slug : string t -> string t
+
+(** Normalizer: strip leading and trailing whitespace. *)
 val trim : string t -> string t
+
+(** Normalizer: lowercase the string. *)
 val lowercase : string t -> string t
+
+(** The integer is at least this value. *)
 val min_i : int -> int t -> int t
+
+(** The integer is at most this value. *)
 val max_i : int -> int t -> int t
+
+(** The integer is greater than zero. *)
 val positive_i : int t -> int t
+
+(** The float is at least this value. *)
 val min_f : float -> float t -> float t
+
+(** The float is at most this value. *)
 val max_f : float -> float t -> float t
+
+(** The float is greater than zero. *)
 val positive : float t -> float t
+
+(** The float is zero or greater. *)
 val non_negative : float t -> float t
+
+(** The float is a multiple of this value. *)
 val multiple_of : float -> float t -> float t
+
+(** The list has at least this many elements. *)
 val min_items : int -> 'a list t -> 'a list t
+
+(** The list has at most this many elements. *)
 val max_items : int -> 'a list t -> 'a list t
+
+(** The list has no duplicate elements. *)
 val unique_items : 'a list t -> 'a list t
 
 (** {1 Records — the builder (what the [@@fennec.collection] deriver targets)}
@@ -278,6 +334,7 @@ val dot : _ field -> 'a field -> 'a field
 
 (** {2 Field accessors — what the collection vocabulary (Filter/M/Index) builds on} *)
 
+(** The field's wire name (the dotted path for a {!dot} field). *)
 val field_name : 'a field -> string
 
 (** Encode a value as this field stores it (checks/norms/convs respected). *)
@@ -293,14 +350,19 @@ val field_validate : 'a field -> 'a -> (unit, error list) result
     primitive: read a projected slice without ever constructing the full record. *)
 val field_get : 'a field -> Bson.t -> ('a, error list) result
 
+(** A record codec under construction: ['r] is the record, ['k] the constructor still awaiting fields. *)
 type ('r, 'k) builder
 
+(** Start a record codec from its constructor function. *)
 val record : 'k -> ('r, 'k) builder
+
+(** Add the next field: its descriptor and its getter. *)
 val field : 'a field -> ('r -> 'a) -> ('r, 'a -> 'k) builder -> ('r, 'k) builder
 
 (** A record-level (cross-field) check, e.g. [checking (fun t -> t.starts < t.ends) "starts must precede ends"]. *)
 val checking : ('r -> bool) -> string -> ('r, 'k) builder -> ('r, 'k) builder
 
+(** Finish a record codec once every constructor argument has a field. *)
 val seal : ('r, 'r) builder -> 'r t
 
 (** {1 Variants — tagged unions over a discriminator field (Mongo's polymorphic-document idiom)}
@@ -313,9 +375,14 @@ val seal : ('r, 'r) builder -> 'r t
     Decode reads the tag and dispatches; encode writes the tag plus the case's fields. Exhaustive
     matching on the OCaml side is the point. *)
 
+(** One case of a {!variant}. *)
 type 'r vcase
 
+(** [case tag fields ~inj ~proj] is the variant case written with discriminator [tag]: [inj] wraps the
+    decoded case into the variant, [proj] extracts it ([None] for other cases). *)
 val case : string -> ('a, 'a) builder -> inj:('a -> 'r) -> proj:('r -> 'a option) -> 'r vcase
+
+(** A tagged union over the discriminator field [tag]. *)
 val variant : tag:string -> 'r vcase list -> 'r t
 
 (** {1 Tuple-style records — the STAGED decoder}
@@ -324,12 +391,17 @@ val variant : tag:string -> 'r vcase list -> 'r t
     currying), building a direct decoder. Same value + errors as the builder, but ~2x faster / ~5x less
     allocation on decode — this is what [@@deriving collection/model] emits for arity ≤ 8. *)
 
+(** A one-field record (staged decoder). *)
 val obj1 : 'a field -> make:('a -> 'r) -> split:('r -> 'a) -> 'r t
+
+(** A two-field record (staged decoder). *)
 val obj2 : 'a field -> 'b field -> make:('a -> 'b -> 'r) -> split:('r -> 'a * 'b) -> 'r t
 
+(** A three-field record (staged decoder). *)
 val obj3 :
   'a field -> 'b field -> 'c field -> make:('a -> 'b -> 'c -> 'r) -> split:('r -> 'a * 'b * 'c) -> 'r t
 
+(** A four-field record (staged decoder). *)
 val obj4 :
   'a field ->
   'b field ->
@@ -339,24 +411,28 @@ val obj4 :
   split:('r -> 'a * 'b * 'c * 'd) ->
   'r t
 
+(** A five-field record (staged decoder). *)
 val obj5 :
   'a field -> 'b field -> 'c field -> 'd field -> 'e field ->
   make:('a -> 'b -> 'c -> 'd -> 'e -> 'r) ->
   split:('r -> 'a * 'b * 'c * 'd * 'e) ->
   'r t
 
+(** A six-field record (staged decoder). *)
 val obj6 :
   'a field -> 'b field -> 'c field -> 'd field -> 'e field -> 'f field ->
   make:('a -> 'b -> 'c -> 'd -> 'e -> 'f -> 'r) ->
   split:('r -> 'a * 'b * 'c * 'd * 'e * 'f) ->
   'r t
 
+(** A seven-field record (staged decoder). *)
 val obj7 :
   'a field -> 'b field -> 'c field -> 'd field -> 'e field -> 'f field -> 'g field ->
   make:('a -> 'b -> 'c -> 'd -> 'e -> 'f -> 'g -> 'r) ->
   split:('r -> 'a * 'b * 'c * 'd * 'e * 'f * 'g) ->
   'r t
 
+(** An eight-field record (staged decoder). *)
 val obj8 :
   'a field -> 'b field -> 'c field -> 'd field -> 'e field -> 'f field -> 'g field -> 'h field ->
   make:('a -> 'b -> 'c -> 'd -> 'e -> 'f -> 'g -> 'h -> 'r) ->
@@ -382,6 +458,7 @@ type hint =
   | H_max_items of int
   | H_unique_items
 
+(** The structural shape of a codec, as plain data. *)
 type view =
   | V_string
   | V_int
@@ -398,6 +475,7 @@ type view =
   | V_obj of (string * bool * view) list (* name, required, shape *)
   | V_variant of string * (string * (string * bool * view) list) list (* tag, cases *)
 
+(** The {!view} of a codec: its structural shape, as plain data. *)
 val view : 'a t -> view
 
 (** The structural {!view} of one field's shape — a form renderer reads the leaf kind + refinement
@@ -420,7 +498,14 @@ val encode_args : 'a args -> 'a -> Bson.t list
 (** Decode a BSON wire param list back to the parameter tuple (the handler side); error is rendered. *)
 val decode_args : 'a args -> Bson.t list -> ('a, string) result
 
+(** No parameters. *)
 val a0 : unit args
+
+(** One parameter. *)
 val a1 : 'a t -> 'a args
+
+(** Two parameters. *)
 val a2 : 'a t -> 'b t -> ('a * 'b) args
+
+(** Three parameters. *)
 val a3 : 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) args

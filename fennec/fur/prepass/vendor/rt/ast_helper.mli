@@ -24,12 +24,22 @@ open Asttypes
 open Docstrings
 open Parsetree
 
+(** A value paired with its source location. *)
 type 'a with_loc = 'a Location.loc
+
+(** A source location. *)
 type loc = Location.t
 
+(** A located long identifier. *)
 type lid = Longident.t with_loc
+
+(** A located string. *)
 type str = string with_loc
+
+(** A located optional string. *)
 type str_opt = string option with_loc
+
+(** An attribute list. *)
 type attrs = attribute list
 
 (** {1 Default locations} *)
@@ -43,6 +53,7 @@ val with_default_loc: loc -> (unit -> 'a) -> 'a
 
 (** {1 Constants} *)
 
+(** Builders for constants. *)
 module Const : sig
   val char : char -> constant
   val string :

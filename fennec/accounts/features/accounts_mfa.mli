@@ -15,6 +15,7 @@
           | Error _ -> ignore uri)
     ]} *)
 
+(** The single-use token primitive behind the step-up ceremony. *)
 module Challenge = Accounts_challenge
 
 (** MFA helper state. *)

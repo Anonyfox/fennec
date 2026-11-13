@@ -48,6 +48,7 @@
   ; the example's app libs (the Dynlinked chain): site_components + its app-local deps, byte .cma's
   %{project_root}/examples/site/web/store/site_store.cma
   %{project_root}/examples/site/_client/styles/site_styles.cma
+  %{project_root}/examples/site/web/methods/site_methods.cma
   %{project_root}/examples/site/web/components/site_components.cma
   ; the site_components inline-test runner (its mtime drives the integrated edit) + its generated
   ; byte .cmo (the chain tail — loading it runs the registrations site_components.cma carries)

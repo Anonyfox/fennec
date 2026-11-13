@@ -32,8 +32,13 @@
     {!Mfa}, {!Org}, {!Scim}, {!Roles}, {!Audit}) compose through canonical user ids, identity links,
     challenges, and the one {!Store.t} instead of one giant configuration record. *)
 
+(** The HTTP connection type the route helpers take (Paw's, re-exported). *)
 module Conn = Paw.Conn
+
+(** Paw, re-exported so an app wiring accounts routes needs no second dependency. *)
 module Paw = Paw
+
+(** The BSON value type that profiles and stored documents use (re-exported). *)
 module Bson = Bson
 
 (** The typed-BSON shape language, re-exported for building a {!profile_codec} — describe the optional
@@ -1233,7 +1238,14 @@ val enroll_account : t -> Challenge.token -> password:string -> (user * token, e
     issuing a full session token. [step_up.token] is single-use and bound to [user.id], letting the
     caller continue with a second-factor ceremony without inventing ad-hoc state. *)
 val reset_password_completion : t -> Challenge.token -> password:string -> (login_completion, error) result
+
+(** Consume an email-verification challenge and mark the address verified. Like
+    {!reset_password_completion}, it returns [Step_up_required] instead of a session when the user
+    has an active MFA enrollment. *)
 val verify_email_completion : t -> Challenge.token -> (login_completion, error) result
+
+(** Consume an enrollment challenge, set the account's first [password] and complete the login.
+    Returns [Step_up_required] instead of a session when the user has an active MFA enrollment. *)
 val enroll_account_completion : t -> Challenge.token -> password:string -> (login_completion, error) result
 
 (** List identity links currently attached to a user. *)

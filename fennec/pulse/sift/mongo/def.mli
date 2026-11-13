@@ -13,11 +13,27 @@
        (* downstream: Task.find ~where:[%q status = "doing"] () *) ]}
 *)
 
+(** The declaration of a collection of ['a] documents. *)
 type 'a t
 
+(** [v ?indexes name codec] declares the collection [name] with document shape [codec] (and optional
+    indexes). Every declaration is also recorded for {!declared}. *)
 val v : ?indexes:Index.t list -> string -> 'a Sift.t -> 'a t
+
+(** A declaration with its document type hidden — the element of {!declared}. *)
+type any = Any : 'a t -> any
+
+(** Every collection declared so far (each {!v} call, in declaration order) — what the server opens at
+    boot, before any workflow transaction runs, so no transaction ever has to create a collection. *)
+val declared : unit -> any list
+
+(** The collection's name. *)
 val name : 'a t -> string
+
+(** The document shape that writes validate against and reads decode through. *)
 val codec : 'a t -> 'a Sift.t
+
+(** The indexes passed to {!v} (see {!all_indexes} for the full set). *)
 val indexes : 'a t -> Index.t list
 
 (** The mongod validator document derived from the shape ({!Json_schema.validator}). *)

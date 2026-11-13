@@ -25,16 +25,28 @@ type t = {
 
 (* ── the kit (used by adapters in this library) ── *)
 
+(** The user's home directory ([$HOME]), the base of every harness config path. *)
 val home : unit -> string
+
+(** Read an environment variable ([None] when unset). *)
 val getenv : string -> string option
+
+(** The whole content of a file, or [None] when it is missing or unreadable. *)
 val read_file : string -> string option
+
+(** Write a file in full, creating its parent directories as needed. *)
 val write_file : string -> string -> unit
 
 (** JSON string escaper, shared with {!Journal}; doubles as a TOML basic-string escaper. *)
 val json_escape : string -> string
 
+(** Escape a string for a TOML basic (double-quoted) string. *)
 val toml_basic_escape : string -> string
+
+(** [contains haystack needle] is whether [needle] occurs in [haystack]. *)
 val contains : string -> string -> bool
+
+(** [find_sub haystack needle] is the index of the first occurrence of [needle], if any. *)
 val find_sub : string -> string -> int option
 
 (** The one constant marker baked as a trailing comment into our hook command, so install is

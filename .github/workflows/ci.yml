@@ -17,11 +17,69 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest # linux x64
-          - os: macos-latest # macos arm64
-          # macos-13 (Intel x64) runners are scarce and queue forever; re-enable
-          # once availability improves. The native chain is identical to arm64.
-          # - os: macos-13 # macos x64
+          # macOS runs in the build-macos job below, only on manual dispatch
+          # (macOS minutes bill at 10x). macos-13 (Intel x64) runners are scarce
+          # and queue forever; the native chain is identical to arm64.
     runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+        with:
+          deps-args: --with-test
+
+      - name: Build
+        run: opam exec -- dune build
+
+      - name: Test
+        run: opam exec -- dune runtest
+
+      - name: Smoke-test the CLI
+        run: opam exec -- dune exec -- fennec --version
+
+      # The site example's real-browser e2e needs a Chrome (no npm, no chromedriver):
+      # it talks the DevTools Protocol straight to headless Chrome over a WebSocket
+      # written on Eio. Install a browser and point the harness at it.
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+
+      # The example's Http and Browser suites via `fennec test`: it boots a dedicated isolated
+      # app instance per suite, runs the Http suites, then drives the real bundles in headless
+      # Chrome (SSR + hydration + interactivity + data + store + localStorage + SPA-nav + bundle
+      # isolation + streaming). Run the built binary directly under the opam env (NOT `dune exec`,
+      # which would nest dune inside fennec's own build and deadlock on the workspace lock).
+      - name: Example suites (fennec test http + browser)
+        working-directory: examples/site
+        run: |
+          FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
+          opam exec -- "$FENNEC" test http
+          CHROME='${{ steps.chrome.outputs.chrome-path }}' opam exec -- "$FENNEC" test browser
+
+      # The example's System suites via `fennec test system`: each spawns the real `fennec dev` and
+      # drives its process/port/livereload/error-panel lifecycle (condition waits, never sleep) —
+      # the typed, deterministic replacement for the old e2e/*.sh. Serial (they share dev's fixed
+      # ports), no Chrome needed. The @manual heal suite (it runs `fennec dev --clean`, wiping
+      # _build) is built but skipped here. Same direct-binary invocation to avoid nesting dune.
+      - name: Example suites (fennec test system)
+        working-directory: examples/site
+        run: |
+          FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
+          opam exec -- "$FENNEC" test system
+
+      # Doc-coverage gate: every public export in the fennec packages must carry a doc comment.
+      # Scoped to the framework libraries (not the example app). Warn-only on the example — it's
+      # userland, not the public API. Running at the workspace root, not examples/site.
+      - name: Doc coverage (fennec test docs --strict)
+        run: |
+          FENNEC="$GITHUB_WORKSPACE/_build/default/cli/fennec.exe"
+          opam exec -- "$FENNEC" test docs --strict fennec/ cli/
+
+  # Same steps on macOS arm64, only when triggered manually (macOS bills at 10x).
+  build-macos:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 

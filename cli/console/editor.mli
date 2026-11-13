@@ -4,6 +4,7 @@
     ({!outcome}); the caller (the REPL session) renders {!line} and talks to the socket. The same
     editor drives the standalone console and the [dev --console] prompt, so neither owns the rendering. *)
 
+(** The line editor's state: the current buffer, the cursor position and the input history. *)
 type t
 
 (** A fresh editor with an empty buffer and no history. *)

@@ -46,6 +46,11 @@ val serve_ddp : ?path:string -> unit -> Paw.t
     once on first use), re-wrapped cheaply per call. The escape hatch when a verb below isn't enough. *)
 val collection : 'a Def.t -> 'a T.t
 
+(** Open every declared collection now ({!Def.declared}), reconciling its indexes and validator. The data
+    layer runs this once at boot ([Fennec.serve] / the console, before [on_start]), so a workflow
+    transaction never creates a collection mid-flight; calling it again is a cheap no-op. *)
+val open_declared : unit -> unit
+
 (** {1 Server writes} — used inside method handlers (the one client write path). Each validates
     against the declaration and raises {!T.Make.Invalid} on a bad value rather than writing it. *)
 
@@ -59,8 +64,15 @@ val insert : 'a Def.t -> 'a -> string
     re-seed of a durable dev DB, reset it first with `fennec clean --db`. *)
 val seed : 'a Def.t -> 'a list -> unit
 
+(** Validating update of the documents matching [where] (one, or all with [~multi:true]); returns the
+    number of documents modified. *)
 val update : 'a Def.t -> ?multi:bool -> where:Filter.t list -> Update.t -> int
+
+(** Like {!update}, but inserts a document when nothing matches; returns the number modified and the
+    new [_id] when one was inserted. *)
 val upsert : 'a Def.t -> ?multi:bool -> where:Filter.t list -> Update.t -> int * string option
+
+(** Remove the documents matching [where]; returns how many were removed. *)
 val remove : 'a Def.t -> where:Filter.t list -> int
 
 (** {1 Publications and methods} *)

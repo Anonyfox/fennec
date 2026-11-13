@@ -7,6 +7,7 @@
            ~html:(fun c -> View.document c (Posts_view.show post))
            ~json:(fun c -> Respond.model c Post.codec post) ]} *)
 
+(** The connection type responders take (Paw's, re-exported). *)
 module Conn = Paw.Conn
 
 (** Whether the client prefers JSON (walks the Accept header in order; HTML is the default). A

@@ -20,14 +20,31 @@
 
 *)
 
+(** Parse a whole implementation (an [.ml]/[.mlx] file). *)
 val implementation : Lexing.lexbuf -> Parsetree.structure
+
+(** Parse a whole interface (an [.mli] file). *)
 val interface : Lexing.lexbuf -> Parsetree.signature
+
+(** Parse one toplevel phrase. *)
 val toplevel_phrase : Lexing.lexbuf -> Parsetree.toplevel_phrase
+
+(** Parse a file of toplevel phrases (the [#use] form). *)
 val use_file : Lexing.lexbuf -> Parsetree.toplevel_phrase list
+
+(** Parse a single type expression. *)
 val core_type : Lexing.lexbuf -> Parsetree.core_type
+
+(** Parse a single expression. *)
 val expression : Lexing.lexbuf -> Parsetree.expression
+
+(** Parse a single pattern. *)
 val pattern : Lexing.lexbuf -> Parsetree.pattern
+
+(** Parse a single module type. *)
 val module_type : Lexing.lexbuf -> Parsetree.module_type
+
+(** Parse a single module expression. *)
 val module_expr : Lexing.lexbuf -> Parsetree.module_expr
 
 (** The functions below can be used to parse Longident safely. *)

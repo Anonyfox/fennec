@@ -3,6 +3,7 @@
     binary, and print the deploy contract. The CLI subcommand is a thin cmdliner wrapper over {!run};
     keeping the orchestration here lets other surfaces drive a release the same way. *)
 
+(** What a release run should do (the CLI flags, as a record). *)
 type opts = {
   outdir : string;  (** where to stage the binary (the CLI defaults this to [dist]) *)
   docker : bool;  (** for a host build, also write a runtime [./Dockerfile] *)

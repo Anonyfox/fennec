@@ -7,10 +7,13 @@
        let () = Def.index collection Index.[ unique (asc Fields.email) ]          (* explicit form *) ]}
 *)
 
+(** One declared index. *)
 type t
 
 (** Ascending / descending single-key index. *)
 val asc : _ Sift.field -> t
+
+(** A descending single-key index. *)
 val desc : _ Sift.field -> t
 
 (** A compound index from several single keys ([compound [ asc a; desc b ]]). *)
@@ -32,6 +35,7 @@ val name : t -> string
 (** Whether a backend index name is fennec-managed (safe to auto-drop when undeclared). *)
 val is_fennec_name : string -> bool
 
+(** Whether the index enforces uniqueness. *)
 val is_unique : t -> bool
 
 (** The Mongo key spec ([{ field: 1|-1, … }]). *)

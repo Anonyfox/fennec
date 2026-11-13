@@ -19,8 +19,13 @@
           Accounts_oidc.verify_id_token google state jwks id_token
     ]} *)
 
+(** The single-use token primitive that carries [state] and [nonce] across the redirect. *)
 module Challenge = Accounts_challenge
+
+(** The identity-link store that maps issuer subjects to canonical users. *)
 module Identity = Accounts_identity
+
+(** The OAuth 2.0 layer OIDC builds on (authorization URL, code exchange). *)
 module OAuth = Accounts_oauth
 
 (** OIDC connection configuration. *)

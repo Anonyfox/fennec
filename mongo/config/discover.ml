@@ -10,7 +10,7 @@
       the one transformation is rewriting any remaining dynamic `-l<name>` whose `lib<name>.a` we can
       find into that archive's full path — a full .a path forces static inclusion on both macOS ld64
       and GNU ld/lld, with no -Bstatic/-Bdynamic juggling. Genuinely OS-provided libs (resolv, the
-      macOS frameworks, libc) have no archive and stay dynamic on purpose.
+      macOS frameworks, libc and the rest of the libc family) stay dynamic on purpose.
 
    Unlike comet (where the driver was mandatory), mongo is OPTIONAL in fennec, so any failure here —
    no cmake/curl, an unsupported OS (Windows, for now), a build error — DEGRADES instead of breaking
@@ -73,7 +73,13 @@ let () =
                   "/usr/lib/x86_64-linux-gnu"; "/usr/lib/aarch64-linux-gnu" ])
             |> List.filter (fun d -> try Sys.is_directory d with _ -> false)
           in
+          (* libc-family libs always stay dynamic: glibc ships non-PIC lib{resolv,m,rt,...}.a that
+             can't go into the shared stub library (ocamlmklib builds a .so too), and statically
+             linking parts of glibc is unsupported anyway. *)
+          let system_libs = [ "c"; "m"; "resolv"; "rt"; "pthread"; "dl"; "util" ] in
           let archive_of name =
+            if List.mem name system_libs then None
+            else
             let fname = "lib" ^ name ^ ".a" in
             List.find_map (fun d -> let p = Filename.concat d fname in if Sys.file_exists p then Some p else None) lib_dirs
           in

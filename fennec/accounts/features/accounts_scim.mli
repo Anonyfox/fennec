@@ -19,7 +19,10 @@
       | Error e -> Error (Accounts_scim.string_of_error e)
     ]} *)
 
+(** The identity-link store that maps SCIM external ids to canonical users. *)
 module Identity = Accounts_identity
+
+(** The organization store that provisioned users and groups are attached to. *)
 module Org = Accounts_org
 
 (** Constructor, auth, and patch errors. *)

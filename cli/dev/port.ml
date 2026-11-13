@@ -115,7 +115,50 @@ let%test "a fastdev near-miss (myfake_build) is still NOT ours" =
 let%test "a different app is NOT ours even across build dirs" =
   not (is_ours ~exe:fastdev_ ~cmd:"/x/ocamlrun /p/_build/default/examples/admin/server.bc")
 
-let listeners port =
+(* Linux without lsof (e.g. CI runner images): the same answer from /proc. [listening_inodes ~port
+   text] is pure over one /proc/net/tcp{,6} table — the socket inodes in state 0A (LISTEN) whose local
+   address ends in [:PORT] (uppercase hex); then every /proc/<pid>/fd that links to [socket:[inode]]
+   is a holder, and /proc/<pid>/cmdline (NUL-separated argv) is its command. Processes we may not
+   inspect are skipped, exactly as lsof skips them for an unprivileged user. *)
+let listening_inodes ~port text =
+  let suffix = Printf.sprintf ":%04X" port in
+  String.split_on_char '\n' text
+  |> List.filter_map (fun line ->
+         match String.split_on_char ' ' line |> List.filter (fun f -> f <> "") with
+         | _sl :: local :: _remote :: "0A" :: _ :: _ :: _ :: _ :: _ :: inode :: _
+           when String.ends_with ~suffix local && inode <> "0" -> Some inode
+         | _ -> None)
+
+let read_file path = try Some (In_channel.with_open_bin path In_channel.input_all) with _ -> None
+
+let proc_listeners port =
+  let inodes =
+    List.concat_map
+      (fun t -> match read_file t with Some text -> listening_inodes ~port text | None -> [])
+      [ "/proc/net/tcp"; "/proc/net/tcp6" ]
+  in
+  if inodes = [] then []
+  else
+    let wanted = List.map (fun i -> "socket:[" ^ i ^ "]") inodes in
+    let pids = try Sys.readdir "/proc" |> Array.to_list |> List.filter_map int_of_string_opt with _ -> [] in
+    List.filter_map
+      (fun pid ->
+        let fd_dir = Printf.sprintf "/proc/%d/fd" pid in
+        let holds =
+          try Sys.readdir fd_dir |> Array.exists (fun fd -> try List.mem (Unix.readlink (Filename.concat fd_dir fd)) wanted with _ -> false)
+          with _ -> false
+        in
+        if not holds || pid <= 1 then None
+        else
+          let cmd =
+            match read_file (Printf.sprintf "/proc/%d/cmdline" pid) with
+            | Some raw -> String.trim (String.map (fun c -> if c = '\000' then ' ' else c) raw)
+            | None -> ""
+          in
+          Some (pid, cmd))
+      pids
+
+let lsof_listeners port =
   match (try Some (Unix.open_process_in (Printf.sprintf "lsof -nP -iTCP:%d -sTCP:LISTEN -t 2>/dev/null" port)) with _ -> None) with
   | None -> []
   | Some ic ->
@@ -135,6 +178,23 @@ let listeners port =
         in
         (p, cmd))
       !pids
+
+(* lsof where it answers (macOS, most Linux desktops); /proc when lsof is absent or finds nothing *)
+let listeners port =
+  match lsof_listeners port with
+  | [] when Sys.file_exists "/proc/net/tcp" -> proc_listeners port
+  | l -> l
+
+let%test "listening_inodes: LISTEN sockets on the port only (v4 + v6 rows)" =
+  let table =
+    String.concat "\n"
+      [ "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+        "   0: 0100007F:0FA0 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4242 1 0000000000000000 100 0 0 10 0";
+        "   1: 0100007F:0FA0 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1001        0 4343 1 0000000000000000 20 4 30 10 -1";
+        "   2: 0100007F:0FA1 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4444 1 0000000000000000 100 0 0 10 0";
+        "   3: 00000000000000000000000001000000:0FA0 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4545 1 0000000000000000 100 0 0 10 0" ]
+  in
+  listening_inodes ~port:4000 table = [ "4242"; "4545" ]
 
 let reclaim ~exe port =
   let mine = List.filter (fun (_, cmd) -> is_ours ~exe ~cmd) (listeners port) in

@@ -19,16 +19,31 @@ type backend = {
 (** [install b] makes [b] the live backend (server boot). *)
 val install : backend -> unit
 
+(** Insert a value through the installed backend; returns it with its new [id]. *)
 val create : 'a Def.t -> 'a -> 'a
+
+(** Replace the stored document that has the value's [id]; returns the saved value. *)
 val save : 'a Def.t -> 'a -> 'a
+
+(** Remove the document that has the value's [id]. *)
 val delete : 'a Def.t -> 'a -> unit
+
+(** The first document matching the filters, if any. *)
 val find_one : 'a Def.t -> Filter.t list -> 'a option
+
+(** All documents matching the filters. *)
 val where : 'a Def.t -> Filter.t list -> 'a list
+
+(** Every document of the collection. *)
 val all : 'a Def.t -> 'a list
+
+(** The number of documents matching the filters. *)
 val count : 'a Def.t -> Filter.t list -> int
 
 (** The ambient sim for a method's optimistic slot. [with_sim w f] runs [f] (the slot body) with [w]
     bound as the current sim, so the model write verbs called inside predict against the local cache;
     the browser backend reads it via [current_sim]. Restored on exit. *)
 val with_sim : Method.sim_writes -> (unit -> 'a) -> 'a
+
+(** The sim bound by the innermost enclosing {!with_sim}, if any. *)
 val current_sim : unit -> Method.sim_writes option
