@@ -28,6 +28,7 @@ type sandbox = {
   env : Eio_unix.Stdenv.base;      (* the Eio environment *)
   sw : Eio.Switch.t;               (* scenario switch — all procs die on release *)
   mutable ports : int list;        (* ports handed out by [free_port] *)
+  mutable dev_ports : int list;    (* the port block of every [dev] spawned — drained on teardown *)
 }
 
 (* the Eio process handle is captured only inside the status daemon, so the record stays
@@ -215,6 +216,10 @@ let server_bc () = Test_proto.server_bc () (* the built server bytecode, if prov
    drives the app over HTTP, not the wire. (An explicit MONGO_URL in the spawn env would still win.) *)
 let dev ?(args = []) sb =
   let mongo_url = "burrow://" ^ Filename.concat sb.dir "e2e-db" in
+  (* the block this dev binds: its gateway base ([--port N], else 4000) and the endpoint ports above it *)
+  let rec base = function "--port" :: n :: _ -> int_of_string_opt n | _ :: r -> base r | [] -> None in
+  let b = Option.value (base args) ~default:4000 in
+  sb.dev_ports <- List.init 4 (fun i -> b + i) @ sb.dev_ports;
   spawn sb ~env:[ ("MONGO_URL", mongo_url) ] ~cwd:(app_dir ()) (fennec () :: "dev" :: args)
 
 let wait_output p ?(timeout = 10.0) sub =
@@ -292,8 +297,19 @@ let run_one (sc : scenario) =
   (try Unix.mkdir dir 0o755 with _ -> ());
   let clock = Eio.Stdenv.clock env in
   let t0 = Eio.Time.now clock in
-  let outcome = try Eio.Switch.run (fun sw -> sc.body { dir; env; sw; ports = [] }); Ok () with e -> Error e in
+  let sb_ports = ref [] in
+  let outcome =
+    try Eio.Switch.run (fun sw -> let sb = { dir; env; sw; ports = []; dev_ports = [] } in
+                         Fun.protect ~finally:(fun () -> sb_ports := sb.dev_ports) (fun () -> sc.body sb)); Ok ()
+    with e -> Error e
+  in
   let ms = (Eio.Time.now clock -. t0) *. 1000.0 in
+  (* Containment between scenarios: the switch release SIGKILLs every spawned process group, but a
+     killed listener's socket closes asynchronously. Wait (bounded) until the dev ports this scenario
+     used are closed, so the NEXT scenario's readiness wait can never be satisfied by this one's dying
+     server (a connect that then resets). *)
+  let drain_deadline = Eio.Time.now clock +. 10.0 in
+  while List.exists port_open !sb_ports && Eio.Time.now clock < drain_deadline do Eio.Time.sleep clock 0.05 done;
   match outcome with
   | Ok () ->
     incr passed;

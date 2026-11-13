@@ -6,8 +6,8 @@
     errs toward NOT-ours: the cost of a miss is a leftover we name instead of auto-killing, vs. the
     cost of a false positive being SIGKILLing the wrong process. *)
 
-(** [(pid, full command)] of every process LISTENING on [port] right now (via lsof + ps); [] if
-    lsof is absent. *)
+(** [(pid, full command)] of every process LISTENING on [port] right now: via lsof + ps, or — when
+    lsof is absent or finds nothing on Linux — from /proc (net/tcp{,6}, fd links, cmdline). *)
 val listeners : int -> (int * string) list
 
 (** Pure. Does command line [cmd] RUN our server binary [exe]? True iff [argv[0]] is that build
