@@ -906,7 +906,7 @@ let run ?(timeout = 30.0) ?(request_timeout = 0.0) ?(max_conns = 10_000) ?parall
         with
         | Unix.Unix_error (Unix.EADDRINUSE, _, _)
         (* the io_uring/posix backends raise the bind failure wrapped as an Eio.Io error, not bare *)
-        | Eio.Io (Eio_unix.Unix_error (Unix.EADDRINUSE, _, _), _) -> raise (Port_in_use port)
+        | Eio.Io (Eio.Exn.X (Eio_unix.Unix_error (Unix.EADDRINUSE, _, _)), _) -> raise (Port_in_use port)
       in
       let serve_conn ~scheme flow addr = handle_conn ~now ~clock ~timeout ~request_timeout ~fs ~on_error ?on_access ~scheme ~allowed ~resolve flow addr in
       let handle flow addr =
