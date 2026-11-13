@@ -5,6 +5,7 @@
     is stateless per call — a chunk from a single [read] holds whole sequences in practice; a lone
     trailing [ESC] is reported as {!Esc}. *)
 
+(** One decoded key press, as the line editor consumes it. *)
 type t =
   | Char of char  (** a printable / pass-through byte *)
   | Enter

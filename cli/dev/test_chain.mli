@@ -77,4 +77,6 @@ type lib = {
   source_dir : string;
 }
 
+(** Parse the output of [dune describe workspace] into its libraries, with their inline-test
+    dependencies and source directories. *)
 val libs_of_describe : string -> lib list

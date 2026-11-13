@@ -47,10 +47,12 @@ val make :
   unit ->
   t
 
+(** Why a send failed. *)
 type error =
   | Invalid_message of string  (** the message itself is unsendable (no recipient / no body) *)
   | Transport_error of string  (** the transport failed (connection / TLS / SMTP rejection) *)
 
+(** A human-readable description of a send error. *)
 val string_of_error : error -> string
 
 (** The serialized RFC-5322/MIME bytes — exposed for custom transports and tests. *)

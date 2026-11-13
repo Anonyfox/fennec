@@ -80,9 +80,9 @@ val run_changed : t -> summary option
 
 (**/**)
 
-(* test-only: inject a [dune describe workspace] string directly (exercises the warm chain→worker
-   path without spawning dune, which would deadlock under [dune runtest]). *)
+(** Test-only: inject a [dune describe workspace] string directly. This exercises the warm
+    chain-to-worker path without spawning dune, which would deadlock under [dune runtest]. *)
 val set_describe_for_test : t -> string -> unit
 
-(* test-only: set the discovered runners directly, bypassing the filesystem scan. *)
+(** Test-only: set the discovered runners directly, bypassing the filesystem scan. *)
 val set_runners_for_test : t -> runner list -> unit

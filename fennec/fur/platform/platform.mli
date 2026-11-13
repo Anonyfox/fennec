@@ -80,4 +80,5 @@ val set_data_source : (string -> (string -> unit) -> unit) -> unit
     its key and casts back. *)
 val slot_get : string -> Obj.t option
 
+(** Store a value under its key in the platform's slot table (the write side of {!slot_get}). *)
 val slot_set : string -> Obj.t -> unit

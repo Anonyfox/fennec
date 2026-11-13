@@ -154,5 +154,9 @@ val complete_login_step_up_backup :
 
 (** Decode helpers exposed for tests and custom low-level clients. *)
 val decode_user : Bson.t -> (user, string) result
+
+(** Decode a session document as the server sends it. *)
 val decode_session : Bson.t -> (session, string) result
+
+(** Decode a login reply: a session, or a pending MFA step-up. *)
 val decode_login_result : Bson.t -> (login_result, string) result

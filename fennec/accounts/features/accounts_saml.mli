@@ -20,7 +20,10 @@
         ~relay_state ~saml_response
     ]} *)
 
+(** The single-use token primitive that carries the SAML [RelayState] across the redirect. *)
 module Challenge = Accounts_challenge
+
+(** The identity-link store that maps IdP name ids to canonical users. *)
 module Identity = Accounts_identity
 
 (** SAML service-provider connection configuration. *)

@@ -5,11 +5,13 @@
     ESMTP [AUTH PLAIN]/[AUTH LOGIN], multi-recipient envelope, and a dot-stuffed [DATA] body. It is the one
     real protocol module of {!Fennec_mail}; the message bytes come from {!Mail_mime}. *)
 
+(** How the connection is secured. *)
 type security =
   | Plaintext  (** no TLS — local dev catchers (Mailpit/MailHog) and the test server *)
   | Starttls  (** [smtp://] — upgrade via STARTTLS when the server advertises it, else stay plaintext *)
   | Implicit_tls  (** [smtps://] — TLS wraps the socket before the greeting (port 465) *)
 
+(** Where and how to submit: host, port, security and optional credentials. *)
 type config = {
   host : string;
   port : int;

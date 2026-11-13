@@ -25,6 +25,8 @@ val call : ('a, 'r) Method.t -> 'a -> ('r, string * string) result option Fur.si
 (** Connection state / buffered-write count, for offline affordances (ambient). *)
 val status : unit -> [ `Connected | `Connecting | `Waiting ] Fur.signal
 
+(** How many method calls are buffered or not yet acknowledged (0 once everything is flushed and
+    confirmed); pinned to 0 during SSR. *)
 val pending_writes : unit -> int Fur.signal
 
 (** The per-model client view (Meteor's collection object): bind once, then call verbs with no

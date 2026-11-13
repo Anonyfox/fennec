@@ -9,6 +9,7 @@
          | Ok m -> ignore (Messages.create m); Handler.redirect conn "/thanks" ~flash:"Sent!"
          | Error errs -> Handler.html ~status:422 conn (Contact_page.view ~errors:errs ()) ]} *)
 
+(** The connection type the form helpers take (Paw's, re-exported). *)
 module Conn = Paw.Conn
 
 (** {1 One Form, both surfaces — the client primitive + codec-driven attrs, re-exported}
@@ -66,6 +67,7 @@ val submitted : Conn.t -> string -> string
     top-level (path-less) messages separated from per-field messages keyed by wire name. *)
 type error_summary = { form_errors : string list; field_errors : (string * string list) list }
 
+(** Group validation errors into the {!error_summary} shape. *)
 val summary : Sift.error list -> error_summary
 
 (** {2 Form-handler view-state + outcome}
@@ -78,6 +80,7 @@ val summary : Sift.error list -> error_summary
     [view] only reads it (a plain value — concurrency-safe). *)
 type ctx
 
+(** Build the view-state from the connection, the flash message and the validation errors. *)
 val ctx : conn:Conn.t -> flash:string option -> errors:Sift.error list -> ctx
 
 (** The flash banner (empty without a message). *)

@@ -67,12 +67,15 @@ val set_post_extra_docstrings : Lexing.position -> docstring list -> unit
 
     The {!docs} type represents documentation attached to an item. *)
 
+(** Documentation attached to an item: the comment before it and the one after it. *)
 type docs =
   { docs_pre: docstring option;
     docs_post: docstring option; }
 
+(** No documentation. *)
 val empty_docs : docs
 
+(** Convert a docstring to its [ocaml.doc] attribute. *)
 val docs_attr : docstring -> Parsetree.attribute
 
 (** Convert item documentation to attributes and add them to an
@@ -82,12 +85,16 @@ val add_docs_attrs : docs -> Parsetree.attributes -> Parsetree.attributes
 (** Fetch the item documentation for the current symbol. This also
     marks this documentation (for ambiguity warnings). *)
 val symbol_docs : unit -> docs
+
+(** Lazy {!symbol_docs}. *)
 val symbol_docs_lazy : unit -> docs Lazy.t
 
 (** Fetch the item documentation for the symbols between two
     positions. This also marks this documentation (for ambiguity
     warnings). *)
 val rhs_docs : int -> int -> docs
+
+(** Lazy {!rhs_docs}. *)
 val rhs_docs_lazy : int -> int -> docs Lazy.t
 
 (** Mark the item documentation for the current symbol (for ambiguity
@@ -103,10 +110,13 @@ val mark_rhs_docs : int -> int -> unit
     The {!info} type represents documentation attached to a field or
     constructor. *)
 
+(** Documentation attached to a field or constructor. *)
 type info = docstring option
 
+(** No field or constructor documentation. *)
 val empty_info : info
 
+(** Convert a docstring to its [ocaml.doc] attribute (field or constructor form). *)
 val info_attr : docstring -> Parsetree.attribute
 
 (** Convert field info to attributes and add them to an
@@ -124,11 +134,16 @@ val rhs_info : int -> info
     The {!text} type represents documentation which is not attached to
     anything. *)
 
+(** Floating documentation that is not attached to any item. *)
 type text = docstring list
 
+(** No floating text. *)
 val empty_text : text
+
+(** No floating text, lazily. *)
 val empty_text_lazy : text Lazy.t
 
+(** Convert a docstring to its [ocaml.text] attribute. *)
 val text_attr : docstring -> Parsetree.attribute
 
 (** Convert text to attributes and add them to an attribute list *)
@@ -136,10 +151,14 @@ val add_text_attrs : text -> Parsetree.attributes -> Parsetree.attributes
 
 (** Fetch the text preceding the current symbol. *)
 val symbol_text : unit -> text
+
+(** Lazy {!symbol_text}. *)
 val symbol_text_lazy : unit -> text Lazy.t
 
 (** Fetch the text preceding the symbol at the given position. *)
 val rhs_text : int -> text
+
+(** Lazy {!rhs_text}. *)
 val rhs_text_lazy : int -> text Lazy.t
 
 (** {2 Extra text}
@@ -164,6 +183,7 @@ val rhs_post_extra_text : int -> text
 (** Fetch text following the symbol at the given position *)
 val rhs_post_text : int -> text
 
+(** The same fetchers, taking Menhir positions instead of the parsing stack. *)
 module WithMenhir: sig
 (** Fetch the item documentation for the current symbol. This also
     marks this documentation (for ambiguity warnings). *)

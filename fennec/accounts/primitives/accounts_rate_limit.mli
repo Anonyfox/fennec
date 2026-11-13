@@ -14,6 +14,7 @@
     keys on the {e selector string} (not on whether a user exists), so a missing and a present account
     are rate-limited identically — the throttle is not an existence oracle. *)
 
+(** A limiter: its rules and the token buckets per selector key. *)
 type t
 
 (** A single rule: [max_attempts] tokens that refill fully over [window] seconds. *)

@@ -3,6 +3,7 @@
     The address is kept structured (rather than a bare string) so the MIME layer can quote / RFC-2047
     encode the display name correctly, and so the SMTP envelope can use just the bare [email]. *)
 
+(** A mailbox: an optional display name and the bare address. *)
 type t = {
   name : string option;  (** display name, e.g. [Some "Ada Lovelace"] *)
   email : string;  (** the bare address, e.g. ["ada@example.com"] *)

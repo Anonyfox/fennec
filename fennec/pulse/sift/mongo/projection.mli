@@ -9,6 +9,7 @@
        (* o#title works; o#body is a COMPILE error (not in the projection) *) ]}
 *)
 
+(** A typed projection whose decoded value is the object ['o]. *)
 type 'o t
 
 (** Used by the ppx; userland writes [\[%fields …\]]. *)
@@ -17,4 +18,5 @@ val v : fields:(string * Bson.t) list -> decode:(Bson.t -> ('o, Sift.error list)
 (** The Mongo projection document ([{a:1, b:1}]) — what the cursor/wire trims by. *)
 val project_doc : 'o t -> Bson.t
 
+(** Decode a projected document into the typed object. *)
 val decode : 'o t -> Bson.t -> ('o, Sift.error list) result

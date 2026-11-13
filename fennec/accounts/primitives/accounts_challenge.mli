@@ -17,6 +17,7 @@
       | Error e -> Error e
     ]} *)
 
+(** The BSON value type that challenge payloads are stored as (re-exported). *)
 module Bson = Bson
 
 (** A typed challenge purpose. Purpose separation prevents a token minted for one flow from being

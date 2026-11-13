@@ -6,6 +6,8 @@ type fit =
   | Contain  (** fit inside the box, preserving aspect ratio (no crop) — the default *)
   | Cover  (** fill the box exactly, center-cropping the overflow *)
 
+(** One image operation: an optional resize box, how to fit into it, the encode quality and
+    whether to strip metadata. *)
 type t = {
   resize : Geometry.t option;  (** [None] keeps the source dimensions *)
   fit : fit;

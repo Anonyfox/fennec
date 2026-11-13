@@ -20,6 +20,7 @@
 
 *)
 
+(** A syntax error, with the locations needed to report it. *)
 type error =
     Unclosed of Location.t * string * Location.t * string
   | Expecting of Location.t * string
@@ -31,8 +32,14 @@ type error =
   | Invalid_package_type of Location.t * string
   | Removed_string_set of Location.t
 
+(** Raised by the parser on a syntax error. *)
 exception Error of error
+
+(** Raised internally to escape from the parser on an error without details. *)
 exception Escape_error
 
+(** The main location of a syntax error. *)
 val location_of_error: error -> Location.t
+
+(** Raise an [Ill_formed_ast] error at the location with the given message. *)
 val ill_formed_ast: Location.t -> string -> 'a

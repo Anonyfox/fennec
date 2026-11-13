@@ -28,12 +28,25 @@ type 'p outcome =
 (** Smart constructors, so [load] reads as plain verbs: [render p] (SPA) / [html p] (plain HTML) /
     [json codec v] (data) / … — one [view]/[payload] negotiated into the representation asked for. *)
 
+(** Answer with the page rendered as an SPA document (SSR plus the hydrating bundle). *)
 val render : 'p -> 'p outcome
+
+(** Answer with the page rendered as plain HTML (no bundle). *)
 val html : 'p -> 'p outcome
+
+(** Answer with a value encoded as JSON through its codec. *)
 val json : 'a Sift.t -> 'a -> 'p outcome
+
+(** Answer with a plain-text body. *)
 val text : string -> 'p outcome
+
+(** Answer with a redirect to the given location. *)
 val redirect : string -> 'p outcome
+
+(** Answer 404 Not Found. *)
 val not_found : 'p outcome
+
+(** Answer with the given HTTP error status. *)
 val error : int -> 'p outcome
 
 (** The protected-handler combinator: [guard conn ~user ~login f] runs [f uid] when [user conn] is

@@ -4,6 +4,7 @@
     production build wants the optimized native binary. All paths are computed once, here, so the rest
     of the release pipeline never reconstructs a [_build/…] path itself. *)
 
+(** The resolved build target: workspace root, executable name and the paths derived from them. *)
 type t = {
   root : string;  (** dune workspace root (absolute) *)
   name : string;  (** the server executable's name *)

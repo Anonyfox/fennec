@@ -10,6 +10,7 @@
        let open_ = T.find tasks ~where:Filter.[ eq Task.Fields.done_ false ] ()
        T.update tasks ~where:Filter.[ eq Task.Fields.id id ] Update.[ set Task.Fields.done_ true ] ]} *)
 
+(** The typed collection runtime over a reactive engine [R]. *)
 module Make (R : Reactive.REACTIVE) : sig
   (** Raised by a write whose value fails the shape's checks — the collected violations. *)
   exception Invalid of Sift.error list

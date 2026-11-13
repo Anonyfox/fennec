@@ -51,6 +51,14 @@ val pid : t -> int
 (**/**)
 
 (* exposed for inline tests *)
+
+(** Test-only: encode a run request for the given library chain as the worker's wire string. *)
 val encode_run : string list -> string
+
+(** Test-only: decode a [RESULT] header into (child exit code, total µs, dynlink µs, run µs,
+    output length); [None] when malformed. *)
 val decode_result_header : string -> (int * float * float * float * int) option
+
+(** Test-only: where the test worker may live, in lookup order: [$FENNEC_TEST_WORKER], the build
+    directory under [root], then next to the running executable. *)
 val candidate_paths : root:string -> string list
