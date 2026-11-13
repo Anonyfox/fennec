@@ -38,8 +38,11 @@ let%test "libmongoc driver authenticates + runs CRUD over TLS (self-signed cert)
       ~users:[ Mongo.wire_user ~user:"ada" ~password:"lovelace" () ]
       ~tls:(self_signed_tls ())
       ();
+    (* connect by NAME, not 127.0.0.1: libmongoc's OpenSSL backend (Linux) sends the host as SNI even
+       for an IP literal (RFC 6066 forbids that), and ocaml-tls rejects an all-numeric SNI with a
+       decode_error alert. macOS Secure Transport omits it, which is why only Linux failed. *)
     let uri =
-      Printf.sprintf "mongodb://ada:lovelace@127.0.0.1:%d/?authSource=admin&tls=true&tlsInsecure=true&serverSelectionTimeoutMS=8000" port
+      Printf.sprintf "mongodb://ada:lovelace@localhost:%d/?authSource=admin&tls=true&tlsInsecure=true&serverSelectionTimeoutMS=8000" port
     in
     let conn = Mongo.connect uri in
     let c = Mongo.collection ~sw conn ~db:"sec" ~name:"vault" in
