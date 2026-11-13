@@ -5,7 +5,17 @@
 
 type 'a t = { name : string; codec : 'a Sift.t; indexes : Index.t list }
 
-let v ?(indexes = []) name codec = { name; codec; indexes }
+(* every declaration made so far, in declaration order — what the server opens at boot (see [declared]) *)
+type any = Any : 'a t -> any
+
+let _declared : any list ref = ref []
+
+let v ?(indexes = []) name codec =
+  let d = { name; codec; indexes } in
+  _declared := Any d :: !_declared;
+  d
+
+let declared () = List.rev !_declared
 let name d = d.name
 let codec d = d.codec
 let indexes d = d.indexes

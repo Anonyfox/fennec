@@ -29,6 +29,13 @@ let collection (def : 'a Def.t) : 'a T.t =
   in
   T.of_reactive def coll
 
+(* Open every declared collection (reconciling its indexes + validator) at data-layer boot, OUTSIDE any
+   transaction. Opening lazily on first use would let a workflow create a collection mid-transaction — on
+   the embedded engine that DDL waits on the write lock the transaction itself holds. *)
+let open_declared () = List.iter (fun (Def.Any def) -> ignore (collection def)) (Def.declared ())
+
+let () = D.at_boot open_declared
+
 (* server writes (used inside method handlers): validating, ambient *)
 let insert def v = T.insert (collection def) v
 

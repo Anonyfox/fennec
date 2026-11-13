@@ -340,6 +340,32 @@ module Dynamic = struct
      [FENNEC_DB] still isolates (its own key space), matching the other backends precisely. *)
   let mem_collections : (string * string, Minimongo.t) Hashtbl.t = Hashtbl.create 16
 
+  (* Burrow DDL (create a collection, ensure/drop an index, set a validator) takes the engine's single write
+     lock. A workflow transaction that has already written to burrow HOLDS that lock (its LMDB parent txn)
+     until it commits, and the lock is not re-entrant — so DDL from inside it would wait on itself forever
+     (the process idles, nothing is logged). Fail loudly instead, naming the fix. Declared collections are
+     opened at boot ({!at_boot}), so app workflows never reach this. *)
+  exception Ddl_in_transaction of string
+
+  let burrow_ddl_guard eng what =
+    match Tx.current () with
+    | Some { Tx.burrow = Some (held, _); _ } when held == eng ->
+      raise
+        (Ddl_in_transaction
+           (Printf.sprintf
+              "Fennec.Mongo: %s inside a workflow transaction that already holds the embedded engine's write \
+               lock would deadlock — open the collection (and its indexes/validator) before the transaction, \
+               e.g. at boot"
+              what))
+    | _ -> ()
+
+  (* Boot hooks: run once by {!boot} after the ambient switch is installed, before the app starts serving.
+     The data facade registers one that opens every declared collection (reconciling indexes + validator)
+     up front, so no workflow transaction ever has to create one mid-flight. Registration order is kept. *)
+  let boot_hooks : (unit -> unit) list ref = ref []
+  let at_boot f = boot_hooks := !boot_hooks @ [ f ]
+  let run_boot_hooks () = List.iter (fun f -> f ()) !boot_hooks
+
   let mem_collection ~name =
     let key = (Runtime.db (), name) in
     match Hashtbl.find_opt mem_collections key with
@@ -356,7 +382,12 @@ module Dynamic = struct
     match Runtime.backend () with
     | Runtime.Missing -> missing (Runtime.unavailable_message ())
     | Runtime.Memory -> mem (mem_collection ~name)
-    | Runtime.Burrow { base; db; _ } -> Embedded (embedded_collection ~sw ~dir:(Filename.concat base db) ~name)
+    | Runtime.Burrow { base; db; _ } ->
+      let dir = Filename.concat base db in
+      (match Hashtbl.find_opt embedded_engines dir with
+       | Some eng when Burrow_engine.collection_opt eng name = None -> burrow_ddl_guard eng ("creating collection " ^ name)
+       | _ -> ());
+      Embedded (embedded_collection ~sw ~dir ~name)
     | Runtime.Mongo { uri; db } -> real ?poll ~sw (connect uri) ~db ~name
 
   (* The ambient Eio switch the data layer forks its long-lived daemons into (Live's change-streams, the
@@ -467,13 +498,13 @@ module Dynamic = struct
     match c with
     | Mem m -> Mini.ensure_index m ~name ~keys ~unique ~sparse
     | Native r -> ensure_index r ~name ~keys ~unique ~sparse
-    | Embedded e -> Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique ~sparse
+    | Embedded e -> burrow_ddl_guard e.eng ("ensuring index " ^ name); Burrow_engine.ensure_index e.eng e.ecoll ~name ~keys ~unique ~sparse
     | Missing message -> unavailable message
   let drop_index c ~name =
     match c with
     | Mem m -> Mini.drop_index m ~name
     | Native r -> drop_index r ~name
-    | Embedded e -> Burrow_engine.drop_index e.eng e.ecoll ~name
+    | Embedded e -> burrow_ddl_guard e.eng ("dropping index " ^ name); Burrow_engine.drop_index e.eng e.ecoll ~name
     | Missing message -> unavailable message
   let index_names c =
     match c with
@@ -486,7 +517,7 @@ module Dynamic = struct
     match c with
     | Mem m -> Mini.ensure_validator m v
     | Native r -> ensure_validator r v
-    | Embedded e -> Burrow_engine.set_validator e.eng e.ecoll v
+    | Embedded e -> burrow_ddl_guard e.eng ("setting a validator"); Burrow_engine.set_validator e.eng e.ecoll v
     | Missing message -> unavailable message
 end
 
@@ -657,4 +688,7 @@ let expose_from_env ~sw ~net () =
    so `mongosh` connects. MONGO_URL alone decides everything; there is no app-level "start". *)
 let boot ~sw ~net () =
   Dynamic.set_switch sw;
-  expose_from_env ~sw ~net ()
+  expose_from_env ~sw ~net ();
+  (* open what the app declared (via {!Dynamic.at_boot}) now, outside any transaction — skipped when no
+     backend is configured, where every op fails clearly on first use instead *)
+  match Runtime.backend () with Runtime.Missing -> () | _ -> Dynamic.run_boot_hooks ()

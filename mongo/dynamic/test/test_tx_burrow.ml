@@ -88,4 +88,22 @@ let () =
    with Boom -> ());
   check "burrow: outer rollback reverts nested inner writes" (count c = 0);
 
+  (* 7. DDL inside a transaction that already holds the engine's write lock must fail fast, never wait on
+     itself: creating a collection or ensuring an index there used to self-deadlock (the process idled
+     forever — `fennec dev` hung on the example's first workflow). The transaction rolls back cleanly. *)
+  let c = coll "p7" in
+  let refused f = try Tx.run (fun () -> ignore (D.insert c (person "ada")); f (); false) with D.Ddl_in_transaction _ -> true in
+  check "burrow: creating a collection inside a held txn fails fast" (refused (fun () -> ignore (coll "p7_fresh")));
+  check "burrow: ensuring an index inside a held txn fails fast"
+    (refused (fun () -> D.ensure_index c ~name:"by_name" ~keys:(B.doc [ ("name", B.int 1) ]) ~unique:false ~sparse:false));
+  check "burrow: the refused transactions rolled back" (count c = 0);
+  (* re-opening an EXISTING collection inside the txn is a lock-free catalog lookup *)
+  Tx.run (fun () ->
+      ignore (D.insert c (person "ada"));
+      check "burrow: re-opening an existing collection in-tx works" (count (coll "p7") = 1));
+  (* the lock is released after commit/rollback: the DDL refused above now goes through *)
+  let fresh = coll "p7_fresh" in
+  D.ensure_index fresh ~name:"by_name" ~keys:(B.doc [ ("name", B.int 1) ]) ~unique:false ~sparse:false;
+  check "burrow: DDL after the transaction proceeds" (List.mem "by_name" (D.index_names fresh));
+
   Printf.printf "all burrow transaction tests passed\n%!"

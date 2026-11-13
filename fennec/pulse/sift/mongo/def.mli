@@ -16,6 +16,13 @@
 type 'a t
 
 val v : ?indexes:Index.t list -> string -> 'a Sift.t -> 'a t
+
+(** A declaration with its document type hidden — the element of {!declared}. *)
+type any = Any : 'a t -> any
+
+(** Every collection declared so far (each {!v} call, in declaration order) — what the server opens at
+    boot, before any workflow transaction runs, so no transaction ever has to create a collection. *)
+val declared : unit -> any list
 val name : 'a t -> string
 val codec : 'a t -> 'a Sift.t
 val indexes : 'a t -> Index.t list
